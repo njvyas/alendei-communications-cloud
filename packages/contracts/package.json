@@ -1,0 +1,19 @@
+{
+  "name": "@acc/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared cross-boundary contracts: tenant context, permissions, event envelope, error codes",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3"
+  }
+}
