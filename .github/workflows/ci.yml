@@ -1,0 +1,163 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop, 'release/**', 'hotfix/**']
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '24'
+
+jobs:
+  # Stage 1 — static quality. Fast, no infrastructure.
+  static:
+    name: lint / typecheck / build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Build
+        run: npm run build
+
+  # Stage 2 — integration against real infrastructure. PostgreSQL is the
+  # correctness boundary, so the database, RLS and tenancy suites run against a
+  # real server rather than a mock (TESTING.md §1).
+  integration:
+    name: integration / database / security
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_ci_password
+          POSTGRES_DB: acc
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d acc"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redpanda:
+        image: redpandadata/redpanda:v24.3.1
+        ports: ['19092:19092']
+        options: >-
+          --health-cmd "rpk cluster health | grep -E 'Healthy:.+true'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      APP_ENV: test
+      NODE_ENV: test
+      LOG_LEVEL: error
+      LOG_PRETTY: 'false'
+      OTEL_ENABLED: 'false'
+      DATABASE_URL: postgres://acc_app:acc_app_ci_password@localhost:5432/acc
+      DATABASE_AUTH_URL: postgres://acc_auth:acc_auth_ci_password@localhost:5432/acc
+      DATABASE_ADMIN_URL: postgres://postgres:postgres_ci_password@localhost:5432/acc
+      DATABASE_RELAY_URL: postgres://acc_relay:acc_relay_ci_password@localhost:5432/acc
+      DATABASE_APP_PASSWORD: acc_app_ci_password
+      DATABASE_AUTH_PASSWORD: acc_auth_ci_password
+      DATABASE_RELAY_PASSWORD: acc_relay_ci_password
+      REDIS_URL: redis://localhost:6379
+      KAFKA_BROKERS: localhost:19092
+      SECRETS_BACKEND: env
+      AUTH_JWT_SECRET_REF: env:ACC_CI_JWT_SECRET
+      # Ephemeral CI-only value; it authenticates nothing outside this job.
+      ACC_CI_JWT_SECRET: ci_only_jwt_secret_value_at_least_32_chars_long
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build workspace packages
+        run: npm run build:packages
+
+      - name: Migrate from a clean database
+        run: npm run db:migrate
+
+      - name: Seed platform reference data
+        run: npm run db:seed
+
+      - name: Database and RLS tests
+        run: npm run test:integration --workspace @acc/db
+
+      - name: API integration tests
+        run: npm run test:integration --workspace @acc/api
+
+      - name: Security and tenancy tests
+        run: npm run test:security --workspace @acc/api
+
+  # Stage 3 — dependency vulnerability gate. Fails on any high/critical advisory
+  # that is not an explicitly justified, dated exception (DEPLOYMENT.md §4).
+  dependency-audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Audit
+        run: npm run audit
+
+  # Stage 4 — secret scanning. Blocks a credential reaching the history at all.
+  secret-scan:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

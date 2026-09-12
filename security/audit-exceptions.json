@@ -1,0 +1,25 @@
+{
+  "$comment": [
+    "Accepted dependency advisories. CI (`scripts/audit-check.mjs`) fails on any",
+    "high/critical advisory NOT listed here, and fails on any listed exception",
+    "whose `expires` date has passed — so an exception can never quietly become",
+    "permanent. Every entry must state why the vulnerable code path is",
+    "unreachable in this codebase (DEPLOYMENT.md §4, SECURITY.md §6)."
+  ],
+  "exceptions": [
+    {
+      "package": "multer",
+      "severity": "high",
+      "advisories": [
+        "GHSA-4pg4-qvpc-4u3m",
+        "GHSA-g5hg-p3ph-g8qg",
+        "GHSA-44fp-w29j-9vj5",
+        "GHSA-fjgf-rc76-4x9p"
+      ],
+      "reason": "Transitive via @nestjs/platform-express, which pins multer to an exact 2.2.0 in both v11 and v12 — no dependency-version choice avoids it. All four advisories are denial-of-service in multipart/form-data parsing. ACC exposes no multipart route in Phase 1: no controller uses FileInterceptor/FilesInterceptor and no multer middleware is registered, so the parser is never invoked. Re-evaluate before Phase 8+ introduces media upload.",
+      "reachable": false,
+      "owner": "platform",
+      "expires": "2026-12-31"
+    }
+  ]
+}

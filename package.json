@@ -1,0 +1,52 @@
+{
+  "name": "alendei-communications-cloud",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Alendei Communications Cloud (ACC) \u2014 multi-tenant communications control plane",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "audit": "node scripts/audit-check.mjs",
+    "build": "tsc -b packages/contracts packages/db && npm run build --workspace @acc/api && npm run build --workspace @acc/web",
+    "build:packages": "tsc -b packages/contracts packages/db",
+    "clean": "npm run clean --workspaces --if-present && rm -rf node_modules/.cache",
+    "db:generate": "npm run db:generate --workspace @acc/db",
+    "db:migrate": "npm run db:migrate --workspace @acc/db",
+    "db:reset": "npm run db:reset --workspace @acc/db",
+    "db:seed": "npm run db:seed --workspace @acc/db",
+    "dev:api": "npm run dev --workspace @acc/api",
+    "dev:web": "npm run dev --workspace @acc/web",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "infra:down": "docker compose down",
+    "infra:logs": "docker compose logs -f",
+    "infra:reset": "docker compose down -v && docker compose up -d",
+    "infra:up": "docker compose up -d",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "npm run test --workspaces --if-present",
+    "test:integration": "npm run test:integration --workspaces --if-present",
+    "test:security": "npm run test:security --workspaces --if-present",
+    "test:unit": "npm run test:unit --workspaces --if-present",
+    "typecheck": "tsc -b packages/contracts packages/db && npm run typecheck --workspace @acc/api && npm run typecheck --workspace @acc/web"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "eslint": "^9.39.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^16.5.0",
+    "prettier": "^3.9.6",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.46.0"
+  },
+  "overrides": {
+    "postcss": "^8.5.28"
+  }
+}
