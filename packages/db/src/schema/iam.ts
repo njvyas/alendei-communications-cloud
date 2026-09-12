@@ -8,6 +8,7 @@ import {
   pgEnum,
   pgTable,
   text,
+  unique,
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
@@ -117,6 +118,10 @@ export const apiKeys = pgTable(
   (table) => [
     uniqueIndex('api_keys_key_prefix_key').on(table.keyPrefix),
     index('api_keys_org_id_idx').on(table.orgId),
+    // Referenced by `audit_logs_actor_api_key_org_fk` so an API-key actor can
+    // never be recorded against an organization the key does not belong to
+    // (`TENANCY.md` §1a.3, ADR-002).
+    unique('api_keys_id_org_id_key').on(table.id, table.orgId),
     check('api_keys_scopes_is_array', sql`jsonb_typeof(${table.scopes}) = 'array'`),
     check('api_keys_prefix_shape', sql`${table.keyPrefix} ~ '^ak_(live|test)_[A-Za-z0-9]{16}$'`),
   ],

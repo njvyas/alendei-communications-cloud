@@ -2,6 +2,8 @@
 
 This is the living register of everything flagged as needing a product-owner decision, carrying scalability/security risk, or representing a tension between requirements that this document set resolved with an explicit, stated choice rather than silently picking one side. As of Phase 0.1 (the consolidated architecture consistency & hardening pass), every item that would have blocked a correct, unambiguous Phase 1 implementation has been resolved and is recorded in §1. Items in §2 are explicitly confirmed non-blocking — none of them affect the correctness of Phase 1 Foundation work. Phase 0.2 (final documentation-hardening pass before Phase 1 implementation — transaction-specific pricing, `requested_channel_id` hard-constraint semantics, attempt-level routing/pricing snapshots, idempotency `failed`-status semantics, and the broader engagement-platform product architecture, `ARCHITECTURE.md` §21) added B19–B22 below, all resolved. A follow-up Phase 0.2 correction pass added B23–B25 (multi-component pricing evaluation model, billable-transaction terminology generalization, and a residual reservation-accounting wording fix). Phase 0.3 (surgical documentation-consistency pass) added B26–B28 (Phase 5/Phase 7 billing-dependency de-conflation, removal of "distributed lock" as an implied Phase 5 deliverable, and an explicit Pricing-Evaluation-vs-Usage-Ledger HOW-vs-WHAT boundary statement). Phase 0.4 (final documentation freeze pass) added B29–B30 (made `usage_ledger.pricing_evaluation_id` the authoritative concrete foreign key to the pricing calculation that produced each ledger amount, demoting `rate_card_ref` to descriptive metadata; clarified `DR.md`'s Redis-loss wording so it cannot be read as Redis participating in fallback correctness). No Phase 0.2–0.4 change reopened or contradicted any earlier resolution; the architecture is frozen as of Phase 0.4.
 
+**Phase 1B implementation feedback (B32)**: building the audit log surfaced a second set of genuine gaps — an over-broad `acc_auth` insert policy, an audit row that could not express three of the five canonical scope levels, a missing `causation_id`, a documented partitioning requirement the implementation did not meet, absent parent–child integrity, and an accidental interaction between `ON DELETE SET NULL` and the append-only trigger. All six are resolved in ADR-002 (§1b) and the affected documents are reconciled. As with B31, this is `ROADMAP.md` §1's `DOCUMENT` stage working as intended.
+
 **Phase 1A implementation feedback (B31)**: building the IAM/tenancy foundation surfaced one genuine contradiction the Phase 0 passes had not caught — `user_roles.scope_type` was specified with three values while the tenancy hierarchy, the reseller model and the routing-precedence hierarchy all assumed five. It is resolved below and the affected documents have been reconciled. This is the documented mechanism working as `ROADMAP.md` §1 intends: a phase's `DOCUMENT` stage updates `/docs` in place when implementation reveals a real ambiguity, rather than the implementation silently diverging.
 
 ## 1. Phase-1 blockers — resolved in Phase 0.1 through Phase 0.4
@@ -97,6 +99,62 @@ Adding a scope level is not free — each one is a boundary that must be tested 
 
 None. The contradiction was found during Phase 1A, before any `user_roles` row existed outside a development database, so the five-value enum ships in the first migration rather than as an `ALTER TYPE`. No production data, no deployed API and no external integration depends on the three-value form. Had this been found later, the change would have required an `ALTER TYPE ... ADD VALUE` plus a backfill of `user_roles.org_id` — which is precisely the cost avoided by resolving it at the first implementation gate.
 
+## 1b. ADR-002 — Audit-log scope, integrity and retention
+
+**Status**: Accepted (Phase 1B implementation). Extends ADR-001 to the audit trail; supersedes the `audit_logs` column list in the Phase 0.4 text of `DATABASE.md` §12 and the unqualified "partitioned from the outset" wording in §13.
+
+### Context
+
+Phase 1B built `audit_logs`. Reviewing the change set before the Phase 1B checkpoint surfaced six issues that could not be settled by reading the Phase 0 documents, because the documents either did not address them or contradicted the implementation.
+
+| # | Issue |
+|---|---|
+| 1 | `acc_auth` had `WITH CHECK (true)` — the identity role could write an audit row naming any tenant, any actor and any action, including a fabricated successful role grant in another organization. |
+| 2 | The row carried only `org_id` and `workspace_id`, so an action at `platform`, `reseller` or `team` scope had nowhere to record where it happened — even though `c3b15d4` had just made the five-level hierarchy canonical. |
+| 3 | `causation_id` was absent, although `RequestContext`, the event envelope and `EVENTS.md` §2 all carry it. |
+| 4 | `DATABASE.md` §13 said these tables are partitioned "from the outset"; the implementation was a plain table. |
+| 5 | Nothing prevented impossible rows: a workspace from another organization, an `actor_type` contradicting the actor id, an API key from another tenant named as the actor. |
+| 6 | `ON DELETE SET NULL` on `org_id` combined with the append-only trigger so that deleting an organization with audit history would fail with a confusing `insufficient_privilege` error from a trigger — an accidental interaction rather than a decision. |
+
+### Decision
+
+**1. Scope is recorded on the canonical five-level hierarchy, using the same enum as `user_roles`.** `audit_logs.scope_type` is `role_scope_type` — `platform | reseller | organization | workspace | team`. The scope an action *occurred at* and the scope a grant *applies at* are the same axis, so they share one vocabulary rather than growing a second, subtly-different one. (`TENANCY.md` §1a.2 warns specifically against conflating the three existing `scope_type` enums; this is reuse of the authorization one, not a fourth.)
+
+**2. Tenancy columns are derived, never accepted.** A writer supplies only `(scope_type, scope_id)`. `fn_validate_audit_scope` resolves that pair, walks its ownership chain, and derives `reseller_id`/`org_id`/`workspace_id`/`team_id`, discarding whatever the writer sent. This mirrors `fn_validate_user_role_scope` (ADR-001). It relies on a documented PostgreSQL ordering property — a `BEFORE ROW` trigger runs before the RLS `WITH CHECK` expression — so the tenancy RLS authorizes is always the derived tenancy. That ordering is verified by an integration test, not assumed.
+
+**3. `acc_auth` is confined by shape and vocabulary, not by `org_id`.** It genuinely cannot be bounded by tenant, because a failed login happens before a tenant is known. It is bounded instead by three simultaneous conditions: `scope_type='platform'` (so it can never name a tenant), `actor_type IN ('user','api_key')` (so it cannot impersonate `system` or `oauth_client`), and membership of a five-action vocabulary (so it cannot record a privileged action). The SQL list mirrors `AUTH_ROLE_AUDIT_ACTIONS` in `@acc/contracts` and a test fails if they drift. `acc_auth` holds no `SELECT`.
+
+**4. `causation_id` is added**, nullable, alongside the `NOT NULL` `correlation_id`. `correlation_id` groups a causal chain; `causation_id` orders it and is null at the origin.
+
+**5. Impossible rows are unrepresentable, at the database.** Composite foreign keys `(workspace_id, org_id) → workspaces(id, org_id)`, `(team_id, org_id) → teams(id, org_id)` and `(actor_api_key_id, org_id) → api_keys(id, org_id)` — following the `teams_workspace_org_fk` pattern — plus two check constraints, `audit_logs_scope_shape` and `audit_logs_actor_shape`. `api_keys` gained a `UNIQUE(id, org_id)` to make the third reference possible. These hold with the trigger disabled, which is how they are tested.
+
+**6. An organization with audit history is not hard-deleted.** Every foreign key out of `audit_logs` is `ON DELETE RESTRICT`, and deactivation (`organizations.status='closed'`) is the modelled path — now stated normatively in `TENANCY.md` §1b rather than left implicit. `SET NULL` was rejected on two grounds: it destroys the tenancy attribution of past events, and on an append-only table it does not work anyway, because the cascade's internal UPDATE trips the append-only trigger.
+
+**7. Append-only is enforced in three layers, and its limit is stated rather than glossed.** No principal holds `UPDATE`/`DELETE`/`TRUNCATE`; no UPDATE or DELETE policy exists; and a trigger refuses all three for every principal including the owner — with a separate statement-level trigger for `TRUNCATE`, which a row-level trigger does not cover. **A database trigger is not tamper evidence**: the owner or a superuser can drop or disable it. That capability is deliberately left in place (retention/archival and test teardown use it), and the controls that actually survive an owner-level adversary are external — the SIEM export in `EVENTS.md` §4, WAL archiving, and cloud-provider audit logging of administrative access. `SECURITY.md` §4a states this in full.
+
+**8. Partitioning is deferred, with criteria.** `audit_logs` ships as a plain table. See "Partitioning" below.
+
+### Partitioning — why deferred rather than built
+
+`DATABASE.md` §13 said "from the outset". That wording is now corrected to "designed for", because building it in Phase 1B would have been cost without benefit:
+
+- The benefit is cheap retention/archival — dropping a partition rather than deleting rows. §4 of this document already records that the retention policy for these tables is an undecided business input. Partitioning before that decision delivers none of it.
+- The cost is real: a range-partitioned table cannot have a primary key excluding the partition key, so `id` becomes `(occurred_at, id)`, breaking the single-column UUIDv7 convention every other table follows (`DATABASE.md` §1); a partition-maintenance job does not exist in Phase 1; and the `BEFORE TRUNCATE` guard must be attached to **every partition individually**, because a TRUNCATE trigger on a partitioned parent does not fire when a partition is truncated directly. (Verified empirically against PostgreSQL 17 during this pass — it is not documented behaviour anyone should have to rediscover.)
+- Deferring stays cheap because **nothing holds a foreign key *to* `audit_logs`**. Conversion is create-copy-swap, not a dependency-bearing rewrite.
+
+**Partition when the first of these is true**: the retention policy is agreed with the business; the table exceeds roughly 50M rows or 50 GB; or Phase 7 begins. Whoever does it must attach the TRUNCATE guard to every partition and to the partition-creation routine.
+
+### Consequences
+
+- `ROADMAP.md` Phase 1's DB-changes list now names `audit_logs` under a Phase 1B sub-phase; it had previously appeared only in `DATABASE.md` §12a's "already built" domain map, which is how it came to be built without being listed as Phase 1 scope.
+- `TESTING.md` §6j adds the audit matrix, including an RLS negative control of its own.
+- Sub-organization scope is now *recorded* even though RLS still does not *filter* on it (`TENANCY.md` §3a). Narrowing an audit read to a workspace or team is a mandatory RBAC/ABAC authorization-layer check, unchanged by this ADR — never UI filtering.
+- The residual risks this pass leaves open are listed in §3 below.
+
+### Migration and compatibility
+
+None. `audit_logs` had not been committed when these decisions were made, so the corrected table ships in its first migration rather than as an `ALTER`. The one change to an already-committed table is additive: `api_keys` gains `UNIQUE(id, org_id)`.
+
 ## 2. Non-blocking future decisions (confirmed — none of these affect Phase 1 correctness)
 
 | # | Decision | Why it's genuinely deferrable | Current default |
@@ -116,6 +174,9 @@ None. The contradiction was found during Phase 1A, before any `user_roles` row e
 - **A fallback chain can theoretically result in a recipient receiving more than one physical message** if a deprioritized channel's delivery lands after escalation already occurred (no provider offers reliable recall). Accepted because preventing it entirely is not possible against external providers; mitigated by keeping wait windows sane and by billing/audit correctly reflecting only one authoritative delivery (`FALLBACK_ENGINE.md` §5).
 - **Exactly-once delivery is not guaranteed** at the transport level; only exactly-once *business outcome* is guaranteed, and this distinction is now stated identically across `PRD.md` §8a, `ARCHITECTURE.md` §9, and `DATABASE.md` §7.3 (Phase 0.1 verified these three do not drift from one another).
 - **No certification is claimed** for SOC 2/ISO 27001/DPDP/GDPR — only control-objective alignment, explicitly and repeatedly disclaimed in `SECURITY.md`.
+- **The audit log is not tamper-evident against an owner or superuser** (ADR-002, `SECURITY.md` §4a). Any in-database control can be removed by whoever owns the database; the trigger stops accident and application compromise, not a privileged operator. Accepted because the mitigation is external (SIEM export, WAL archiving, infrastructure-level audit of administrative access), not because the risk is small. Hash-chaining rows so a deletion is detectable is the obvious strengthening if it is ever needed.
+- **A workspace- or team-scoped audit row is visible to any principal the authorization layer admits to that organization's audit trail.** The database guarantees organization-level isolation only (`TENANCY.md` §3a); restricting a record to its workspace or team is a required RBAC/ABAC check in the request path, on every read including list endpoints and exports, and is never satisfied by UI filtering or a client-supplied predicate. Unchanged by ADR-002, which records the finer scope without filtering on it. Accepted as a layering decision, not as a licence to omit the check: omitting it is a security defect.
+- **Synchronous-versus-asynchronous audit writes are not yet implemented.** `SECURITY.md` §4 specifies the distinction and `SECURITY_SENSITIVE_AUDIT_ACTIONS` in `@acc/contracts` names the set, but no service-layer code consumes it yet — there is no audit-writing service before Phase 2. The schema does not constrain it either way.
 
 ## 4. Scalability concerns flagged for later phases
 

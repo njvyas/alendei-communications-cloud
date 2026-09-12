@@ -7,7 +7,7 @@ import { sql } from 'drizzle-orm';
 
 import { connect, createTenant, destroyTenant, type Principals } from './harness';
 
-/** The Phase 1 tables listed in `ROADMAP.md` Phase 1 "DB changes". */
+/** The Phase 1 tables listed in `ROADMAP.md` Phase 1 "DB changes" (Phase 1A and 1B). */
 const PHASE_1_TABLES = [
   'organizations',
   'resellers',
@@ -22,6 +22,7 @@ const PHASE_1_TABLES = [
   'sessions',
   'ws_tickets',
   'idempotency_keys',
+  'audit_logs',
 ] as const;
 
 /**
@@ -40,6 +41,7 @@ const ORG_SCOPED_TABLES = [
   'api_keys',
   'ws_tickets',
   'idempotency_keys',
+  'audit_logs',
 ] as const;
 
 describe('Phase 1 schema', () => {
@@ -117,6 +119,8 @@ describe('Phase 1 schema', () => {
     const names = new Set(result.rows.map((row) => row.tgname));
     expect(names.has('trg_user_roles_validate_scope')).toBe(true);
     expect(names.has('trg_role_permissions_validate')).toBe(true);
+    expect(names.has('trg_audit_logs_validate_scope')).toBe(true);
+    expect(names.has('trg_audit_logs_append_only')).toBe(true);
   });
 
   it('indexes every foreign key used for tenant filtering', async () => {

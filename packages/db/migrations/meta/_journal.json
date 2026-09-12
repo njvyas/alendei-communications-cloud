@@ -8,6 +8,13 @@
       "when": 1789180325110,
       "tag": "0000_phase1_tenancy_iam_rbac",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789201791715,
+      "tag": "0001_phase1b_audit_log",
+      "breakpoints": true
     }
   ]
 }

@@ -93,11 +93,15 @@ export interface TenantFixture {
   readonly teamId: string;
   readonly userId: string;
   readonly roleId: string;
+  readonly apiKeyId: string;
   readonly slug: string;
 }
 
 export async function createTenant(admin: Db, label: string): Promise<TenantFixture> {
-  const slug = `${label}-${uuidv7().slice(0, 8)}`;
+  // The random low bits, not the UUIDv7 timestamp prefix: the leading bytes are
+  // identical for every fixture created within the same ~65-second window, which
+  // made concurrent or repeated runs collide on `resellers_slug_key`.
+  const slug = `${label}-${uuidv7().replace(/-/g, '').slice(-12)}`;
 
   const [reseller] = await admin
     .insert(schema.resellers)
@@ -119,6 +123,15 @@ export async function createTenant(admin: Db, label: string): Promise<TenantFixt
     .insert(schema.users)
     .values({ email: `${slug}@example.test`, status: 'invited' })
     .returning({ id: schema.users.id });
+  const [apiKey] = await admin
+    .insert(schema.apiKeys)
+    .values({
+      orgId: org!.id,
+      name: `Key ${slug}`,
+      keyPrefix: `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`,
+      keyHash: 'not-a-real-hash',
+    })
+    .returning({ id: schema.apiKeys.id });
   const [role] = await admin
     .insert(schema.roles)
     .values({ orgId: org!.id, key: 'org_admin', name: 'Organization Admin', isSystemRole: true })
@@ -138,12 +151,36 @@ export async function createTenant(admin: Db, label: string): Promise<TenantFixt
     teamId: team!.id,
     userId: user!.id,
     roleId: role!.id,
+    apiKeyId: apiKey!.id,
     slug,
   };
 }
 
+/**
+ * Deletes a tenant's audit rows as the schema owner.
+ *
+ * `audit_logs` is append-only and the trigger refuses DELETE for every
+ * principal, the owner included — so the only way past it is to disable the
+ * trigger, which requires table ownership. That is deliberate: it is the same
+ * capability retention/archival will use later, and stating it plainly here is
+ * more honest than carving a back door into the trigger itself
+ * (`SECURITY.md` §4a, ADR-002).
+ */
+export async function purgeAuditRows(admin: Db, orgId: string): Promise<void> {
+  await admin.execute(sql`ALTER TABLE audit_logs DISABLE TRIGGER trg_audit_logs_append_only`);
+  try {
+    await admin.execute(sql`DELETE FROM audit_logs WHERE org_id = ${orgId}`);
+  } finally {
+    await admin.execute(sql`ALTER TABLE audit_logs ENABLE TRIGGER trg_audit_logs_append_only`);
+  }
+}
+
 /** Removes a fixture tenant and everything under it. */
 export async function destroyTenant(admin: Db, tenant: TenantFixture): Promise<void> {
+  // Audit rows hold RESTRICT references to the organization, its workspace/team
+  // and its API keys, so they must go first — an organization with audit history
+  // is never hard-deleted in production either (ADR-002).
+  await purgeAuditRows(admin, tenant.orgId);
   await admin.execute(sql`DELETE FROM user_roles WHERE org_id = ${tenant.orgId}`);
   await admin.execute(sql`DELETE FROM role_permissions WHERE org_id = ${tenant.orgId}`);
   await admin.execute(sql`DELETE FROM roles WHERE org_id = ${tenant.orgId}`);

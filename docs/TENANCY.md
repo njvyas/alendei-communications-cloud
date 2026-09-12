@@ -75,6 +75,7 @@ Each level has exactly one parent, and the chain is walkable in both directions:
 | `workspaces` | `workspaces.org_id → organizations.id` | foreign key, `NOT NULL` |
 | `teams` | `teams.workspace_id → workspaces.id`, plus a denormalized `teams.org_id` | a **composite** foreign key `(workspace_id, org_id) → workspaces(id, org_id)`, so a team whose organization disagrees with its workspace's organization is unrepresentable |
 | `user_roles` grant | the scope named by `(scope_type, scope_id)` | the `fn_validate_user_role_scope` trigger (`RBAC.md` §6), which resolves the target row, verifies its ownership chain reaches the role's own organization, and **derives** `user_roles.org_id` rather than trusting the writer |
+| `audit_logs` record | the scope named by `(scope_type, scope_id)` | the `fn_validate_audit_scope` trigger, which **derives** `reseller_id`/`org_id`/`workspace_id`/`team_id` from that pair, plus composite foreign keys `(workspace_id, org_id) → workspaces(id, org_id)` and `(team_id, org_id) → teams(id, org_id)` making a mismatched chain unrepresentable (`DATABASE.md` §12, ADR-002) |
 
 A request that names a mismatched parent/child pair — a workspace that does not belong to the claimed organization, a team that does not belong to the claimed workspace — is rejected, never silently reinterpreted.
 
@@ -93,6 +94,19 @@ team         ──▶ that team only
 Concretely: an `organization`-scoped grant needs no additional workspace-level grant to act within that organization's workspaces. The inverse never holds — a `workspace`-scoped grant confers nothing at organization level, and a `team`-scoped grant confers nothing at workspace level. Sideways is likewise closed: a grant at Workspace A confers nothing at Workspace B, even within the same organization.
 
 Inheritance is a property of the *grant*, not of the permission: a permission the role does not hold is not acquired by holding that role at a higher scope.
+
+## 1b. Deletion and retention of tenancy rows (normative)
+
+**A tenancy row that has audit or financial history is never hard-deleted. It is deactivated and retained.** Every level of the hierarchy already carries the status column this requires: `resellers.status`, `organizations.status` (`active|suspended|closed`), `workspaces.status` (`active|archived`), and `users.status` (`active|invited|disabled`). Closing an organization means `status='closed'`, not a `DELETE`.
+
+This is enforced, not merely intended. Foreign keys into tenancy rows are `ON DELETE RESTRICT` from `workspaces`, `teams`, `api_keys`, `ws_tickets` and — as of Phase 1B — `audit_logs`. An organization with audit history fails a `DELETE` with a plain foreign-key violation naming `audit_logs`.
+
+`ON DELETE SET NULL` is specifically **not** used from `audit_logs`, and the reasoning generalizes to any future append-only table (ADR-002):
+
+- It would mutate audit history as a side effect of deleting an unrelated row, silently destroying the tenancy attribution of past events — a row that recorded "this happened in Organization A" would quietly become "this happened at platform level".
+- On an append-only table it does not even work: the cascade performs an internal UPDATE, which the append-only trigger refuses, so the delete fails anyway — but with a confusing `insufficient_privilege` error from a trigger instead of a clear foreign-key violation.
+
+Hard deletion of tenancy rows remains available to the schema owner for development fixtures and for a genuine erasure request (`DECISIONS.md` D8), and in both cases it is an explicit, owner-level operation rather than something the application can do.
 
 ## 2. Tenant context resolution
 
@@ -180,6 +194,10 @@ OR app_org_reseller(target_org) = app_current_reseller_id()  -- an organization 
 ```
 
 This is exactly §1a.4's downward inheritance expressed in SQL. Note what it does *not* contain: no workspace or team term. **RLS enforces isolation down to the organization; workspace and team are enforced above it, by the authorization layer.** That is a deliberate boundary, not an omission — a workspace is not a tenant, and modelling it as one would make every policy a join and still not remove the need for the authorization check. Documented as a residual risk and revisited if `DECISIONS.md` D3 (making `workspace_id` mandatory on every tenant-scoped table) is ever resolved in favour of mandatory.
+
+**RLS stopping at organization does not mean sub-organization scope is unrecorded.** `audit_logs` records the exact scope an action occurred at — including `workspace` and `team` — and enforces the parent–child chain physically (§1a.3). What RLS does not do is *filter* on those levels.
+
+**Dividing line, stated once and normative for every module:** the database guarantees **organization-level tenant isolation** and nothing finer. Any narrower visibility — workspace, team, or per-resource — is a **mandatory authorization-layer requirement**, enforced by the RBAC/ABAC check in the request path (`RBAC.md` §2, `API.md` §3a) on every read and every write, for API responses, enumerations, exports and reports alike. It is **never** satisfied by UI filtering, by a client-supplied predicate, or by a query that merely happens to include a `workspace_id`: those are presentation and convenience, not boundaries, and a caller that bypasses the client reaches the unfiltered organization-level view. A workspace-scoped audit row is therefore visible to any principal the authorization layer admits to that organization's audit trail, and restricting it to the workspace is that layer's obligation to enforce, not an optional refinement.
 
 **Scope levels are enforced at different layers, and each layer is load-bearing:**
 

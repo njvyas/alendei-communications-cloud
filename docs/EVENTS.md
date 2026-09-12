@@ -9,6 +9,8 @@ A Kafka-wire-compatible event bus (Apache Kafka or Redpanda; abstracted so eithe
 `alendei.<domain>.<event_name>.v<n>` — e.g. `alendei.messages.status_changed.v1`.
 
 - Schemas are defined (JSON Schema initially, Avro/Protobuf evaluated for Phase 2+, tracked in `DECISIONS.md` as non-blocking) and enforced via a schema registry; producers cannot publish a payload that fails validation.
+`correlation_id` and `causation_id` below carry the same meaning on an `audit_logs` row as they do on an event envelope, and an audit row, log line and event emitted by the same step agree on both (`DATABASE.md` §12): `correlation_id` groups a causal chain and never changes within it; `causation_id` names the immediate cause and changes at every hop, and is null at the origin.
+
 - Every event envelope carries: `event_id (UUIDv7)`, `event_type`, `event_version` (the schema version of this specific payload shape, independent of the topic's `.v<n>` suffix — allows additive payload evolution without a topic migration), `schema_version` (the registry schema id used to validate this payload), `occurred_at`, `aggregate_type` (e.g. `message`, `message_attempt`, `campaign`), `aggregate_id` (the id of that entity), `tenant_id` (`org_id`) + `workspace_id` where applicable, `correlation_id`, `causation_id` (the event/request that caused this one), `payload`.
 - Partition key is `tenant_id` + `aggregate_id` where per-entity ordering matters, ensuring all events for one message/attempt/conversation land on the same partition and are consumed in order.
 
@@ -64,7 +66,7 @@ Two structurally different kinds of event exist, and the catalogue is organized 
 | `alendei.billing.invoice_issued.v1` | billing | Invoice finalized |
 | `alendei.billing.wallet_low_balance.v1` | billing | Available balance (`balance - reserved`) crosses configured threshold |
 | `alendei.ai.usage_recorded.v1` | ai-gateway | AI call billed |
-| `alendei.audit.action_recorded.v1` | audit | Umbrella event mirroring every `audit_logs` insert, for external SIEM export |
+| `alendei.audit.action_recorded.v1` | audit | Umbrella event mirroring every `audit_logs` insert, for external SIEM export. This export is what gives the audit trail integrity against owner-level tampering, which no in-database control can provide (`SECURITY.md` §4a) — `acc_relay` holds `SELECT` on `audit_logs` for it |
 
 ## 5. Consumer groups (representative)
 

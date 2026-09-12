@@ -144,7 +144,7 @@ ACC is built as a modular monolith-first NestJS codebase organized into bounded 
 | `billing` | Usage ledger, wallets, invoices, GST, reseller markup | `tenancy` |
 | `resellers` | Reseller-scoped config, white-label | `tenancy`, `billing` |
 | `ai-gateway` | AI provider/model abstraction | `tenancy` |
-| `audit` | Immutable audit log | all modules (write-only dependency) |
+| `audit` | Immutable audit log — append-only, scope-aware, enforced at the database (`DATABASE.md` §12, `SECURITY.md` §4a, ADR-002) | all modules (write-only dependency) |
 | `admin-control` | Provider/routing/fallback live configuration UI+API | `provider-registry`, `provider-router` |
 
 Module boundaries map to NestJS modules with explicit public interfaces (services/DTOs); no module reaches into another's repository/ORM layer directly.

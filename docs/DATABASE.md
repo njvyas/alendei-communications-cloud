@@ -7,7 +7,7 @@ PostgreSQL is the system of record for all transactional and financial data. Red
 - Primary keys: `UUID` (UUIDv7 — time-sortable, generated application-side or via `pg_uuidv7`), column name `id`.
 - Every tenant-scoped table carries `org_id UUID NOT NULL REFERENCES organizations(id)`, and where relevant `workspace_id UUID REFERENCES workspaces(id)`.
 - Every table carries `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`, `updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`; mutable tables use a trigger to bump `updated_at`.
-- Financial/audit/event tables are **append-only**: no `UPDATE`/`DELETE` grants at the DB role level for the application user; corrections are new rows.
+- Financial/audit/event tables are **append-only**: no `UPDATE`/`DELETE`/`TRUNCATE` grants at the DB role level for any application principal, no UPDATE or DELETE policy so RLS would admit no row even if a grant were added by mistake, and a trigger that refuses all three for every principal including the schema owner. Corrections are new rows. What this does *not* claim is tamper-proofing against the table owner or a superuser, who can drop or disable that trigger — see `SECURITY.md` §4a for the threat model, and ADR-002 for why the capability is deliberately left in place.
 - Row-Level Security is enabled on every tenant-scoped table, **in the same migration that creates the table** — a table is never created in one change set and protected in a later one. Policies are built from one shared predicate, `app_org_in_scope(org_id)`, which expresses the downward-only scope inheritance of `TENANCY.md` §1a.4 (platform admin, or the organization in context, or an organization under the reseller in context). Session variables are set with `SET LOCAL` inside the request/job's transaction only (never `SET` at connection level) — see §14a for why this matters for pooled connections. `TENANCY.md` §3a lists every session variable and states exactly which scope boundaries RLS enforces and which are enforced above it.
 - Soft delete (`deleted_at TIMESTAMPTZ`) is used for tenant-manageable entities (contacts, templates, campaigns); hard delete is never used on tables with financial or audit references.
 - Optimistic concurrency: any row that can be concurrently transitioned by more than one worker carries a monotonically incrementing `state_version INT NOT NULL DEFAULT 0`, bumped on every state-changing update, and used as a compare-and-swap guard (§8, §"Migration ownership").
@@ -56,8 +56,16 @@ Isolation depends on the application never connecting as a principal that can by
 |---|---|---|---|
 | schema owner | migrations, seeding, maintenance jobs | full DDL/DML | bypassed (table owner) — never used by the running API |
 | `acc_app` | every tenant-scoped business query | `SELECT/INSERT/UPDATE` on tenancy/IAM/RBAC tables; `DELETE` only on `teams`, `roles`, `role_permissions`, `user_roles`, `idempotency_keys`; `SELECT` only on `permissions` | **enforced** — non-owner, non-superuser |
-| `acc_auth` | identity resolution *before* any tenant context exists: credential verification, API-key lookup, WebSocket ticket consumption | `SELECT` on the identity and RBAC-read tables; `INSERT/UPDATE` on `sessions`; `UPDATE` on `users`, `api_keys`, `ws_tickets` | enforced, but its policies are identity-shaped rather than org-shaped — its reach is bounded by *table grants* instead |
-| `acc_relay` | the transactional-outbox publisher, which is cross-tenant by necessity (`EVENTS.md` §1) | the outbox tables only | enforced; a permissive policy on the outbox alone |
+| `acc_auth` | identity resolution *before* any tenant context exists: credential verification, API-key lookup, WebSocket ticket consumption | `SELECT` on the identity and RBAC-read tables; `INSERT/UPDATE` on `sessions`; `UPDATE` on `users`, `api_keys`, `ws_tickets`; `INSERT` only on `audit_logs`, bounded as below | enforced, but its policies are identity-shaped rather than org-shaped — its reach is bounded by *table grants* instead |
+| `acc_relay` | the transactional-outbox publisher, which is cross-tenant by necessity (`EVENTS.md` §1) | the outbox tables, plus `SELECT` on `audit_logs` for the SIEM projection (`EVENTS.md` §4) | enforced; a permissive policy on the outbox alone |
+
+**`acc_auth` and the audit log.** `acc_auth` must be able to record authentication outcomes — a failed login is, by definition, an event that happens before any tenant context exists, so it cannot be bounded by `org_id` the way every other write is. It is instead bounded by *vocabulary and shape*, which is what keeps that exception narrow (ADR-002). Its INSERT policy admits a row only when all three hold:
+
+- `scope_type = 'platform'` — so the row carries no `org_id`, `reseller_id`, `workspace_id` or `team_id` at all, and `acc_auth` can never file an audit record against a tenant;
+- `actor_type IN ('user','api_key')` — the only two identity types that can present a credential, so it cannot impersonate the `system` or `oauth_client` actor;
+- `action` is in `app_is_auth_audit_action()` — the five pre-tenant actions (`auth.login.succeeded`, `auth.login.failed`, `auth.logout`, `auth.token.refreshed`, `api_key.authenticated`), so it cannot record a privileged action such as a role grant.
+
+That SQL list mirrors `AUTH_ROLE_AUDIT_ACTIONS` in `packages/contracts/src/audit.ts`, and an integration test fails if the two drift apart. `acc_auth` holds no `SELECT` on `audit_logs`: it writes authentication history and cannot read anyone's.
 
 `acc_auth` exists because credential verification is a genuine chicken-and-egg problem: the server cannot filter by organization while it is still establishing *which* organization the caller belongs to. Rather than granting the application role a blanket read, or running that step as the owner, the pre-context work gets its own least-privilege principal that can reach the identity tables and nothing else. `acc_app` remains unable to read outside its tenant under any circumstances.
 
@@ -278,7 +286,28 @@ The Pricing & Rating Engine is conceptually independent of `usage_ledger`: it de
 
 **`webhook_deliveries`** — one row per (endpoint, event) delivery attempt lineage: `id, endpoint_id FK, event_id (the domain event being delivered), attempt_count INT DEFAULT 0, status ENUM(pending,delivering,delivered,retrying,failed,dead_letter), last_http_status NULL, last_error NULL, next_retry_at NULL, delivered_at NULL, created_at, updated_at`. Unique constraint `(endpoint_id, event_id)` — redelivering the same event to the same endpoint updates this same row's attempt history rather than creating a duplicate delivery record, which is what makes outbound replay safe (`EVENTS.md` §5b).
 
-**`audit_logs`** — append-only: `id, org_id NULL (NULL = platform-level action), actor_user_id NULL, actor_type ENUM(user,api_key,oauth_client,system), action, resource_type, resource_id, before JSONB NULL, after JSONB NULL, correlation_id, ip NULL, occurred_at`. `actor_type=system` covers background workers/schedulers acting without a human/API-key request in the loop (e.g. an automatic fallback escalation or an automatic provider health transition) — every such row still carries `correlation_id` tracing it back to the request/event chain that ultimately caused it.
+**`audit_logs`** — append-only. Built in Phase 1B; the decisions behind its shape are ADR-002 (`DECISIONS.md` §1b).
+
+| Group | Columns |
+|---|---|
+| Identity | `id` (UUIDv7 PK) |
+| Scope | `scope_type ENUM(platform,reseller,organization,workspace,team) NOT NULL`, `scope_id NULL`, and the derived `reseller_id NULL`, `org_id NULL`, `workspace_id NULL`, `team_id NULL` |
+| Actor | `actor_type ENUM(user,api_key,oauth_client,system) NOT NULL`, `actor_user_id NULL`, `actor_api_key_id NULL`, `actor_label NULL` |
+| Action | `action NOT NULL`, `resource_type NOT NULL`, `resource_id NULL`, `outcome ENUM(success,failure,denied) NOT NULL` |
+| State | `before JSONB NULL`, `after JSONB NULL`, `metadata JSONB NOT NULL DEFAULT '{}'` |
+| Trace | `correlation_id NOT NULL`, `causation_id NULL` |
+| Request | `ip INET NULL`, `user_agent NULL` |
+| Time | `occurred_at NOT NULL`, `created_at NOT NULL` |
+
+**Scope is the canonical five-level hierarchy, not an ad-hoc pair of columns.** `scope_type` is the same enum `user_roles.scope_type` carries (`TENANCY.md` §1a.2) — the scope an action *occurred at* and the scope a grant *applies at* are the same axis, so they use one vocabulary. A writer supplies only `(scope_type, scope_id)`; the `fn_validate_audit_scope` trigger resolves that pair, walks its ownership chain and **derives** `reseller_id`/`org_id`/`workspace_id`/`team_id`. The writer's own values for those columns are discarded, so an audit row cannot be filed against a tenant the writer does not reach. PostgreSQL evaluates a `BEFORE ROW` trigger before the RLS `WITH CHECK` expression, so the tenancy RLS authorizes is always the derived tenancy. `audit_logs_scope_shape` then enforces the per-level shape (`platform` carries no ids at all; `team` carries the full org/workspace/team chain), exactly mirroring `user_roles_scope_shape`.
+
+**Parent–child integrity is physical, not procedural** (`TENANCY.md` §1a.3). Composite foreign keys `(workspace_id, org_id) → workspaces(id, org_id)` and `(team_id, org_id) → teams(id, org_id)` make a workspace or team whose organization disagrees with `org_id` unrepresentable. `(actor_api_key_id, org_id) → api_keys(id, org_id)` does the same for cross-tenant actor references — an API key from Organization B cannot be recorded as the actor on an Organization A row. (`api_keys` gained a `UNIQUE(id, org_id)` in the same migration to make that reference possible.) `audit_logs_actor_shape` forbids an actor identifier that contradicts `actor_type`: a `user` row cannot carry an API-key id, a `system` row cannot claim either, and an `oauth_client` row — which has no id column until OAuth2 ships (`DECISIONS.md` D6) — must at least carry an `actor_label`.
+
+`actor_type=system` covers background workers/schedulers acting without a human/API-key request in the loop (e.g. an automatic fallback escalation or an automatic provider health transition) — every such row still carries `correlation_id` tracing it back to the request/event chain that ultimately caused it.
+
+**`correlation_id` versus `causation_id`** (`EVENTS.md` §2, `OBSERVABILITY.md` §2): `correlation_id` is constant across everything one originating request or job produces — it *groups* a chain, and is `NOT NULL` because a chain always has an origin. `causation_id` is the id of the request or event that immediately triggered this specific action — it changes at every hop, which is what lets a chain be *ordered* rather than merely grouped, and it is `NULL` for the action that began the chain. Both are carried on `RequestContext` (`packages/contracts/src/tenancy.ts`) and on the event envelope, so an audit row, a log line and an event emitted by the same step agree on both values.
+
+**Retention**: audit rows are never deleted by the application, and every foreign key out of `audit_logs` is `ON DELETE RESTRICT`. An organization, workspace, team, user or API key with audit history therefore cannot be hard-deleted — it is deactivated and retained (`TENANCY.md` §1b). `ON DELETE SET NULL` was rejected deliberately: it would mutate audit history as a side effect of deleting some other row, which both loses the tenancy attribution of past events and collides with the append-only trigger.
 
 ## 12a. Future domain boundaries (conceptual only — no migrations in this pass)
 
@@ -292,7 +321,15 @@ Phase 0.2 strategic update (`ARCHITECTURE.md` §21, `ROADMAP.md` Phase 8A–8G):
 
 ## 13. Indexing & partitioning notes
 
-- `messages`, `message_attempts`, `message_events`, `usage_ledger`, `audit_logs`, `webhook_events`, `webhook_deliveries` are high-volume, append-heavy tables — planned for time-range partitioning (monthly) from the outset, partitioned on `created_at`/`occurred_at`, to keep indexes small and enable cheap retention/archival.
+- `messages`, `message_attempts`, `message_events`, `usage_ledger`, `audit_logs`, `webhook_events`, `webhook_deliveries` are high-volume, append-heavy tables — **designed for** time-range partitioning (monthly) on `created_at`/`occurred_at`, to keep indexes small and enable cheap retention/archival. "Designed for" is deliberate wording and replaces an earlier "from the outset": see the partitioning decision below.
+
+**Partitioning is deferred, explicitly (ADR-002, `DECISIONS.md` §1b / B32).** `audit_logs` ships in Phase 1B as a plain table. The reasoning, which applies equally to the other tables in this list:
+
+- The benefit partitioning delivers is cheap retention and archival — dropping a partition instead of deleting rows. `DECISIONS.md` §4 already records that the retention/archival policy for these tables is a business input not yet decided. Partitioning before that decision buys the cost and none of the benefit.
+- The cost is not zero. A range-partitioned table cannot have a primary key that excludes the partition key, so `id` would become `(occurred_at, id)` — breaking the single-column UUIDv7 primary-key convention in §1 that every other table follows. It also requires a partition-maintenance job that does not exist in Phase 1, and a `BEFORE TRUNCATE` guard attached to **every partition individually**, because a TRUNCATE trigger on a partitioned parent does not fire when a partition is truncated directly (verified against PostgreSQL 17).
+- The conversion stays cheap for as long as it is deferred, because **nothing holds a foreign key *to* `audit_logs`**. Converting is: create the partitioned table, copy, swap names in one transaction — not a schema rewrite that other tables depend on.
+
+**Partition when the first of these becomes true**, and not before: (a) the retention/archival policy in `DECISIONS.md` §4 is agreed with the business; (b) the table exceeds roughly 50 million rows or 50 GB; or (c) Phase 7 (billing go-live) begins, whichever is earliest. Whoever does it must attach the append-only TRUNCATE guard to every partition and to the partition-creation routine.
 - `messages` additionally indexed on `(org_id, conversation_id, created_at)`, `(org_id, campaign_id)`, `(org_id, journey_id)`, `(org_id, idempotency_key)` unique, `(current_provider_id, current_provider_message_id)`.
 - `message_attempts` additionally indexed on `(message_id, attempt_number)` unique, and a partial index `(status, deadline_at) WHERE status = 'provider_accepted'` — this is the index the DB-backed fallback timer poller scans (`FALLBACK_ENGINE.md` §4, `EVENTS.md` §6).
 - `usage_ledger` indexed on `(org_id, occurred_at)`, `(message_id)`.

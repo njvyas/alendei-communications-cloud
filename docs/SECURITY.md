@@ -34,7 +34,33 @@ The same `SecretsPort` backs `webhook_endpoints.signing_secret_ref` (`DATABASE.m
 
 ## 4. Audit architecture
 
-`audit_logs` (see `DATABASE.md` §11) is append-only and captures actor, action, resource, before/after state, correlation id, and timestamp for every privileged mutation across every module — not just security-relevant actions. Audit writes are best-effort-synchronous (the triggering request fails if the audit write fails, for actions classified as security-sensitive: role grants, credential changes, billing adjustments) versus best-effort-asynchronous for lower-sensitivity actions, a distinction made explicitly per action type rather than uniformly, to balance integrity against latency.
+`audit_logs` (see `DATABASE.md` §12) is append-only and captures actor, actor scope, action, resource, outcome, before/after state, correlation id, causation id, and timestamp for every privileged mutation across every module — not just security-relevant actions. A refused action is recorded as deliberately as a successful one: `outcome='denied'` exists precisely so that a rejected privilege escalation leaves a record (`RBAC.md` §7).
+
+The scope an action occurred at is recorded on the canonical five-level hierarchy (`TENANCY.md` §1a) — `platform`, `reseller`, `organization`, `workspace` or `team` — and the tenancy columns backing it are **derived by the database** from the scope the writer names, never trusted from the writer. ADR-002 (`DECISIONS.md` §1b) is the full decision record.
+
+**Who may read an audit record is enforced at two layers, and both are mandatory.** Row-Level Security guarantees **organization-level tenant isolation**: no principal reaches another organization's audit trail, and platform-scoped records require platform admin. RLS deliberately stops there (`TENANCY.md` §3a). Finer visibility — restricting a workspace- or team-scoped record to principals holding a grant at that workspace or team — is a **required RBAC/ABAC authorization check in the request path**, applied to every audit read including list endpoints, exports and reports. It is **never** delivered by UI filtering or by a client-supplied query predicate: the console is not a security boundary, and a caller reaching the API directly sees whatever the authorization layer permits, not whatever the console chose to display. Treating workspace/team audit visibility as a presentation detail would be a security defect, not a cosmetic one.
+
+Audit writes are best-effort-synchronous (the triggering request fails if the audit write fails, for actions classified as security-sensitive: role grants, credential changes, billing adjustments) versus best-effort-asynchronous for lower-sensitivity actions, a distinction made explicitly per action type rather than uniformly, to balance integrity against latency. The set classified as security-sensitive is `SECURITY_SENSITIVE_AUDIT_ACTIONS` in `packages/contracts/src/audit.ts`.
+
+### 4a. Append-only enforcement, and its threat model
+
+Append-only is enforced in three layers, each covering something the others cannot:
+
+| Layer | Mechanism | Stops |
+|---|---|---|
+| Privilege | No principal the application connects as (`acc_app`, `acc_auth`, `acc_relay`) holds `UPDATE`, `DELETE` or `TRUNCATE` | Every application code path, including a compromised one |
+| Policy | No `UPDATE` or `DELETE` RLS policy exists on the table | A grant added later by mistake — RLS would still admit no row |
+| Trigger | `fn_audit_logs_append_only` refuses `UPDATE`, `DELETE` and `TRUNCATE` for **every** principal, the schema owner included | A migration script, an admin tool, or a maintenance job rewriting history by accident |
+
+**What is *not* claimed.** A database trigger is not tamper evidence. The table owner and any superuser can `DROP TRIGGER` or `ALTER TABLE ... DISABLE TRIGGER` and then mutate or delete rows freely; a superuser can also rewrite the table's files directly. This is not an oversight and it is not closed by adding more triggers — any in-database control can be removed by whoever owns the database. The capability is also *used*: it is how retention/archival will eventually prune rows, and how integration-test fixtures are torn down.
+
+The controls that do survive an owner-level adversary live outside this database, and are what the audit trail's integrity actually rests on:
+
+- **Off-box export.** Every `audit_logs` insert is projected to `alendei.audit.action_recorded.v1` for external SIEM export (`EVENTS.md` §4), read by `acc_relay`. A row deleted from PostgreSQL after export is still in the SIEM.
+- **Least privilege on the owner role.** The running application never connects as the owner (`DATABASE.md` §2a); owner credentials are operator-held and their use is an infrastructure-level event, not an application one.
+- **Infrastructure-level controls** — WAL archiving and point-in-time recovery (`DR.md`), and cloud-provider audit logging of administrative database access — are what detect owner-level tampering.
+
+Anyone strengthening this should target that outer layer (export lag, SIEM alerting on gaps, hash-chaining rows so a deletion is detectable) rather than adding further in-database guards, which would add the appearance of protection without the substance.
 
 ## 5. Webhook & API hardening
 

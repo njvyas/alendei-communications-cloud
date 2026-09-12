@@ -136,6 +136,20 @@ These connect **directly as the non-owner principal**, bypassing the application
 - `acc_auth` and `acc_relay` hold exactly their intended grants and no others — also asserted against the catalog, so a future migration that widens one is caught.
 - **Negative control**: a deliberately weakened query (one that omits the application's own `org_id` filter) still returns nothing cross-tenant. Without this test the suite cannot distinguish "RLS works" from "the application filter happened to work".
 
+### 6j. Audit-log isolation and integrity
+
+`audit_logs` is the one table where a write is itself a security claim ("this actor did this, at this scope"), so it is tested as a boundary in its own right (`DATABASE.md` §12, ADR-002). Implemented in `packages/db/src/test/audit.int-spec.ts`, all against a real database:
+
+- **Structure** — table, every column, every index, every foreign key (including the three composite ones), RLS enabled, the expected policies and *no* UPDATE/DELETE policy, all three triggers, and the grant set asserted against the catalog so a later migration that widens it is caught.
+- **Append-only** — `UPDATE`, `DELETE` and `TRUNCATE` each refused for the schema owner as well as for `acc_app`; the row is then re-read to confirm it is unchanged.
+- **Tenant isolation** — Org A reads its own trail; Org A cannot read Org B's and vice versa; a tenant cannot insert a record for another tenant; a tenant cannot create a platform-level (`org_id IS NULL`) record.
+- **Platform isolation** — a platform admin reads platform-level records, a tenant cannot see them, and a reseller sees exactly the organizations beneath it.
+- **Actor integrity** — valid user and API-key actors accepted; an actor id contradicting `actor_type` rejected; an API key belonging to another organization rejected by the composite foreign key; a non-existent actor rejected.
+- **Scope integrity** — each of the five scope levels derives the correct tenancy chain; a forged `org_id` is overwritten by the derived value rather than honoured; a non-existent scope, a `platform` scope carrying a `scope_id`, and a non-platform scope missing one are all rejected; and with the trigger deliberately disabled, the composite foreign keys and `audit_logs_scope_shape` still refuse an impossible row — proving the constraint, not just the trigger.
+- **`acc_auth` confinement** — a pre-tenant authentication record is accepted; an organization- or reseller-scoped record, a non-auth action, an invented action, and an attempt to impersonate the `system` or `oauth_client` actor are each refused; `acc_auth` cannot read the table at all; and the SQL action vocabulary is asserted to match `AUTH_ROLE_AUDIT_ACTIONS` in `@acc/contracts`, so the two cannot drift.
+- **Organization deletion** — with every other child removed, deleting an organization that has audit history fails with a foreign-key violation naming `audit_logs`, and the organization is closed instead (`TENANCY.md` §1b).
+- **Negative control** — the SELECT policy is weakened to `USING (true)` mid-test; Org B's rows must then become visible from Org A, and must disappear again when it is restored. Without this the isolation assertions could not be distinguished from an incidental absence of data.
+
 ### 6h. Worker and pooled-connection context
 
 - Worker tenant-context contamination: two jobs for two different organizations run back-to-back on the same pooled connection; the second never sees the first's RLS context (`TENANCY.md` §5, `DATABASE.md` §14a) — this specifically tests that `SET LOCAL` truly resets at transaction boundary under the pooling strategy actually used.

@@ -27,7 +27,7 @@ All public and console APIs are served under `/api/v1`. Breaking changes ship as
 | `/wallets` | `billing` | Wallet balance, recharge, auto-recharge config |
 | `/resellers` | `resellers` | Reseller CRUD, markup config, branding |
 | `/reports` | cross-module read models | Delivery/cost/quality reporting |
-| `/audit` | `audit` | Audit log query (permissioned) |
+| `/audit` | `audit` | Audit log query (permissioned — `audit.read` within a tenant, `platform.audit.read` for platform-level records). Results are scope-filtered: a caller sees records at or below the scopes it holds, and platform-scoped records only with `platform.audit.read` (`DATABASE.md` §12) |
 | `/webhooks/{provider}` | `webhooks` | Inbound provider webhook receivers, per-provider sub-path (`ARCHITECTURE.md` §10a) |
 | `/webhook-endpoints` | `webhooks` | Customer-facing outbound webhook subscription CRUD (`ARCHITECTURE.md` §10b) |
 | `/webhook-deliveries` | `webhooks` | Outbound delivery status query + replay (`EVENTS.md` §5d) |
@@ -49,6 +49,8 @@ Every authenticated caller resolves to exactly one **identity type**, and `audit
 | System (background worker) | Internal, no HTTP request in the loop | n/a | Fallback escalation, scheduled jobs, event consumers — never presents an HTTP credential; its tenant context comes from the job/event payload per `TENANCY.md` §5, and its audit rows always carry `actor_type=system` |
 
 These are not interchangeable for authorization purposes: a permission grant is checked against the actual identity type presenting the request, and an OAuth2 client is never silently treated as if it were the human user who authorized it (the human's identity, where relevant, is recorded separately as the authorizing party).
+
+The database enforces the same distinction rather than trusting the caller: `audit_logs_actor_shape` makes an actor identifier that contradicts `actor_type` unrepresentable — a `user` row cannot carry an API-key id, a `system` row cannot claim either, and an `oauth_client` row must carry an `actor_label` since it has no id column until OAuth2 ships (`DECISIONS.md` D6). An API-key actor is additionally tied to its own organization by a composite foreign key, so a key from one tenant can never appear as the actor on another tenant's record (`DATABASE.md` §12).
 
 Every authenticated request resolves a `TenantContext` per `TENANCY.md` §2a before any handler executes; no handler trusts a body/query tenant identifier over the resolved context.
 

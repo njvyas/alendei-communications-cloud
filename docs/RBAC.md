@@ -145,7 +145,9 @@ Each guard names the layer that enforces it, because a guard that exists only in
 | **No forged `org_id` on a grant.** `user_roles.org_id` is derived by the trigger from the resolved scope chain, never taken from the writer. | `fn_validate_user_role_scope` |
 | **No upward administration.** An actor cannot modify its own scope's parent — an organization admin cannot reassign their organization's reseller. | Service layer + RLS (`TENANCY.md` §3a) |
 
-Every role grant and revocation is audit-logged without exception, including the attempts that were refused (`SECURITY.md` §4) — a rejected escalation attempt is precisely the event worth having a record of.
+Every role grant and revocation is audit-logged without exception, including the attempts that were refused (`SECURITY.md` §4) — a rejected escalation attempt is precisely the event worth having a record of. `audit_logs.outcome` carries `denied` for exactly this purpose, and the audit row records the scope the attempt was made at on the same five-level enum `user_roles.scope_type` uses (`DATABASE.md` §12, ADR-002), so a refused escalation and the grant it targeted are directly comparable.
+
+The identity database role (`acc_auth`) cannot write a role-grant audit row at all: it is confined to platform scope and to the pre-tenant authentication vocabulary (`DATABASE.md` §2a), so an audit record claiming a privileged action can only have come from the application role acting inside a resolved tenant context.
 
 Frontend validation is UX-only and is never an authorization boundary for any of the above.
 
