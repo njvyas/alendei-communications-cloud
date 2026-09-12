@@ -50,7 +50,20 @@ Every authenticated caller resolves to exactly one **identity type**, and `audit
 
 These are not interchangeable for authorization purposes: a permission grant is checked against the actual identity type presenting the request, and an OAuth2 client is never silently treated as if it were the human user who authorized it (the human's identity, where relevant, is recorded separately as the authorizing party).
 
-Every authenticated request resolves a `TenantContext` per `TENANCY.md` before any handler executes; no handler trusts a body/query tenant identifier over the resolved context.
+Every authenticated request resolves a `TenantContext` per `TENANCY.md` §2a before any handler executes; no handler trusts a body/query tenant identifier over the resolved context.
+
+### 3a. Scope enforcement order
+
+Authorization is two checks, not one, and both are mandatory (`TENANCY.md` §4a):
+
+1. **Permission** — does the principal hold the permission this endpoint requires?
+2. **Scope coverage** — does it hold that permission at a scope *covering the target resource's scope*, per the downward-only inheritance of `TENANCY.md` §1a.4?
+
+Holding `workspaces.update` somewhere is never authority to update *this* workspace. A request that passes (1) and fails (2) is refused exactly as if it had failed (1).
+
+**Enumeration follows the same rule as retrieval.** A list endpoint returns only what is within the caller's scope set; an out-of-scope resource is *absent* from the listing rather than present-and-forbidden. A direct fetch of an out-of-scope resource returns `404` — not `403` — and the error message never echoes the caller-supplied identifier, because either would confirm the resource exists.
+
+**Path identifiers are advisory.** `/tenants/{org_id}/workspaces` may carry an `org_id` for readability and routing, but the authoritative organization is always the one resolved from the credential; a mismatch is `403` (`TENANCY.md` §2b).
 
 ## 4. Idempotency
 
@@ -118,6 +131,19 @@ Real-time channels (inbox live updates, campaign progress, provider health dashb
 3. The server consumes the ticket exactly once (`consumed_at` set — replay of the same ticket is rejected), binds the connection's tenant context to what the ticket recorded (never to anything the client sends afterward), and only then admits subscriptions within the ticket's topic scope.
 
 The server never pushes data the connection's bound tenant context isn't authorized to see, and a connection can never widen its own scope after establishment.
+
+### 9a. Scope enforcement on a WebSocket connection
+
+The socket performs no scope resolution of its own — it inherits a decision already made over an authenticated HTTP call (`TENANCY.md` §4b). Four properties, each independently testable:
+
+| Property | Consequence |
+|---|---|
+| Topic scope is computed at **ticket-issue** time from the caller's scope set, and recorded on the `ws_tickets` row | A user who could not subscribe to a topic over HTTP cannot obtain a ticket that admits it |
+| The connection binds to the **ticket's** recorded `org_id`/`workspace_id`/`scope` | The client cannot assert tenancy on the socket at all — there is no field for it |
+| Subscriptions are admitted only within the ticket's recorded scope | A subscription to another organization's, workspace's or team's topic is refused, not silently ignored |
+| The ticket is consumed exactly once, is short-lived (~30s), and is stored only as a hash | Replay of a consumed ticket, use of an expired ticket, and a database read yielding a usable ticket are all closed |
+
+A connection is **not** re-resolved against the user's current grants mid-session: it keeps the scope the ticket recorded. Revoking a grant therefore takes effect on the next ticket, and revoking the underlying session invalidates its outstanding tickets.
 
 ## 10. Related
 

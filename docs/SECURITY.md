@@ -7,7 +7,9 @@ No certification (SOC 2, ISO 27001) is claimed anywhere in this document or by t
 - **Identity types**: human user, API key (service account), OAuth2 client, and system (background worker) are treated as distinct identity classes with independent authorization checks — never collapsed into one "authenticated caller" concept. Full definition: `API.md` §3.
 - **MFA**: TOTP required for all human users by default, org-configurable enforcement policy; WebAuthn as a stretch target. Architecture: `RBAC.md` §5.
 - **SSO/SAML/OIDC**: per-organization IdP configuration reserved on `organizations`; implementation phase not yet committed (see `DECISIONS.md`).
-- **RBAC/ABAC**: `RBAC.md`, including scope-integrity enforcement (`RBAC.md` §6) preventing a role grant from ever pointing at a workspace/team outside its own organization.
+- **Scope model**: the canonical five-level hierarchy — `platform → reseller → organization → workspace → team` — is defined normatively in `TENANCY.md` §1a. Scope inheritance is downward only; no grant is ever widened by the scope it is exercised at.
+- **RBAC/ABAC**: `RBAC.md`, including scope-integrity enforcement (`RBAC.md` §6) preventing a role grant from ever pointing at a scope outside its own organization, and the escalation guards in `RBAC.md` §7 — several of which are enforced by database trigger, so they hold even if the service layer is bypassed.
+- **Database principals**: the running application connects only as non-owner roles that cannot bypass RLS (`DATABASE.md` §2a). The schema owner is used for migrations and seeding, never to serve a request.
 - **Session management**: short-lived JWT access tokens, server-revocable refresh tokens via `sessions`, per-device visibility, explicit "sign out this device / sign out everywhere."
 - **API authentication**: hashed API keys (never stored/returned in plaintext after creation), scoped to org + permission subset, rotatable.
 - **WebSocket authentication**: never a long-lived JWT in the connection URL — a single-use, short-lived ticket minted over an authenticated HTTP call and consumed exactly once at connect time (`API.md` §9, `DATABASE.md` §2 `ws_tickets`).
@@ -45,7 +47,9 @@ The same `SecretsPort` backs `webhook_endpoints.signing_secret_ref` (`DATABASE.m
 
 | Risk | Mitigation |
 |---|---|
-| Broken access control / IDOR | Tenant context always server-derived (`TENANCY.md` §2); every resource fetch scoped by resolved `org_id`/RLS, never by client-supplied ID alone |
+| Broken access control / IDOR | Tenant context always server-derived (`TENANCY.md` §2); every resource fetch scoped by resolved `org_id`/RLS, never by client-supplied ID alone. Out-of-scope fetches return `404` without echoing the supplied identifier, and list endpoints omit out-of-scope resources rather than returning `403` — a `403` on a specific id is itself a disclosure that the id exists (`TENANCY.md` §4a) |
+| Vertical privilege escalation | Scope inheritance is downward only (`TENANCY.md` §1a.4); the escalation guard table in `RBAC.md` §7 names, per guard, whether the service layer or a database trigger enforces it |
+| Horizontal (cross-scope) access | `TENANCY.md` §6 enumerates every prevention mechanism, from client-supplied identifiers through to WebSocket ticket replay |
 | Cryptographic failures | TLS everywhere, encryption at rest, secrets never in plaintext config (§§2–3) |
 | Injection (SQL, etc.) | ORM/parameterized queries exclusively; no raw string-concatenated SQL; input validation via DTO schemas (class-validator/zod) at every API boundary |
 | Insecure design | Threat modeling per module during design review (dev lifecycle §"SECURITY REVIEW" stage, `ROADMAP.md`) |

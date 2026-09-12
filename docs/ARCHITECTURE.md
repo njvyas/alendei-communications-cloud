@@ -295,6 +295,8 @@ Resellers own a set of organizations, their own pricing/markup configuration, an
 
 ## 17. Multi-tenant isolation (summary — full detail in `TENANCY.md`)
 
+The canonical tenancy/authorization scope hierarchy is **`platform → reseller → organization → workspace → team`**, defined normatively in `TENANCY.md` §1a and resolved in `DECISIONS.md` B31. No other document defines a conflicting set of scope levels; `user_roles.scope_type` carries exactly these five values, and the same-named columns on `routing_policies` and `provider_credentials` are separate configuration enums that confer no access (`TENANCY.md` §1a.2).
+
 Tenant context (`org_id`, `workspace_id`, `reseller_id`) is derived exclusively from the authenticated session/token/API-key context on the server side. A client-supplied tenant ID in a URL, body, or header is **never** trusted for authorization — it may be present for readability/routing but is always cross-checked against the resolved auth context, and a mismatch is rejected (403), not silently corrected.
 
 Isolation is enforced at:
@@ -302,7 +304,7 @@ Isolation is enforced at:
 | Layer | Mechanism |
 |---|---|
 | API | Auth middleware resolves tenant context once, injects it into every downstream call; handlers cannot query without it |
-| Database | Postgres Row-Level Security keyed on session-local `app.current_org_id`/`app.current_workspace_id`, set immediately after connection auth |
+| Database | Postgres Row-Level Security keyed on session-local `app.current_org_id`/`app.current_workspace_id`/`app.current_reseller_id`, set with `SET LOCAL` inside the request or job's own transaction (never at connection level — `TENANCY.md` §3a, `DATABASE.md` §14a). RLS enforces the boundary down to organization; workspace and team are enforced by the authorization layer above it |
 | Cache | Redis keys namespaced `t:{org_id}:...`; no cross-tenant key ever constructed |
 | Queues | Kafka message keys/headers carry `tenant_id`; consumers assert tenant scope before acting |
 | Storage | S3-compatible object keys prefixed `{org_id}/{workspace_id}/...`; bucket policy enforces prefix conditions |

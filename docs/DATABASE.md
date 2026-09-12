@@ -8,7 +8,7 @@ PostgreSQL is the system of record for all transactional and financial data. Red
 - Every tenant-scoped table carries `org_id UUID NOT NULL REFERENCES organizations(id)`, and where relevant `workspace_id UUID REFERENCES workspaces(id)`.
 - Every table carries `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`, `updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`; mutable tables use a trigger to bump `updated_at`.
 - Financial/audit/event tables are **append-only**: no `UPDATE`/`DELETE` grants at the DB role level for the application user; corrections are new rows.
-- Row-Level Security is enabled on every tenant-scoped table; policy pattern: `USING (org_id = current_setting('app.current_org_id')::uuid)`, applied per `TENANCY.md`. Session variables are set with `SET LOCAL` inside the request/job's transaction only (never `SET` at connection level) — see §14 for why this matters for pooled connections.
+- Row-Level Security is enabled on every tenant-scoped table, **in the same migration that creates the table** — a table is never created in one change set and protected in a later one. Policies are built from one shared predicate, `app_org_in_scope(org_id)`, which expresses the downward-only scope inheritance of `TENANCY.md` §1a.4 (platform admin, or the organization in context, or an organization under the reseller in context). Session variables are set with `SET LOCAL` inside the request/job's transaction only (never `SET` at connection level) — see §14a for why this matters for pooled connections. `TENANCY.md` §3a lists every session variable and states exactly which scope boundaries RLS enforces and which are enforced above it.
 - Soft delete (`deleted_at TIMESTAMPTZ`) is used for tenant-manageable entities (contacts, templates, campaigns); hard delete is never used on tables with financial or audit references.
 - Optimistic concurrency: any row that can be concurrently transitioned by more than one worker carries a monotonically incrementing `state_version INT NOT NULL DEFAULT 0`, bumped on every state-changing update, and used as a compare-and-swap guard (§8, §"Migration ownership").
 
@@ -20,7 +20,7 @@ PostgreSQL is the system of record for all transactional and financial data. Red
 
 **`workspaces`** — `id, org_id FK, name, brand_config JSONB, status`. `workspace_id` remains optional on tenant-scoped tables (see `DECISIONS.md`, resolved non-blocking); every organization is seeded with one default workspace at creation so application code can always resolve a workspace without a null-check special case if desired.
 
-**`teams`** — `id, workspace_id FK, name`.
+**`teams`** — `id, workspace_id FK, org_id FK organizations NOT NULL, name`. `org_id` is denormalized from the parent workspace so this tenant-scoped table satisfies §1's rule that every tenant-scoped table carries `org_id`, and so its RLS policy is a direct comparison rather than a join. The two cannot drift: a **composite** foreign key `(workspace_id, org_id) → workspaces(id, org_id)` makes a team whose organization disagrees with its workspace's organization unrepresentable (`TENANCY.md` §1a.3).
 
 **`users`** — `id, email, phone NULL, password_hash NULL (nullable — SSO-only users have none), mfa_enabled, status ENUM(active,invited,disabled), created_at`. Users are platform-level identities; tenant access is via `user_roles`.
 
@@ -28,19 +28,42 @@ PostgreSQL is the system of record for all transactional and financial data. Red
 
 **`permissions`** — `id, key TEXT UNIQUE` (e.g. `campaigns.create`), `description`.
 
-**`role_permissions`** — `role_id FK, permission_id FK`, PK `(role_id, permission_id)`.
+**`role_permissions`** — `role_id FK, permission_id FK, org_id UUID NULL, created_at`, PK `(role_id, permission_id)`. `org_id` is denormalized from `roles.org_id` (`NULL` for platform roles) so the table can be RLS-filtered without a join; it is derived by `fn_validate_role_permission` below, never written by the caller.
 
-**`user_roles`** — `id, user_id FK, role_id FK, scope_type ENUM(organization,workspace,team), scope_id UUID, granted_by FK users, created_at`.
+**`user_roles`** — `id, user_id FK, role_id FK, org_id UUID NULL FK organizations, scope_type ENUM(platform,reseller,organization,workspace,team), scope_id UUID NULL, granted_by FK users, created_at, updated_at`.
 
-Scope integrity (`RBAC.md` §6): `scope_id` is polymorphic and cannot carry a single physical `FOREIGN KEY` across three possible target tables. Integrity is enforced by **both** of the following, not either alone:
-- A `BEFORE INSERT/UPDATE` trigger (`fn_validate_user_role_scope`) that looks up the target row for the given `scope_type` (`organizations`, `workspaces`, or `teams`) and verifies its `org_id` (directly, or transitively via `workspaces.org_id`/`teams.workspace_id → workspaces.org_id`) equals `roles.org_id` for the role being granted (or that the role is a platform-level role, i.e. `roles.org_id IS NULL`, in which case `scope_type` must be a value the platform role's design permits). A trigger failure raises and the transaction aborts — this is a hard DB-level guarantee, not advisory.
+`scope_type` carries the five values of the canonical scope hierarchy, defined normatively in `TENANCY.md` §1a and resolved in `DECISIONS.md` B31. **Do not confuse it with the same-named column on `routing_policies` (§4) or `provider_credentials` (§3)** — those are *configuration* scopes with their own, different value sets and confer no access; `user_roles.scope_type` is the *authorization* scope. `TENANCY.md` §1a.2 tabulates all three.
+
+`org_id` is the organization this grant lives in. It is `NULL` only for `platform` and `reseller` scope, and it is **derived by the trigger below from the resolved scope chain, never trusted from the writer** — a forged value is overwritten rather than merely rejected. A check constraint additionally requires the shape to be coherent: `platform` has neither `scope_id` nor `org_id`; `reseller` has a `scope_id` but no `org_id`; `organization`/`workspace`/`team` have both.
+
+Scope integrity (`RBAC.md` §6): `scope_id` is polymorphic and cannot carry a single physical `FOREIGN KEY` across four possible target tables. Integrity is enforced by **both** of the following, not either alone:
+- A `BEFORE INSERT/UPDATE` trigger (`fn_validate_user_role_scope`) that resolves the target row for the given `scope_type` and verifies the ownership chain: `organizations.id` directly, `workspaces.org_id` for a workspace, `teams.org_id` for a team — each of which must equal `roles.org_id` for the role being granted. A platform-level role (`roles.org_id IS NULL`) is exempt from that org match, because it belongs to no organization, but is instead restricted to `scope_type ∈ {platform, reseller}` **and** to actors who already hold platform admin — both checked inside the trigger, so the escalation path is closed at the database even if the service layer is bypassed. A trigger failure raises and the transaction aborts: a hard DB-level guarantee, not advisory. `RBAC.md` §6 tabulates the per-scope resolution rules.
 - An application-level check at assignment time (`RBAC.md` §6) that re-derives the same chain from the actor's own resolved tenant context before even attempting the write, so invalid combinations are rejected with a clear `403`/`422` before ever reaching the trigger — the trigger is defense-in-depth, not the only line of defense.
+
+**`fn_validate_role_permission`** — a `BEFORE INSERT/UPDATE` trigger on `role_permissions` that derives `role_permissions.org_id` from `roles.org_id` (so it cannot be forged) and **refuses to attach any `platform.*` permission to a role with `org_id IS NOT NULL`**. Without it, an organization could compose a custom role containing a platform permission and escalate out of its own tenancy — `RBAC.md` §7.
 
 **`api_keys`** — `id, org_id FK, name, key_prefix, key_hash, scopes JSONB (permission subset), last_used_at, revoked_at NULL, created_by FK users`.
 
 **`sessions`** — `id, user_id FK, refresh_token_hash, device_info JSONB, ip, revoked_at NULL, expires_at, created_at`.
 
 **`ws_tickets`** — single-use WebSocket connection tickets (`API.md` §9): `id, user_id FK, org_id FK, workspace_id NULL, scope JSONB (topics permitted), issued_at, expires_at (short, ~30s), consumed_at NULL`. A ticket is minted by an authenticated `POST /api/v1/ws/ticket` call and consumed exactly once at WebSocket connect time; the tenant context bound to the resulting connection comes from the ticket record, never from a client-supplied value on the socket.
+
+### 2a. Database principals
+
+Isolation depends on the application never connecting as a principal that can bypass RLS. Four principals exist, and the running application uses only the last three — never the first:
+
+| Principal | Used by | Grants | RLS |
+|---|---|---|---|
+| schema owner | migrations, seeding, maintenance jobs | full DDL/DML | bypassed (table owner) — never used by the running API |
+| `acc_app` | every tenant-scoped business query | `SELECT/INSERT/UPDATE` on tenancy/IAM/RBAC tables; `DELETE` only on `teams`, `roles`, `role_permissions`, `user_roles`, `idempotency_keys`; `SELECT` only on `permissions` | **enforced** — non-owner, non-superuser |
+| `acc_auth` | identity resolution *before* any tenant context exists: credential verification, API-key lookup, WebSocket ticket consumption | `SELECT` on the identity and RBAC-read tables; `INSERT/UPDATE` on `sessions`; `UPDATE` on `users`, `api_keys`, `ws_tickets` | enforced, but its policies are identity-shaped rather than org-shaped — its reach is bounded by *table grants* instead |
+| `acc_relay` | the transactional-outbox publisher, which is cross-tenant by necessity (`EVENTS.md` §1) | the outbox tables only | enforced; a permissive policy on the outbox alone |
+
+`acc_auth` exists because credential verification is a genuine chicken-and-egg problem: the server cannot filter by organization while it is still establishing *which* organization the caller belongs to. Rather than granting the application role a blanket read, or running that step as the owner, the pre-context work gets its own least-privilege principal that can reach the identity tables and nothing else. `acc_app` remains unable to read outside its tenant under any circumstances.
+
+Revocation is modelled as an `UPDATE` (setting `revoked_at`), never a `DELETE`, which is why `acc_app` holds no `DELETE` on `sessions`, `api_keys` or `ws_tickets`.
+
+Roles are created `NOLOGIN` and passwordless by the migration; the migration runner grants `LOGIN` and sets each password from the environment, so no credential ever appears in a migration file.
 
 ## 3. Domain: Channels & Providers
 
@@ -277,7 +300,7 @@ Phase 0.2 strategic update (`ARCHITECTURE.md` §21, `ROADMAP.md` Phase 8A–8G):
 
 ## 14. Migration ownership & tooling
 
-Schema migrations are owned by each module (per `ARCHITECTURE.md` §4) but run through one shared migration tool/pipeline. **Resolved (Phase 1 blocker, `DECISIONS.md`)**: Drizzle ORM is the chosen schema/migration tool — its SQL-first, non-magic query builder gives explicit control over the `SET LOCAL` session-variable pattern RLS depends on (§1, §14a) and over the partitioned-table DDL in §13, both of which are awkward under a heavier active-record-style ORM. Raw SQL migrations remain an escape hatch for anything Drizzle's schema DSL can't express directly (e.g. RLS policies, partition attachment, the scope-integrity trigger in §2).
+Schema migrations are owned by each module (per `ARCHITECTURE.md` §4) but run through one shared migration tool/pipeline. **Resolved (Phase 1 blocker, `DECISIONS.md`)**: Drizzle ORM is the chosen schema/migration tool — its SQL-first, non-magic query builder gives explicit control over the `SET LOCAL` session-variable pattern RLS depends on (§1, §14a) and over the partitioned-table DDL in §13, both of which are awkward under a heavier active-record-style ORM. Raw SQL migrations remain an escape hatch for anything Drizzle's schema DSL can't express directly (e.g. RLS policies, partition attachment, the scope-integrity trigger in §2). In practice the generator emits the table DDL and the hand-written SQL is appended to **that same migration file**, which is what makes §1's "RLS ships with the table" rule mechanically true rather than a convention someone has to remember.
 
 ### 14a. Tenant context in pooled connections (background workers)
 

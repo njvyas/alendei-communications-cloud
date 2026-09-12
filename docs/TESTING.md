@@ -79,13 +79,76 @@ This scenario is the acceptance gate for Phase 5 (`ROADMAP.md` §8, with item 7 
 - A hard-pinned channel (`requested_channel_id` set, `cross_channel_fallback_enabled = false`, `ROUTING_ENGINE.md` §1a) with every provider on that channel ineligible → the chain fails per the org's failure policy at that step; the Channel Router never substitutes a different channel, verified by asserting no `message_attempts` row for this message ever has a `channel_id` other than the requested one.
 - The same scenario with `cross_channel_fallback_enabled = true` → the Channel Router substitutes the next channel per `fallback_steps`, verified by asserting a subsequent attempt's `channel_id` differs from the requested channel.
 
-## 6. Tenant isolation tests
+## 6. Tenant and scope isolation tests
 
-- Cross-org API attempt: an authenticated caller for Org A supplies Org B's id in a URL/body/header for any resource type → `403`, never a silent scope substitution or leakage (`TENANCY.md` §2).
-- Cross-workspace/cross-org role assignment attempt (`RBAC.md` §6's invalid state) → rejected both at the application-validation layer and, if that layer is bypassed, at the database trigger layer — both paths are tested independently.
-- Malicious/forged tenant ID in a JWT claim or API payload → rejected because tenant context is derived from the *validated* auth material, never trusted as supplied.
-- Worker tenant-context contamination: a test harness deliberately runs two jobs for two different orgs back-to-back on the same pooled DB connection and asserts the second job never sees the first job's RLS context (`TENANCY.md` §5, `DATABASE.md` §14a) — this specifically tests that `SET LOCAL` truly resets at transaction boundary under the pooling strategy actually used.
-- Reused DB connection after an error/exception path (not just the happy path) → context is still correctly cleared, verified with a fault-injected mid-transaction failure.
+These exercise the canonical scope hierarchy `platform → reseller → organization → workspace → team` (`TENANCY.md` §1a). They are organized by the *direction* of the attempted access, because horizontal and vertical failures have different causes and different fixes.
+
+### 6a. Horizontal isolation (sideways, at the same level)
+
+- Org A → Org B: read, update, delete and enumerate, for every resource type → denied.
+- Workspace A → Workspace B **within the same organization** → denied. This one matters precisely because RLS does not cover it (`TENANCY.md` §3a); it is the authorization layer's own boundary and is tested as such.
+- Team A → Team B within the same workspace → denied.
+- Reseller A → Reseller B's organizations → denied.
+
+### 6b. Vertical privilege escalation (upward)
+
+Each of these asserts that a grant is never widened by the scope it is used at (`TENANCY.md` §1a.4):
+
+- team-scoped grant attempting a workspace-scoped action → denied.
+- workspace-scoped grant attempting an organization-scoped action → denied.
+- organization-scoped grant attempting a reseller-scoped action → denied.
+- reseller-scoped grant attempting a platform-scoped action → denied.
+
+The mirror-image positive tests are equally necessary: an organization-scoped grant *does* reach its own workspaces and teams without any additional grant, or the model has been implemented as isolation-by-accident rather than as inheritance.
+
+### 6c. Scope substitution
+
+An authenticated caller supplies another `org_id` / `workspace_id` / `team_id` / `reseller_id` in a path, query, body or header → rejected, never silently substituted and never silently filtered to an empty result (`TENANCY.md` §2b). Includes a forged tenant id in a JWT claim: rejected because tenancy is re-derived from `user_roles` against the *verified* credential, not read from the claim.
+
+### 6d. Enumeration
+
+List organizations, workspaces, teams, users and roles as principals at each scope level, and assert that out-of-scope resources are **absent from the listing** rather than returned-and-forbidden — and that a direct fetch by a known out-of-scope id returns `404` without echoing the identifier (`TENANCY.md` §4a). A test that only checks the `403` misses the disclosure.
+
+### 6e. Role-assignment escalation
+
+- A lower-scope actor granting a role at a higher scope → denied.
+- Any non-platform actor granting `alendei_super_admin`, `alendei_support` or `reseller_admin` → denied.
+- Granting a platform role at `organization` scope to "scope it down" → denied.
+- Granting a permission the actor does not itself hold → denied.
+- Composing a custom tenant role containing a `platform.*` permission → refused by `fn_validate_role_permission`.
+- Cross-tenant grant (Organization A's role at a scope owned by Organization B, `RBAC.md` §6's invalid state) → rejected at the application-validation layer **and**, independently, at the database trigger when that layer is deliberately bypassed. Both paths are tested separately; a test that only exercises the service layer proves nothing about the trigger.
+- A forged `org_id` on a grant insert → overwritten by the trigger's derived value, not merely rejected.
+
+### 6f. Parent–child integrity
+
+- A workspace that does not belong to the claimed organization → rejected.
+- A team that does not belong to the claimed workspace or organization → rejected, including at the database, where the composite foreign key makes the inconsistent row unrepresentable (`TENANCY.md` §1a.3).
+- A role-grant scope whose ownership chain does not reach the role's organization → rejected.
+
+### 6g. Database-level RLS proof
+
+These connect **directly as the non-owner principal**, bypassing the application entirely, because the point is to prove the guarantee survives the application being wrong:
+
+- `acc_app` with another tenant's context set → sees nothing of this tenant's data, for select, update and delete alike.
+- `acc_app` with *no* tenant context set → sees nothing at all (fails closed, not open).
+- `acc_app` attempting to write a row into another tenant → refused by the policy's `WITH CHECK`, not merely filtered on read.
+- `acc_app` cannot disable RLS, cannot `SET ROLE` to the owner, and is neither table owner nor superuser — asserted against the catalog, not assumed.
+- `acc_auth` and `acc_relay` hold exactly their intended grants and no others — also asserted against the catalog, so a future migration that widens one is caught.
+- **Negative control**: a deliberately weakened query (one that omits the application's own `org_id` filter) still returns nothing cross-tenant. Without this test the suite cannot distinguish "RLS works" from "the application filter happened to work".
+
+### 6h. Worker and pooled-connection context
+
+- Worker tenant-context contamination: two jobs for two different organizations run back-to-back on the same pooled connection; the second never sees the first's RLS context (`TENANCY.md` §5, `DATABASE.md` §14a) — this specifically tests that `SET LOCAL` truly resets at transaction boundary under the pooling strategy actually used.
+- Reused connection after an error/exception path (not just the happy path) → context still cleared, verified with a fault-injected mid-transaction failure.
+
+### 6i. WebSocket authorization
+
+- Ticket expiry → refused.
+- Ticket reuse/replay after consumption → refused.
+- Ticket bound to the issuing user, session and tenant context → a ticket cannot be used by a different principal.
+- Ticket issued for Workspace A used to subscribe to Workspace B's topic → refused.
+- Subscription outside the ticket's recorded topic scope → refused, not silently ignored.
+- Revoking the underlying session invalidates its outstanding tickets.
 
 ## 7. Billing tests
 
@@ -116,7 +179,8 @@ Fault injection targets: kill a Kafka broker/partition leader mid-flow, inject P
 ## 10. Security testing
 
 - SAST and dependency vulnerability scanning in CI (blocking on high/critical findings).
-- Targeted abuse-case tests per `SECURITY.md` §6: tenant-isolation bypass attempts (cross-org ID substitution on every resource type, §6 above), webhook signature bypass/replay attempts, rate-limit bypass attempts, privilege-escalation attempts via `user_roles`/`role_permissions` manipulation (`RBAC.md` §6 invalid-scope tests), unauthorized provider test-send/admin-operation attempts (`PROVIDER_ADAPTER.md` §4).
+- Targeted abuse-case tests per `SECURITY.md` §6: the full tenant- and scope-isolation matrix in §6 above, webhook signature bypass/replay attempts, rate-limit bypass attempts, privilege-escalation attempts via `user_roles`/`role_permissions` manipulation (`RBAC.md` §§6-7), unauthorized provider test-send/admin-operation attempts (`PROVIDER_ADAPTER.md` §4).
+- **Every security defect found gets a regression test before it gets a fix**, named for the behaviour it prevents rather than for the incident.
 - Periodic manual review (`code-review`/security-review discipline) before any phase's production release gate.
 
 ## 11. Load/performance testing

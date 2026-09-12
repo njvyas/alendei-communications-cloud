@@ -60,7 +60,10 @@ Given a channel's eligible provider set (possibly one, usually several), selects
 
 ## 4. Routing policy precedence (the single deterministic answer to "which policy wins")
 
-`routing_policies` (`DATABASE.md` §4) carries `scope_type` + `scope_id`, one row per scope instance. **Exactly one precedence hierarchy applies platform-wide, matching the tenancy hierarchy (`TENANCY.md` §1) plus the message-origination dimensions that sit below it**:
+`routing_policies` (`DATABASE.md` §4) carries `scope_type` + `scope_id`, one row per scope instance. **Exactly one precedence hierarchy applies platform-wide, matching the canonical tenancy hierarchy (`TENANCY.md` §1a) plus the message-origination dimensions that sit below it**.
+
+`routing_policies.scope_type` is a **configuration** scope and is a different enum from `user_roles.scope_type`, which is the **authorization** scope (`TENANCY.md` §1a.2). Their first levels align deliberately, but neither confers the other: holding a role at `scope_type='workspace'` does not make a workspace-scoped routing policy administrable, and a routing policy existing at some scope grants nobody access to it. Note also that this hierarchy has no `team` level — routing is never configured per team — while it does add `channel`, `campaign`, `journey` and `message`, which are origination dimensions rather than tenancy levels.
+
 
 ```
 1. Platform default        (scope_type=platform, scope_id=NULL)

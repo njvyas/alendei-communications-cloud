@@ -2,6 +2,8 @@
 
 This is the living register of everything flagged as needing a product-owner decision, carrying scalability/security risk, or representing a tension between requirements that this document set resolved with an explicit, stated choice rather than silently picking one side. As of Phase 0.1 (the consolidated architecture consistency & hardening pass), every item that would have blocked a correct, unambiguous Phase 1 implementation has been resolved and is recorded in §1. Items in §2 are explicitly confirmed non-blocking — none of them affect the correctness of Phase 1 Foundation work. Phase 0.2 (final documentation-hardening pass before Phase 1 implementation — transaction-specific pricing, `requested_channel_id` hard-constraint semantics, attempt-level routing/pricing snapshots, idempotency `failed`-status semantics, and the broader engagement-platform product architecture, `ARCHITECTURE.md` §21) added B19–B22 below, all resolved. A follow-up Phase 0.2 correction pass added B23–B25 (multi-component pricing evaluation model, billable-transaction terminology generalization, and a residual reservation-accounting wording fix). Phase 0.3 (surgical documentation-consistency pass) added B26–B28 (Phase 5/Phase 7 billing-dependency de-conflation, removal of "distributed lock" as an implied Phase 5 deliverable, and an explicit Pricing-Evaluation-vs-Usage-Ledger HOW-vs-WHAT boundary statement). Phase 0.4 (final documentation freeze pass) added B29–B30 (made `usage_ledger.pricing_evaluation_id` the authoritative concrete foreign key to the pricing calculation that produced each ledger amount, demoting `rate_card_ref` to descriptive metadata; clarified `DR.md`'s Redis-loss wording so it cannot be read as Redis participating in fallback correctness). No Phase 0.2–0.4 change reopened or contradicted any earlier resolution; the architecture is frozen as of Phase 0.4.
 
+**Phase 1A implementation feedback (B31)**: building the IAM/tenancy foundation surfaced one genuine contradiction the Phase 0 passes had not caught — `user_roles.scope_type` was specified with three values while the tenancy hierarchy, the reseller model and the routing-precedence hierarchy all assumed five. It is resolved below and the affected documents have been reconciled. This is the documented mechanism working as `ROADMAP.md` §1 intends: a phase's `DOCUMENT` stage updates `/docs` in place when implementation reveals a real ambiguity, rather than the implementation silently diverging.
+
 ## 1. Phase-1 blockers — resolved in Phase 0.1 through Phase 0.4
 
 | # | Issue | Resolution | Where documented |
@@ -36,6 +38,64 @@ This is the living register of everything flagged as needing a product-owner dec
 | B16 | Provider test-send and other privileged provider/routing admin operations had no explicit authorization/audit requirement | All gated behind `providers.manage`/`providers.test_send`, all audit-logged without exception; test-send additionally rate-limited and environment-aware | `PROVIDER_ADAPTER.md` §4, `SECURITY.md` §1 |
 | B17 | API contracts left identity types, error-contract completeness, and WebSocket auth underspecified | Four distinct identity types (human/API key/OAuth client/system) formalized; error envelope gained `retryable`; WebSocket auth uses a single-use short-lived ticket, never a JWT in the URL | `API.md` §§3, 7, 9, `DATABASE.md` §2 |
 | B18 | ORM/migration tooling choice was left open, blocking Phase 1's ability to write real migrations | Resolved: Drizzle ORM (SQL-first control needed for RLS `SET LOCAL` patterns, partitioned tables, and the scope-integrity trigger), raw SQL as an escape hatch | `DATABASE.md` §14 |
+| B31 | `user_roles.scope_type` was specified as `ENUM(organization, workspace, team)` in `DATABASE.md` §2 and restated as such in `RBAC.md` §1 — but `RBAC.md` §3 defines `alendei_super_admin` at platform scope and `reseller_admin` at reseller scope, giving those roles no representable scope. `TENANCY.md` §1, `ARCHITECTURE.md` §16, `PRD.md` §6 and `ROUTING_ENGINE.md` §4 all already assumed a five-level hierarchy. The three-value enum was the outlier, not the design | **Five-scope model adopted as canonical**: `platform → reseller → organization → workspace → team`. `TENANCY.md` §1a is now the single normative definition; every other document defers to it and none restates a conflicting set. See the ADR immediately below | `TENANCY.md` §§1a, 2a–2b, 3a, 4a–4b, 6; `RBAC.md` §§1, 2, 3, 4a–4b, 6, 7; `DATABASE.md` §§1, 2, 2a, 14; `ARCHITECTURE.md` §17; `API.md` §§3a, 9a; `SECURITY.md` §§1, 6; `TESTING.md` §6 |
+
+## 1a. ADR-001 — Five-scope authorization hierarchy
+
+**Status**: Accepted (Phase 1A review). Supersedes the three-value `user_roles.scope_type` enum in the Phase 0.4 text of `DATABASE.md` §2.
+
+### Context — the original ambiguity
+
+`DATABASE.md` §2 declared `user_roles.scope_type ENUM(organization, workspace, team)`, and `RBAC.md` §1 restated it. Yet:
+
+- `RBAC.md` §3 defines `alendei_super_admin` with scope "platform" and `reseller_admin` with scope "reseller". Neither value existed in the enum, so neither role could actually be granted.
+- `TENANCY.md` §1, `ARCHITECTURE.md` §16 and `PRD.md` §6 all describe the hierarchy as `Alendei → Reseller → Organization → Workspace → Team → User`.
+- `ROUTING_ENGINE.md` §4 states its precedence hierarchy "matches the tenancy hierarchy (`TENANCY.md` §1)" and enumerates platform and reseller as its first two levels.
+- `DATABASE.md` §2's own description of `fn_validate_user_role_scope` anticipated the gap, saying a platform-level role's `scope_type` "must be a value the platform role's design permits" — an acknowledgement that values outside the three-value enum were expected, without ever naming them.
+
+Four documents assumed five levels; one enum said three. Two engineers reading the set would have implemented incompatible authorization models, which is exactly the bar §5 sets for a §1 blocker.
+
+### Decision
+
+The canonical authorization scope hierarchy is:
+
+```
+PLATFORM  →  RESELLER  →  ORGANIZATION  →  WORKSPACE  →  TEAM
+```
+
+`user_roles.scope_type` carries exactly these five values. `TENANCY.md` §1a is the single normative definition of what each scope means, which roles are assignable at each, how inheritance works, and how scope resolves from an authenticated identity.
+
+### Why five scopes are required
+
+- **`platform` is not optional.** Without it, Alendei's own operators have no representable identity, and cross-tenant control-plane access would have to be expressed as an out-of-band flag or a superuser database connection — both worse, because neither is auditable as a role grant.
+- **`reseller` is not optional.** `ARCHITECTURE.md` §16 makes reseller scoping a first-class tenancy dimension enforced "the same way tenant scoping is". Collapsing it into `organization` would force a reseller admin to hold one grant per organization, which breaks the moment an organization is added — the grant set would silently fail to cover it.
+- **`organization`, `workspace`, `team`** are unchanged from the original three, and keep their original meanings.
+
+Adding a scope level is not free — each one is a boundary that must be tested in both directions — but four documents already depended on these two levels existing.
+
+### Consequences for RBAC
+
+- A role's assignable scopes are constrained by whether it is platform-level (`roles.org_id IS NULL`) or tenant-level; `RBAC.md` §4a is the complete matrix.
+- A platform-level role may only be granted at `platform` or `reseller` scope, and only by an actor who already holds platform admin — enforced in `fn_validate_user_role_scope`, not only in the service layer.
+- Inheritance is downward only. This is what makes an `organization` grant sufficient for the workspaces beneath it, and what makes a `workspace` grant insufficient for anything above it.
+- A new escalation path had to be closed explicitly: composing a custom tenant role containing a `platform.*` permission. `fn_validate_role_permission` refuses it at the database.
+
+### Consequences for RLS
+
+- `user_roles.org_id` becomes nullable — `NULL` for `platform` and `reseller` grants, which belong to no organization — with a check constraint enforcing the per-scope shape, and the value **derived by the trigger** rather than trusted from the writer.
+- Policies are built from one predicate, `app_org_in_scope()`, which encodes platform-admin and reseller-reach alongside the direct organization match.
+- Two session variables join `app.current_org_id`: `app.current_reseller_id` and `app.is_platform_admin`. Both are set only from resolved authentication material.
+- **RLS enforces the boundary down to organization only.** Workspace and team are enforced by the authorization layer above it. This is a deliberate, stated limit (`TENANCY.md` §3a) rather than an unexamined gap, and it is listed as a residual risk; `DECISIONS.md` D3 is the decision that would change it.
+
+### Consequences for API and WebSocket authorization
+
+- Authorization becomes two checks, not one: the permission, *and* whether it is held at a scope covering the target (`API.md` §3a).
+- Enumeration inherits the same rule: out-of-scope resources are absent from listings, and a direct fetch returns `404` rather than `403`, so an id's existence is not disclosed.
+- A WebSocket connection's scope is fixed at ticket-issue time and recorded on the ticket row; the connection never re-resolves scope and can never widen it (`API.md` §9a).
+
+### Migration and compatibility
+
+None. The contradiction was found during Phase 1A, before any `user_roles` row existed outside a development database, so the five-value enum ships in the first migration rather than as an `ALTER TYPE`. No production data, no deployed API and no external integration depends on the three-value form. Had this been found later, the change would have required an `ALTER TYPE ... ADD VALUE` plus a backfill of `user_roles.org_id` — which is precisely the cost avoided by resolving it at the first implementation gate.
 
 ## 2. Non-blocking future decisions (confirmed — none of these affect Phase 1 correctness)
 

@@ -52,14 +52,14 @@ Phase 8's sub-phases (8A–8G) implement the Engagement Layer and Experience App
 - **Dependencies**: Phase 0 sign-off.
 - **Architecture**: implements `TENANCY.md`, `RBAC.md` module boundaries; adopts the migration tooling decision already resolved in Phase 0.1 (`DATABASE.md` §14 — Drizzle).
 - **Implementation scope**: `iam`, `tenancy` modules; auth (session + API key, not yet SSO/OAuth2); WebSocket ticket issuance (`API.md` §9); base `/health` endpoint; OTel/Prometheus/logging scaffolding wired but with nothing meaningful to instrument yet beyond the foundation itself; the `fn_validate_user_role_scope` DB trigger (`RBAC.md` §6) ships with the first `user_roles` migration, not added later.
-- **DB changes**: `organizations, resellers, workspaces, teams, users, roles, permissions, role_permissions, user_roles, api_keys, sessions, ws_tickets, idempotency_keys`.
+- **DB changes**: `organizations, resellers, workspaces, teams, users, roles, permissions, role_permissions, user_roles, api_keys, sessions, ws_tickets, idempotency_keys`. `user_roles.scope_type` carries the five canonical scope values (`TENANCY.md` §1a, `DECISIONS.md` B31/ADR-001). Every tenant-scoped table's RLS policy ships in the same migration as the table, never a later one.
 - **API changes**: `/auth`, `/tenants`, `/users`, `/roles`, `/permissions`, `/health`.
 - **Frontend changes**: Next.js app skeleton, login flow, tenant/user management console screens.
-- **Tests**: unit + integration for auth/RBAC/tenant isolation (including a deliberate cross-tenant-access-attempt test suite).
+- **Tests**: unit + integration for auth/RBAC/tenant isolation, following the matrix in `TESTING.md` §6 — horizontal isolation at every scope level, vertical escalation between every adjacent pair, scope substitution, enumeration, role-assignment escalation, parent-child integrity, direct database RLS proof through the non-owner principal (including a negative control that would fail if RLS were absent), and WebSocket ticket expiry/reuse/binding.
 - **Security checks**: session hardening review, RLS policy verification per table.
 - **Observability**: base dashboards for API latency/errors, auth failure rate.
 - **Documentation**: update `TENANCY.md`/`RBAC.md`/`DATABASE.md` with any implementation-driven refinements.
-- **Acceptance criteria**: a user can register/log in, be assigned roles at org/workspace/team scope, and tenant isolation tests pass (including the negative cross-tenant tests).
+- **Acceptance criteria**: a user can register/log in, be assigned roles at any valid scope of the canonical hierarchy, and the full `TESTING.md` §6 isolation matrix passes — including the negative cross-tenant tests and the negative control proving the suite would fail if RLS were weakened.
 - **Deployment requirements**: Dev environment stood up.
 - **Rollback strategy**: standard app rollback (`DEPLOYMENT.md` §7); no external-facing risk yet.
 

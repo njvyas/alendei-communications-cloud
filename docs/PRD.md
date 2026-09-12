@@ -59,12 +59,14 @@ ACC replaces this with a provider-abstracted core where providers are swappable 
 Alendei (platform)
   └─ Reseller (optional; "Alendei Direct" is the implicit default reseller)
        └─ Organization ("Customer" — the paying tenant)
-            └─ Workspace (brand/business-unit scope; unit of white-label and billing rollup)
+            └─ Workspace (brand/business-unit scope; unit of white-label branding and of usage
+                           roll-up for reporting — not itself a billing entity; wallets, credit
+                           accounts and invoices exist only at organization level)
                  └─ Team (permission-scoping group within a workspace)
                       └─ User
 ```
 
-Full isolation model, RBAC/ABAC, and rationale: see `TENANCY.md` and `RBAC.md`.
+The authorization scope hierarchy mirrors this structure exactly — `platform → reseller → organization → workspace → team` — and is defined normatively in `TENANCY.md` §1a. Full isolation model, RBAC/ABAC, and rationale: see `TENANCY.md` and `RBAC.md`.
 
 ## 7. Functional scope by domain
 
