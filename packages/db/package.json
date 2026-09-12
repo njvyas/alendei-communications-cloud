@@ -1,0 +1,41 @@
+{
+  "name": "@acc/db",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PostgreSQL schema, migrations, RLS policies and tenant-scoped client for ACC",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "migrations"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/cli/migrate.ts",
+    "db:seed": "tsx src/cli/seed.ts",
+    "db:reset": "tsx src/cli/reset.ts",
+    "test": "npm run test:unit && npm run test:integration",
+    "test:unit": "jest --selectProjects unit --passWithNoTests",
+    "test:integration": "jest --selectProjects integration --runInBand --passWithNoTests"
+  },
+  "dependencies": {
+    "@acc/contracts": "*",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.23.0",
+    "uuidv7": "^1.2.1"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.10.0",
+    "@types/pg": "^8.15.6",
+    "dotenv": "^17.4.2",
+    "drizzle-kit": "^0.31.10",
+    "jest": "^30.5.1",
+    "ts-jest": "^29.4.12",
+    "tsx": "^4.23.13",
+    "typescript": "~5.9.3"
+  }
+}
