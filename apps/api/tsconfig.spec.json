@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": false,
+    "types": ["node", "jest"],
+    "paths": {
+      "@acc/contracts": ["../../packages/contracts/src/index.ts"],
+      "@acc/db": ["../../packages/db/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "jest.config.ts"],
+  "references": []
+}

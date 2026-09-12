@@ -1,0 +1,25 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "types": ["node", "jest"],
+    "paths": {
+      "@acc/contracts": ["../../packages/contracts/src/index.ts"],
+      "@acc/db": ["../../packages/db/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../../packages/contracts/tsconfig.json"
+    },
+    {
+      "path": "../../packages/db/tsconfig.json"
+    }
+  ]
+}
