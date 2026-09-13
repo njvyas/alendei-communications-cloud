@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   boolean,
   check,
+  foreignKey,
   index,
   inet,
   jsonb,
@@ -74,9 +75,34 @@ export const sessions = pgTable(
     revokedAt: tstz('revoked_at'),
     revokedReason: text('revoked_reason'),
     expiresAt: tstz('expires_at').notNull(),
+
+    /**
+     * The rotation chain this session belongs to (`RBAC.md` §5a).
+     *
+     * A login starts a family; every refresh rotates the current session into a
+     * successor carrying the same `family_id`. It exists so that detecting a
+     * replayed refresh token can revoke the entire chain in one statement — the
+     * standard response to a stolen token, which is otherwise indistinguishable
+     * from legitimate use.
+     */
+    familyId: uuid('family_id')
+      .notNull()
+      .default(sql`uuidv7()`),
+    /** Set when this session has been rotated; a rotated session never refreshes again. */
+    rotatedAt: tstz('rotated_at'),
+    /** The successor minted by that rotation. */
+    replacedBySessionId: uuid('replaced_by_session_id'),
+    /** Set when an already-rotated refresh token was presented again — theft, presumed. */
+    reuseDetectedAt: tstz('reuse_detected_at'),
+
     ...timestamps(),
   },
   (table) => [
+    foreignKey({
+      name: 'sessions_replaced_by_session_id_fk',
+      columns: [table.replacedBySessionId],
+      foreignColumns: [table.id],
+    }).onDelete('set null'),
     uniqueIndex('sessions_refresh_token_hash_key').on(table.refreshTokenHash),
     index('sessions_user_id_idx').on(table.userId),
     // The index the "active sessions for this user" lookup and the expiry
@@ -84,6 +110,19 @@ export const sessions = pgTable(
     index('sessions_active_idx')
       .on(table.userId, table.expiresAt)
       .where(sql`${table.revokedAt} IS NULL`),
+    index('sessions_family_id_idx').on(table.familyId),
+    /**
+     * A successor may only ever replace one predecessor. Together with the
+     * conditional rotation UPDATE (`WHERE rotated_at IS NULL`), this is what
+     * makes concurrent rotation of the same token impossible at the database
+     * rather than merely unlikely in the application.
+     */
+    unique('sessions_replaced_by_session_id_key').on(table.replacedBySessionId),
+    check(
+      'sessions_rotation_shape',
+      sql`(${table.replacedBySessionId} IS NULL OR ${table.rotatedAt} IS NOT NULL)
+       AND (${table.reuseDetectedAt} IS NULL OR ${table.rotatedAt} IS NOT NULL)`,
+    ),
   ],
 );
 

@@ -96,6 +96,15 @@ export const envSchema = z.object({
   AUTH_REFRESH_TOKEN_TTL_SECONDS: positiveInt.default(2_592_000),
   AUTH_WS_TICKET_TTL_SECONDS: positiveInt.max(300).default(30),
   AUTH_MAX_SESSIONS_PER_USER: positiveInt.max(1_000).default(25),
+
+  // --- Bootstrap (ADR-003 D-1) ---------------------------------------------
+  // Consumed only by the owner-run `bootstrap` CLI, never by the running API.
+  // The password is a *secret reference* resolved through `SecretsPort`, so no
+  // plaintext credential ever lives in configuration — and there is deliberately
+  // no default, so a missing value fails the bootstrap instead of silently
+  // installing a known password.
+  AUTH_BOOTSTRAP_EMAIL: z.string().email().optional(),
+  AUTH_BOOTSTRAP_PASSWORD_REF: secretRef.optional(),
   AUTH_ARGON2_MEMORY_KIB: positiveInt.min(8_192).default(19_456),
   AUTH_ARGON2_TIME_COST: positiveInt.min(2).max(10).default(2),
   AUTH_ARGON2_PARALLELISM: positiveInt.min(1).max(16).default(1),

@@ -14,7 +14,8 @@
     "test:unit": "jest --selectProjects unit",
     "test:integration": "jest --selectProjects integration --runInBand",
     "test:security": "jest --selectProjects security --runInBand --passWithNoTests",
-    "test:cov": "jest --selectProjects unit --coverage"
+    "test:cov": "jest --selectProjects unit --coverage",
+    "bootstrap": "tsx src/cli/bootstrap.ts"
   },
   "dependencies": {
     "@acc/contracts": "*",

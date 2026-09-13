@@ -44,7 +44,17 @@ Scope integrity (`RBAC.md` §6): `scope_id` is polymorphic and cannot carry a si
 
 **`api_keys`** — `id, org_id FK, workspace_id NULL FK, name, key_prefix, key_hash, scopes JSONB (permission subset), last_used_at NULL, expires_at NULL, revoked_at NULL, revoked_reason NULL, created_by NULL FK users, created_at, updated_at`. `key_prefix` is unique and shape-checked (`^ak_(live|test)_[A-Za-z0-9]{16}$`) so verification is an indexed lookup rather than a scan; `scopes` is CHECKed to be a JSON array. A composite `UNIQUE(id, org_id)` exists so `audit_logs` can reference a key *and* its organization together, making a cross-tenant actor reference unrepresentable (§12). Effective permissions at use are an intersection, not simply `scopes` — `RBAC.md` §5c.
 
-**`sessions`** — `id, user_id FK, refresh_token_hash (unique), device_info JSONB, ip NULL, user_agent NULL, last_used_at NULL, revoked_at NULL, revoked_reason NULL, expires_at, created_at, updated_at`. A partial index on `(user_id, expires_at) WHERE revoked_at IS NULL` serves both the "active sessions" lookup and the expiry sweep. `revoked_at` and `expires_at` are checked on **every** refresh, not merely at access-token expiry (`RBAC.md` §5a).
+**`sessions`** — `id, user_id FK, refresh_token_hash (unique), device_info JSONB, ip NULL, user_agent NULL, last_used_at NULL, revoked_at NULL, revoked_reason NULL, expires_at, family_id, rotated_at NULL, replaced_by_session_id NULL FK sessions, reuse_detected_at NULL, created_at, updated_at`. A partial index on `(user_id, expires_at) WHERE revoked_at IS NULL` serves both the "active sessions" lookup and the expiry sweep. `revoked_at` and `expires_at` are checked on **every** refresh, not merely at access-token expiry (`RBAC.md` §5a).
+
+**Rotation lineage** (Phase 1B.2, migration `0003`). `family_id` identifies the chain of sessions descending from one login; every rotation mints a successor carrying the same family. `rotated_at`/`replaced_by_session_id` record that a session has been spent and by which successor, and `reuse_detected_at` marks a session whose token was presented again after rotation. The invariant these exist to enforce, and where each layer enforces it:
+
+| Layer | Mechanism | What it stops |
+|---|---|---|
+| Conditional UPDATE | `WHERE id = $1 AND rotated_at IS NULL` | Two concurrent refreshes of the same token both rotating. The loser blocks on the row lock, re-evaluates against the committed row and updates zero rows. |
+| `sessions_replaced_by_session_id_key` | `UNIQUE(replaced_by_session_id)` | A second successor ever replacing the same predecessor, even if the conditional update were weakened. |
+| `sessions_rotation_shape` | CHECK | Lineage columns contradicting each other — naming a successor, or recording reuse, without having been rotated. |
+
+A zero-row rotation is not a retryable failure: it means the token had already been spent, which is the signature of a replayed token. The response is to revoke the whole `family_id` chain. This is enforced by the database rather than by an application read-then-write, which would have a race window between the two statements.
 
 **`ws_tickets`** — single-use WebSocket connection tickets (`API.md` §9): `id, user_id FK, org_id FK, workspace_id NULL, scope JSONB (topics permitted), issued_at, expires_at (short, ~30s), consumed_at NULL`. A ticket is minted by an authenticated `POST /api/v1/ws/ticket` call and consumed exactly once at WebSocket connect time; the tenant context bound to the resulting connection comes from the ticket record, never from a client-supplied value on the socket.
 

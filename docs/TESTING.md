@@ -192,6 +192,20 @@ One test asserting every link of the request-to-database chain, required before 
 - `withRequestTenant` establishes context with `SET LOCAL` inside one transaction, and the audit row written through it lands with the derived tenancy.
 - With no principal, the path refuses rather than writing unscoped.
 
+### 6k.2 Credentials, sessions and rotation (Phase 1B.2)
+
+Implemented in `apps/api/src/iam/*.spec.ts` (unit) and `apps/api/test/iam-session.int-spec.ts` / `bootstrap.int-spec.ts` (integration).
+
+- **Credentials** — Argon2id digest asserted by its `$argon2id$` prefix and configured `m`/`t`/`p`; correct password verifies, wrong password and empty password do not; the same password salts differently each time; a corrupt digest reads as "wrong password" rather than throwing; `needsRehash` is true below the configured cost and for any unparseable or foreign digest; no method returns or retains the plaintext.
+- **Refresh tokens** — 32 bytes of CSPRNG entropy, never repeating; only the SHA-256 is persisted; the stored row contains no substring of the raw token; the token has no parseable structure to forge; hash comparison does not short-circuit.
+- **User lifecycle** — an invited user has no credential and cannot authenticate; activation sets a digest and moves to `active`; a **disabled user cannot authenticate even though their password still verifies** (the test that proves status is checked independently of the digest); the database refuses an `active` user with no credential.
+- **Sessions** — creation, lookup by token hash, idempotent revocation preserving the original reason, revoke-all, and presentability covering revoked, expired **and rotated**.
+- **Rotation** — the successor inherits the family and issues a different token; the predecessor is marked spent; replaying a rotated token is detected and revokes the entire family.
+- **Concurrency** — two genuinely concurrent transactions on **two independent connection pools** rotate the same token; exactly one wins. Plus the constraints beneath it: two successors replacing one predecessor is refused, and contradictory lineage columns are refused.
+- **Bootstrap** — creates the first platform administrator; is idempotent; a second run with a *different* email still creates no second administrator; both audit rows are written inside the bootstrap transaction; an audit failure rolls the administrator back; a missing platform role aborts with a clear message; and `fn_validate_user_role_scope` is **not** weakened — an ordinary `acc_app` principal still cannot grant a platform role afterwards.
+- **Principal boundary** — `acc_auth` is refused INSERT on `users`; its grants on `sessions` are exactly `INSERT, SELECT, UPDATE` with no DELETE, asserted against the catalog.
+- **RLS** — `sessions` still carries both policies after the lineage migration, a user sees only their own sessions through `acc_app`, and a negative control weakens `sessions_self` mid-test to prove the isolation assertions measure the policy.
+
 ### 6l. Tenant-context selection (Phase 1B)
 
 - A principal with exactly one organization in scope resolves it implicitly.

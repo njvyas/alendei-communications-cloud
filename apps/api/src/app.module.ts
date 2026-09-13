@@ -8,6 +8,7 @@ import { AuditModule } from './audit/audit.module';
 import { AppConfigModule } from './config/config.module';
 import { DatabaseModule } from './database/database.module';
 import { HealthModule } from './health/health.module';
+import { IamModule } from './iam/iam.module';
 import { HttpMetricsInterceptor } from './observability/http-metrics.interceptor';
 import { LoggingModule } from './observability/logging.module';
 import { ObservabilityModule } from './observability/observability.module';
@@ -30,6 +31,7 @@ import { SecretsModule } from './secrets/secrets.module';
     SecretsModule,
     DatabaseModule,
     AuditModule,
+    IamModule,
     RedisModule,
     HealthModule,
   ],

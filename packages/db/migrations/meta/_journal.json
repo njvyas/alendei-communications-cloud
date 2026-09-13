@@ -22,6 +22,13 @@
       "when": 1789263415470,
       "tag": "0002_phase1b_audit_auth_anonymous_actor",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789265736044,
+      "tag": "0003_phase1b_session_rotation_lineage",
+      "breakpoints": true
     }
   ]
 }

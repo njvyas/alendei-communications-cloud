@@ -104,6 +104,14 @@ export class AppConfigService {
     } as const;
   }
 
+  /** Owner-run bootstrap only (ADR-003 D-1); never read by a request path. */
+  get bootstrap() {
+    return {
+      email: this.get('AUTH_BOOTSTRAP_EMAIL'),
+      passwordRef: this.get('AUTH_BOOTSTRAP_PASSWORD_REF'),
+    } as const;
+  }
+
   get rateLimit() {
     return {
       enabled: this.get('RATE_LIMIT_ENABLED'),

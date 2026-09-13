@@ -113,6 +113,22 @@ The **refresh token** is an opaque random value stored only as a hash in `sessio
 
 Session/device management: `sessions` records device/IP/user-agent metadata and supports explicit revocation (single session or "all sessions for user"); revoking a session invalidates its refresh token immediately — `revoked_at` and `expires_at` are checked on **every** refresh, not merely at token expiry.
 
+**Rotation and reuse detection** (Phase 1B.2). Every refresh rotates the token and records lineage on `sessions` (`DATABASE.md` §2): the spent session is marked `rotated_at` and points at its successor, which inherits the chain's `family_id`. Presenting an already-rotated token is treated as theft rather than as a retryable error — the entire family is revoked and `reuse_detected_at` is set. Concurrency is settled by the database, through a conditional `UPDATE ... WHERE rotated_at IS NULL` plus a unique constraint on the successor, so two simultaneous refreshes of one token cannot both succeed.
+
+A **rotated** session is spent even though it is neither revoked nor expired; presentability is all three conditions, not just the two.
+
+### 5a.1 User lifecycle and credential state (Phase 1B.2)
+
+`users.status` is load-bearing, not descriptive, because `users_active_requires_credential` enforces at the database that an `active` user holds a password or an MFA secret:
+
+```
+invited  ──activate(password)──▶  active  ──disable()──▶  disabled
+```
+
+An `invited` user has no credential and cannot authenticate. A `disabled` user retains their digest — which is precisely why status is checked independently of password verification, and why a correct password for a disabled account is still a failed login.
+
+**How an invited user comes to set their password is not yet decided.** It requires either an invitation token delivered out of band or an administrator setting it directly, and neither is documented. Phase 1B.2 deliberately implements neither: `activate(userId, password)` takes the password directly, which is what the bootstrap CLI needs, and the delivery mechanism is recorded as a decision required before the `/users` invitation endpoint ships in Phase 1B.6 (`DECISIONS.md`). No invitation-token table is invented and no mail transport is assumed.
+
 ### 5b. Bootstrapping the first platform admin (ADR-003 D-1)
 
 `fn_validate_user_role_scope` refuses a platform-level role grant unless the actor already holds platform admin (§7). Combined with a database that seeds no users, this makes the first platform grant impossible through any ordinary path — which is the intended property, not a gap, and it means the bootstrap must be explicit rather than incidental.
