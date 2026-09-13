@@ -15,6 +15,13 @@
       "when": 1789201791715,
       "tag": "0001_phase1b_audit_log",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789263415470,
+      "tag": "0002_phase1b_audit_auth_anonymous_actor",
+      "breakpoints": true
     }
   ]
 }

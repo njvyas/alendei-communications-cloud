@@ -181,6 +181,17 @@ Implemented across the `@acc/api` integration and `security` Jest projects; the 
 - `/auth/*` rate limiting returns `429` with `Retry-After`; the per-IP and per-account buckets are each independently effective.
 - Revoked and expired API keys are rejected; a key acts only within its bound organization; a key's effective permissions are the intersection in `RBAC.md` §5c, re-evaluated at use — a key whose creator has since lost a permission loses it too.
 
+### 6k.1 The authenticated chain (Phase 1B.3 gate)
+
+One test asserting every link of the request-to-database chain, required before any authenticated tenant-scoped endpoint uses `AuditWriter`'s non-transactional path (`ROADMAP.md` §4a):
+
+`AuthGuard` → `RequestContext.setPrincipal()` → `ScopeResolver` → `TenantContext` → `TenantDatabase.withRequestTenant()` → `SET LOCAL` → `acc_app` → RLS → `AuditWriter`.
+
+- A verified credential resolves a principal; an unverified or revoked one resolves none and the request fails closed.
+- Tenancy is derived from `user_roles`, never from a token claim — asserted with a token carrying a forged `org_id`.
+- `withRequestTenant` establishes context with `SET LOCAL` inside one transaction, and the audit row written through it lands with the derived tenancy.
+- With no principal, the path refuses rather than writing unscoped.
+
 ### 6l. Tenant-context selection (Phase 1B)
 
 - A principal with exactly one organization in scope resolves it implicitly.

@@ -4,6 +4,7 @@ import { APP_FILTER, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { CorrelationMiddleware } from './common/context/correlation.middleware';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { validationPipe } from './common/http/validation.pipe';
+import { AuditModule } from './audit/audit.module';
 import { AppConfigModule } from './config/config.module';
 import { DatabaseModule } from './database/database.module';
 import { HealthModule } from './health/health.module';
@@ -28,6 +29,7 @@ import { SecretsModule } from './secrets/secrets.module';
     ObservabilityModule,
     SecretsModule,
     DatabaseModule,
+    AuditModule,
     RedisModule,
     HealthModule,
   ],

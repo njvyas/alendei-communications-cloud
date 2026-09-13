@@ -65,11 +65,33 @@ The audit log (1B.0) is complete. The remaining sub-phases are sequenced by actu
 | **1B.0** | `audit_logs` table, RLS, triggers, grants (migration `0001`) | — | ✅ complete at `db6337e`, 58 tests |
 | **1B.1** | Audit write path: `AuditWriter`, centralized recursive redactor, audit module | 1B.0 | Every Phase 1B audit action is writable and asserted; a failed audit insert rolls back its accompanying mutation; `isSecuritySensitiveAction()` has a real caller |
 | **1B.2** | Credentials and bootstrap: Argon2id credential service, owner-run bootstrap CLI, `sessions` rotation lineage | 1B.1 | A platform admin exists with a verifiable password; bootstrap is idempotent and audits itself |
-| **1B.3** | Authentication and session lifecycle: login, refresh with rotation, logout, session revocation, `AuthGuard`, auth rate limiting | 1B.2 | `RequestContext.setPrincipal()` is called on every authenticated request; `/auth/me` returns a real principal |
+| **1B.3** | Authentication and session lifecycle: login, refresh with rotation, logout, session revocation, `AuthGuard`, auth rate limiting | 1B.2 | `RequestContext.setPrincipal()` is called on every authenticated request; `/auth/me` returns a real principal; **plus the end-to-end chain criterion below** |
 | **1B.4** | Scope resolution and tenant context: `ScopeResolver`, `TenantGuard`, advisory-identifier cross-check, `X-Acc-Organization` selection, worker envelope mapper | 1B.3 | `TenantDatabase.withRequestTenant()` is live; RLS is exercised by real requests |
 | **1B.5** | Authorization: `scopeCovers`, `PermissionEvaluator`, `AuthorizationGuard`, role CRUD, grant/revoke, tenant-role seeding at provisioning | 1B.4 | The full §6b and §6e matrices pass; each service-only escalation guard has a named test |
 | **1B.6** | Identity and credentials surface: user invite/update/disable, API-key create/list/revoke, `/audit` read | 1B.5 | The minimum endpoint set is live, audited, rate-limited and IDOR-safe |
 | **1B.7** | Vertical slice, minimal console, Gate B | 1B.6 | Every Gate B criterion below is met |
+
+#### 1B.3 exit criterion — the authenticated chain, proven end to end
+
+Recorded during the Phase 1B.1 verification pass. `AuditWriter`'s non-transactional branch calls `TenantDatabase.withRequestTenant()`, which today is unreachable: no principal is ever resolved, so it fails closed with `AUTH_CREDENTIAL_REQUIRED`. That branch must not carry its first real traffic unproven.
+
+**Before any authenticated, tenant-scoped API uses the non-transactional `AuditWriter` path, this chain must be demonstrated end to end by an automated test:**
+
+```
+AuthGuard
+  → RequestContext.setPrincipal()
+    → ScopeResolver
+      → TenantContext
+        → TenantDatabase.withRequestTenant()
+          → SET LOCAL
+            → acc_app
+              → RLS
+                → AuditWriter
+```
+
+Each link asserted, not merely exercised: the guard resolves a principal from a verified credential only; the principal reaches `RequestContext`; the scope resolver derives tenancy from grants rather than from any claim; `withRequestTenant` establishes that tenancy with `SET LOCAL` inside one transaction; the row written is RLS-filtered under `acc_app`; and the audit row lands with the derived tenancy. A failure at any link must fail closed rather than fall through to an unscoped write.
+
+Until that test exists, callers use the transactional `record(input, tx)` form, which is in any case what ADR-003 D-2 requires for every security-sensitive action.
 
 ### 4b. Gate B — Phase 1B acceptance
 

@@ -69,6 +69,39 @@ export function isAuthRoleAuditAction(action: string): boolean {
 }
 
 /**
+ * The actor label recorded when an authentication attempt cannot be associated
+ * with a real user — an unknown email address (ADR-003 R4, `SECURITY.md` §4).
+ *
+ * Such an attempt is never omitted from the audit trail, and a fictitious
+ * `actorUserId` is never invented for it: the row is written with
+ * `actorType: 'system'` and this label instead.
+ *
+ * The value is load-bearing, not descriptive. The `audit_logs_auth_insert`
+ * policy admits a `system` actor through `acc_auth` only when the action is
+ * exactly `auth.login.failed` AND the label is exactly this string, so a change
+ * here without the matching migration silently disables the anonymous-failure
+ * audit path. `audit.int-spec.ts` asserts the two agree.
+ */
+export const ANONYMOUS_LOGIN_ACTOR_LABEL = 'anonymous_login_attempt';
+
+/**
+ * The audit record for a login attempt against an unknown identity. Exported as
+ * one helper so every caller produces the exact shape the database policy
+ * admits, rather than assembling it from the constants by hand.
+ */
+export function anonymousLoginFailureActor(): Pick<
+  AuditRecordInput,
+  'actorType' | 'actorUserId' | 'actorApiKeyId' | 'actorLabel'
+> {
+  return {
+    actorType: 'system',
+    actorUserId: null,
+    actorApiKeyId: null,
+    actorLabel: ANONYMOUS_LOGIN_ACTOR_LABEL,
+  };
+}
+
+/**
  * Actions classified as security-sensitive (`SECURITY.md` §4): their audit write
  * is synchronous and failing it fails the request.
  */
