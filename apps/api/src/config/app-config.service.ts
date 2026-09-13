@@ -37,6 +37,7 @@ export class AppConfigService {
       port: this.get('API_PORT'),
       globalPrefix: this.get('API_GLOBAL_PREFIX'),
       corsOrigins: this.get('CORS_ORIGINS'),
+      trustedProxyHops: this.get('TRUSTED_PROXY_HOPS'),
       shutdownTimeoutMs: this.get('SHUTDOWN_TIMEOUT_SECONDS') * 1_000,
       openApiUiEnabled: this.get('OPENAPI_UI_ENABLED'),
     } as const;

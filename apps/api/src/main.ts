@@ -9,6 +9,7 @@ import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { Logger as PinoLogger } from 'nestjs-pino';
 
@@ -35,14 +36,36 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
-  // Proxy headers are trusted only for the client IP, and only because the
-  // deployment terminates TLS at an ingress in front of this process.
-  app.set('trust proxy', 1);
+  // The refresh token arrives as an httpOnly cookie (`API.md` §3b); nothing
+  // else in the platform reads cookies.
+  app.use(cookieParser());
+
+  // Proxy headers are trusted for exactly the configured number of hops, and
+  // only because the deployment terminates TLS at an ingress in front of this
+  // process. Trusting them unconditionally would let any client spoof its
+  // source address through `X-Forwarded-For` and walk straight past the
+  // IP-keyed authentication rate limit, so the hop count is configuration
+  // rather than a constant, and `0` disables the trust entirely.
+  app.set('trust proxy', config.http.trustedProxyHops);
 
   app.enableCors({
     origin: config.http.corsOrigins.length > 0 ? config.http.corsOrigins : false,
     credentials: true,
+    // Credentialed CORS: the refresh cookie must be sent cross-origin, which
+    // makes a wildcard origin invalid. `false` when no origin is configured
+    // denies every cross-origin request rather than defaulting to permissive.
     exposedHeaders: ['x-correlation-id', 'x-request-id'],
+    allowedHeaders: [
+      'authorization',
+      'content-type',
+      'x-correlation-id',
+      'x-causation-id',
+      'x-acc-organization',
+      'x-acc-refresh',
+      'idempotency-key',
+    ],
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    maxAge: 600,
   });
 
   // `/metrics` and `/health` intentionally sit outside the versioned prefix so

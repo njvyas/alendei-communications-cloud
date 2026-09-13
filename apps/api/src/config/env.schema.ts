@@ -55,6 +55,12 @@ export const envSchema = z.object({
   API_PORT: port.default(3001),
   API_GLOBAL_PREFIX: z.string().default('api/v1'),
   CORS_ORIGINS: commaSeparated.default([]),
+  /**
+   * How many reverse-proxy hops to trust for the client IP. Anything above the
+   * real hop count lets a client forge `X-Forwarded-For` and bypass the
+   * IP-keyed auth rate limit; `0` trusts nothing and uses the socket address.
+   */
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(1),
   SHUTDOWN_TIMEOUT_SECONDS: positiveInt.max(300).default(15),
   OPENAPI_UI_ENABLED: booleanFromEnv.default(false),
 

@@ -154,7 +154,7 @@ The table above says where `org_id` comes from, not which one wins when a princi
 | More than one in scope, selector absent | **`400 TENANCY_CONTEXT_REQUIRED`** |
 | Selector names an organization outside the principal's scope | **`403 TENANCY_CONTEXT_MISMATCH`** |
 
-The canonical selector is the **`X-Acc-Organization`** request header. It is a *selection among organizations already in scope*, never a claim of access — it can only narrow, exactly like `workspace_id` in §2b.
+The canonical selector is the **`X-Acc-Organization`** request header, implemented in Phase 1B.3 by `ScopeResolver.selectOrganization`. The authorized set is derived from `user_roles` on every request — a platform grant reaches every organization, a reseller grant the organizations beneath it, everything else exactly the organizations its grants name. An API key is bound to one organization and selects none: a selector naming a different one is refused rather than ignored. It is a *selection among organizations already in scope*, never a claim of access — it can only narrow, exactly like `workspace_id` in §2b.
 
 Two behaviours are explicitly forbidden, because each converts a security refusal into something that looks like ordinary emptiness:
 

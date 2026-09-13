@@ -190,3 +190,58 @@ export const SCOPE_DEPTH: Readonly<Record<ScopeType, number>> = Object.freeze({
   workspace: 3,
   team: 4,
 });
+
+/** One level of the canonical hierarchy, as a concrete target. */
+export interface ScopeRef {
+  readonly scopeType: ScopeType;
+  /** `null` only for `platform`, which has no row. */
+  readonly scopeId: string | null;
+}
+
+/**
+ * The ancestry of a target, as resolved from the database. Supplied separately
+ * because coverage cannot be decided from ids alone — knowing a grant is at
+ * workspace W and a target at team T says nothing until you know T's parent.
+ */
+export interface ScopeChain {
+  readonly resellerId?: string | null;
+  readonly orgId?: string | null;
+  readonly workspaceId?: string | null;
+  readonly teamId?: string | null;
+}
+
+/**
+ * Does a grant at `grant` cover an action at `target`?
+ *
+ * This is `TENANCY.md` §1a.4's downward-only inheritance expressed once, as a
+ * pure function, so every call site decides coverage the same way:
+ *
+ *     platform     -> everything
+ *     reseller     -> its organizations, and their workspaces and teams
+ *     organization -> its workspaces and their teams
+ *     workspace    -> its teams
+ *     team         -> itself
+ *
+ * Nothing ever covers upward or sideways. Holding a permission somewhere is
+ * never authority over *this* resource (`API.md` §3a).
+ */
+export function scopeCovers(grant: ScopeRef, target: ScopeRef, chain: ScopeChain): boolean {
+  if (grant.scopeType === 'platform') return true;
+  if (!grant.scopeId) return false;
+
+  // A grant can never reach a level above its own.
+  if (SCOPE_DEPTH[grant.scopeType] > SCOPE_DEPTH[target.scopeType]) return false;
+
+  switch (grant.scopeType) {
+    case 'reseller':
+      return chain.resellerId === grant.scopeId;
+    case 'organization':
+      return chain.orgId === grant.scopeId;
+    case 'workspace':
+      return chain.workspaceId === grant.scopeId;
+    case 'team':
+      return chain.teamId === grant.scopeId;
+    default:
+      return false;
+  }
+}

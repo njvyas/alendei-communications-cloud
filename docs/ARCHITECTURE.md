@@ -126,6 +126,7 @@ ACC is built as a modular monolith-first NestJS codebase organized into bounded 
 | Module | Owns | Depends on |
 |---|---|---|
 | `iam` | Auth, sessions, API keys. MFA and SSO are reserved here but **not built in Phase 1B** (ADR-003 D-6, `DECISIONS.md` D6/D10) | `audit` |
+| `auth` | Request authentication and tenant-context resolution: `AuthGuard`, access-token issue/verify, `ScopeResolver`, `PermissionEvaluator`, auth rate limiting, CSRF. Registered globally so the API denies by default (Phase 1B.3) | `iam`, `audit` |
 | `tenancy` | Orgs, resellers, workspaces, teams, RBAC/ABAC. Owns the `PermissionEvaluator` every scoped service calls for target-scope authorization (ADR-003 D-5) | `iam`, `audit` |
 | `contacts` | Contacts, identities, consent, suppression | `tenancy` |
 | `comms-api` | Public/internal message intake, idempotency | `tenancy`, `contacts` |

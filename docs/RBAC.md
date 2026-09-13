@@ -154,7 +154,9 @@ effective_permissions =
     ∩ permissions_valid_for_the_target_operation
 ```
 
-The intersection is computed when the key is created **and re-checked at use**, because the creator's own grants may since have been revoked — a key must not outlive the authority that produced it.
+The intersection is **recomputed on every request**, not snapshotted at creation: a key whose creator has since lost a permission loses it on the next request, and a key whose creator no longer exists resolves to no permissions at all. A key must not outlive the authority that produced it.
+
+**How a key is authorized.** The principal carries exactly one synthesized grant — `roleKey: 'api_key'`, scoped to the key's own binding (its workspace when it has one, otherwise its organization) — so an API key passes through the same `PermissionEvaluator` and the same `scopeCovers` rule as a user, with no special branch anywhere. The grant is never `platform`, so a key can never reach the control plane, and downward-only inheritance then means a workspace-bound key cannot perform an organization-wide operation. Authentication and authorization are both operational in Phase 1B.3; *administration* of keys (creation, rotation, revocation endpoints) is Phase 1B.6.
 
 A key is permanently bound to its organization (`api_keys.org_id`), and that binding is never widened by anything on the request. A client-supplied `workspace_id` or `team_id` may **narrow** what the key acts on; it can never create authority the key does not already hold. This is the same authoritative-versus-advisory rule as for user sessions (`TENANCY.md` §2b), applied to a credential whose tenancy is fixed at creation rather than resolved per request.
 

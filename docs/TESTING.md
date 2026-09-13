@@ -206,6 +206,34 @@ Implemented in `apps/api/src/iam/*.spec.ts` (unit) and `apps/api/test/iam-sessio
 - **Principal boundary** — `acc_auth` is refused INSERT on `users`; its grants on `sessions` are exactly `INSERT, SELECT, UPDATE` with no DELETE, asserted against the catalog.
 - **RLS** — `sessions` still carries both policies after the lineage migration, a user sees only their own sessions through `acc_app`, and a negative control weakens `sessions_self` mid-test to prove the isolation assertions measure the policy.
 
+### 6k.3 The authenticated request pipeline (Phase 1B.3)
+
+Implemented in `apps/api/test/auth.sec-spec.ts` (the security project, 41 tests) and `apps/api/test/auth-chain.int-spec.ts` (14 tests), plus unit suites for the token service, scope coverage, the permission evaluator, the rate limiter and trusted-proxy handling.
+
+- **JWT** — valid; expired; wrong issuer; wrong audience; `alg=none`; a different algorithm with the same secret; a different secret; a tampered subject; five malformed shapes; a well-signed token missing required claims. The issued claim set is asserted as an **exact key set**, so adding `org_id`, roles or permissions to the payload fails the suite rather than quietly becoming an authorization source.
+- **Authentication** — valid login; wrong password; unknown address; disabled user holding a valid password. Unknown address and wrong password are asserted to return an identical code *and* message. No response body contains a credential.
+- **Session revocation** — a validly-signed token is refused once its session is revoked, and once its user is disabled, both with the token still cryptographically valid.
+- **Refresh** — rotation issues a new token; replay of a spent token is refused and revokes the whole family (asserted against that family, not merely the user); two concurrent refreshes of one token yield exactly one 200 and one 401; an unknown token is refused.
+- **CSRF** — refresh and logout both refused without `X-Acc-Refresh` and accepted with it. The refusal case sends exactly the request a cross-site form post could make.
+- **CORS** — an unlisted origin is never reflected, and a wildcard origin is never combined with credentials.
+- **Tenant context** — single organization implicit; multiple organizations without a selector → `400 TENANCY_CONTEXT_REQUIRED`; authorized selector accepted; unauthorized selector → `403 TENANCY_CONTEXT_MISMATCH` with **no** `workspaces` key in the body, so a refusal and genuine emptiness stay distinguishable; a non-existent organization refused identically.
+- **Cross-tenant isolation** — another tenant's organization id in a query parameter is refused; another tenant's workspace id returns `404` without echoing the id, with a positive control on the same route proving the 404 is isolation rather than a broken endpoint.
+- **Session management** — listing returns only the caller's sessions; revoking another user's session returns `404` and leaves it live.
+- **Rate limiting** — the threshold is enforced and stays enforced within the window; both buckets are independently effective; an IPv6 address produces a usable key; Redis unavailability fails open *and* flags the verdict; the account identifier never appears in a key.
+- **Trusted proxy** — a forged `X-Forwarded-For` is ignored at zero trusted hops, the nearest untrusted hop wins at one, and over-configuring the hop count is shown to let a client forge its address.
+- **Audit** — login success, login failure (anonymous actor, with the attempted address asserted *absent*), logout, refresh and session revocation all recorded; session and audit row commit together; breaking the `acc_auth` insert policy rolls the session back.
+
+### 6k.4 API-key authentication and authorization (Phase 1B.3)
+
+`apps/api/test/api-key.sec-spec.ts` (22 tests). Added after an independent review found API-key principals authenticated and then denied everything, with the whole method untested.
+
+- **Intersection** — creator holds the permission → authorized; creator does not → the scope is absent from the principal and the operation is denied; a key requesting only unheld permissions authenticates but authorizes nothing; revoking the creator's permission denies the *existing* key on its next request; a key whose creator is unknown resolves to no permissions.
+- **Synthesized grant** — exactly one grant, at the key's own binding, never `platform`; a workspace-bound key is scoped to its workspace and is refused an organization-wide operation.
+- **Organization binding** — reaches only its own organization; a selector for another organization is `403 TENANCY_CONTEXT_MISMATCH` with no body payload; its own organization is accepted; another organization's workspace id returns `404` without echoing it.
+- **Credential failures** — revoked, expired, wrong secret, unknown prefix and three malformed shapes all `401`; an unknown prefix and a wrong secret return an identical code *and* message, so key existence is not disclosed; no error echoes the presented credential.
+- **Audit** — `api_key.authenticated` written with `actor_type='api_key'`, the key id, `scope_type='platform'`, and no credential material anywhere; a failed authentication writes nothing; `last_used_at` and the audit row share a transaction, proven by refusing the audit policy and asserting `last_used_at` stays null.
+- **Mutation-sensitive** — emptying `roles` fails 8 tests; ignoring the creator intersection fails 3; removing organization binding fails 1; removing audit emission fails 3; removing the bookkeeping fails 1.
+
 ### 6l. Tenant-context selection (Phase 1B)
 
 - A principal with exactly one organization in scope resolves it implicitly.

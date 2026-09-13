@@ -8,7 +8,7 @@ All public and console APIs are served under `/api/v1`. Breaking changes ship as
 
 | Path | Module | Purpose |
 |---|---|---|
-| `/auth` | `iam` | Login, refresh, logout, session management. **No MFA challenge in Phase 1B** — MFA is not implemented (ADR-003 D-6) |
+| `/auth` | `iam` | Login, refresh, logout, session management, `/auth/me`. **Built in Phase 1B.3.** No MFA challenge — MFA is not implemented (ADR-003 D-6) |
 | `/ws/ticket` | `iam` | Mints a single-use, short-lived WebSocket connection ticket (§9). Issuance ships in Phase 1B; ticket *consumption* and the socket gateway are deferred (`DECISIONS.md` D15) |
 | `/tenants` | `tenancy` | Organization/workspace/team CRUD (scoped by caller's role) |
 | `/users` | `tenancy` | User invite/management |
@@ -60,7 +60,9 @@ effective_permissions =
     ∩ permissions_valid_for_the_target_operation
 ```
 
-A key is permanently bound to its organization (`api_keys.org_id`) and nothing on a request widens that binding. A client-supplied `workspace_id` or `team_id` may **narrow** what the key acts on; it can never create authority the key does not hold. The creator intersection is re-evaluated at use, not only at creation, so a key cannot outlive the authority that produced it (`RBAC.md` §5c).
+A key is permanently bound to its organization (`api_keys.org_id`) and nothing on a request widens that binding: an `X-Acc-Organization` naming any other organization is refused with `403 TENANCY_CONTEXT_MISMATCH` rather than ignored. A key bound to a workspace is restricted to it and cannot perform organization-wide operations. The creator intersection is recomputed on every request, so a key cannot outlive the authority that produced it (`RBAC.md` §5c).
+
+Every successful API-key authentication emits an `api_key.authenticated` audit record, in the same transaction as the key's `last_used_at` bookkeeping. The record identifies the key by its row id only — never the presented credential, its secret half or its prefix.
 
 The database enforces the same distinction rather than trusting the caller: `audit_logs_actor_shape` makes an actor identifier that contradicts `actor_type` unrepresentable — a `user` row cannot carry an API-key id, a `system` row cannot claim either, and an `oauth_client` row must carry an `actor_label` since it has no id column until OAuth2 ships (`DECISIONS.md` D6). An API-key actor is additionally tied to its own organization by a composite foreign key, so a key from one tenant can never appear as the actor on another tenant's record (`DATABASE.md` §12).
 
@@ -100,7 +102,9 @@ Holding `workspaces.update` somewhere is never authority to update *this* worksp
 
 **CORS.** Because the refresh call must send a cookie, it is a credentialed cross-origin request: the console sends `credentials: 'include'`, and the API must answer with an explicit `Access-Control-Allow-Origin` drawn from the configured `CORS_ORIGINS` allow-list plus `Access-Control-Allow-Credentials: true`. A wildcard origin is invalid on a credentialed request and must never be configured.
 
-**CSRF.** `SameSite=Lax` is a mitigation, not a guarantee — it is not honoured uniformly by older user agents, and it does not cover same-site attacker-controlled content. The refresh endpoint therefore also requires a **non-simple request**: it accepts only `POST` carrying a custom header (for example `X-Acc-Refresh: 1`), which forces a CORS preflight and makes the endpoint undrivable by a cross-site HTML form post. Logout is protected the same way. This is a required control, not a defence-in-depth nicety: without it, `SameSite=Lax` alone is the only thing standing between a cross-site request and a token rotation.
+**CSRF.** `SameSite=Lax` is a mitigation, not a guarantee — it is not honoured uniformly by older user agents, and it does not cover same-site attacker-controlled content. The refresh endpoint therefore also requires a **non-simple request**: it accepts only `POST` carrying the header `X-Acc-Refresh`, which forces a CORS preflight and makes the endpoint undrivable by a cross-site HTML form post. Logout is protected the same way. This is a required control, not a defence-in-depth nicety: without it, `SameSite=Lax` alone is the only thing standing between a cross-site request and a token rotation.
+
+The mechanism is the *absence* of a token rather than the presence of one: nothing is stored or compared, so there is no CSRF secret to leak, rotate or desynchronize. The protection comes entirely from the fact that a cross-origin caller must first pass a preflight that the origin allowlist refuses, and an HTML form cannot set a header at all.
 
 **Refresh rotation.** Every refresh rotates the token and records lineage. Presenting an already-rotated refresh token is treated as theft: the entire session chain is revoked and the event is audited.
 
@@ -119,7 +123,10 @@ This section is the API-facing view of the tier-1 mechanism defined canonically 
 ## 5. Rate limiting
 
 - Keyed by `(org_id, api_key_or_user, endpoint_class)`, using a Redis token bucket. **In Phase 1B this runs in-process in the API** — there is no API gateway in the Phase 1 deployment topology (`DEPLOYMENT.md`). Moving it to a gateway later is a deployment change, not a redesign; the key shape and limits are unchanged by where it runs.
-- Authentication endpoints carry their own stricter bucket (`RATE_LIMIT_AUTH_*`), and apply **two independent buckets** — one keyed by source IP and one by the target account — so that neither address rotation nor a spray across many accounts defeats the control on its own.
+- Authentication endpoints carry their own stricter bucket (`RATE_LIMIT_AUTH_*`), and apply **two independent buckets** — one keyed by source IP and one by the target account — so that neither address rotation nor a spray across many accounts defeats the control on its own. A refusal from *either* refuses the attempt.
+- The account bucket is keyed by a hash of the identifier, not the identifier itself, so a dump of Redis keys is not a list of the addresses people have tried to sign in with.
+- The IP key depends on `req.ip`, which depends in turn on how many proxy hops are trusted (`TRUSTED_PROXY_HOPS`). Trusting more hops than the deployment actually has lets a client forge `X-Forwarded-For` and choose its own bucket, so the value is configuration rather than a constant and `0` disables the trust entirely.
+- **When Redis is unavailable the limiter fails open**, logs at `warn` on every degraded call, and flags the verdict. Redis is an accelerator and never a system of record (`DATABASE.md` §1): refusing every sign-in because a cache is down converts a degraded dependency into a total outage, and the limiter is a throttle rather than the authentication control itself — credentials are still verified and every failure is still audited. This is a tested decision, not the client's default error behaviour.
 - Limits are tenant-configurable (plan-based defaults, override per organization); responses include standard `X-RateLimit-Limit/Remaining/Reset` headers and `429` with `Retry-After` on breach.
 
 ## 6. Webhooks — inbound vs. outbound (do not conflate; full model `DATABASE.md` §12, `EVENTS.md` §§4c, 5a–5d)

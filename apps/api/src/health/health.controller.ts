@@ -5,6 +5,7 @@ import { HealthCheck, HealthCheckService } from '@nestjs/terminus';
 import { AppConfigService } from '../config/app-config.service';
 import { DatabaseHealthIndicator } from './database.health';
 import { RedisHealthIndicator } from './redis.health';
+import { Public } from '../auth/public.decorator';
 
 /**
  * Liveness and readiness (`API.md` §2). Unauthenticated and minimal by design:
@@ -12,6 +13,7 @@ import { RedisHealthIndicator } from './redis.health';
  * disclose no version, topology or dependency detail.
  */
 @ApiTags('health')
+@Public()
 @Controller('health')
 export class HealthController {
   constructor(

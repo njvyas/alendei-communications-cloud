@@ -5,6 +5,7 @@ import { CorrelationMiddleware } from './common/context/correlation.middleware';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { validationPipe } from './common/http/validation.pipe';
 import { AuditModule } from './audit/audit.module';
+import { AuthModule } from './auth/auth.module';
 import { AppConfigModule } from './config/config.module';
 import { DatabaseModule } from './database/database.module';
 import { HealthModule } from './health/health.module';
@@ -13,6 +14,7 @@ import { HttpMetricsInterceptor } from './observability/http-metrics.interceptor
 import { LoggingModule } from './observability/logging.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { RedisModule } from './redis/redis.module';
+import { TenancyModule } from './tenancy/tenancy.module';
 import { SecretsModule } from './secrets/secrets.module';
 
 /**
@@ -32,8 +34,10 @@ import { SecretsModule } from './secrets/secrets.module';
     DatabaseModule,
     AuditModule,
     IamModule,
+    AuthModule,
     RedisModule,
     HealthModule,
+    TenancyModule,
   ],
   providers: [
     { provide: APP_PIPE, useValue: validationPipe() },
