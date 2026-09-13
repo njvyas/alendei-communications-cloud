@@ -143,6 +143,26 @@ The tenant triple is derived from the scope set as follows, and from nothing els
 | `org_id` | an `organization` grant's `scope_id`; or the owning organization of a `workspace`/`team` grant; or, for an API key, `api_keys.org_id` |
 | `workspace_id` | a `workspace` grant's `scope_id`, or the owning workspace of a `team` grant; `NULL` when the principal's grants are organization-level or above |
 
+#### Principals holding grants in more than one organization (ADR-003 D-4)
+
+The table above says where `org_id` comes from, not which one wins when a principal legitimately holds grants in several organizations — a reseller admin, an Alendei support user, or a consultant invited into two tenants. Resolved:
+
+| Situation | Behaviour |
+|---|---|
+| Exactly one organization in scope | Selected implicitly; no selector required |
+| More than one in scope, selector present and in scope | That organization is selected |
+| More than one in scope, selector absent | **`400 TENANCY_CONTEXT_REQUIRED`** |
+| Selector names an organization outside the principal's scope | **`403 TENANCY_CONTEXT_MISMATCH`** |
+
+The canonical selector is the **`X-Acc-Organization`** request header. It is a *selection among organizations already in scope*, never a claim of access — it can only narrow, exactly like `workspace_id` in §2b.
+
+Two behaviours are explicitly forbidden, because each converts a security refusal into something that looks like ordinary emptiness:
+
+- **Never silently substitute** another organization the principal happens to hold.
+- **Never silently return an empty result** to mask a context mismatch. An out-of-scope selector is a `403`; an in-scope selector that genuinely matches no rows is an empty `200`. A caller — and a test — must be able to tell those apart.
+
+A platform admin is not exempt: holding `platform` scope puts every organization in scope, so a platform admin acting on tenant data supplies the selector like anyone else.
+
 ### 2b. Authoritative versus advisory identifiers
 
 | Identifier | Authoritative source | Client-supplied value |
@@ -151,6 +171,7 @@ The tenant triple is derived from the scope set as follows, and from nothing els
 | `workspace_id` | the principal's grants, or the workspace's own `org_id` chain | Accepted only as a *narrowing* selection among workspaces already in scope; anything else is `403` |
 | `team_id` | `teams.workspace_id → workspaces.org_id` chain | Same — narrowing only, within scope |
 | `reseller_id` | a `reseller` grant, or `organizations.reseller_id` | **Never trusted** |
+| `X-Acc-Organization` (selector) | validated against the principal's own scope set | Accepted only as a *selection among organizations already in scope* (§2a). Out of scope is `403`, never a substitution |
 | `user_id` (acting) | the verified credential | **Never trusted** from body, query or header |
 | `scope_type` / `scope_id` on a role-assignment request | validated against the actor's own scope set, then re-validated by the database trigger | Treated as a *request*, never as an assertion |
 

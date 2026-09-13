@@ -136,6 +136,22 @@ These connect **directly as the non-owner principal**, bypassing the application
 - `acc_auth` and `acc_relay` hold exactly their intended grants and no others — also asserted against the catalog, so a future migration that widens one is caught.
 - **Negative control**: a deliberately weakened query (one that omits the application's own `org_id` filter) still returns nothing cross-tenant. Without this test the suite cannot distinguish "RLS works" from "the application filter happened to work".
 
+### 6h. Worker and pooled-connection context
+
+- Worker tenant-context contamination: two jobs for two different organizations run back-to-back on the same pooled connection; the second never sees the first's RLS context (`TENANCY.md` §5, `DATABASE.md` §14a) — this specifically tests that `SET LOCAL` truly resets at transaction boundary under the pooling strategy actually used.
+- Reused connection after an error/exception path (not just the happy path) → context still cleared, verified with a fault-injected mid-transaction failure.
+
+### 6i. WebSocket authorization
+
+**Phase 1B satisfies the issuance half only.** Ticket *consumption* and the socket gateway are deferred (`DECISIONS.md` D15), so the consumption, replay and subscription cases below are not exercisable at Gate B. They remain required and become testable in the phase that builds the gateway; this partial satisfaction is recorded rather than quietly passed over.
+
+- Ticket expiry → refused.
+- Ticket reuse/replay after consumption → refused.
+- Ticket bound to the issuing user, session and tenant context → a ticket cannot be used by a different principal.
+- Ticket issued for Workspace A used to subscribe to Workspace B's topic → refused.
+- Subscription outside the ticket's recorded topic scope → refused, not silently ignored.
+- Revoking the underlying session invalidates its outstanding tickets.
+
 ### 6j. Audit-log isolation and integrity
 
 `audit_logs` is the one table where a write is itself a security claim ("this actor did this, at this scope"), so it is tested as a boundary in its own right (`DATABASE.md` §12, ADR-002). Implemented in `packages/db/src/test/audit.int-spec.ts`, all against a real database:
@@ -150,19 +166,37 @@ These connect **directly as the non-owner principal**, bypassing the application
 - **Organization deletion** — with every other child removed, deleting an organization that has audit history fails with a foreign-key violation naming `audit_logs`, and the organization is closed instead (`TENANCY.md` §1b).
 - **Negative control** — the SELECT policy is weakened to `USING (true)` mid-test; Org B's rows must then become visible from Org A, and must disappear again when it is restored. Without this the isolation assertions could not be distinguished from an incidental absence of data.
 
-### 6h. Worker and pooled-connection context
+### 6k. Authentication and credential lifecycle (Phase 1B)
 
-- Worker tenant-context contamination: two jobs for two different organizations run back-to-back on the same pooled connection; the second never sees the first's RLS context (`TENANCY.md` §5, `DATABASE.md` §14a) — this specifically tests that `SET LOCAL` truly resets at transaction boundary under the pooling strategy actually used.
-- Reused connection after an error/exception path (not just the happy path) → context still cleared, verified with a fault-injected mid-transaction failure.
+Implemented across the `@acc/api` integration and `security` Jest projects; the latter exists and is CI-wired but is currently empty.
 
-### 6i. WebSocket authorization
+- Valid login succeeds; wrong password, unknown email and a disabled user each fail — and unknown email and wrong password return an **identical** body with comparable timing, so the endpoint is not a user-enumeration oracle.
+- Argon2id parameters come from configuration; a stored hash with outdated parameters is rehashed on successful login.
+- Access token expires at its configured TTL; its claims carry `sub`/`sid`/`actor_type`/`jti`/`iss`/`aud`/`iat`/`exp` and **nothing else** — asserted positively, so adding a tenancy or role claim fails the test (ADR-003 D-3).
+- A forged `org_id`, role or permission claim in an otherwise valid token changes nothing, because tenancy and authorization are re-derived (§6c).
+- Refresh rotates; the rotated token is rejected on reuse and revokes the whole session chain; `revoked_at`/`expires_at` are checked on every refresh, not only at access-token expiry.
+- Logout revokes only the presenting session; revoke-all revokes every session for the user.
+- The refresh token is delivered only as an `httpOnly` cookie and never appears in a JSON body readable by browser JavaScript; the refresh endpoint rejects a request without its required custom header, so a cross-site form post cannot drive it (`API.md` §3b).
+- No route accepts a token in a query parameter — asserted by scanning the registered routes, not by spot-checking.
+- `/auth/*` rate limiting returns `429` with `Retry-After`; the per-IP and per-account buckets are each independently effective.
+- Revoked and expired API keys are rejected; a key acts only within its bound organization; a key's effective permissions are the intersection in `RBAC.md` §5c, re-evaluated at use — a key whose creator has since lost a permission loses it too.
 
-- Ticket expiry → refused.
-- Ticket reuse/replay after consumption → refused.
-- Ticket bound to the issuing user, session and tenant context → a ticket cannot be used by a different principal.
-- Ticket issued for Workspace A used to subscribe to Workspace B's topic → refused.
-- Subscription outside the ticket's recorded topic scope → refused, not silently ignored.
-- Revoking the underlying session invalidates its outstanding tickets.
+### 6l. Tenant-context selection (Phase 1B)
+
+- A principal with exactly one organization in scope resolves it implicitly.
+- A principal with several in scope and **no** `X-Acc-Organization` header → `400 TENANCY_CONTEXT_REQUIRED`.
+- `X-Acc-Organization` naming an organization outside scope → `403 TENANCY_CONTEXT_MISMATCH`, **never** a substitution and **never** an empty `200`.
+- An in-scope selector matching no rows returns an empty `200` — asserted alongside the case above, because the whole point is that a refusal and genuine emptiness stay distinguishable.
+- A platform admin is not exempt from supplying the selector when acting on tenant data.
+
+### 6m. Bootstrap (Phase 1B)
+
+- The bootstrap CLI creates the first platform admin and grants `alendei_super_admin` at `platform` scope.
+- Rerunning it against an already-bootstrapped database changes nothing.
+- It installs no fixed or default password.
+- It writes its own audit records.
+- `fn_validate_user_role_scope` is unchanged by it: after bootstrap, an ordinary application principal still cannot grant a platform role.
+- No HTTP route performs a privilege grant without authentication — asserted against the registered route table.
 
 ## 7. Billing tests
 

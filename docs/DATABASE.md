@@ -22,7 +22,7 @@ PostgreSQL is the system of record for all transactional and financial data. Red
 
 **`teams`** — `id, workspace_id FK, org_id FK organizations NOT NULL, name`. `org_id` is denormalized from the parent workspace so this tenant-scoped table satisfies §1's rule that every tenant-scoped table carries `org_id`, and so its RLS policy is a direct comparison rather than a join. The two cannot drift: a **composite** foreign key `(workspace_id, org_id) → workspaces(id, org_id)` makes a team whose organization disagrees with its workspace's organization unrepresentable (`TENANCY.md` §1a.3).
 
-**`users`** — `id, email, phone NULL, password_hash NULL (nullable — SSO-only users have none), mfa_enabled, status ENUM(active,invited,disabled), created_at`. Users are platform-level identities; tenant access is via `user_roles`.
+**`users`** — `id, email, phone NULL, password_hash NULL (nullable — SSO-only users have none), password_updated_at NULL, mfa_enabled, mfa_secret_ref NULL (a pointer into the secrets backend, never a TOTP seed), status ENUM(active,invited,disabled), last_login_at NULL, created_at, updated_at`. Email uniqueness is case-insensitive (`UNIQUE` on `lower(email)`), with a format CHECK, and `users_active_requires_credential` forbids an `active` user holding neither a password nor an MFA secret. Users are platform-level identities; tenant access is via `user_roles`. The two MFA columns are **reserved space, not a shipped feature** — MFA is not implemented (ADR-003 D-6).
 
 **`roles`** — `id, org_id NULL (NULL = platform-level role), name, is_system_role BOOL`.
 
@@ -42,9 +42,9 @@ Scope integrity (`RBAC.md` §6): `scope_id` is polymorphic and cannot carry a si
 
 **`fn_validate_role_permission`** — a `BEFORE INSERT/UPDATE` trigger on `role_permissions` that derives `role_permissions.org_id` from `roles.org_id` (so it cannot be forged) and **refuses to attach any `platform.*` permission to a role with `org_id IS NOT NULL`**. Without it, an organization could compose a custom role containing a platform permission and escalate out of its own tenancy — `RBAC.md` §7.
 
-**`api_keys`** — `id, org_id FK, name, key_prefix, key_hash, scopes JSONB (permission subset), last_used_at, revoked_at NULL, created_by FK users`.
+**`api_keys`** — `id, org_id FK, workspace_id NULL FK, name, key_prefix, key_hash, scopes JSONB (permission subset), last_used_at NULL, expires_at NULL, revoked_at NULL, revoked_reason NULL, created_by NULL FK users, created_at, updated_at`. `key_prefix` is unique and shape-checked (`^ak_(live|test)_[A-Za-z0-9]{16}$`) so verification is an indexed lookup rather than a scan; `scopes` is CHECKed to be a JSON array. A composite `UNIQUE(id, org_id)` exists so `audit_logs` can reference a key *and* its organization together, making a cross-tenant actor reference unrepresentable (§12). Effective permissions at use are an intersection, not simply `scopes` — `RBAC.md` §5c.
 
-**`sessions`** — `id, user_id FK, refresh_token_hash, device_info JSONB, ip, revoked_at NULL, expires_at, created_at`.
+**`sessions`** — `id, user_id FK, refresh_token_hash (unique), device_info JSONB, ip NULL, user_agent NULL, last_used_at NULL, revoked_at NULL, revoked_reason NULL, expires_at, created_at, updated_at`. A partial index on `(user_id, expires_at) WHERE revoked_at IS NULL` serves both the "active sessions" lookup and the expiry sweep. `revoked_at` and `expires_at` are checked on **every** refresh, not merely at access-token expiry (`RBAC.md` §5a).
 
 **`ws_tickets`** — single-use WebSocket connection tickets (`API.md` §9): `id, user_id FK, org_id FK, workspace_id NULL, scope JSONB (topics permitted), issued_at, expires_at (short, ~30s), consumed_at NULL`. A ticket is minted by an authenticated `POST /api/v1/ws/ticket` call and consumed exactly once at WebSocket connect time; the tenant context bound to the resulting connection comes from the ticket record, never from a client-supplied value on the socket.
 
@@ -66,6 +66,12 @@ Isolation depends on the application never connecting as a principal that can by
 - `action` is in `app_is_auth_audit_action()` — the five pre-tenant actions (`auth.login.succeeded`, `auth.login.failed`, `auth.logout`, `auth.token.refreshed`, `api_key.authenticated`), so it cannot record a privileged action such as a role grant.
 
 That SQL list mirrors `AUTH_ROLE_AUDIT_ACTIONS` in `packages/contracts/src/audit.ts`, and an integration test fails if the two drift apart. `acc_auth` holds no `SELECT` on `audit_logs`: it writes authentication history and cannot read anyone's.
+
+**One narrow exception to the actor rule (ADR-003 R4).** A login attempt for an address matching no user has no identity to name, and must be audited without inventing one. `acc_auth` may therefore also write `actor_type='system'`, but only when `action = 'auth.login.failed'` **and** `actor_label = 'anonymous_login_attempt'` — both conditions together, at platform scope like every other `acc_auth` row. It is not opened to arbitrary system-actor writes: a role able to write any `system` row could fabricate a record of automated action that never occurred.
+
+> **Implementation status (as of `db6337e`): specified, not yet in force.** The `audit_logs_actor_shape` CHECK constraint already accepts this row shape — a `system` actor with both id columns `NULL` and any `actor_label` — so no table constraint changes. The `audit_logs_auth_insert` policy, however, restricts `acc_auth` to `actor_type IN ('user','api_key')` and rejects it. Implementing it requires one new migration replacing that single policy; migration `0001` is committed and applied and is not edited.
+
+**`acc_auth` sizing note.** Its audit grant is `INSERT` only, and the policy is the whole boundary — the grant cannot express "only these actions", so removing or widening the policy silently widens the role. The policy's `WITH CHECK` is therefore asserted against the catalog in `audit.int-spec.ts`, not merely exercised.
 
 `acc_auth` exists because credential verification is a genuine chicken-and-egg problem: the server cannot filter by organization while it is still establishing *which* organization the caller belongs to. Rather than granting the application role a blanket read, or running that step as the owner, the pre-context work gets its own least-privilege principal that can reach the identity tables and nothing else. `acc_app` remains unable to read outside its tenant under any circumstances.
 

@@ -5,13 +5,13 @@ No certification (SOC 2, ISO 27001) is claimed anywhere in this document or by t
 ## 1. Identity & access
 
 - **Identity types**: human user, API key (service account), OAuth2 client, and system (background worker) are treated as distinct identity classes with independent authorization checks — never collapsed into one "authenticated caller" concept. Full definition: `API.md` §3.
-- **MFA**: TOTP required for all human users by default, org-configurable enforcement policy; WebAuthn as a stretch target. Architecture: `RBAC.md` §5.
-- **SSO/SAML/OIDC**: per-organization IdP configuration reserved on `organizations`; implementation phase not yet committed (see `DECISIONS.md`).
+- **MFA**: **not implemented, and not in Phase 1B** (ADR-003 D-6). TOTP is the intended mechanism and `users.mfa_enabled`/`users.mfa_secret_ref` reserve schema space, but no library, configuration, table, enrolment flow or login branching exists, and no organization-level enforcement policy column is present. Treat this as a planned control, not a shipped one; `RBAC.md` §5 records the phase decision.
+- **SSO/SAML/OIDC**: architecturally reserved; implementation phase not yet committed (`DECISIONS.md` D6). Note that the per-organization IdP configuration column is **not** currently present on `organizations` — it is deferred with the feature rather than pre-created.
 - **Scope model**: the canonical five-level hierarchy — `platform → reseller → organization → workspace → team` — is defined normatively in `TENANCY.md` §1a. Scope inheritance is downward only; no grant is ever widened by the scope it is exercised at.
 - **RBAC/ABAC**: `RBAC.md`, including scope-integrity enforcement (`RBAC.md` §6) preventing a role grant from ever pointing at a scope outside its own organization, and the escalation guards in `RBAC.md` §7 — several of which are enforced by database trigger, so they hold even if the service layer is bypassed.
 - **Database principals**: the running application connects only as non-owner roles that cannot bypass RLS (`DATABASE.md` §2a). The schema owner is used for migrations and seeding, never to serve a request.
-- **Session management**: short-lived JWT access tokens, server-revocable refresh tokens via `sessions`, per-device visibility, explicit "sign out this device / sign out everywhere."
-- **API authentication**: hashed API keys (never stored/returned in plaintext after creation), scoped to org + permission subset, rotatable.
+- **Session management**: short-lived JWT access tokens carrying identity and session claims only — never tenancy, roles or permissions (ADR-003 D-3) — plus server-revocable refresh tokens via `sessions`, per-device visibility, and explicit "sign out this device / sign out everywhere." The browser receives its refresh token as an `httpOnly` cookie, never as JavaScript-readable JSON (ADR-003 D-7, `API.md` §3b).
+- **API authentication**: hashed API keys (never stored or returned in plaintext after creation), permanently bound to one organization, and carrying an effective permission set that is the intersection of the key's requested scopes, the permissions its creator holds, and those valid for the operation — re-evaluated at use, so a key never outlives the authority that produced it (`RBAC.md` §5c).
 - **WebSocket authentication**: never a long-lived JWT in the connection URL — a single-use, short-lived ticket minted over an authenticated HTTP call and consumed exactly once at connect time (`API.md` §9, `DATABASE.md` §2 `ws_tickets`).
 - **Background worker/job identity**: workers never present an HTTP credential; their authorization boundary is that they only ever act within a tenant context derived from a trusted, already-authenticated source (the job/event payload's designated authoritative field), never from arbitrary payload data — full rule: `TENANCY.md` §5.
 - **Privileged provider/routing operations**: adding, testing, enabling/disabling, draining, re-prioritizing, or migrating a provider — and activating a routing/fallback policy version — are gated behind `providers.manage`/`providers.test_send`-class permissions and are audit-logged without exception, since they can redirect real traffic or (once real providers are connected) incur real cost. Full detail: `PROVIDER_ADAPTER.md` §4.
@@ -40,7 +40,28 @@ The scope an action occurred at is recorded on the canonical five-level hierarch
 
 **Who may read an audit record is enforced at two layers, and both are mandatory.** Row-Level Security guarantees **organization-level tenant isolation**: no principal reaches another organization's audit trail, and platform-scoped records require platform admin. RLS deliberately stops there (`TENANCY.md` §3a). Finer visibility — restricting a workspace- or team-scoped record to principals holding a grant at that workspace or team — is a **required RBAC/ABAC authorization check in the request path**, applied to every audit read including list endpoints, exports and reports. It is **never** delivered by UI filtering or by a client-supplied query predicate: the console is not a security boundary, and a caller reaching the API directly sees whatever the authorization layer permits, not whatever the console chose to display. Treating workspace/team audit visibility as a presentation detail would be a security defect, not a cosmetic one.
 
-Audit writes are best-effort-synchronous (the triggering request fails if the audit write fails, for actions classified as security-sensitive: role grants, credential changes, billing adjustments) versus best-effort-asynchronous for lower-sensitivity actions, a distinction made explicitly per action type rather than uniformly, to balance integrity against latency. The set classified as security-sensitive is `SECURITY_SENSITIVE_AUDIT_ACTIONS` in `packages/contracts/src/audit.ts`.
+The set classified as security-sensitive is `SECURITY_SENSITIVE_AUDIT_ACTIONS` in `packages/contracts/src/audit.ts` — role grants, credential changes, session revocations, user disablement, and (from Phase 7) billing adjustments.
+
+**Write synchronization — Phase 1B (ADR-003 D-2).** All audit writes are **synchronous**. For a security-sensitive mutation the audit row is written **in the same database transaction as the business mutation**: if the audit insert fails, the business mutation rolls back. That is what makes "a role grant cannot succeed without leaving a record" a guarantee rather than an intention. Non-sensitive actions are written synchronously too, for a plain reason — Phase 1 has no outbox or queue, so there is no asynchronous transport to write to, and inventing a fire-and-forget path would silently lose records while appearing to satisfy the design.
+
+The security-sensitive **classification is retained and used** even though both branches are currently synchronous, because it is what Phase 2 switches on: when the transactional outbox arrives, non-sensitive writes move to the queued path and sensitive writes stay in-transaction. The classification is therefore live today as a routing decision, not a placeholder.
+
+**Unknown-user authentication failures (ADR-003 R4).** A login attempt for an address matching no user still produces an audit record. It is never omitted, and a fictitious `actor_user_id` is never invented:
+
+| Field | Known user | Unknown identity |
+|---|---|---|
+| `action` | `auth.login.failed` | `auth.login.failed` |
+| `actor_type` | `user` | `system` |
+| `actor_user_id` | the real user id | `NULL` |
+| `actor_label` | — | `anonymous_login_attempt` |
+| `scope_type` | `platform` | `platform` |
+| `outcome` | `failure` | `failure` |
+
+The `acc_auth` database policy permits the system-actor form for this **exact** case only — `action = 'auth.login.failed'` together with `actor_label = 'anonymous_login_attempt'`. It is not opened to arbitrary system-actor writes, because a role that could write any `system` row could fabricate a record of automated action it never took.
+
+> **Implementation status.** As of `db6337e` this is specified but **not yet writable**: the `audit_logs_actor_shape` CHECK constraint already accepts the row shape, but the `audit_logs_auth_insert` RLS policy restricts `acc_auth` to `actor_type IN ('user','api_key')` and rejects it. One migration replacing that single policy is required; migration `0001` is committed and is not edited. Until it lands, unknown-email login failures have no audit representation.
+
+**Redaction is the writer's responsibility.** The database does not and cannot inspect `before`/`after`/`metadata` for credential material, so a single centralized redactor strips it before any insert — recursively through nested objects and arrays, covering `password`, `password_hash`, `key_hash`, `refresh_token_hash`, `mfa_secret_ref`, `ticket_hash`, and any key matching `/secret|token/i` (§2). An audit row must never be the place a credential leaks.
 
 ### 4a. Append-only enforcement, and its threat model
 

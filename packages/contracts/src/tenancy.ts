@@ -7,10 +7,15 @@
 /**
  * Levels at which a role may be granted (`user_roles.scope_type`).
  *
- * `organization | workspace | team` are the tenant-configurable scopes named in
- * `RBAC.md` §1. `platform` and `reseller` exist because `RBAC.md` §3 defines
- * roles at those levels and `DATABASE.md` §2 explicitly permits a platform-level
- * role to use "a value the platform role's design permits".
+ * The canonical five-level authorization hierarchy, defined normatively in
+ * `TENANCY.md` §1a and resolved in ADR-001 (`DECISIONS.md` §1a):
+ *
+ *     platform -> reseller -> organization -> workspace -> team
+ *
+ * Two other columns are also named `scope_type` — on `routing_policies` and
+ * `provider_credentials` — and are deliberately *different* enums carrying
+ * configuration scopes that confer no access. `TENANCY.md` §1a.2 tabulates all
+ * three; they must never be conflated.
  */
 export const SCOPE_TYPES = ['platform', 'reseller', 'organization', 'workspace', 'team'] as const;
 export type ScopeType = (typeof SCOPE_TYPES)[number];

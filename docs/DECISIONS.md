@@ -2,6 +2,8 @@
 
 This is the living register of everything flagged as needing a product-owner decision, carrying scalability/security risk, or representing a tension between requirements that this document set resolved with an explicit, stated choice rather than silently picking one side. As of Phase 0.1 (the consolidated architecture consistency & hardening pass), every item that would have blocked a correct, unambiguous Phase 1 implementation has been resolved and is recorded in §1. Items in §2 are explicitly confirmed non-blocking — none of them affect the correctness of Phase 1 Foundation work. Phase 0.2 (final documentation-hardening pass before Phase 1 implementation — transaction-specific pricing, `requested_channel_id` hard-constraint semantics, attempt-level routing/pricing snapshots, idempotency `failed`-status semantics, and the broader engagement-platform product architecture, `ARCHITECTURE.md` §21) added B19–B22 below, all resolved. A follow-up Phase 0.2 correction pass added B23–B25 (multi-component pricing evaluation model, billable-transaction terminology generalization, and a residual reservation-accounting wording fix). Phase 0.3 (surgical documentation-consistency pass) added B26–B28 (Phase 5/Phase 7 billing-dependency de-conflation, removal of "distributed lock" as an implied Phase 5 deliverable, and an explicit Pricing-Evaluation-vs-Usage-Ledger HOW-vs-WHAT boundary statement). Phase 0.4 (final documentation freeze pass) added B29–B30 (made `usage_ledger.pricing_evaluation_id` the authoritative concrete foreign key to the pricing calculation that produced each ledger amount, demoting `rate_card_ref` to descriptive metadata; clarified `DR.md`'s Redis-loss wording so it cannot be read as Redis participating in fallback correctness). No Phase 0.2–0.4 change reopened or contradicted any earlier resolution; the architecture is frozen as of Phase 0.4.
 
+**Phase 1B planning feedback (B33)**: the planning review for the identity/tenancy/RBAC half of Phase 1B found nine decisions that had to be settled before implementation — bootstrap of the first platform admin, audit synchronization with no outbox available, JWT claim contents, multi-organization selection, where target-scope authorization runs, MFA's actual phase, refresh-token transport, the audit representation of an unknown-user login failure, and the API-key effective-permission model. Several of these were *documented as settled* in ways the repository contradicted. All are resolved in ADR-003 (§1c) and the affected documents are reconciled in this pass. One consequence (R4) requires a schema change that is deliberately not made in a documentation-only pass and is recorded as pending.
+
 **Phase 1B implementation feedback (B32)**: building the audit log surfaced a second set of genuine gaps — an over-broad `acc_auth` insert policy, an audit row that could not express three of the five canonical scope levels, a missing `causation_id`, a documented partitioning requirement the implementation did not meet, absent parent–child integrity, and an accidental interaction between `ON DELETE SET NULL` and the append-only trigger. All six are resolved in ADR-002 (§1b) and the affected documents are reconciled. As with B31, this is `ROADMAP.md` §1's `DOCUMENT` stage working as intended.
 
 **Phase 1A implementation feedback (B31)**: building the IAM/tenancy foundation surfaced one genuine contradiction the Phase 0 passes had not caught — `user_roles.scope_type` was specified with three values while the tenancy hierarchy, the reseller model and the routing-precedence hierarchy all assumed five. It is resolved below and the affected documents have been reconciled. This is the documented mechanism working as `ROADMAP.md` §1 intends: a phase's `DOCUMENT` stage updates `/docs` in place when implementation reveals a real ambiguity, rather than the implementation silently diverging.
@@ -155,6 +157,85 @@ Phase 1B built `audit_logs`. Reviewing the change set before the Phase 1B checkp
 
 None. `audit_logs` had not been committed when these decisions were made, so the corrected table ships in its first migration rather than as an `ALTER`. The one change to an already-committed table is additive: `api_keys` gains `UNIQUE(id, org_id)`.
 
+## 1c. ADR-003 — Phase 1B authentication, tenant context and authorization
+
+**Status**: Accepted (Phase 1B planning review against `db6337e`). Governs the identity/tenancy/RBAC half of Phase 1B. Extends ADR-001 (scope hierarchy) and ADR-002 (audit log). Supersedes the MFA and rate-limiting statements in the Phase 0.4 text of `RBAC.md` §5, `SECURITY.md` §1 and `API.md` §5.
+
+### Context
+
+The Phase 1B planning review established that the database, contracts and configuration for identity/tenancy/RBAC are effectively complete, while the request path is unimplemented: `apps/api` has no `iam`, `tenancy`, `auth` or `rbac` module, `RequestContext.setPrincipal()` is never called, and `TenantDatabase.withRequestTenant()` is unreachable code. Nine decisions had to be settled before implementation, because each one changes either a wire contract, a database policy, or the shape of the authorization path.
+
+### Decisions
+
+**D-1 — First platform-admin bootstrap: an owner-run, idempotent CLI.**
+
+`fn_validate_user_role_scope` refuses a platform-role grant unless the actor already holds platform admin, and no user is seeded — so the first grant is otherwise impossible. The bootstrap is a CLI run by the schema owner, following the precedent `seed.ts` already sets when it declares `app.is_platform_admin` to seed platform role rows. It is **never** exposed through the API and there is no unauthenticated HTTP privilege-grant route. It creates the first platform-admin user, grants `alendei_super_admin` at `platform` scope, is safe to rerun, requires explicit confirmation to execute against production, and never installs a fixed or default production password. It writes its own audit records. It **does not weaken `fn_validate_user_role_scope`** for normal application requests: the trigger is unchanged and the elevation is a transaction-local GUC set by the owner, exactly as seeding already does.
+
+**D-2 — Audit synchronization: everything synchronous in Phase 1B.**
+
+`SECURITY.md` §4 specifies a synchronous/asynchronous split, but Phase 1 has no outbox or queue, so "asynchronous" has no transport. In Phase 1B **all** audit writes are synchronous. A security-sensitive mutation writes its audit row **in the same database transaction** as the business mutation: if the audit insert fails, the business mutation rolls back. Non-sensitive writes are synchronous too, for the same reason — no transport exists. No fake post-commit transport is invented. `SECURITY_SENSITIVE_AUDIT_ACTIONS` and `isSecuritySensitiveAction()` are retained and used, because they are what Phase 2 will switch on when the outbox introduces the queued path.
+
+**D-3 — Access-token claims: identity and session only.**
+
+The access JWT carries `sub`, `sid`, `actor_type`, `jti`, `iss`, `aud`, `iat`, `exp` — and nothing else. It **never** carries `org_id`, `reseller_id`, `workspace_id`, `team_id`, roles or permissions as authoritative values. Tenant context and authorization are re-derived server-side from the verified credential and session on every request. This is what makes `TESTING.md` §6c's forged-claim test structurally true rather than incidental: a tenancy claim cannot influence authorization because no code reads one. The cost is a grant resolution per request; caching is deferred (D-8).
+
+**D-4 — Multi-organization context: implicit when unambiguous, explicit otherwise.**
+
+A principal may hold grants in several organizations; the derivation table in `TENANCY.md` §2a did not say which one wins. Resolved: exactly one organization in scope may be selected implicitly. More than one requires an explicit selector, canonically the **`X-Acc-Organization`** request header. Absent selector with several organizations in scope → `400 TENANCY_CONTEXT_REQUIRED`. Selector naming an organization outside the principal's authorized scope → `403 TENANCY_CONTEXT_MISMATCH`. Never a silent substitution, and never a silently empty result used to hide a context mismatch — an empty list and a refused context must remain distinguishable to the caller.
+
+**D-5 — Target-scope authorization: a mandatory service-layer invariant with one reusable mechanism.**
+
+Authorization has two dimensions, permission and target-scope coverage (`API.md` §3a), and both are mandatory. `AuthorizationGuard` can enforce the endpoint-level permission, but it is **not** sufficient for the target, because a target's scope is often knowable only after the resource is loaded. Every scoped service operation therefore performs an explicit target-scope check through the centralized `PermissionEvaluator`. Workspace and team authorization is an application/service invariant — **not** UI filtering, and **not** merely a code-review convention. One reusable mechanism is built for this; ad-hoc per-call-site scope checks are the failure mode it exists to prevent. This matters because RLS contains no workspace or team term (`TENANCY.md` §3a): below organization level, the service layer is the only enforcement there is.
+
+**D-6 — MFA is out of Phase 1B.**
+
+`RBAC.md` §5, `SECURITY.md` §1, `PRD.md` §86 and `API.md` §2 described MFA as required and routed an MFA challenge, while the repository contains no TOTP library, no MFA configuration, no MFA table and no organization MFA-policy column — only the unused `users.mfa_enabled` and `users.mfa_secret_ref` columns. Phase 1B adds no MFA library, table, configuration, enrolment flow, challenge flow or login branching. The affected documents are corrected in this pass so that Phase 1B does not claim MFA is implemented or mandatory. The `users` columns remain as reserved space.
+
+**D-7 — Refresh-token transport: httpOnly cookie for the browser console.**
+
+The refresh token is delivered to and consumed from the browser as an `httpOnly; Secure; SameSite=Lax` cookie, scoped to the refresh path. It is **never** readable by browser JavaScript and is **never** placed in `localStorage`, `sessionStorage` or a URL. `POST /auth/login` sets the cookie; `POST /auth/refresh` consumes it; the refresh token is not returned as ordinary JSON to browser JavaScript. Consequences are recorded in `API.md` §3b: CORS must be credentialed with an explicit origin allow-list (never `*`), and because `SameSite=Lax` is a mitigation rather than a guarantee, the refresh endpoint additionally requires a non-simple request (a custom header) so it cannot be driven by a cross-site form post. Non-browser clients (server-to-server) use API keys and never the refresh-cookie flow.
+
+**D-8 and onward — deferrals retained.** Scope-set Redis caching; API-key rotation lineage; password reset/recovery; `users.locked_until` account lockout; WebSocket ticket consumption and the socket gateway; OAuth2/SSO; ABAC policy authoring; real worker identity. Each is listed in §2 or §3 of this document rather than left implicit.
+
+### R4 — Unknown-user login failures are audited, with a system actor
+
+An authentication failure for an address that matches no user has no real identity to name. It is **not** omitted from the audit trail, and a fictitious `actor_user_id` is **never** invented. Such an attempt is recorded as:
+
+| Field | Value |
+|---|---|
+| `action` | `auth.login.failed` |
+| `actor_type` | `system` |
+| `actor_label` | `anonymous_login_attempt` |
+| `scope_type` | `platform` |
+| `outcome` | `failure` |
+
+A failure for a **known** user uses `actor_type='user'` with the real `actor_user_id`. The `acc_auth` database policy permits the system-actor form for this **exact** case only — `action = 'auth.login.failed'` **and** `actor_label = 'anonymous_login_attempt'` — and is not opened to arbitrary system audit writes.
+
+**Implementation status: this requires a schema change that is not yet made.** Verified against the migrated database at `db6337e`: the `audit_logs_actor_shape` CHECK constraint already **accepts** this row shape (a `system` actor with both id columns null and any label), so no table constraint changes. The `audit_logs_auth_insert` RLS policy, however, restricts `acc_auth` to `actor_type IN ('user','api_key')` and **rejects** it. Implementing R4 therefore requires one new migration that replaces that single policy. Migration `0001` is committed and applied and is not edited. Until that migration exists, the anonymous-failure path is specified but not writable.
+
+### Consequences
+
+- `TENANCY.md` §2a gains the multi-organization selection rule it did not previously state, and §2b gains `X-Acc-Organization` as an authoritative-selector row.
+- `SECURITY.md` §4 gains the Phase 1B synchronization semantics and the anonymous-actor rule; §1's MFA bullet is corrected.
+- `API.md` gains §3b (refresh-token transport, CORS and CSRF), an `/ws/ticket` row in §2, the API-key effective-permission formula in §3, and a corrected §5 rate-limiting locus.
+- `RBAC.md` §5 is corrected for MFA and refresh transport and gains §5a (tokens), §5b (bootstrap) and §5c (API-key effective permissions).
+- `DATABASE.md` §2a records the narrow `acc_auth` exception and its pending-migration status; §2's column lists are brought level with the schema.
+- `ROADMAP.md` gains the 1B.1–1B.7 sub-phase sequence and Gate B.
+- `TESTING.md` gains the Phase 1B categories and §6j is moved into order.
+
+### API-key effective permissions
+
+Recorded here because it spans `RBAC.md`, `API.md` and `TENANCY.md`:
+
+```
+effective_permissions =
+      requested_key_scopes
+    ∩ permissions_held_by_the_creator_at_the_key's_organization
+    ∩ permissions_valid_for_the_target_operation
+```
+
+An API key is permanently bound to its organization (`api_keys.org_id`) and that binding is never widened. A client-supplied `workspace_id` or `team_id` can **narrow** what a key acts on; it can never create authority the key does not already hold. A key cannot be created carrying a permission its creator does not hold — the intersection is computed at creation and re-checked at use, because the creator's own grants may since have been revoked.
+
 ## 2. Non-blocking future decisions (confirmed — none of these affect Phase 1 correctness)
 
 | # | Decision | Why it's genuinely deferrable | Current default |
@@ -164,7 +245,13 @@ None. `audit_logs` had not been committed when these decisions were made, so the
 | D3 | Whether `workspace_id` should be mandatory (not just optional) on every tenant-scoped table | Every org already gets a seeded default workspace (`TENANCY.md` §1); making the column itself `NOT NULL` later is a non-breaking tightening, not a blocking ambiguity now | Optional column, default workspace seeded per org |
 | D4 | Event schema format (JSON Schema vs. Avro/Protobuf) | JSON Schema is sufficient through Phase 2; schema evolution pain, if it emerges, is addressable without redesigning the event envelope (`EVENTS.md` §2) | JSON Schema |
 | D5 | Cross-channel conversation grouping (does a WhatsApp thread and an SMS thread with the same contact ever merge?) | Purely a Phase 8 inbox UX decision; the `conversations` grouping key is trivially changeable before Phase 8 without affecting Phases 1–7 | Grouped by `(org_id, contact_id, channel)` — no cross-channel merge yet |
-| D6 | SSO/SAML/OIDC and full OAuth2 partner-integration implementation timing | Architecturally reserved (config slots exist on `organizations`, identity type defined in `API.md` §3); no Phase 1–8 work depends on it existing yet | Reserved, not implemented; recommend deciding before Phase 9 |
+| D6 | SSO/SAML/OIDC and full OAuth2 partner-integration implementation timing | Architecturally reserved (identity type defined in `API.md` §3); no Phase 1–8 work depends on it existing yet. Note: the per-organization IdP configuration column `DATABASE.md` §2 once implied is **not** present on `organizations` and is deferred with this decision | Reserved, not implemented; recommend deciding before Phase 9 |
+| D10 | MFA/TOTP implementation phase | Resolved out of Phase 1B by ADR-003 D-6: no library, configuration, table or flow exists, and the login path is simpler without a challenge branch. Nothing in Phases 1–2 depends on it | Out of Phase 1B; `users.mfa_enabled`/`mfa_secret_ref` remain reserved columns. Decide the implementing phase before any real customer PII or production tenant is onboarded |
+| D11 | Scope-set caching for per-request grant resolution | ADR-003 D-3 re-derives grants per request by design; caching is a measured optimization, not a correctness requirement, and a stale cache is an authorization risk | Uncached in Phase 1B; revisit with measurements |
+| D12 | Password reset / account recovery | No mail transport exists in Phase 1, and the flow is not in `API.md` §2's resource areas | Deferred; required before external users self-serve |
+| D13 | Account lockout (`users.locked_until`) beyond rate limiting | Redis rate limiting plus `auth.login.failed` audit covers Phase 1B's threat model; lockout adds a denial-of-service vector against a known address | Deferred; rate limiting only |
+| D14 | API-key rotation as a first-class operation with lineage | Revoke-plus-create already produces two audit rows describing the same change | Deferred |
+| D15 | WebSocket ticket consumption and the socket gateway | There is no real-time consumer until Phase 8; building consumption now means a socket server with nothing to serve. Ticket *issuance* is in Phase 1B | Issuance only in Phase 1B; consumption deferred, so `TESTING.md` §6i is only partly satisfiable at Gate B |
 | D7 | RTO/RPO targets in `DR.md` §3 | A business-input number, not an engineering ambiguity — the mechanisms (WAL archiving, cross-region replication) are already fully specified regardless of the exact target number | Placeholder targets pending business/product-owner confirmation before Phase 12 |
 | D8 | Data-subject request handling (DPDP/GDPR erasure/export) | No real contact PII is processed before Phase 3, and even then only simulator-backed test data through Phase 12 — there is no Phase 1 code path this blocks | Not yet designed; required before any real customer PII is processed |
 | D9 | Modular monolith vs. early service extraction for `provider-adapters` under high throughput | Module boundaries are already drawn specifically so this is a deployment-topology change later, not a Phase 1 architectural fork | Modular monolith through Phase 2–8 |
@@ -176,6 +263,9 @@ None. `audit_logs` had not been committed when these decisions were made, so the
 - **No certification is claimed** for SOC 2/ISO 27001/DPDP/GDPR — only control-objective alignment, explicitly and repeatedly disclaimed in `SECURITY.md`.
 - **The audit log is not tamper-evident against an owner or superuser** (ADR-002, `SECURITY.md` §4a). Any in-database control can be removed by whoever owns the database; the trigger stops accident and application compromise, not a privileged operator. Accepted because the mitigation is external (SIEM export, WAL archiving, infrastructure-level audit of administrative access), not because the risk is small. Hash-chaining rows so a deletion is detectable is the obvious strengthening if it is ever needed.
 - **A workspace- or team-scoped audit row is visible to any principal the authorization layer admits to that organization's audit trail.** The database guarantees organization-level isolation only (`TENANCY.md` §3a); restricting a record to its workspace or team is a required RBAC/ABAC check in the request path, on every read including list endpoints and exports, and is never satisfied by UI filtering or a client-supplied predicate. Unchanged by ADR-002, which records the finer scope without filtering on it. Accepted as a layering decision, not as a licence to omit the check: omitting it is a security defect.
+- **Workspace and team isolation has no database backstop.** RLS enforces organization-level isolation only (`TENANCY.md` §3a), so below that level the service layer is the entire enforcement. A single missing target-scope check opens cross-workspace access while every database test stays green and RLS remains fully satisfied. This is the highest residual risk in Phase 1B. Mitigated by ADR-003 D-5's single reusable mechanism and by isolation tests written to pass only when application-layer enforcement is present.
+- **An access token remains valid for up to its TTL after its session is revoked**, unless `sessions.revoked_at` is checked on the same query that resolves grants. Because ADR-003 D-3 already requires a per-request session/grant read, that check is nearly free and is the recommended implementation; if it is ever skipped for performance, the window must be documented rather than assumed away.
+- **The anonymous-login-failure audit path (R4) is specified but not yet writable.** The `acc_auth` RLS policy rejects it until a migration replaces that policy. Until then, unknown-email login failures have no audit representation.
 - **Synchronous-versus-asynchronous audit writes are not yet implemented.** `SECURITY.md` §4 specifies the distinction and `SECURITY_SENSITIVE_AUDIT_ACTIONS` in `@acc/contracts` names the set, but no service-layer code consumes it yet — there is no audit-writing service before Phase 2. The schema does not constrain it either way.
 
 ## 4. Scalability concerns flagged for later phases

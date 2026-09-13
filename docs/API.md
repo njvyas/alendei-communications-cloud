@@ -8,7 +8,8 @@ All public and console APIs are served under `/api/v1`. Breaking changes ship as
 
 | Path | Module | Purpose |
 |---|---|---|
-| `/auth` | `iam` | Login, refresh, logout, MFA challenge, session management |
+| `/auth` | `iam` | Login, refresh, logout, session management. **No MFA challenge in Phase 1B** — MFA is not implemented (ADR-003 D-6) |
+| `/ws/ticket` | `iam` | Mints a single-use, short-lived WebSocket connection ticket (§9). Issuance ships in Phase 1B; ticket *consumption* and the socket gateway are deferred (`DECISIONS.md` D15) |
 | `/tenants` | `tenancy` | Organization/workspace/team CRUD (scoped by caller's role) |
 | `/users` | `tenancy` | User invite/management |
 | `/roles` | `tenancy` | Role CRUD (custom roles) |
@@ -50,6 +51,17 @@ Every authenticated caller resolves to exactly one **identity type**, and `audit
 
 These are not interchangeable for authorization purposes: a permission grant is checked against the actual identity type presenting the request, and an OAuth2 client is never silently treated as if it were the human user who authorized it (the human's identity, where relevant, is recorded separately as the authorizing party).
 
+**An API key's effective permissions are an intersection, recomputed at use:**
+
+```
+effective_permissions =
+      requested_key_scopes
+    ∩ permissions_held_by_the_creator_at_the_key's_organization
+    ∩ permissions_valid_for_the_target_operation
+```
+
+A key is permanently bound to its organization (`api_keys.org_id`) and nothing on a request widens that binding. A client-supplied `workspace_id` or `team_id` may **narrow** what the key acts on; it can never create authority the key does not hold. The creator intersection is re-evaluated at use, not only at creation, so a key cannot outlive the authority that produced it (`RBAC.md` §5c).
+
 The database enforces the same distinction rather than trusting the caller: `audit_logs_actor_shape` makes an actor identifier that contradicts `actor_type` unrepresentable — a `user` row cannot carry an API-key id, a `system` row cannot claim either, and an `oauth_client` row must carry an `actor_label` since it has no id column until OAuth2 ships (`DECISIONS.md` D6). An API-key actor is additionally tied to its own organization by a composite foreign key, so a key from one tenant can never appear as the actor on another tenant's record (`DATABASE.md` §12).
 
 Every authenticated request resolves a `TenantContext` per `TENANCY.md` §2a before any handler executes; no handler trusts a body/query tenant identifier over the resolved context.
@@ -67,6 +79,31 @@ Holding `workspaces.update` somewhere is never authority to update *this* worksp
 
 **Path identifiers are advisory.** `/tenants/{org_id}/workspaces` may carry an `org_id` for readability and routing, but the authoritative organization is always the one resolved from the credential; a mismatch is `403` (`TENANCY.md` §2b).
 
+**Selecting an organization when several are in scope.** A principal with grants in more than one organization sends the `X-Acc-Organization` header to choose which one the request acts in (`TENANCY.md` §2a, ADR-003 D-4). With exactly one organization in scope the header is optional. Absent while several are in scope → `400 TENANCY_CONTEXT_REQUIRED`. Naming an organization outside the principal's scope → `403 TENANCY_CONTEXT_MISMATCH`. The header selects among organizations already in scope; it never confers access, and a mismatch is never resolved by substituting a different organization or by returning an empty result.
+
+**Scope-target authorization is not the guard's job alone.** The endpoint permission may be enforced declaratively, but the target-scope half is checked inside the service, through the shared evaluator, because a target's scope is often knowable only once it is loaded (`RBAC.md` §2, ADR-003 D-5).
+
+### 3b. Token transport, CORS and CSRF (Phase 1B, ADR-003 D-7)
+
+**Access token** — returned in the login/refresh JSON response and presented as `Authorization: Bearer <token>`. Held in memory by the console. Never placed in a URL, a query parameter, `localStorage` or `sessionStorage`.
+
+**Refresh token** — for the browser console, carried exclusively in a cookie:
+
+| Attribute | Value | Why |
+|---|---|---|
+| `HttpOnly` | yes | JavaScript cannot read it, so an XSS foothold cannot exfiltrate a 30-day credential |
+| `Secure` | yes | Never transmitted over plaintext HTTP |
+| `SameSite` | `Lax` | Not attached to cross-site subrequests |
+| `Path` | the refresh endpoint only | Not sent on ordinary API calls, so its exposure surface is one route |
+
+`POST /auth/login` sets the cookie. `POST /auth/refresh` consumes it. **The refresh token is never returned as ordinary JSON to browser JavaScript.** Non-browser clients (server-to-server) authenticate with API keys and never use this flow at all.
+
+**CORS.** Because the refresh call must send a cookie, it is a credentialed cross-origin request: the console sends `credentials: 'include'`, and the API must answer with an explicit `Access-Control-Allow-Origin` drawn from the configured `CORS_ORIGINS` allow-list plus `Access-Control-Allow-Credentials: true`. A wildcard origin is invalid on a credentialed request and must never be configured.
+
+**CSRF.** `SameSite=Lax` is a mitigation, not a guarantee — it is not honoured uniformly by older user agents, and it does not cover same-site attacker-controlled content. The refresh endpoint therefore also requires a **non-simple request**: it accepts only `POST` carrying a custom header (for example `X-Acc-Refresh: 1`), which forces a CORS preflight and makes the endpoint undrivable by a cross-site HTML form post. Logout is protected the same way. This is a required control, not a defence-in-depth nicety: without it, `SameSite=Lax` alone is the only thing standing between a cross-site request and a token rotation.
+
+**Refresh rotation.** Every refresh rotates the token and records lineage. Presenting an already-rotated refresh token is treated as theft: the entire session chain is revoked and the event is audited.
+
 ## 4. Idempotency
 
 This section is the API-facing view of the tier-1 mechanism defined canonically in `DATABASE.md` §7.1 — see that section before implementing; do not re-derive the semantics independently here.
@@ -81,7 +118,8 @@ This section is the API-facing view of the tier-1 mechanism defined canonically 
 
 ## 5. Rate limiting
 
-- Enforced at the API gateway layer, keyed by `(org_id, api_key_or_user, endpoint_class)`, using a Redis token-bucket.
+- Keyed by `(org_id, api_key_or_user, endpoint_class)`, using a Redis token bucket. **In Phase 1B this runs in-process in the API** — there is no API gateway in the Phase 1 deployment topology (`DEPLOYMENT.md`). Moving it to a gateway later is a deployment change, not a redesign; the key shape and limits are unchanged by where it runs.
+- Authentication endpoints carry their own stricter bucket (`RATE_LIMIT_AUTH_*`), and apply **two independent buckets** — one keyed by source IP and one by the target account — so that neither address rotation nor a spray across many accounts defeats the control on its own.
 - Limits are tenant-configurable (plan-based defaults, override per organization); responses include standard `X-RateLimit-Limit/Remaining/Reset` headers and `429` with `Retry-After` on breach.
 
 ## 6. Webhooks — inbound vs. outbound (do not conflate; full model `DATABASE.md` §12, `EVENTS.md` §§4c, 5a–5d)

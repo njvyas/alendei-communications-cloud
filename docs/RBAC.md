@@ -26,7 +26,9 @@ A request is authorized when:
 1. RBAC check passes: the resolved tenant context (`TENANCY.md` §2a) plus the user's `user_roles` yields at least one role whose `role_permissions` include the permission required by the endpoint, **at a scope that covers the target resource's scope**. Coverage is the downward-only inheritance of `TENANCY.md` §1a.4: `platform` covers everything, `reseller` covers its organizations and below, `organization` covers its workspaces and teams, `workspace` covers its teams, `team` covers itself. Holding the permission somewhere is never sufficient — it must be held at a covering scope.
 2. ABAC check passes: policy conditions evaluated against resource attributes and request context — e.g. `resource.workspace_id ∈ user.assigned_workspace_ids`, `resource.owner_id == user.id OR user.has(permission, scope=resource.workspace_id)`, business-hour or IP-range conditions for sensitive actions.
 
-Both checks run server-side, after tenant context resolution, never based on client-asserted role/permission claims beyond what's in the signed token/session.
+Both checks run server-side, after tenant context resolution, never based on client-asserted role/permission claims — and, per ADR-003 D-3, the signed token carries no role, permission or tenancy claim to assert in the first place.
+
+**Where each check runs, and why it is split (ADR-003 D-5).** The endpoint-level *permission* check can be declarative, on a guard. The *target-scope coverage* check frequently cannot: a target's scope is often knowable only after the resource is loaded. A guard alone is therefore **not** sufficient authorization, and treating it as sufficient is the specific failure mode that turns workspace and team isolation into accidental filtering. Every scoped service operation performs an explicit target-scope check through the centralized `PermissionEvaluator`, using **one reusable mechanism** rather than ad-hoc checks repeated per call site. This is a mandatory application invariant, not a code-review convention — and below organization level it is the *only* enforcement that exists, because RLS carries no workspace or team term (`TENANCY.md` §3a).
 
 Policy evaluation is designed as pluggable (conceptually OPA/Rego-compatible rule shape) so ABAC rules can be authored/updated without a code deploy in a later phase — the interface is fixed in Phase 0/1; the policy authoring UI is a later-phase deliverable (see `ROADMAP.md`).
 
@@ -97,13 +99,48 @@ The recurring pattern: **an actor may administer downward, never its own level's
 
 | Mechanism | Use case | Notes |
 |---|---|---|
-| Session (JWT access + refresh) | Web console users | Short-lived access token (minutes), refresh token bound to a `sessions` row for server-side revocation |
-| API keys | Server-to-server integration | Stored as salted hash + visible prefix (`ak_live_xxxx...`), scoped to one `org_id` and an explicit permission subset, rotatable, revocable |
-| OAuth2 (authorization code + client credentials) | Third-party/partner integrations, future SSO token exchange | Architecture reserved for Phase 6+; not built in Phase 0/1 |
-| SSO (SAML / OIDC) | Enterprise organization login | Architecture reserved; per-organization IdP config lives on `organizations`; implementation phase TBD — flagged in `DECISIONS.md` |
-| MFA | All human users, enforced by org policy | TOTP at minimum; WebAuthn as a stretch target |
+| Session (JWT access + refresh) | Web console users | Short-lived access token (15 min default), refresh token bound to a `sessions` row for server-side revocation. **Built in Phase 1B.** |
+| API keys | Server-to-server integration | Stored as Argon2id hash + visible prefix (`ak_live_xxxx...`), permanently bound to one `org_id` and an explicit permission subset, revocable. **Built in Phase 1B** (rotation lineage deferred, `DECISIONS.md` D14). |
+| OAuth2 (authorization code + client credentials) | Third-party/partner integrations, future SSO token exchange | Architecture reserved for Phase 6+; not built in Phase 0/1. There is deliberately no `oauth_clients` table — only the `oauth_client` actor type reserves the space (`DATABASE.md` §12). |
+| SSO (SAML / OIDC) | Enterprise organization login | Architecture reserved; implementation phase TBD — `DECISIONS.md` D6. The per-organization IdP configuration column is **not** present on `organizations` and is deferred with it. |
+| MFA | Human users | **Not implemented, and not in Phase 1B** (ADR-003 D-6, `DECISIONS.md` D10). TOTP is the intended mechanism and `users.mfa_enabled`/`users.mfa_secret_ref` reserve space for it, but no library, configuration, table, enrolment flow, challenge flow or login branching exists. Phase 1B's login path has no MFA step. Do not read this row as a shipped control. |
 
-Session/device management: `sessions` records device/IP/user-agent metadata and supports explicit revocation (single session or "all sessions for user"); revoking a session invalidates its refresh token immediately (checked on every refresh, not just at token expiry).
+### 5a. Access and refresh tokens (Phase 1B, ADR-003)
+
+The **access token** is a short-lived JWT carrying identity and session claims only — `sub`, `sid`, `actor_type`, `jti`, `iss`, `aud`, `iat`, `exp`. It carries **no** `org_id`, `reseller_id`, `workspace_id`, `team_id`, roles or permissions (ADR-003 D-3). Tenant context and authorization are re-derived server-side from the verified credential on every request, which is precisely why a forged tenancy claim cannot influence a decision: no code path reads one.
+
+The **refresh token** is an opaque random value stored only as a hash in `sessions.refresh_token_hash`. For the browser console it is carried in an `httpOnly; Secure; SameSite=Lax` cookie scoped to the refresh path — never readable by JavaScript, never in `localStorage`, never in a URL (ADR-003 D-7; transport, CORS and CSRF consequences in `API.md` §3b). Non-browser clients authenticate with API keys and never use the refresh-cookie flow.
+
+Session/device management: `sessions` records device/IP/user-agent metadata and supports explicit revocation (single session or "all sessions for user"); revoking a session invalidates its refresh token immediately — `revoked_at` and `expires_at` are checked on **every** refresh, not merely at token expiry.
+
+### 5b. Bootstrapping the first platform admin (ADR-003 D-1)
+
+`fn_validate_user_role_scope` refuses a platform-level role grant unless the actor already holds platform admin (§7). Combined with a database that seeds no users, this makes the first platform grant impossible through any ordinary path — which is the intended property, not a gap, and it means the bootstrap must be explicit rather than incidental.
+
+The first platform admin is created by an **owner-run, idempotent CLI**, following the precedent `seed.ts` already sets when it declares `app.is_platform_admin` in order to seed platform role rows. Its properties, each testable:
+
+- It is **never** reachable through the API. There is no unauthenticated HTTP privilege-grant route, and no "first-run setup" endpoint.
+- It creates the first platform-admin user and grants `alendei_super_admin` at `platform` scope.
+- It is safe to rerun: a second run against an already-bootstrapped database changes nothing.
+- Executing it against a production environment requires explicit confirmation.
+- It never installs a fixed or default production password.
+- It writes its own audit records, so the existence of the first administrator is itself accounted for.
+- It **does not weaken `fn_validate_user_role_scope`**. The trigger is unchanged; the elevation is a transaction-local session variable set by the schema owner, and no application principal can set it.
+
+### 5c. API-key effective permissions
+
+An API key never carries more authority than the person who created it, and never more than the operation allows:
+
+```
+effective_permissions =
+      requested_key_scopes
+    ∩ permissions_held_by_the_creator_at_the_key's_organization
+    ∩ permissions_valid_for_the_target_operation
+```
+
+The intersection is computed when the key is created **and re-checked at use**, because the creator's own grants may since have been revoked — a key must not outlive the authority that produced it.
+
+A key is permanently bound to its organization (`api_keys.org_id`), and that binding is never widened by anything on the request. A client-supplied `workspace_id` or `team_id` may **narrow** what the key acts on; it can never create authority the key does not already hold. This is the same authoritative-versus-advisory rule as for user sessions (`TENANCY.md` §2b), applied to a credential whose tenancy is fixed at creation rather than resolved per request.
 
 ## 6. Scope integrity — `user_roles.scope_id` cannot point cross-tenant
 

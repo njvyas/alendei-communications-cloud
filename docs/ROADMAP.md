@@ -54,8 +54,42 @@ Phase 8's sub-phases (8A–8G) implement the Engagement Layer and Experience App
 - **Implementation scope**: `iam`, `tenancy` modules; auth (session + API key, not yet SSO/OAuth2); WebSocket ticket issuance (`API.md` §9); base `/health` endpoint; OTel/Prometheus/logging scaffolding wired but with nothing meaningful to instrument yet beyond the foundation itself; the `fn_validate_user_role_scope` DB trigger (`RBAC.md` §6) ships with the first `user_roles` migration, not added later.
 - **DB changes**: `organizations, resellers, workspaces, teams, users, roles, permissions, role_permissions, user_roles, api_keys, sessions, ws_tickets, idempotency_keys` (Phase 1A), then `audit_logs` (Phase 1B). `user_roles.scope_type` carries the five canonical scope values (`TENANCY.md` §1a, `DECISIONS.md` B31/ADR-001); `audit_logs.scope_type` carries the same five (`DECISIONS.md` B32/ADR-002). Every tenant-scoped table's RLS policy ships in the same migration as the table, never a later one.
   - **Phase 1A / Gate A** — tenancy, IAM and RBAC foundation (migration `0000`).
-  - **Phase 1B** — the immutable audit log (migration `0001`). `audit_logs` was previously listed only under `DATABASE.md` §12a's "Platform (already built)" domain map and was missing from this Phase 1 list; it is built here. Partitioning it is explicitly deferred with stated criteria (`DATABASE.md` §13, ADR-002), not silently skipped.
-- **API changes**: `/auth`, `/tenants`, `/users`, `/roles`, `/permissions`, `/health`.
+  - **Phase 1B** — the immutable audit log (migration `0001`), then identity, tenant context and authorization. `audit_logs` was previously listed only under `DATABASE.md` §12a's "Platform (already built)" domain map and was missing from this Phase 1 list; it is built here. Partitioning it is explicitly deferred with stated criteria (`DATABASE.md` §13, ADR-002), not silently skipped.
+
+### 4a. Phase 1B sub-phases
+
+The audit log (1B.0) is complete. The remaining sub-phases are sequenced by actual dependency: the audit write path comes first because every later step must call it, and retrofitting audit is how audit gaps are created. Decisions governing all of them: ADR-003 (`DECISIONS.md` §1c).
+
+| Step | Deliverable | Depends on | Exit criteria |
+|---|---|---|---|
+| **1B.0** | `audit_logs` table, RLS, triggers, grants (migration `0001`) | — | ✅ complete at `db6337e`, 58 tests |
+| **1B.1** | Audit write path: `AuditWriter`, centralized recursive redactor, audit module | 1B.0 | Every Phase 1B audit action is writable and asserted; a failed audit insert rolls back its accompanying mutation; `isSecuritySensitiveAction()` has a real caller |
+| **1B.2** | Credentials and bootstrap: Argon2id credential service, owner-run bootstrap CLI, `sessions` rotation lineage | 1B.1 | A platform admin exists with a verifiable password; bootstrap is idempotent and audits itself |
+| **1B.3** | Authentication and session lifecycle: login, refresh with rotation, logout, session revocation, `AuthGuard`, auth rate limiting | 1B.2 | `RequestContext.setPrincipal()` is called on every authenticated request; `/auth/me` returns a real principal |
+| **1B.4** | Scope resolution and tenant context: `ScopeResolver`, `TenantGuard`, advisory-identifier cross-check, `X-Acc-Organization` selection, worker envelope mapper | 1B.3 | `TenantDatabase.withRequestTenant()` is live; RLS is exercised by real requests |
+| **1B.5** | Authorization: `scopeCovers`, `PermissionEvaluator`, `AuthorizationGuard`, role CRUD, grant/revoke, tenant-role seeding at provisioning | 1B.4 | The full §6b and §6e matrices pass; each service-only escalation guard has a named test |
+| **1B.6** | Identity and credentials surface: user invite/update/disable, API-key create/list/revoke, `/audit` read | 1B.5 | The minimum endpoint set is live, audited, rate-limited and IDOR-safe |
+| **1B.7** | Vertical slice, minimal console, Gate B | 1B.6 | Every Gate B criterion below is met |
+
+### 4b. Gate B — Phase 1B acceptance
+
+Objectively testable; each is pass/fail.
+
+- **Build and hygiene** — `format:check`, `lint`, `typecheck`, `build` and `audit` all clean.
+- **Migrations** — `db:reset` from empty applies and seeds; `db:migrate` re-run is a no-op; `drizzle-kit generate` reports no drift; any new tenant-scoped table ships RLS in its creating migration; bootstrap is idempotent.
+- **Authentication** (§6k) — login/refresh/logout/revocation, rotation-reuse chain revocation, no user enumeration, no token in any URL, refresh cookie not JavaScript-readable, auth rate limiting effective on both buckets.
+- **Authorization** (§6b, §6e) — the full `scopeCovers` matrix including positive downward inheritance; vertical escalation refused at every adjacent pair; role-assignment escalation refused; cross-tenant grant refused by the service **and** independently by the trigger with the service bypassed.
+- **Tenant isolation** (§6a, §6c, §6d, §6f, §6g, §6h) — including the RLS negative control and the pooled-connection error path.
+- **Workspace/team scope** — a workspace-scoped principal cannot reach a sibling workspace or the organization above it, proven **with RLS satisfied**, since RLS does not enforce below organization (`TENANCY.md` §3a).
+- **Tenant-context selection** (§6l) and **bootstrap** (§6m).
+- **API keys** — org binding, revoked/expired rejection, effective-permission intersection re-evaluated at use, secret shown exactly once and never audited.
+- **Audit** (§6j plus Phase 1B actions) — every operation writes its specified action, actor, scope and outcome; security-sensitive writes roll back with their mutation; redaction proven against nested and array payloads; unknown-user failures recorded as the approved anonymous form.
+- **Negative security** — the `security` Jest project is populated: IDOR sweep, token-in-query rejection, rate-limit bypass attempts, direct `user_roles`/`role_permissions` manipulation, revoked-session token reuse.
+- **Frontend** — login → `/auth/me` → context render → logout smoke test; no token in `localStorage` or any URL.
+- **Regression** — the full suite green, with Gate A's schema tests and the existing `@acc/api` tests unchanged.
+
+**Explicitly not required at Gate B**, each deferred with a recorded decision: MFA (D10), password reset (D12), account lockout (D13), API-key rotation lineage (D14), WebSocket ticket consumption and the socket gateway (D15 — so `TESTING.md` §6i is only partly satisfiable), OAuth2/SSO (D6), scope-set caching (D11), ABAC policy authoring, and the queued audit transport (ADR-003 D-2).
+- **API changes**: `/auth` (login, refresh, logout, sessions — no MFA challenge, ADR-003 D-6), `/tenants`, `/users`, `/roles`, `/role-assignments`, `/permissions`, `/api-keys`, `/audit`, `/ws/ticket` (issuance only), `/health`.
 - **Frontend changes**: Next.js app skeleton, login flow, tenant/user management console screens.
 - **Tests**: unit + integration for auth/RBAC/tenant isolation, following the matrix in `TESTING.md` §6 — horizontal isolation at every scope level, vertical escalation between every adjacent pair, scope substitution, enumeration, role-assignment escalation, parent-child integrity, direct database RLS proof through the non-owner principal (including a negative control that would fail if RLS were absent), and WebSocket ticket expiry/reuse/binding. Phase 1B adds the audit-log matrix in `TESTING.md` §6j — append-only (UPDATE/DELETE/TRUNCATE), scope derivation and integrity, actor integrity, `acc_auth` confinement, organization-deletion behaviour, and its own RLS negative control.
 - **Security checks**: session hardening review, RLS policy verification per table.
