@@ -23,7 +23,18 @@ users ──< user_roles >── roles ──< role_permissions >── permissi
 
 A request is authorized when:
 
-1. RBAC check passes: the resolved tenant context (`TENANCY.md` §2a) plus the user's `user_roles` yields at least one role whose `role_permissions` include the permission required by the endpoint, **at a scope that covers the target resource's scope**. Coverage is the downward-only inheritance of `TENANCY.md` §1a.4: `platform` covers everything, `reseller` covers its organizations and below, `organization` covers its workspaces and teams, `workspace` covers its teams, `team` covers itself. Holding the permission somewhere is never sufficient — it must be held at a covering scope.
+1. RBAC check passes: **one single grant** supplies both halves of the answer (ADR-005 D-1):
+
+   ```
+   ALLOW(P, target)  ⟺  ∃ g ∈ grants(principal) :
+           P ∈ permissions(g.role)
+       ∧   scopeCovers(g.scope, target.scope, target.chain)
+       ∧   g is active
+   ```
+
+   Existential over grants, conjunctive within a grant. Coverage is the downward-only inheritance of `TENANCY.md` §1a.4: `platform` covers everything, `reseller` covers its organizations and below, `organization` covers its workspaces and teams, `workspace` covers its teams, `team` covers itself.
+
+   **Holding the permission through *any* grant is not sufficient**, and this is the part that is easy to get wrong. A principal's permissions are not a set it possesses — they are a set of `(permission, scope)` pairs, each one conferred by a particular grant and reaching no further than that grant does. Testing a flattened union of permissions against a union of covered scopes authorizes the cross-product of the two, which includes combinations no grant confers: a `workspace_manager` at one workspace, who also holds `read_only` across the organization, would be authorized for `role_assignments.grant` at organization scope. Neither grant permits that. Both halves must be read off the same grant.
 2. ABAC check passes: policy conditions evaluated against resource attributes and request context — e.g. `resource.workspace_id ∈ user.assigned_workspace_ids`, `resource.owner_id == user.id OR user.has(permission, scope=resource.workspace_id)`, business-hour or IP-range conditions for sensitive actions.
 
 Both checks run server-side, after tenant context resolution, never based on client-asserted role/permission claims — and, per ADR-003 D-3, the signed token carries no role, permission or tenancy claim to assert in the first place.
@@ -99,6 +110,8 @@ Administering a scope means creating, updating or deleting the resources at that
 
 The recurring pattern: **an actor may administer downward, never its own level's parent and never sideways.** A reseller admin creating an organization is administering downward. An organization admin changing which reseller owns their organization would be administering upward, and is refused.
 
+**The first two guards are `(permission, scope)` pairs, not permission sets**, and the distinction is the whole of §2 restated as an escalation rule. A guard written as "does the actor hold every permission in this role?" against `AuthPrincipal.permissions` reproduces the cross-product defect exactly: an actor holding a permission only at a workspace would pass the check for a grant at organization scope, and the guard meant to prevent escalation would itself become the escalation path. The actor's **effective grant authority** — the set of pairs it may confer — is `{(P, s) : ∃ coherent grant g, P ∈ permissions(g) ∧ scopeCovers(g.scope, s)}`, computed per grant and never from the flattened union.
+
 ## 5. Authentication architecture
 
 | Mechanism | Use case | Notes |
@@ -154,9 +167,14 @@ An API key never carries more authority than the person who created it, and neve
 ```
 effective_permissions =
       requested_key_scopes
-    ∩ permissions_held_by_the_creator_at_the_key's_organization
+    ∩ { P : ∃ coherent creator grant g,
+            P ∈ permissions(g) ∧ scopeCovers(g.scope, key.binding_scope) }
     ∩ permissions_valid_for_the_target_operation
 ```
+
+The middle term is the creator's authority **at a scope covering the key's own binding** — not everything the creator holds anywhere. The distinction is load-bearing: a creator who is `read_only` in Organization A and `org_admin` in Organization B must not be able to mint a key bound to Organization A carrying `org_admin` permissions.
+
+**The implementation currently diverges from this**, intersecting against the creator's flattened union across every grant. It is the same error as §2's, applied to the creator rather than to the caller, and is corrected together with it in increment 1B.5.1 (ADR-005 D-4) so the two cannot drift apart.
 
 The intersection is **recomputed on every request**, not snapshotted at creation: a key whose creator has since lost a permission loses it on the next request, and a key whose creator no longer exists resolves to no permissions at all. A key must not outlive the authority that produced it.
 
@@ -195,7 +213,7 @@ Each guard names the layer that enforces it, because a guard that exists only in
 
 | Guard | Enforced by |
 |---|---|
-| **No granting a permission you do not hold.** Role/permission assignment requires the actor to already hold every permission being granted. | Service layer |
+| **No conferring a `(permission, scope)` pair you do not hold.** Assigning role `R` at scope `s` requires that for **every** permission `P` in `R`, the actor holds some coherent grant carrying `P` at a scope covering `s`. | Service layer |
 | **No granting at a scope you do not cover.** The grant's `(scope_type, scope_id)` must fall within the actor's own scope set, per the downward-only inheritance of `TENANCY.md` §1a.4. | Service layer |
 | **No cross-tenant role assignment.** A role from Organization A can never be granted at a scope owned by Organization B. | Service layer **and** `fn_validate_user_role_scope` (§6) |
 | **No self-granted platform access.** Platform-level roles are assignable only by an existing platform admin. | Service layer **and** `fn_validate_user_role_scope` |
@@ -203,6 +221,9 @@ Each guard names the layer that enforces it, because a guard that exists only in
 | **No smuggling platform power into a tenant role.** A `platform.*` permission cannot be attached to a role with `roles.org_id IS NOT NULL`, closing escalation by custom role composition. | `fn_validate_role_permission` (`DATABASE.md` §2) |
 | **No forged `org_id` on a grant.** `user_roles.org_id` is derived by the trigger from the resolved scope chain, never taken from the writer. | `fn_validate_user_role_scope` |
 | **No upward administration.** An actor cannot modify its own scope's parent — an organization admin cannot reassign their organization's reseller. | Service layer + RLS (`TENANCY.md` §3a) |
+| **At least one active platform administrator always remains.** Revoking the last platform grant, disabling its holder, or deleting the role is refused. | Service layer (clear `409`) **and** a database trigger taking `pg_advisory_xact_lock`, which is what makes it hold under concurrency (ADR-005 D-7) |
+| **No unaudited mass revocation through role deletion.** Deleting a role while grants of it exist is refused, so every revocation is an explicit, individually audited act rather than a cascade. | Service layer + `ON DELETE RESTRICT` (ADR-005 D-8) |
+| **No grant at a scope level the role was never designed for.** `RoleDefinition.allowedScopeTypes` bounds where a seeded role may be granted — `org_admin` at `organization` only, `agent` at `organization`/`workspace`/`team`. | Service layer. **Currently documented but enforced nowhere**; enforced from Phase 1B.5.5 |
 
 Every role grant and revocation is audit-logged without exception, including the attempts that were refused (`SECURITY.md` §4) — a rejected escalation attempt is precisely the event worth having a record of. `audit_logs.outcome` carries `denied` for exactly this purpose, and the audit row records the scope the attempt was made at on the same five-level enum `user_roles.scope_type` uses (`DATABASE.md` §12, ADR-002), so a refused escalation and the grant it targeted are directly comparable.
 
@@ -210,6 +231,35 @@ The identity database role (`acc_auth`) cannot write a role-grant audit row at a
 
 Frontend validation is UX-only and is never an authorization boundary for any of the above.
 
-## 8. Related
+## 8. Role and grant lifecycle
+
+Every state change below is a privilege change, so each one is audited, and each audit row commits in the same transaction as the change it records (ADR-003 D-2).
+
+### 8a. Roles
+
+| Operation | Rule | Audit |
+|---|---|---|
+| Create | A tenant role only: `roles.org_id` is the actor's resolved organization, never `NULL`, and `is_system_role` is false. Its permission set must lie within the actor's effective grant authority at that organization (§7) | `role.created` |
+| Update | Name, description and the permission set. The permission set is supplied as a **complete replacement**, not a delta, so the audit row's `before`/`after` describe the whole role rather than one edit. Adding a permission requires the actor to hold it; removing one does too, so an actor cannot strip authority it cannot itself see | `role.updated` |
+| Delete | Refused with `409` while any `user_roles` row references the role. `role_permissions` cascades — it is the role's own composition — and the `before` payload preserves what the role was | `role.deleted` |
+
+System roles are immutable except for name and description. Platform roles (`org_id IS NULL`) are not administrable through the API at all; they are seeded, and changing them is a migration (`DECISIONS.md` D22).
+
+**Why deletion is refused rather than cascaded.** `user_roles.role_id` cascades at the schema level, so an unguarded delete would revoke every grant of that role across the organization and write no audit row for any of them — an unbounded privilege change from a single statement, invisible to the trail that exists to record exactly that. Refusing while referenced forces each revocation to be an explicit act with its own record. Soft deletion is rejected for a different reason: a `deleted_at` the evaluator must filter on is a new bypass surface, and one query that forgets the predicate silently restores a role that was meant to be gone (ADR-005 D-8).
+
+### 8b. Grants
+
+| Operation | Rule | Audit |
+|---|---|---|
+| Grant | `(user, role, scope_type, scope_id)`. `org_id` is derived by the trigger, never supplied (§6). The scope must be admitted by the role's `allowedScopeTypes`, must fall within the actor's own scope set, and every permission the role carries must be within the actor's effective grant authority at that scope (§7) | `user_role.granted` |
+| Revoke | A hard `DELETE`. There is no `revoked_at` column: a revocation flag would be a second source of truth the evaluator must filter on, and a missed predicate would silently restore authority (`DECISIONS.md` D17) | `user_role.revoked` |
+
+A duplicate grant is refused by the partial unique indexes on `user_roles` and surfaces as `409`, never as a silent success — a silent success hides a caller that is double-granting.
+
+**Grants take effect on the next request, not mid-request.** Authorization is re-derived per request from current database state (ADR-003 D-3), so a grant committed during request *n* applies from request *n+1*. This is a consequence of re-derivation rather than a limitation to work around, and it means a revocation is effective immediately on the next call rather than at token expiry.
+
+**Refused attempts are audited as deliberately as successful ones.** `audit_logs.outcome = 'denied'` exists for this, and a rejected escalation is precisely the event worth having a record of. A refusal by the authorization layer itself is recorded as `authorization.denied` with the actor's own legitimate scope and the attempted target in metadata (`SECURITY.md` §4, ADR-005 D-6).
+
+## 9. Related
 
 Full table definitions: `DATABASE.md` §"IAM & RBAC domain". Security controls (encryption, session hardening, audit): `SECURITY.md`.

@@ -36,6 +36,8 @@ No certification (SOC 2, ISO 27001) is claimed anywhere in this document or by t
 | Client-supplied tenant identifiers are cross-checked | One declarative mechanism, `AdvisoryTenantGuard`, running after authentication and before the handler. A contradiction is `403 TENANCY_CONTEXT_MISMATCH`; a repeated, structured, malformed or empty identifier is `400 VALIDATION_FAILED`. Never substituted, never silently emptied, never resolved by parameter order (`TENANCY.md` §2b, ADR-004 D-3/D-4) |
 | Organization selection cannot confer access | `X-Acc-Organization` selects among organizations already in scope; one outside scope is refused, not substituted (ADR-003 D-4) |
 | Below organization level, the application is the only boundary | RLS carries no workspace or team term (`TENANCY.md` §3a), so target-scope authorization through `PermissionEvaluator` is mandatory on every scoped operation (`RBAC.md` §2, ADR-003 D-5) |
+| Authorization decisions are made per coherent grant | A decision is allowed only when **one** grant supplies both the permission and the covering scope (`RBAC.md` §2, ADR-005 D-1). Every allow therefore names the grant that authorized it, which is what makes a decision explainable rather than merely monotonic — and what stops a permission conferred at a workspace being honoured at the organization above it |
+| A target's ancestry is read from the database | The `ScopeChain` a coverage decision rests on is resolved inside the request's own tenant transaction, never taken from request input, so an out-of-scope target resolves to nothing and is a `404` without echo rather than a coverage question (ADR-005 D-5) |
 
 ## 3. Secrets management
 
@@ -56,6 +58,24 @@ The set classified as security-sensitive is `SECURITY_SENSITIVE_AUDIT_ACTIONS` i
 **Write synchronization — Phase 1B (ADR-003 D-2).** All audit writes are **synchronous**. For a security-sensitive mutation the audit row is written **in the same database transaction as the business mutation**: if the audit insert fails, the business mutation rolls back. That is what makes "a role grant cannot succeed without leaving a record" a guarantee rather than an intention. Non-sensitive actions are written synchronously too, for a plain reason — Phase 1 has no outbox or queue, so there is no asynchronous transport to write to, and inventing a fire-and-forget path would silently lose records while appearing to satisfy the design.
 
 The security-sensitive **classification is retained and used** even though both branches are currently synchronous, because it is what Phase 2 switches on: when the transactional outbox arrives, non-sensitive writes move to the queued path and sensitive writes stay in-transaction. The classification is therefore live today as a routing decision, not a placeholder.
+
+**Refused authorization (ADR-005 D-6).** Every refusal by the authorization layer writes an `authorization.denied` record. The field that matters most is the scope:
+
+| Field | Value |
+|---|---|
+| `scope_type` / `scope_id` | **The actor's own resolved, legitimate scope** — never the scope it attempted to reach |
+| `actor_type` / `actor_user_id` / `actor_api_key_id` | From the verified principal. Never fabricated |
+| `resource_type` / `resource_id` | The attempted target |
+| `metadata` | `{ permission, attempted_scope_type, attempted_scope_id }` |
+| `outcome` | `denied` |
+
+An attacker-supplied target must never become the record of where the actor legitimately was: the derived tenancy columns are what a later query filters on, so recording an attempted scope as the actor's scope would file the record under a tenant the actor was never in. The attempted target belongs in metadata, where it is operator context rather than a tenancy claim.
+
+The record is written **synchronously, in its own transaction**, and a failed audit write fails the request closed. A refusal has no business transaction to couple to, and coupling it to one would turn a `403` into a `500`; the caller receives a refusal either way, so the guarantee costs nothing. `authorization.denied` is classified security-sensitive for the same reason every other privilege event is.
+
+The error **response** carries `403 AUTHZ_SCOPE_DENIED` and echoes no target — the identifier appears in the audit row and in operator logs, never to the caller (`API.md` §3a).
+
+Successful authorization checks are **not** audited. The operation is — `role.created`, `user_role.granted` and the rest. One row per check per request would bury the records that carry forensic value, so this is a deliberate rejection rather than an omission.
 
 **Unknown-user authentication failures (ADR-003 R4).** A login attempt for an address matching no user still produces an audit record. It is never omitted, and a fictitious `actor_user_id` is never invented:
 

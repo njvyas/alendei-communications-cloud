@@ -101,6 +101,16 @@ Each of these asserts that a grant is never widened by the scope it is used at (
 
 The mirror-image positive tests are equally necessary: an organization-scoped grant *does* reach its own workspaces and teams without any additional grant, or the model has been implemented as isolation-by-accident rather than as inheritance.
 
+**Multi-grant cross-product cases (ADR-005 D-1).** The single-grant cases above are necessary and were never sufficient: a principal holding several grants can be widened by the *combination* even when each grant alone is correctly bounded. These are the cases that fail against a flattened permission union, and they are stated explicitly because a suite containing only the single-grant cases stays green while the defect is live:
+
+- **`read_only` @ organization + `workspace_manager` @ workspace, asking `role_assignments.grant` at organization scope → denied.** Neither grant confers it: the organization grant lacks the permission, the workspace grant cannot reach the organization. The same shape with `teams.create`, `workspaces.update` and `users.invite`.
+- **The same permission held through two grants, one of which covers the target → allowed.** The correction must not over-correct: coherence means *some* grant satisfies both halves, not that every grant must.
+- **Different permissions across grants, no single grant satisfying both halves → denied**, for each pairing of (organization, workspace) and (workspace, team).
+- **A permission held only at a narrower scope, used at a wider one → denied** — the general statement of the case above, asserted at every adjacent pair.
+- **A principal holding no grant at all → denied**, not defaulted.
+
+The full adversarial matrix, its layers and its mutations are in §6n.
+
 ### 6c. Scope substitution
 
 An authenticated caller supplies another `org_id` / `workspace_id` / `team_id` / `reseller_id` in a path, query, body or header → rejected, never silently substituted and never silently filtered to an empty result (`TENANCY.md` §2b). Includes a forged tenant id in a JWT claim: rejected because tenancy is re-derived from `user_roles` against the *verified* credential, not read from the claim.
@@ -118,6 +128,9 @@ List organizations, workspaces, teams, users and roles as principals at each sco
 - Composing a custom tenant role containing a `platform.*` permission → refused by `fn_validate_role_permission`.
 - Cross-tenant grant (Organization A's role at a scope owned by Organization B, `RBAC.md` §6's invalid state) → rejected at the application-validation layer **and**, independently, at the database trigger when that layer is deliberately bypassed. Both paths are tested separately; a test that only exercises the service layer proves nothing about the trigger.
 - A forged `org_id` on a grant insert → overwritten by the trigger's derived value, not merely rejected.
+- A grant at a scope level the role's `allowedScopeTypes` does not admit (`org_admin` at `team`, say) → refused. Currently a documented constraint enforced nowhere; the test lands with the enforcement in Phase 1B.5.
+- Removing the last active platform administrator — by revoking the grant, by disabling the holder, and by deleting the role — → refused in all three forms, and the administrator is still able to authenticate afterwards.
+- **Concurrent last-admin removal**: two genuinely concurrent transactions on **two independent connection pools** each remove a *different* platform administrator, when exactly two exist. Exactly one succeeds; at least one administrator remains. This is the case an application-level count cannot pass, because neither transaction sees the other's uncommitted delete and no row they wrote overlaps (ADR-005 D-7). A negative control disables the guard and asserts that both then succeed, leaving zero administrators — without it the test cannot distinguish "the lock works" from "the two transactions happened not to interleave".
 
 ### 6f. Parent–child integrity
 
@@ -269,6 +282,54 @@ Implemented in `apps/api/test/auth.sec-spec.ts` (the security project, 41 tests)
 - It writes its own audit records.
 - `fn_validate_user_role_scope` is unchanged by it: after bootstrap, an ordinary application principal still cannot grant a platform role.
 - No HTTP route performs a privilege grant without authentication — asserted against the registered route table.
+
+### 6n. Authorization coherence (Phase 1B.5)
+
+The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Every case asks one question: does a decision rest on **one** grant that supplies both the permission and the covering scope?
+
+**Layers.** Unit tests over the evaluator for the algebra; integration tests over real HTTP with real grants for the request path; security tests for the escalation attempts. The algebra is cheap enough to enumerate exhaustively and is, so the integration layer asserts the wiring rather than re-deriving the matrix.
+
+| # | Case | Expected |
+|---|---|---|
+| 1–9 | The §6a/§6b single-grant matrix — same-org, cross-org, same/sibling workspace, same/sibling team, parent covers child, child covers neither sibling nor parent | as §6a/§6b |
+| 10 | `read_only`@org + `workspace_manager`@ws asking `role_assignments.grant`@org | **denied** — the regression test for ADR-005 |
+| 11 | Same permission via two grants, one covering | allowed |
+| 12 | Different permissions across grants, none coherent | denied |
+| 13 | Reseller A reaching Reseller B's organization | denied |
+| 14 | Platform grant across all five levels | allowed |
+| 15 | API-key creator intersection taken at the key's binding scope | the wider permission is absent from the principal |
+| 16 | Grant revoked → next request | denied |
+| 17 | Permission removed from a role → next request | denied |
+| 18 | Role deleted while grants exist | `409`, grants intact |
+| 19–20 | Last platform admin, sequential and concurrent | §6e |
+| 21 | Granting role R at scope s where the actor lacks R's permissions *at s* | `403` |
+| 22 | Granting a permission the actor holds only at a narrower scope | `403` — §6b's cross-product as an escalation attempt |
+| 23 | A refusal writes `authorization.denied` | row carries the **actor's** scope |
+| 24 | Denial metadata carries the attempted target; the response does not | both asserted |
+| 25 | Application authorization bypassed → RLS still blocks cross-organization | zero rows |
+| 26 | `fn_validate_user_role_scope` with the service bypassed | raises |
+| 27 | Self-grant within the actor's own effective grant authority | allowed, and confers nothing new |
+| 28 | Grant at a scope type `allowedScopeTypes` does not admit | refused |
+| 29 | Duplicate grant | `409` |
+| 30 | Every scoped route performs exactly one target-scope check | asserted against the registered route table, not by review |
+
+**Mutation sensitivity.** Each mutation is applied, the suite is run, the named tests must fail, and the implementation is restored:
+
+| Mutation | Must fail |
+|---|---|
+| `grantCarries` returns the flattened union (restores today's behaviour) | 10, 12, 22 |
+| `scopeCovers` term dropped from `allows` | 4, 6, 8, 9 |
+| Permission term dropped from `allows` | 12 and every denial case |
+| `ScopeChainResolver` returns the request-supplied chain | 2, 4, 6 |
+| Advisory lock removed from the last-admin path | 20 only — 19 still passes, which is the point |
+| Last-admin trigger removed, service check kept | 20 and the service-bypassed case |
+| Escalation guard written against the flattened union | 21, 22 |
+| API-key intersection taken at the creator's widest scope | 15 |
+| `authorization.denied` write removed | 23, 24 |
+| Denial records the *attempted* scope as the actor's scope | 23 |
+| Role delete cascades instead of refusing | 18 |
+
+The first mutation is the keystone: it is the behaviour in production today, so a suite that stays green under it has not fixed anything.
 
 ## 7. Billing tests
 

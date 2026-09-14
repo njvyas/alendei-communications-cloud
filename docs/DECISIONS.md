@@ -2,6 +2,8 @@
 
 This is the living register of everything flagged as needing a product-owner decision, carrying scalability/security risk, or representing a tension between requirements that this document set resolved with an explicit, stated choice rather than silently picking one side. As of Phase 0.1 (the consolidated architecture consistency & hardening pass), every item that would have blocked a correct, unambiguous Phase 1 implementation has been resolved and is recorded in §1. Items in §2 are explicitly confirmed non-blocking — none of them affect the correctness of Phase 1 Foundation work. Phase 0.2 (final documentation-hardening pass before Phase 1 implementation — transaction-specific pricing, `requested_channel_id` hard-constraint semantics, attempt-level routing/pricing snapshots, idempotency `failed`-status semantics, and the broader engagement-platform product architecture, `ARCHITECTURE.md` §21) added B19–B22 below, all resolved. A follow-up Phase 0.2 correction pass added B23–B25 (multi-component pricing evaluation model, billable-transaction terminology generalization, and a residual reservation-accounting wording fix). Phase 0.3 (surgical documentation-consistency pass) added B26–B28 (Phase 5/Phase 7 billing-dependency de-conflation, removal of "distributed lock" as an implied Phase 5 deliverable, and an explicit Pricing-Evaluation-vs-Usage-Ledger HOW-vs-WHAT boundary statement). Phase 0.4 (final documentation freeze pass) added B29–B30 (made `usage_ledger.pricing_evaluation_id` the authoritative concrete foreign key to the pricing calculation that produced each ledger amount, demoting `rate_card_ref` to descriptive metadata; clarified `DR.md`'s Redis-loss wording so it cannot be read as Redis participating in fallback correctness). No Phase 0.2–0.4 change reopened or contradicted any earlier resolution; the architecture is frozen as of Phase 0.4.
 
+**Phase 1B.5 planning feedback (B35)**: the authorization review for Phase 1B.5 found that `PermissionEvaluator` evaluates the permission question and the scope question against *different* grants. `grantCarries()` ignores its `roleId` and returns the flattened union, so `allows(P, target)` reduces to "some grant carries P" AND "some grant covers the target" — a cross-product. Confirmed empirically against the real evaluator and the real seeded roles: a user holding `read_only` at an organization and `workspace_manager` at one workspace is granted `role_assignments.grant`, `teams.create`, `workspaces.update` and `users.invite` **at organization scope**, where no coherent grant authorizes any of them. Three corrections to the risk as previously recorded: the recorded mitigation reasons in the wrong direction (the over-approximation is *upward*, so "no endpoint below organization level" does not bound it); stock seeded roles reproduce it with no custom role; and it is latent only because the single live endpoint checks a permission every seeded role carries — Phase 1B.5 introduces `role_assignments.grant` as an endpoint permission and makes it directly exploitable inside the privilege-management API. Resolved in ADR-005 (§1e); the fix needs no schema change, because `role_permissions` already is the per-grant relation.
+
 **Phase 1B.4 implementation feedback (B34)**: the Phase 1B.3 verification pass found that implementation and `ROADMAP.md` §4a had diverged — 1B.3 had necessarily absorbed the whole of 1B.4's scope-resolution and tenant-context deliverables, and had pulled `scopeCovers` and `PermissionEvaluator` forward from 1B.5, because the 1B.3 exit criterion (the authenticated chain proven end to end) is not demonstrable without them. Nothing was missing; the phase table was wrong. ADR-004 (§1d) records the delivered split, re-scopes 1B.4 to the three things genuinely unbuilt — this reconciliation, the pooled-connection hardening tests, and one generic advisory-identifier cross-check — and states why the worker/job tenant-context harness is deferred to Phase 2 rather than guessed at now.
 
 **Phase 1B planning feedback (B33)**: the planning review for the identity/tenancy/RBAC half of Phase 1B found nine decisions that had to be settled before implementation — bootstrap of the first platform admin, audit synchronization with no outbox available, JWT claim contents, multi-organization selection, where target-scope authorization runs, MFA's actual phase, refresh-token transport, the audit representation of an unknown-user login failure, and the API-key effective-permission model. Several of these were *documented as settled* in ways the repository contradicted. All are resolved in ADR-003 (§1c) and the affected documents are reconciled in this pass. One consequence (R4) requires a schema change that is deliberately not made in a documentation-only pass and is recorded as pending.
@@ -297,6 +299,158 @@ Consequently `TESTING.md` §6h is satisfied for the connection-pooling half at G
 
 The over-approximation ADR-003 left in `PermissionEvaluator.grantCarries` is unchanged — a principal holding a permission through any grant is treated as holding it through each. It is out of scope here and closes in Phase 1B.5 with per-grant permission sets. The advisory cross-check narrows the blast radius but does not substitute for it: the two answer different questions.
 
+## 1e. ADR-005 — Coherent-grant authorization
+
+**Status**: Accepted (Phase 1B.5 planning review against `9d946f1`). Governs the authorization half of Phase 1B. Extends ADR-001 (scope hierarchy) and ADR-003 (D-5, target-scope authorization); supersedes nothing. Closes the over-approximation ADR-003 recorded and ADR-004 carried forward.
+
+### Context
+
+`PermissionEvaluator` asks two questions — does the principal hold the permission, and does it hold it at a scope covering the target — and ADR-003 D-5 made both mandatory. What neither ADR stated is that the two questions must be answered about the **same grant**.
+
+They are not. `PermissionEvaluator.grantCarries()` ignores its `roleId` argument and returns `principal.permissions.includes(permission)`, the flattened union across every grant the principal holds. The whole of `allows()` therefore reduces to:
+
+```
+allows(P, target)  ⟺  (∃ g₁ : P ∈ permissions(g₁))  ∧  (∃ g₂ : scopeCovers(g₂, target))
+```
+
+`g₁` and `g₂` need not be the same grant. This is a cross-product, not a grant evaluation.
+
+Verified empirically against the real evaluator and the real seeded role definitions:
+
+```
+Grant A: read_only          @ organization org-1
+Grant B: workspace_manager  @ workspace    ws-1
+
+role_assignments.grant @ ORGANIZATION org-1
+  read_only carries it?              false
+  workspace_manager carries it?      true
+  workspace grant covers org target? false
+  ⇒ no coherent grant authorizes it
+  EVALUATOR SAYS ALLOWED:            true
+```
+
+`teams.create`, `workspaces.update` and `users.invite` behave identically at organization scope. A permission held by *neither* role is still correctly denied, so this is a scope-binding failure rather than allow-all.
+
+Three corrections to the risk as previously recorded:
+
+1. **The recorded mitigation reasons in the wrong direction.** Both `DECISIONS.md` §3 and the comment at `permission-evaluator.service.ts` bounded the risk on the grounds that no endpoint targets a scope *below* organization level. The over-approximation is *upward*: a permission conferred at a narrow scope is honoured at a wider one. It is vertical privilege escalation, which is `TESTING.md` §6b's own subject, and the "no endpoint below organization" argument does not bound it at all.
+2. **No custom role is required.** Stock seeded roles reproduce it. The example above is the ordinary "organization-wide reporting access, plus manages one workspace" user.
+3. **It is latent, not absent.** The only live endpoint checks `workspaces.read`, which every seeded role carries, so the cross-product currently has nothing to expose. Phase 1B.5 introduces `role_assignments.grant` as an endpoint permission — which turns this into a privilege-escalation primitive inside the privilege-management API itself.
+
+The second-order consequence matters as much as the first: `RBAC.md` §7's "no granting a permission you do not hold" guard, if written against `principal.permissions`, **inherits the defect** rather than containing it.
+
+The same class of error exists a second time, at the API-key creator intersection: it intersects against the creator's flattened union across all grants, while `RBAC.md` §5c specifies the creator's permissions *at the key's organization*.
+
+### Decisions
+
+**D-1 — A decision is authorized only when one grant supplies both the permission and the covering scope.**
+
+```
+ALLOW(P, target)  ⟺  ∃ g ∈ grants(principal) :
+        P ∈ permissions(g.role)
+    ∧   scopeCovers(g.scope, target.scope, target.chain)
+    ∧   g is active
+```
+
+Existential over grants, conjunctive within a grant. Holding `P` through *any* grant is never sufficient. `scopeCovers` is correct as it stands and is **not** modified: the correction is entirely in what the evaluator is given to reason over.
+
+Verified against the unmodified `scopeCovers`: this rule denies every escalation above while preserving every legitimate case — `role_assignments.grant` at workspace `ws-1` and at team `tm-1`, `audit.read` and `workspaces.read` at organization `org-1`, and `workspaces.read` at team `tm-1` all remain allowed; a sibling workspace remains denied.
+
+**D-2 — `RoleGrant` carries its own permissions. No schema change is required.**
+
+`role_permissions (role_id, permission_id)` already *is* the per-grant permission relation; the mapping is discarded in exactly one place, `ScopeResolver.permissionsForRoles`, which selects `DISTINCT key` and drops `role_id`. The correction is to stop discarding it: the resolver returns permissions per role, and each `RoleGrant` on the principal carries the set its own role confers. The query changes from `SELECT DISTINCT key` to `SELECT role_id, key` over the same index — not a new query, and not an N+1. `DECISIONS.md` D11 (no scope-set caching) is unaffected.
+
+**D-3 — `AuthPrincipal.permissions` is retained, and is not authoritative for authorization.**
+
+The flattened union has two legitimate consumers: the API-key creator intersection (`RBAC.md` §5c is defined on the creator's *held* permissions) and capability hints for rendering a console. It stays, and is documented as **not** an authorization input. The evaluator stops reading it as the deciding term. Removing it would break `RBAC.md` §5c; leaving it undocumented is how it gets read as a decision source again.
+
+**D-4 — The API-key intersection is taken at the key's binding scope.**
+
+```
+effective = requested_key_scopes
+          ∩ { P : ∃ coherent creator grant g,
+                  P ∈ permissions(g) ∧ scopeCovers(g.scope, key.bindingScope) }
+```
+
+Today a creator who is `read_only` in Org-1 and `org_admin` in Org-2 can mint a key bound to Org-1 carrying `org_admin` permissions. This is D-1's defect wearing a different hat and is corrected in the same increment, so the two cannot drift apart.
+
+**D-5 — A target's `ScopeChain` is resolved from the database, never from request input.**
+
+`scopeCovers` is only as correct as the ancestry it is given, and coverage below organization level cannot be decided from ids alone. The chain is resolved inside the request's own tenant transaction, so RLS filters it: a target in another organization resolves to nothing, and that is a `404` without echo (`API.md` §3a), not a `403`. A chain taken from request input would be a complete bypass of the scope model, so this is stated as an invariant rather than left to each call site.
+
+This composes with, and does not replace, the advisory-identifier cross-check (ADR-004 D-3). That one refuses a *supplied* identifier that contradicts the resolved context, before the handler runs. This one establishes the *authoritative* ancestry of a target the handler has loaded. Neither substitutes for the other.
+
+**D-6 — Refused authorization is audited with the actor's own scope; successful checks are not audited.**
+
+`authorization.denied` records `(scopeType, scopeId)` as the **actor's** resolved, legitimate scope. The attempted target lives in `metadata` and in `resourceType`/`resourceId`. An attacker-supplied target must never become the record of where the actor legitimately was, and an actor scope is never fabricated to make a row fit. The response carries `403 AUTHZ_SCOPE_DENIED` and echoes no target.
+
+A denial has no business transaction to couple to, so it is written **synchronously in its own transaction**, and a failed audit write fails the request closed. The caller receives a refusal either way — the request was never going to succeed — so the coupling costs nothing and the record is guaranteed. `authorization.denied` is therefore added to `SECURITY_SENSITIVE_AUDIT_ACTIONS`, where it is currently missing.
+
+**Successful authorization checks are deliberately not audited.** The *operation* is audited — `role.created`, `user_role.granted` and the rest. Recording every successful check would write a row per check per request and bury the trail that has forensic value. This is a rejection, not an omission.
+
+**D-7 — The at-least-one-active-platform-admin invariant is enforced by a database trigger taking `pg_advisory_xact_lock`.**
+
+The invariant, stated exactly:
+
+> At every committed state there exists at least one user `u` with `u.status = 'active'` holding a grant of a platform role at `platform` scope.
+
+"Active" is load-bearing: a disabled user holding `alendei_super_admin` cannot authenticate and therefore does not satisfy it. Three operations can violate it — revoking the grant, disabling the user, deleting the role.
+
+An application-level count cannot enforce it. Two concurrent transactions each count two admins, each decide the removal is safe, each remove a *different* admin, and both commit. Under `READ COMMITTED` neither sees the other's uncommitted delete and no row they wrote overlaps, so nothing serialises them. This is textbook write-skew.
+
+| Mechanism | Why not / why |
+|---|---|
+| `SELECT … FOR UPDATE` on `user_roles` | **Rejected.** It locks rows that exist; the hazard here is the *absence* of rows, and a concurrent INSERT of a new admin is not blocked by it |
+| `SERIALIZABLE` isolation | **Rejected.** Correct, but it changes the isolation level of the whole request path and forces retry-on-`40001` handling everywhere, for one invariant |
+| Partial unique index / CHECK | **Rejected.** Constraints are per-row and cannot express "at least one row exists" |
+| **`pg_advisory_xact_lock`** | **Chosen.** Serialises exactly the three mutators of this invariant, releases automatically on commit *and* rollback — the same property that makes `SET LOCAL` safe — requires no isolation change, and contends only between platform-admin mutations, which are rare |
+
+The lock key is a fixed constant exported from `@acc/db`, so every call site takes the same lock; a second key would silently disable the guarantee. The lock is taken **before** any row lock in these paths, and that ordering is what keeps the paths deadlock-free.
+
+Enforcement lives in the database, for the reason `RBAC.md` §6 already gives for cross-tenant grants: a guard that exists only in the service is a different quality of assurance, and a migration script or admin tool bypasses it. The service keeps its own check for a clear `409`; the trigger is the guarantee.
+
+**D-8 — Role deletion is refused while grants exist. No soft delete.**
+
+`roles.id` is referenced by `user_roles.role_id` with `ON DELETE CASCADE`, so deleting a role today silently revokes every grant of it across the organization with **no audit row for any of those revocations** — an unbounded, unaudited privilege change from one statement. Deletion is instead refused with `409` while any grant exists; the administrator revokes explicitly and each revocation is audited individually. This mirrors `TENANCY.md` §1b, where an organization with history is closed rather than deleted.
+
+Soft deletion is rejected. A `deleted_at` the evaluator must filter on is a new bypass surface: one query that forgets the predicate silently resurrects a revoked role. Refusing while referenced gives the same safety with no new state to keep consistent.
+
+`role_permissions` still cascades — it is the role's own composition, and the `role.deleted` audit row carries the full permission set in `before`. `audit_logs` holds no foreign key to `roles`, so deletion never threatens audit integrity. System roles (`is_system_role`) and platform roles (`org_id IS NULL`) are never deletable through the API at all.
+
+**D-9 — Grant revocation is a hard delete plus a security-sensitive audit row.**
+
+No `revoked_at` column on `user_roles`. A revocation column would become a second source of truth the evaluator must filter on, and a missed predicate would silently restore authority — the same failure mode D-8 rejects soft deletion for. The `user_role.revoked` audit row, written in the same transaction as the delete, is the durable record.
+
+### Consequences
+
+- `RBAC.md` §2 gains the coherent-grant formula; §5c is corrected to the key's binding scope; §7's first two guards are restated as `(permission, scope)` pairs; a new §8 records the role and grant lifecycle.
+- `SECURITY.md` §2a records per-grant decisions; §4 gains the `authorization.denied` semantics.
+- `TENANCY.md` §1a.4 gains coherence as a fourth invariant; §3a cites it where workspace/team enforcement is described.
+- `API.md` §2 marks `/roles`, `/role-assignments` and `/permissions` as Phase 1B.5; §3a clarifies that the endpoint guard is necessary but not sufficient; a new §3c specifies the endpoint surface.
+- `ARCHITECTURE.md` §4 gains `AuthorizationService`/`@RequiresPermission` on `auth` and `ScopeChainResolver` on `tenancy`.
+- `DATABASE.md` §2 records the planned migrations; §14a gains the advisory-lock ordering rule.
+- `TESTING.md` §6b is replaced by the adversarial matrix, §6e gains the concurrency and scope-type cases, and §6n records the Phase 1B.5 suite and its mutation table.
+- `ROADMAP.md` §4a replaces the 1B.5 row with seven increments and renumbers the identity surface to 1B.6 and the vertical slice to 1B.7; §4b gains the Gate B criteria this ADR implies.
+- **Four statements in the repository are stale as of this ADR and are recorded here rather than changed in a documentation-only pass**, each with the increment that closes it:
+
+  | Stale statement | Where | Closes in |
+  |---|---|---|
+  | The comment bounding the over-approximation on the grounds that no endpoint targets below organization level — the direction is inverted (see Context) | `apps/api/src/auth/permission-evaluator.service.ts` | 1B.5.1, with the correction itself |
+  | The API-key creator intersection taken over the creator's flattened union, contradicting `RBAC.md` §5c | `apps/api/src/auth/auth.guard.ts` | 1B.5.1 (D-4) |
+  | `RoleDefinition.allowedScopeTypes` — a documented constraint enforced nowhere. An unenforced documented constraint is worse than an absent one, so it is either enforced or deleted | `packages/contracts/src/roles.ts`, `RBAC.md` §7 | 1B.5.5 |
+  | `TENANT_ROLE_DEFINITIONS` — defined, exported, and seeded by nothing. Only `PLATFORM_ROLE_DEFINITIONS` reaches the database | `packages/contracts/src/roles.ts`, `packages/db/src/cli/seed.ts` | 1B.5.4, seeding tenant roles at provisioning |
+  | `AUDIT_ACTIONS.AUTHORIZATION_DENIED` — defined in the contract, written by no code path, and absent from `SECURITY_SENSITIVE_AUDIT_ACTIONS` | `packages/contracts/src/audit.ts` | 1B.5.3 (D-6) |
+
+  None of them is edited in the 1B.5.0 pass: this increment records decisions, and changing code to match a decision is the next increment's work.
+
+### Residual risk
+
+- **Workspace and team isolation still has no database backstop.** RLS carries no workspace or team term (`TENANCY.md` §3a). D-1 makes the application layer *correct*; it does not make it *redundant*. This remains the highest residual risk in Phase 1B.
+- **A future endpoint can still omit the target-scope call.** Mitigated by a test asserting every scoped route performs exactly one target-scope check, not eliminated.
+- **ABAC is advertised and not implemented.** `RBAC.md` §1 describes RBAC *and* ABAC; only RBAC with scope coverage exists. Attribute conditions are deferred beyond Phase 1B (D20) and Gate B must say so rather than imply otherwise.
+- **`TENANT_ROLE_DEFINITIONS.allowedScopeTypes` is a documented constraint enforced nowhere**, and `TENANT_ROLE_DEFINITIONS` itself is defined and never seeded. Both close in Phase 1B.5 (1B.5.5 and 1B.5.4 respectively); an unenforced documented constraint is worse than none.
+- **Denial rows are attacker-influenceable in volume.** A valid principal can generate unbounded `authorization.denied` rows by probing. Accepted, and named as an additional trigger for the `audit_logs` partitioning decision deferred in ADR-002.
+
 ## 2. Non-blocking future decisions (confirmed — none of these affect Phase 1 correctness)
 
 | # | Decision | Why it's genuinely deferrable | Current default |
@@ -317,6 +471,13 @@ The over-approximation ADR-003 left in `PermissionEvaluator.grantCarries` is unc
 | D7 | RTO/RPO targets in `DR.md` §3 | A business-input number, not an engineering ambiguity — the mechanisms (WAL archiving, cross-region replication) are already fully specified regardless of the exact target number | Placeholder targets pending business/product-owner confirmation before Phase 12 |
 | D8 | Data-subject request handling (DPDP/GDPR erasure/export) | No real contact PII is processed before Phase 3, and even then only simulator-backed test data through Phase 12 — there is no Phase 1 code path this blocks | Not yet designed; required before any real customer PII is processed |
 | D9 | Modular monolith vs. early service extraction for `provider-adapters` under high throughput | Module boundaries are already drawn specifically so this is a deployment-topology change later, not a Phase 1 architectural fork | Modular monolith through Phase 2–8 |
+| D17 | Grant revocation representation | A `revoked_at` column would be a second source of truth the evaluator must filter on, and a missed predicate would silently restore authority (ADR-005 D-9) | Hard `DELETE` on `user_roles` plus a security-sensitive `user_role.revoked` audit row in the same transaction; no revocation column |
+| D18 | Role deletion representation | Soft deletion adds state the evaluator must filter on; refusing while referenced gives the same safety with none (ADR-005 D-8) | Deletion refused with `409` while any grant exists; no `deleted_at`. System and platform roles never deletable through the API |
+| D19 | Transaction coupling for denial auditing | A refusal has no business transaction to couple to, and coupling it to one would turn a `403` into a `500` on audit failure (ADR-005 D-6) | `authorization.denied` written synchronously in its own transaction, failing the request closed; added to `SECURITY_SENSITIVE_AUDIT_ACTIONS` |
+| D20 | Whether successful authorization checks are audited | One row per check per request buries the trail that carries forensic value; the *operation* is already audited (ADR-005 D-6) | Not audited. Only refusals and the operations themselves are recorded |
+| D21 | ABAC attribute-condition evaluation | `RBAC.md` §1 describes RBAC *and* ABAC; only RBAC with scope coverage exists. No Phase 1B endpoint needs an attribute condition, and authoring them without a policy surface would be speculative | Deferred beyond Phase 1B, with `PermissionEvaluator` as the documented insertion point. Gate B states plainly that attribute conditions are not implemented |
+| D22 | Platform-role administration through the API | Platform roles are the control plane's own authority; making them editable by any API caller would put the escalation guard inside the thing it guards | Immutable through the API. Administrable only by migration or seed, as `seed.ts` already does |
+| D23 | Cross-user authorization introspection | The console cannot render a correct permissions UI from a flattened union, but "effective permissions of another user" is an enumeration surface with no Phase 1B consumer | `GET /auth/me/authorization` is self-only, disclosing nothing the principal could not already derive. No cross-user variant in Phase 1B |
 
 ## 3. Risks explicitly accepted by design (not oversights)
 
@@ -325,10 +486,10 @@ The over-approximation ADR-003 left in `PermissionEvaluator.grantCarries` is unc
 - **No certification is claimed** for SOC 2/ISO 27001/DPDP/GDPR — only control-objective alignment, explicitly and repeatedly disclaimed in `SECURITY.md`.
 - **The audit log is not tamper-evident against an owner or superuser** (ADR-002, `SECURITY.md` §4a). Any in-database control can be removed by whoever owns the database; the trigger stops accident and application compromise, not a privileged operator. Accepted because the mitigation is external (SIEM export, WAL archiving, infrastructure-level audit of administrative access), not because the risk is small. Hash-chaining rows so a deletion is detectable is the obvious strengthening if it is ever needed.
 - **A workspace- or team-scoped audit row is visible to any principal the authorization layer admits to that organization's audit trail.** The database guarantees organization-level isolation only (`TENANCY.md` §3a); restricting a record to its workspace or team is a required RBAC/ABAC check in the request path, on every read including list endpoints and exports, and is never satisfied by UI filtering or a client-supplied predicate. Unchanged by ADR-002, which records the finer scope without filtering on it. Accepted as a layering decision, not as a licence to omit the check: omitting it is a security defect.
-- **Workspace and team isolation has no database backstop.** RLS enforces organization-level isolation only (`TENANCY.md` §3a), so below that level the service layer is the entire enforcement. A single missing target-scope check opens cross-workspace access while every database test stays green and RLS remains fully satisfied. This is the highest residual risk in Phase 1B. Mitigated by ADR-003 D-5's single reusable mechanism and by isolation tests written to pass only when application-layer enforcement is present.
+- **Workspace and team isolation has no database backstop.** RLS enforces organization-level isolation only (`TENANCY.md` §3a), so below that level the service layer is the entire enforcement, and a cross-workspace failure leaves every database test green with RLS fully satisfied. This remains the highest residual risk in Phase 1B. Two distinct failure modes live here and only one of them was previously recorded. The first is a *missing* target-scope check on some endpoint — mitigated by ADR-003 D-5's single reusable mechanism, and by a Phase 1B.5 test asserting that every scoped route performs exactly one such check. The second needs no missing check at all: until ADR-005 D-1 lands, the check that *is* performed can be satisfied by a permission from one grant and a scope from another, so a correctly-written call site still authorizes an action no coherent grant confers. That is closed by increment 1B.5.1, and the mutation restoring the flattened union must fail the suite.
 - **An access token remains valid for up to its TTL after its session is revoked**, unless `sessions.revoked_at` is checked on the same query that resolves grants. Because ADR-003 D-3 already requires a per-request session/grant read, that check is nearly free and is the recommended implementation; if it is ever skipped for performance, the window must be documented rather than assumed away.
 - **Every successful API-key authentication writes an audit row.** Correct for traceability, and required because an API key has no session to anchor its activity to — but it is one audit row per request, where session authentication writes one per login. At Phase 1B volumes this is immaterial; before a high-throughput integration goes live it should be revisited (sampling, or aggregating to first-use-per-window), and that is a deliberate decision rather than something to discover from table growth.
-- **`PermissionEvaluator` over-approximates which grant carries a permission.** `AuthPrincipal.permissions` is the flattened union across every grant, so a principal holding a permission through *any* grant is treated as holding it through *each* when checking scope coverage. A user with `read_only` at the organization and `org_admin` at one workspace would therefore pass an organization-level check for an `org_admin` permission. This is safe today only because Phase 1B.3 exposes no endpoint whose target is below organization level; it is closed in Phase 1B.5 by carrying per-grant permission sets on the principal, which role administration needs anyway. Recorded here rather than left as a comment because it is a real gap between the implementation and the model.
+- **`PermissionEvaluator` evaluates permission and scope against different grants.** `AuthPrincipal.permissions` is the flattened union, so a principal holding a permission through *any* grant is treated as holding it through *each* when checking scope coverage. A user with `read_only` at the organization and `workspace_manager` at one workspace passes an organization-level check for `role_assignments.grant`, `teams.create`, `workspaces.update` and `users.invite` — verified against the real evaluator and the real seeded roles. **The bound previously recorded here was wrong and is corrected**: this was described as safe because no endpoint targets a scope *below* organization level, but the over-approximation runs *upward* — a permission conferred narrowly is honoured widely — so that argument does not bound it. It is latent only because the single live endpoint checks `workspaces.read`, which every seeded role carries. Phase 1B.5 introduces `role_assignments.grant` as an endpoint permission and makes it directly exploitable inside the privilege-management API, and a naive "no granting a permission you do not hold" guard written against the same union would inherit the defect rather than contain it. Closed by ADR-005 D-1 in increment 1B.5.1; the same class of error at the API-key creator intersection (ADR-005 D-4) is corrected in the same increment.
 - **Authentication rate limiting fails open when Redis is unavailable.** Deliberate and tested (`API.md` §5): Redis is an accelerator, the limiter is a throttle rather than the authentication control, and refusing every sign-in during a cache outage converts a degraded dependency into a total one. The cost is that a sustained Redis outage removes brute-force throttling — mitigated by logging every degraded call at `warn` so the condition is visible, and by the fact that credentials are still verified and every failure still audited. Revisit if a lockout mechanism (D13) ever lands.
 - **Logout revokes the presenting session only.** "Sign out everywhere" is a separate, explicit action, so closing one browser tab cannot silently kill a user's other devices. `DELETE /auth/sessions/:id` revokes one named session; a bulk revoke-all endpoint is Phase 1B.6.
 - **`acc_auth` holds no INSERT on `users`, so user creation is an `acc_app` operation.** Discovered while writing the Phase 1B.2 tests, and correct as it stands: the identity role resolves identities, it does not mint them, which keeps a compromised credential-verification path from provisioning itself an account. It does mean that any future flow creating a user before a tenant context exists (self-service signup, JIT provisioning from SSO) needs an explicit decision about which principal performs it, rather than widening `acc_auth`. Asserted by a test.

@@ -12,8 +12,9 @@ All public and console APIs are served under `/api/v1`. Breaking changes ship as
 | `/ws/ticket` | `iam` | Mints a single-use, short-lived WebSocket connection ticket (§9). Issuance ships in Phase 1B; ticket *consumption* and the socket gateway are deferred (`DECISIONS.md` D15) |
 | `/tenants` | `tenancy` | Organization/workspace/team CRUD (scoped by caller's role) |
 | `/users` | `tenancy` | User invite/management |
-| `/roles` | `tenancy` | Role CRUD (custom roles) |
-| `/permissions` | `tenancy` | Permission catalogue (read-only, system-defined) |
+| `/roles` | `tenancy` | Role CRUD (custom roles). **Built in Phase 1B.5** (§3c) |
+| `/role-assignments` | `tenancy` | Scope-bound role grant and revocation. **Built in Phase 1B.5** (§3c) |
+| `/permissions` | `tenancy` | Permission catalogue (read-only, system-defined). **Built in Phase 1B.5** (§3c) |
 | `/channels` | `provider-registry` | Supported channel catalogue |
 | `/providers` | `provider-registry` | Provider CRUD, enable/disable/drain, capability config |
 | `/routing` | `provider-router` | Routing policy CRUD, versioning, activation |
@@ -96,6 +97,8 @@ An error never echoes the supplied identifier back.
 
 **Scope-target authorization is not the guard's job alone.** The endpoint permission may be enforced declaratively, but the target-scope half is checked inside the service, through the shared evaluator, because a target's scope is often knowable only once it is loaded (`RBAC.md` §2, ADR-003 D-5).
 
+**The endpoint guard is necessary and never sufficient**, and the two halves are wired so that omitting the second is a test failure rather than a silent hole. The declarative guard records the permission the route requires; the service-layer check asserts at runtime that the permission it is being asked about is the one the route declared, and that the target's scope is covered by a coherent grant (ADR-005 D-1) whose ancestry was resolved from the database (ADR-005 D-5). A scoped route that never reaches the service-layer check is caught by a test asserting every such route performs exactly one, rather than by review. Passing the guard alone authorizes nothing.
+
 ### 3b. Token transport, CORS and CSRF (Phase 1B, ADR-003 D-7)
 
 **Access token** — returned in the login/refresh JSON response and presented as `Authorization: Bearer <token>`. Held in memory by the console. Never placed in a URL, a query parameter, `localStorage` or `sessionStorage`.
@@ -118,6 +121,54 @@ An error never echoes the supplied identifier back.
 The mechanism is the *absence* of a token rather than the presence of one: nothing is stored or compared, so there is no CSRF secret to leak, rotate or desynchronize. The protection comes entirely from the fact that a cross-origin caller must first pass a preflight that the origin allowlist refuses, and an HTML form cannot set a header at all.
 
 **Refresh rotation.** Every refresh rotates the token and records lineage. Presenting an already-rotated refresh token is treated as theft: the entire session chain is revoked and the event is audited.
+
+### 3c. Role and grant administration (Phase 1B.5)
+
+Nine endpoints, deliberately small. Every mutation writes its audit row **in the same transaction** as the change (ADR-003 D-2); every target scope is checked through the shared evaluator against a coherent grant (§3a); every out-of-scope target is `404` without echo rather than `403`.
+
+**Roles** (module `tenancy`)
+
+| Method | Path | Permission | Target scope | Request | Response | Errors | Audit | Idempotency | Transaction |
+|---|---|---|---|---|---|---|---|---|---|
+| `GET` | `/roles` | `roles.read` | organization | — | `{roles:[{id,key,name,description,is_system_role,permissions[]}]}` | — | — | safe | one read-only tenant transaction |
+| `POST` | `/roles` | `roles.create` | organization | `{key,name,description?,permissions[]}` | `201` role | `409` duplicate key; `403` a permission outside the actor's effective grant authority | `role.created` | not idempotent; duplicate key is `409`, never a silent success | one transaction: role + `role_permissions` + audit |
+| `PATCH` | `/roles/:id` | `roles.update` | the role's organization | `{name?,description?,permissions?}` | `200` role | `404` unknown/out-of-scope; `403` as above; `409` system role permission edit | `role.updated` with full `before`/`after` | naturally idempotent | one transaction |
+| `DELETE` | `/roles/:id` | `roles.delete` | the role's organization | — | `204` | `404` unknown/out-of-scope; **`409` while any grant references it**; `409` system or platform role | `role.deleted` with `before` | `404` if already gone | one transaction |
+
+`permissions` is a **complete replacement set**, not a delta. That is what lets the audit row describe the whole role rather than one edit, and it removes the add/remove endpoint pair that would otherwise need to stay consistent with each other.
+
+**Permissions** (module `tenancy`)
+
+| Method | Path | Permission | Target scope | Response | Notes |
+|---|---|---|---|---|---|
+| `GET` | `/permissions` | `permissions.read` | organization | `{permissions:[{key,domain,action,description}]}` | The catalogue is system-defined and read-only. There is no permission CRUD |
+
+**Role assignments** (module `tenancy`)
+
+| Method | Path | Permission | Target scope | Request | Response | Errors | Audit | Idempotency | Transaction |
+|---|---|---|---|---|---|---|---|---|---|
+| `GET` | `/role-assignments` | `role_assignments.read` | organization | query `user_id?`, `scope_type?`, `scope_id?` | `{assignments:[{id,user_id,role_id,scope_type,scope_id,granted_by,created_at}]}` | — | — | safe | one read-only tenant transaction |
+| `POST` | `/role-assignments` | `role_assignments.grant` | **the scope being granted at** | `{user_id,role_id,scope_type,scope_id}` | `201` assignment | `403` scope outside the actor's own scope set, or a permission outside its effective grant authority at that scope; `422` scope type not admitted by the role; `409` duplicate | `user_role.granted` | duplicate is `409` | one transaction: advisory lock → insert → audit |
+| `DELETE` | `/role-assignments/:id` | `role_assignments.revoke` | the grant's scope | — | `204` | `404` unknown/out-of-scope; **`409` if it would remove the last active platform administrator** | `user_role.revoked` | `404` if already gone | one transaction: advisory lock → delete → invariant re-check → audit |
+
+`POST /role-assignments` is the highest-risk endpoint in Phase 1B, and its target scope is **the scope being granted at** — not the actor's resolved context. That is what makes `RBAC.md` §7's non-escalation rule enforceable: the actor must cover the grant's scope and hold every permission the role carries *at that scope*.
+
+**Authorization introspection**
+
+| Method | Path | Permission | Response |
+|---|---|---|---|
+| `GET` | `/auth/me/authorization` | none — self only | `{grants:[{role_id,role_key,scope_type,scope_id,permissions[]}], organization_ids[]}` |
+
+Grants are returned **as grants**, not flattened. A console cannot render a correct permissions UI from a union, and handing it one is how an incorrect flattened model gets reinvented client-side. It discloses nothing the principal could not already derive, exactly as `authorized_organization_ids` on `/auth/me` already does. Self-only: there is no cross-user effective-permission endpoint in Phase 1B (`DECISIONS.md` D23).
+
+**Deliberately excluded from Phase 1B.5**
+
+| Not built | Why |
+|---|---|
+| Permission create/update/delete | The catalogue is system-defined; a permission with no code enforcing it is a lie, and one enforced nowhere is a liability |
+| Bulk grant/revoke | Defeats per-grant auditing: one request would produce either one row describing many privilege changes, or many rows with no way to tell which were intended |
+| `PUT /users/:id/roles` (set replacement) | A set replacement hides individual revocations from the audit trail. Revocation is an explicit act with its own record (`RBAC.md` §8b) |
+| Role permission add/remove endpoints | Subsumed by `PATCH /roles/:id`'s replacement set, with a complete `before`/`after` |
 
 ## 4. Idempotency
 

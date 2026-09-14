@@ -42,6 +42,15 @@ Scope integrity (`RBAC.md` §6): `scope_id` is polymorphic and cannot carry a si
 
 **`fn_validate_role_permission`** — a `BEFORE INSERT/UPDATE` trigger on `role_permissions` that derives `role_permissions.org_id` from `roles.org_id` (so it cannot be forged) and **refuses to attach any `platform.*` permission to a role with `org_id IS NOT NULL`**. Without it, an organization could compose a custom role containing a platform permission and escalate out of its own tenancy — `RBAC.md` §7.
 
+**PLANNED — Phase 1B.5 migrations (not applied; recorded here so the design is reviewable before it ships).** Migrations `0000`–`0003` are committed and are not edited (ADR-002, ADR-004).
+
+| Migration | Content | Why it is a database change rather than a service check |
+|---|---|---|
+| `0004` | `user_roles.role_id` changes from `ON DELETE CASCADE` to **`ON DELETE RESTRICT`** | Today a role delete silently revokes every grant of it across the organization and writes no audit row for any of them — an unbounded, unaudited privilege change from one statement. `RESTRICT` makes the refusal a database guarantee rather than a service convention, and the service layer's `409` becomes the friendly error in front of it (ADR-005 D-8) |
+| `0005` | `fn_assert_platform_admin_remains()` plus `AFTER` statement-level triggers on `user_roles` (DELETE) and `users` (UPDATE OF `status`), and a fixed advisory-lock key exported from `@acc/db` | The invariant is "at least one row exists", which no per-row CHECK or unique index can express, and an application count is subject to write-skew: two concurrent transactions each count two admins, each remove a different one, and both commit under `READ COMMITTED`. The function takes `pg_advisory_xact_lock(<fixed key>)` first, performs the count after the mutation, and raises if zero remain. `SELECT … FOR UPDATE` was rejected because it locks rows that exist while the hazard is their absence; `SERIALIZABLE` was rejected because it changes the isolation level of the whole request path and forces `40001` retry handling everywhere, for one invariant (ADR-005 D-7) |
+
+Both follow §1's rule that a guarantee ships with the structure it protects. Neither adds a table, a column or an audit action.
+
 **`api_keys`** — `id, org_id FK, workspace_id NULL FK, name, key_prefix, key_hash, scopes JSONB (permission subset), last_used_at NULL, expires_at NULL, revoked_at NULL, revoked_reason NULL, created_by NULL FK users, created_at, updated_at`. `key_prefix` is unique and shape-checked (`^ak_(live|test)_[A-Za-z0-9]{16}$`) so verification is an indexed lookup rather than a scan; `scopes` is CHECKed to be a JSON array. A composite `UNIQUE(id, org_id)` exists so `audit_logs` can reference a key *and* its organization together, making a cross-tenant actor reference unrepresentable (§12). Effective permissions at use are an intersection, not simply `scopes` — `RBAC.md` §5c.
 
 **`sessions`** — `id, user_id FK, refresh_token_hash (unique), device_info JSONB, ip NULL, user_agent NULL, last_used_at NULL, revoked_at NULL, revoked_reason NULL, expires_at, family_id, rotated_at NULL, replaced_by_session_id NULL FK sessions, reuse_detected_at NULL, created_at, updated_at`. A partial index on `(user_id, expires_at) WHERE revoked_at IS NULL` serves both the "active sessions" lookup and the expiry sweep. `revoked_at` and `expires_at` are checked on **every** refresh, not merely at access-token expiry (`RBAC.md` §5a).
@@ -358,3 +367,10 @@ Schema migrations are owned by each module (per `ARCHITECTURE.md` §4) but run t
 ### 14a. Tenant context in pooled connections (background workers)
 
 RLS session variables are set via `SET LOCAL ...` **inside the transaction**, never `SET ...` at the connection level, specifically because connections are pooled and reused across requests/jobs. `SET LOCAL` is automatically reset at transaction end (commit or rollback) — this is what makes it safe for a pooled connection to be reused immediately afterward by a different tenant's request/job without any explicit "reset tenant context" step that could be forgotten. No code path may use session-level `SET` for `app.current_org_id`/`app.current_workspace_id`. See `TENANCY.md` §5 for the full background-worker tenant-context rule this pattern supports.
+
+**Advisory-lock ordering (Phase 1B.5, ADR-005 D-7).** The same transaction-scoped discipline applies to `pg_advisory_xact_lock`, and for the same reason: a transaction-scoped advisory lock releases automatically at transaction end, on commit **and** rollback, so no error path can leave one held. Two rules govern its use:
+
+- **One key per invariant, exported as a constant.** The platform-admin liveness guard has a single fixed key in `@acc/db`; every path that can violate the invariant takes that same key. A second key, or a locally computed one, silently disables the guarantee while appearing to lock something.
+- **The advisory lock is taken before any row lock in these paths.** Consistent lock ordering is what keeps them deadlock-free; a path that takes a row lock first and the advisory lock second can deadlock against one that does the reverse.
+
+Session-level `pg_advisory_lock` is never used, for the same reason session-level `SET` is never used — it outlives the transaction on a pooled connection.
