@@ -289,6 +289,8 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 
 **Layers.** Unit tests over the evaluator for the algebra; integration tests over real HTTP with real grants for the request path; security tests for the escalation attempts. The algebra is cheap enough to enumerate exhaustively and is, so the integration layer asserts the wiring rather than re-deriving the matrix.
 
+**Implemented for Phase 1B.5.1** (cases 1–12, 15, and the grant/role-state rows) in `apps/api/src/auth/permission-evaluator.spec.ts` (31 unit cases, permission sets read from `TENANT_ROLE_DEFINITIONS` rather than invented), `apps/api/test/coherent-grant.sec-spec.ts` (5 cases driving the real `/tenants/workspaces` endpoint) and `apps/api/test/api-key-binding-scope.sec-spec.ts` (17 cases). The remaining rows land with the increments that build their subjects.
+
 | # | Case | Expected |
 |---|---|---|
 | 1–9 | The §6a/§6b single-grant matrix — same-org, cross-org, same/sibling workspace, same/sibling team, parent covers child, child covers neither sibling nor parent | as §6a/§6b |
@@ -317,7 +319,10 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 
 | Mutation | Must fail |
 |---|---|
-| `grantCarries` returns the flattened union (restores today's behaviour) | 10, 12, 22 |
+| `grantCarries` returns the flattened union (restores the pre-1B.5.1 behaviour) | 10, 12, 22 — **executed at 1B.5.1: 18 unit + 2 security tests fail** |
+| Permission provenance and scope provenance taken from different grants | 10–12 — **executed at 1B.5.1: 17 unit + 2 security tests fail** |
+| API-key creator intersection taken over the creator's flattened union | 15 — **executed at 1B.5.1: 5 security tests fail** |
+| API-key binding-scope coverage widened to any grant in the same organization | 15 — **executed at 1B.5.1: 4 security tests fail** |
 | `scopeCovers` term dropped from `allows` | 4, 6, 8, 9 |
 | Permission term dropped from `allows` | 12 and every denial case |
 | `ScopeChainResolver` returns the request-supplied chain | 2, 4, 6 |

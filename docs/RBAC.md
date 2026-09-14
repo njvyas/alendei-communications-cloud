@@ -34,6 +34,8 @@ A request is authorized when:
 
    Existential over grants, conjunctive within a grant. Coverage is the downward-only inheritance of `TENANCY.md` §1a.4: `platform` covers everything, `reseller` covers its organizations and below, `organization` covers its workspaces and teams, `workspace` covers its teams, `team` covers itself.
 
+   Implemented in Phase 1B.5.1: `RoleGrant` carries its own role's permissions and `PermissionEvaluator` reads both halves off one grant, which makes the cross-product unrepresentable rather than merely avoided.
+
    **Holding the permission through *any* grant is not sufficient**, and this is the part that is easy to get wrong. A principal's permissions are not a set it possesses — they are a set of `(permission, scope)` pairs, each one conferred by a particular grant and reaching no further than that grant does. Testing a flattened union of permissions against a union of covered scopes authorizes the cross-product of the two, which includes combinations no grant confers: a `workspace_manager` at one workspace, who also holds `read_only` across the organization, would be authorized for `role_assignments.grant` at organization scope. Neither grant permits that. Both halves must be read off the same grant.
 2. ABAC check passes: policy conditions evaluated against resource attributes and request context — e.g. `resource.workspace_id ∈ user.assigned_workspace_ids`, `resource.owner_id == user.id OR user.has(permission, scope=resource.workspace_id)`, business-hour or IP-range conditions for sensitive actions.
 
@@ -174,7 +176,7 @@ effective_permissions =
 
 The middle term is the creator's authority **at a scope covering the key's own binding** — not everything the creator holds anywhere. The distinction is load-bearing: a creator who is `read_only` in Organization A and `org_admin` in Organization B must not be able to mint a key bound to Organization A carrying `org_admin` permissions.
 
-**The implementation currently diverges from this**, intersecting against the creator's flattened union across every grant. It is the same error as §2's, applied to the creator rather than to the caller, and is corrected together with it in increment 1B.5.1 (ADR-005 D-4) so the two cannot drift apart.
+Implemented in Phase 1B.5.1 (ADR-005 D-4), together with §2's correction so the two cannot drift apart: each creator grant is tested for coverage of the key's binding scope with the same `scopeCovers` rule the evaluator uses, and only the grants that cover it contribute their own permissions. The chain the coverage is judged against is read from the key's own `org_id`/`workspace_id` columns, never from the request.
 
 The intersection is **recomputed on every request**, not snapshotted at creation: a key whose creator has since lost a permission loses it on the next request, and a key whose creator no longer exists resolves to no permissions at all. A key must not outlive the authority that produced it.
 
@@ -224,6 +226,7 @@ Each guard names the layer that enforces it, because a guard that exists only in
 | **At least one active platform administrator always remains.** Revoking the last platform grant, disabling its holder, or deleting the role is refused. | Service layer (clear `409`) **and** a database trigger taking `pg_advisory_xact_lock`, which is what makes it hold under concurrency (ADR-005 D-7) |
 | **No unaudited mass revocation through role deletion.** Deleting a role while grants of it exist is refused, so every revocation is an explicit, individually audited act rather than a cascade. | Service layer + `ON DELETE RESTRICT` (ADR-005 D-8) |
 | **No grant at a scope level the role was never designed for.** `RoleDefinition.allowedScopeTypes` bounds where a seeded role may be granted — `org_admin` at `organization` only, `agent` at `organization`/`workspace`/`team`. | Service layer. **Currently documented but enforced nowhere**; enforced from Phase 1B.5.5 |
+| **No conferring authority a credential's creator never held at its binding.** An API key's effective permissions intersect its creator's authority *at the key's own binding scope*, so a creator cannot mint a key carrying permissions it holds only in another workspace or another organization (§5c). | Service layer (`AuthGuard`), Phase 1B.5.1 |
 
 Every role grant and revocation is audit-logged without exception, including the attempts that were refused (`SECURITY.md` §4) — a rejected escalation attempt is precisely the event worth having a record of. `audit_logs.outcome` carries `denied` for exactly this purpose, and the audit row records the scope the attempt was made at on the same five-level enum `user_roles.scope_type` uses (`DATABASE.md` §12, ADR-002), so a refused escalation and the grant it targeted are directly comparable.
 

@@ -1,6 +1,13 @@
 import { CanActivate, ExecutionContext, HttpStatus, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { AUDIT_ACTIONS, ERROR_CODES, type ActorType, type AuthPrincipal } from '@acc/contracts';
+import {
+  AUDIT_ACTIONS,
+  ERROR_CODES,
+  scopeCovers,
+  type ActorType,
+  type AuthPrincipal,
+  type ScopeChain,
+} from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
 import { eq } from 'drizzle-orm';
 import type { Request } from 'express';
@@ -206,21 +213,6 @@ export class AuthGuard implements CanActivate {
         });
       }
 
-      const requested = Array.isArray(key.scopes) ? (key.scopes as string[]) : [];
-      let creatorPermissions: string[] = [];
-      if (key.createdBy) {
-        const creatorScopes = await this.scopes.forUser(tx, key.createdBy);
-        creatorPermissions = [...creatorScopes.permissions];
-      }
-      /**
-       * The intersection, recomputed on every request rather than snapshotted at
-       * creation. A key whose creator has since lost a permission loses it too —
-       * which is the whole point of not storing the creator's authority on the
-       * key row (`RBAC.md` §5c). A key whose creator no longer exists resolves to
-       * no permissions at all, not to its requested scopes.
-       */
-      const effective = requested.filter((s) => creatorPermissions.includes(s));
-
       /**
        * The key's own authority, expressed as a grant so it flows through the
        * ordinary `PermissionEvaluator` path.
@@ -236,10 +228,26 @@ export class AuthGuard implements CanActivate {
        * can never reach the control plane, and `scopeCovers` then refuses any
        * target above its binding — a workspace-bound key cannot perform an
        * organization-wide operation.
+       *
+       * It is computed here, before the creator intersection, because it is also
+       * the scope that intersection is taken at.
        */
       const grantScope = key.workspaceId
         ? { scopeType: 'workspace' as const, scopeId: key.workspaceId }
         : { scopeType: 'organization' as const, scopeId: key.orgId };
+
+      const requested = Array.isArray(key.scopes) ? (key.scopes as string[]) : [];
+      const creatorAuthority = key.createdBy
+        ? await this.creatorAuthorityAtBinding(tx, key.createdBy, grantScope, key.orgId)
+        : [];
+      /**
+       * The intersection, recomputed on every request rather than snapshotted at
+       * creation. A key whose creator has since lost a permission loses it too —
+       * which is the whole point of not storing the creator's authority on the
+       * key row (`RBAC.md` §5c). A key whose creator no longer exists resolves to
+       * no permissions at all, not to its requested scopes.
+       */
+      const effective = requested.filter((s) => creatorAuthority.includes(s));
 
       // Bookkeeping and its audit row share this transaction, so the record of
       // an authentication cannot commit without the authentication's own state
@@ -294,6 +302,10 @@ export class AuthGuard implements CanActivate {
             scopeType: grantScope.scopeType,
             scopeId: grantScope.scopeId,
             orgId: key.orgId,
+            // The key's effective set, carried on the grant itself, so an API-key
+            // principal is structurally a single-grant user principal and the
+            // evaluator needs no key-specific branch (ADR-005 D-1).
+            permissions: effective,
           },
         ],
         permissions: effective,
@@ -303,5 +315,59 @@ export class AuthGuard implements CanActivate {
         authorizedOrganizationIds: [key.orgId],
       };
     });
+  }
+
+  /**
+   * What the key's creator may legitimately confer **at the key's binding
+   * scope** (`RBAC.md` §5c, ADR-005 D-4).
+   *
+   * The creator's flattened union is the wrong quantity, and was what this
+   * previously used. A creator who is `read_only` in Organization A and
+   * `org_admin` in Organization B holds `roles.create` *somewhere*; minting a
+   * key bound to Organization A carrying it would move authority between
+   * tenants through a credential. The same error one level down lets a creator
+   * who administers a single workspace mint an organization-bound key with that
+   * workspace's administrative permissions.
+   *
+   * So each creator grant is tested for coverage of the binding scope with the
+   * same `scopeCovers` rule the evaluator uses, and only the grants that cover
+   * it contribute their own permissions. It is the coherent-grant rule
+   * (ADR-005 D-1) applied to the creator rather than to the caller, which is
+   * why the two are corrected together and share a definition of "covers".
+   *
+   * The chain is read from the key's own columns rather than from anything on
+   * the request — `api_keys.org_id`/`workspace_id` are the binding itself. The
+   * reseller term is resolved because a reseller-scoped creator legitimately
+   * covers the organizations beneath its reseller; omitting it would silently
+   * strip a reseller admin's authority from every key it creates.
+   */
+  private async creatorAuthorityAtBinding(
+    tx: Transaction,
+    creatorId: string,
+    bindingScope: { scopeType: 'organization' | 'workspace'; scopeId: string },
+    orgId: string,
+  ): Promise<string[]> {
+    const creatorScopes = await this.scopes.forUser(tx, creatorId);
+
+    const chain: ScopeChain = {
+      resellerId: await this.scopes.resellerForOrganization(tx, orgId),
+      orgId,
+      workspaceId: bindingScope.scopeType === 'workspace' ? bindingScope.scopeId : null,
+      teamId: null,
+    };
+
+    return [
+      ...new Set(
+        creatorScopes.grants
+          .filter((grant) =>
+            scopeCovers(
+              { scopeType: grant.scopeType, scopeId: grant.scopeId },
+              bindingScope,
+              chain,
+            ),
+          )
+          .flatMap((grant) => grant.permissions),
+      ),
+    ];
   }
 }

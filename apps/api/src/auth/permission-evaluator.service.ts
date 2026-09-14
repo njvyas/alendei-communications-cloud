@@ -4,6 +4,7 @@ import {
   scopeCovers,
   type AuthPrincipal,
   type PermissionKey,
+  type RoleGrant,
   type ScopeChain,
   type ScopeRef,
 } from '@acc/contracts';
@@ -42,30 +43,38 @@ export interface AuthorizationRequest {
  * enforcement there is. A missing call is not a style problem, it is an
  * isolation hole.
  *
- * Phase 1B.3 ships the evaluator and the identity/tenant half of the chain.
- * Phase 1B.5 builds the role-administration surface on top of it unchanged.
+ * **Both questions are answered about the same grant** (ADR-005 D-1). That is
+ * the property the whole design rests on, and it is the one that was previously
+ * missing: asking "does the principal hold P anywhere?" and "does the principal
+ * cover this target anywhere?" independently authorizes the cross-product of
+ * the two answers, which contains combinations no grant confers. A principal
+ * holding `read_only` across an organization and `workspace_manager` in one
+ * workspace would pass an organization-level check for `role_assignments.grant`
+ * — a permission the organization grant does not carry, at a scope the
+ * workspace grant does not reach. Both halves are therefore read off one
+ * `RoleGrant`, which makes the mistake unrepresentable rather than merely
+ * avoided.
+ *
+ * Phase 1B.3 shipped the evaluator and the identity/tenant half of the chain;
+ * Phase 1B.5.1 corrected its provenance. Phase 1B.5 builds the
+ * role-administration surface on top of it unchanged.
  */
 @Injectable()
 export class PermissionEvaluator {
-  /** Non-throwing form, for filtering listings and rendering capability flags. */
+  /**
+   * Non-throwing form, for filtering listings and rendering capability flags.
+   *
+   *     ALLOW(P, target)  ⟺  ∃ g ∈ principal.roles :
+   *             P ∈ g.permissions
+   *         ∧   scopeCovers(g.scope, target.scope, target.chain)
+   *
+   * `AuthPrincipal.permissions` — the flattened union — is deliberately not
+   * read here (ADR-005 D-3). It answers "somewhere", and this question is
+   * "here".
+   */
   allows(request: AuthorizationRequest): boolean {
     const { principal, permission, target } = request;
-
-    if (!principal.permissions.includes(permission)) return false;
-
-    // Only grants whose role actually carries the permission can cover it. A
-    // principal holding `read_only` at the organization and `org_admin` at one
-    // workspace must not have the organization grant satisfy a workspace-level
-    // admin action.
-    return principal.roles.some(
-      (grant) =>
-        this.grantCarries(principal, grant.roleId, permission) &&
-        scopeCovers(
-          { scopeType: grant.scopeType, scopeId: grant.scopeId },
-          target.scope,
-          target.chain,
-        ),
-    );
+    return principal.roles.some((grant) => this.grantAuthorizes(grant, permission, target));
   }
 
   /** Throwing form. Refusal is a `403` that never echoes the target back. */
@@ -89,20 +98,26 @@ export class PermissionEvaluator {
   }
 
   /**
-   * Whether one specific grant's role carries the permission.
+   * Whether **this one grant** authorizes this action.
    *
-   * `AuthPrincipal.permissions` is the flattened union across every grant, which
-   * answers question 1 but is too coarse for question 2. Until per-role
-   * permission sets are carried on the principal (Phase 1B.5, where role
-   * administration needs them anyway), a principal holding the permission
-   * through any grant is treated as holding it through each — a deliberate,
-   * documented over-approximation that is safe today because Phase 1B.3 exposes
-   * no endpoint whose target is below organization level.
+   * Both terms read off the same `grant` parameter, and there is no other
+   * source of either in scope. That is the point: the cross-product is not
+   * guarded against here, it is structurally impossible to express.
    *
-   * `DECISIONS.md` records this as the one place Phase 1B.3 is weaker than the
-   * model, and Phase 1B.5 closes it by carrying per-grant permissions.
+   * A grant's own permission set comes from `role_permissions` for its role
+   * (`ScopeResolver.permissionsByRole`), so a grant can never be widened by
+   * what some *other* grant's role happens to carry.
    */
-  private grantCarries(principal: AuthPrincipal, _roleId: string, permission: string): boolean {
-    return principal.permissions.includes(permission);
+  private grantAuthorizes(
+    grant: RoleGrant,
+    permission: PermissionKey | string,
+    target: AuthorizationTarget,
+  ): boolean {
+    if (!grant.permissions.includes(permission)) return false;
+    return scopeCovers(
+      { scopeType: grant.scopeType, scopeId: grant.scopeId },
+      target.scope,
+      target.chain,
+    );
   }
 }

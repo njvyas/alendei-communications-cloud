@@ -42,13 +42,30 @@ export interface TenantContext {
   readonly isPlatformAdmin: boolean;
 }
 
-/** A single role grant held by the authenticated principal. */
+/**
+ * A single role grant held by the authenticated principal.
+ *
+ * A grant is the unit an authorization decision is made against: it carries
+ * both the permissions its role confers **and** the scope they are conferred
+ * at, so the two can never be read from different grants (ADR-005 D-1).
+ */
 export interface RoleGrant {
   readonly roleId: string;
   readonly roleKey: string;
   readonly scopeType: ScopeType;
   readonly scopeId: string | null;
   readonly orgId: string | null;
+  /**
+   * The permissions this grant's role carries — and the only permission set an
+   * authorization decision about this grant may consult.
+   *
+   * Required rather than optional on purpose: a grant with no permission set is
+   * not a grant that permits everything, and making the field optional would
+   * let one be constructed by omission. The compiler refusing an incomplete
+   * grant is what keeps permission provenance intact at every construction
+   * site.
+   */
+  readonly permissions: readonly string[];
 }
 
 /**
@@ -65,7 +82,19 @@ export interface AuthPrincipal {
   readonly sessionId: string | null;
   readonly tenant: TenantContext;
   readonly roles: readonly RoleGrant[];
-  /** Effective permission keys, already flattened across all role grants. */
+  /**
+   * Every permission key the principal holds through *some* grant, flattened.
+   *
+   * **Not authoritative for an authorization decision** (ADR-005 D-3). It says
+   * what the principal can do *somewhere*, never what it can do *here*, and
+   * testing it against a separately-resolved scope authorizes the cross-product
+   * of the two — combinations no single grant confers. `PermissionEvaluator`
+   * therefore reads `RoleGrant.permissions` instead.
+   *
+   * Retained for the two uses that legitimately want the union: the API-key
+   * creator intersection (`RBAC.md` §5c), and capability hints a console uses
+   * to decide what to render.
+   */
   readonly permissions: readonly string[];
 }
 

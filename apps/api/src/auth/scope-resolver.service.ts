@@ -28,7 +28,7 @@ export const ORGANIZATION_HEADER = 'x-acc-organization';
  */
 @Injectable()
 export class ScopeResolver {
-  /** Reads every grant a user holds, with the role's flattened permissions. */
+  /** Reads every grant a user holds, each carrying its own role's permissions. */
   async forUser(tx: Transaction, userId: string): Promise<ResolvedScopes> {
     const rows = await tx
       .select({
@@ -42,18 +42,26 @@ export class ScopeResolver {
       .innerJoin(schema.roles, eq(schema.roles.id, schema.userRoles.roleId))
       .where(eq(schema.userRoles.userId, userId));
 
+    // Per role, not flattened. Keeping the role-to-permission mapping is what
+    // makes a coherent-grant decision possible at all (ADR-005 D-1); collapsing
+    // it here is what previously made one impossible.
+    const byRole = await this.permissionsByRole(
+      tx,
+      rows.map((r) => r.roleId),
+    );
+
     const grants: RoleGrant[] = rows.map((r) => ({
       roleId: r.roleId,
       roleKey: r.roleKey,
       scopeType: r.scopeType as ScopeType,
       scopeId: r.scopeId,
       orgId: r.orgId,
+      permissions: byRole.get(r.roleId) ?? [],
     }));
 
-    const permissions = await this.permissionsForRoles(
-      tx,
-      grants.map((g) => g.roleId),
-    );
+    // The union, derived from the grants rather than queried separately, so the
+    // two can never disagree. Non-authoritative for authorization (ADR-005 D-3).
+    const permissions = [...new Set(grants.flatMap((g) => g.permissions))];
 
     const isPlatformAdmin = grants.some((g) => g.scopeType === 'platform');
     const resellerIds = [
@@ -71,15 +79,52 @@ export class ScopeResolver {
     return { grants, permissions, organizationIds, isPlatformAdmin, resellerIds };
   }
 
-  /** The permission subset an API key may exercise, intersected by the caller. */
-  async permissionsForRoles(tx: Transaction, roleIds: readonly string[]): Promise<string[]> {
-    if (roleIds.length === 0) return [];
+  /**
+   * The permissions each role carries, keyed by role.
+   *
+   * Deliberately *not* a flattened union: `role_permissions` already models the
+   * role-to-permission relation correctly, and the only thing that ever lost it
+   * was this projection selecting `DISTINCT key` and discarding `role_id`. The
+   * query reads the same rows over the same index; it simply keeps the column
+   * that says which role each permission came from.
+   */
+  async permissionsByRole(
+    tx: Transaction,
+    roleIds: readonly string[],
+  ): Promise<Map<string, string[]>> {
+    const byRole = new Map<string, string[]>();
+    const unique = [...new Set(roleIds)];
+    if (unique.length === 0) return byRole;
+
     const rows = await tx
-      .selectDistinct({ key: schema.permissions.key })
+      .select({ roleId: schema.rolePermissions.roleId, key: schema.permissions.key })
       .from(schema.rolePermissions)
       .innerJoin(schema.permissions, eq(schema.permissions.id, schema.rolePermissions.permissionId))
-      .where(inArray(schema.rolePermissions.roleId, [...roleIds]));
-    return rows.map((r) => r.key);
+      .where(inArray(schema.rolePermissions.roleId, unique));
+
+    for (const row of rows) {
+      const existing = byRole.get(row.roleId);
+      if (existing) existing.push(row.key);
+      else byRole.set(row.roleId, [row.key]);
+    }
+    return byRole;
+  }
+
+  /**
+   * The reseller owning an organization, for building the scope chain an
+   * API key's binding scope is judged against (ADR-005 D-4).
+   *
+   * A reseller-scoped creator legitimately covers the organizations beneath its
+   * reseller, and `scopeCovers` can only see that through the chain — so
+   * omitting the term here would silently strip a reseller admin's authority
+   * from every key it creates.
+   */
+  async resellerForOrganization(tx: Transaction, orgId: string): Promise<string | null> {
+    const [org] = await tx
+      .select({ resellerId: schema.organizations.resellerId })
+      .from(schema.organizations)
+      .where(eq(schema.organizations.id, orgId));
+    return org?.resellerId ?? null;
   }
 
   /**

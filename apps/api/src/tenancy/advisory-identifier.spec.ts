@@ -10,12 +10,18 @@ const TEAM = '01930000-0000-7000-8000-0000000000d1';
 const OTHER_TEAM = '01930000-0000-7000-8000-0000000000d2';
 const RESELLER = '01930000-0000-7000-8000-0000000000e1';
 
-const grant = (scopeType: ScopeType, scopeId: string | null, orgId: string | null): RoleGrant => ({
+const grant = (
+  scopeType: ScopeType,
+  scopeId: string | null,
+  orgId: string | null,
+  permissions: readonly string[] = [],
+): RoleGrant => ({
   roleId: `role-${scopeType}`,
   roleKey: scopeType,
   scopeType,
   scopeId,
   orgId,
+  permissions,
 });
 
 const principalOf = (
