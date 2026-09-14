@@ -79,7 +79,18 @@ Holding `workspaces.update` somewhere is never authority to update *this* worksp
 
 **Enumeration follows the same rule as retrieval.** A list endpoint returns only what is within the caller's scope set; an out-of-scope resource is *absent* from the listing rather than present-and-forbidden. A direct fetch of an out-of-scope resource returns `404` — not `403` — and the error message never echoes the caller-supplied identifier, because either would confirm the resource exists.
 
-**Path identifiers are advisory.** `/tenants/{org_id}/workspaces` may carry an `org_id` for readability and routing, but the authoritative organization is always the one resolved from the credential; a mismatch is `403` (`TENANCY.md` §2b).
+**Path identifiers are advisory.** `/tenants/{org_id}/workspaces` may carry an `org_id` for readability and routing, but the authoritative organization is always the one resolved from the credential; a mismatch is `403` (`TENANCY.md` §2b). The same rule applies wherever the identifier arrives — path segment, query parameter, body field or header — and is enforced by one shared mechanism rather than a comparison per endpoint (ADR-004 D-3). Its outcomes are fixed:
+
+| Supplied identifier | Response |
+|---|---|
+| Agrees with the resolved context | The request proceeds unchanged |
+| Contradicts it | `403 TENANCY_CONTEXT_MISMATCH` — never substituted, never an empty `200` |
+| Names something that does not exist | The **same** `403`, with an identical message, so the endpoint is not an existence oracle |
+| Repeated or structured (`?org_id=A&org_id=B`) | `400 VALIDATION_FAILED` — refused, never resolved by parameter order |
+| Malformed or empty | `400 VALIDATION_FAILED` — never treated as absent |
+| Absent, where the endpoint declares it optional | The request proceeds under the resolved context |
+
+An error never echoes the supplied identifier back.
 
 **Selecting an organization when several are in scope.** A principal with grants in more than one organization sends the `X-Acc-Organization` header to choose which one the request acts in (`TENANCY.md` §2a, ADR-003 D-4). With exactly one organization in scope the header is optional. Absent while several are in scope → `400 TENANCY_CONTEXT_REQUIRED`. Naming an organization outside the principal's scope → `403 TENANCY_CONTEXT_MISMATCH`. The header selects among organizations already in scope; it never confers access, and a mismatch is never resolved by substituting a different organization or by returning an empty result.
 

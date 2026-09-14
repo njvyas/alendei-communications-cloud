@@ -138,8 +138,14 @@ These connect **directly as the non-owner principal**, bypassing the application
 
 ### 6h. Worker and pooled-connection context
 
-- Worker tenant-context contamination: two jobs for two different organizations run back-to-back on the same pooled connection; the second never sees the first's RLS context (`TENANCY.md` §5, `DATABASE.md` §14a) — this specifically tests that `SET LOCAL` truly resets at transaction boundary under the pooling strategy actually used.
-- Reused connection after an error/exception path (not just the happy path) → context still cleared, verified with a fault-injected mid-transaction failure.
+**The pooled-connection half is implemented (Phase 1B.4); the worker half is deferred (ADR-004 D-5).** Phase 1B has no consumer, poller or job to wrap, so the shared worker harness — and the contamination tests that would exercise *it* — arrive in Phase 2 with the first real consumer. The database guarantee underneath is not deferred with it and is proven here now, through the same `withTenantTransaction` helper a worker will use. This partial satisfaction is recorded rather than quietly passed over, as §6i's is.
+
+Implemented in `packages/db/src/test/tenant-context.int-spec.ts`, against a real `max: 1` pool so "the same pooled connection" is a fact rather than a hope — asserted with `pg_backend_pid()`:
+
+- Two organizations' work run back-to-back on one connection: A sees only A's rows, B sees only B's, and neither sees the other's (`TENANCY.md` §5, `DATABASE.md` §14a). Real row visibility is the assertion; reading `current_setting()` back would prove only that a value was written, not that RLS acted on it.
+- **The bare probe** — a query on the same connection with *no* context established at all — returns nothing, before and after each tenant's transaction. This is the load-bearing case: a connection-level `SET` is invisible to every transaction that establishes its own context, because each one overwrites all six variables, so it surfaces only in a query that deliberately establishes none.
+- Reused connection after an error/exception path, not just the happy path: a fault injected mid-transaction after a real write rolls the write back, leaves no context behind, and leaves the connection immediately usable — the next organization's transaction sees only itself.
+- **Mutation-sensitive**: changing `set_config(..., true)` to the connection-level `set_config(..., false)` fails all three integration tests and the `SET LOCAL` unit assertion.
 
 ### 6i. WebSocket authorization
 
@@ -233,6 +239,19 @@ Implemented in `apps/api/test/auth.sec-spec.ts` (the security project, 41 tests)
 - **Credential failures** — revoked, expired, wrong secret, unknown prefix and three malformed shapes all `401`; an unknown prefix and a wrong secret return an identical code *and* message, so key existence is not disclosed; no error echoes the presented credential.
 - **Audit** — `api_key.authenticated` written with `actor_type='api_key'`, the key id, `scope_type='platform'`, and no credential material anywhere; a failed authentication writes nothing; `last_used_at` and the audit row share a transaction, proven by refusing the audit policy and asserting `last_used_at` stays null.
 - **Mutation-sensitive** — emptying `roles` fails 8 tests; ignoring the creator intersection fails 3; removing organization binding fails 1; removing audit emission fails 3; removing the bookkeeping fails 1.
+
+### 6k.5 Advisory tenant identifiers (Phase 1B.4)
+
+`apps/api/test/advisory-identifier.sec-spec.ts` (the security project) and `apps/api/src/tenancy/advisory-identifier.spec.ts` (unit). The HTTP suite drives the real guard through the real application; routes for the workspace and team levels come from a probe controller registered only in the test module, because the production surface does not accept those identifiers until Phase 1B.6 and a mechanism must be proven correct before it is handed them.
+
+- **Organization** — a matching identifier is accepted; another tenant's is `403 TENANCY_CONTEXT_MISMATCH` with no handler output at all; a non-existent one is refused with an *identical* code and message, so the endpoint is not an existence oracle; the supplied value is never echoed back.
+- **Workspace and team** — a principal whose only grant is at workspace or team level is pinned to it: its own is accepted, another tenant's is refused, and a **sibling team in its own organization** is refused, which is the case RLS cannot see at all (`TENANCY.md` §3a). A team-scoped principal's workspace is the one derived from its team, and another workspace is refused.
+- **Unpinned levels** — an organization-scoped principal supplying a `workspace_id` is not refused here, because its grant covers every workspace beneath it and there is nothing to contradict without reading the database. The narrowing is decided by target-scope authorization and RLS instead, asserted by §6k.3's `404`-not-`403` case (ADR-004 D-3).
+- **Sources** — the same cross-check runs on a query parameter, a path segment and a body field, so an identifier is judged the same way wherever it arrives.
+- **Shape** — a repeated parameter is `400 VALIDATION_FAILED` in either order and even when the duplicates agree, never resolved by picking one; a malformed or empty identifier is refused rather than treated as absent; a hostile value is never echoed into the response. Array and object forms are asserted at the unit level, where the normalizer is exercised directly rather than through a parser setting.
+- **Declaration** — an identifier no handler declared is not policed as a tenant identifier, and an undeclared parameter carrying another tenant's id demonstrably changes nothing about what the request returns.
+- **Fail-closed boundary** — an unauthenticated request to a declaring route is `401` before any cross-check runs.
+- **Mutation-sensitive** — bypassing the guard's cross-check fails 19 tests, including §6k.3's pre-existing cross-tenant case; removing the declaration from `TenancyController` alone fails 3. A suite that stays green when the protection is removed would prove nothing.
 
 ### 6l. Tenant-context selection (Phase 1B)
 

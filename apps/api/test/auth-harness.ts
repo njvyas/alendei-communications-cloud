@@ -6,9 +6,9 @@
  * everything under test (RLS, session state, rotation, grant resolution) lives
  * in PostgreSQL and cannot be demonstrated against a mock.
  */
-import { PLATFORM_ROLE_KEYS, TENANT_ROLE_KEYS } from '@acc/contracts';
+import { PLATFORM_ROLE_KEYS, TENANT_ROLE_KEYS, type ScopeType } from '@acc/contracts';
 import { createDatabase, createPool, schema, type Database } from '@acc/db';
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, type Type } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import cookieParser from 'cookie-parser';
@@ -50,8 +50,24 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-export async function startHarness(): Promise<Harness> {
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+/**
+ * Options for a harness instance.
+ *
+ * `controllers` registers additional controllers alongside the real
+ * application. It exists so a globally-registered guard can be exercised over
+ * real HTTP against routes the production surface does not yet have — the guard
+ * itself, the authentication in front of it and the pipeline around it are all
+ * the real ones; only the route it protects is the test's own.
+ */
+export interface HarnessOptions {
+  readonly controllers?: readonly Type<unknown>[];
+}
+
+export async function startHarness(options: HarnessOptions = {}): Promise<Harness> {
+  const moduleRef = await Test.createTestingModule({
+    imports: [AppModule],
+    controllers: [...(options.controllers ?? [])],
+  }).compile();
   const app = moduleRef.createNestApplication({ logger: false });
   app.use(cookieParser());
   app.useGlobalPipes(validationPipe());
@@ -174,6 +190,49 @@ export async function grantInto(
     scopeType: 'organization',
     scopeId: tenant.orgId,
   });
+}
+
+/**
+ * An additional active user in an existing tenant, holding one grant at the
+ * given scope and nothing else.
+ *
+ * The narrowness is the point: a principal whose only grant is at workspace or
+ * team level is the one whose resolved context actually pins those levels, and
+ * therefore the only one against which an advisory workspace/team identifier
+ * can be cross-checked.
+ */
+export async function createScopedUser(
+  admin: Database,
+  tenant: TenantFixture,
+  credentials: { hash(p: string): Promise<string> },
+  scopeType: Extract<ScopeType, 'organization' | 'workspace' | 'team'>,
+  scopeId: string,
+  label: string,
+): Promise<{ userId: string; email: string }> {
+  const email = `${label}-${uuidv7().replace(/-/g, '').slice(-12)}@example.test`;
+  const [user] = await admin
+    .insert(schema.users)
+    .values({
+      email,
+      status: 'active',
+      passwordHash: await credentials.hash(PASSWORD),
+      passwordUpdatedAt: new Date(),
+    })
+    .returning({ id: schema.users.id });
+
+  await admin
+    .insert(schema.userRoles)
+    .values({ userId: user!.id, roleId: tenant.roleId, scopeType, scopeId });
+
+  return { userId: user!.id, email };
+}
+
+/** Removes a user created by `createScopedUser`, with its dependent rows. */
+export async function destroyUser(admin: Database, userId: string): Promise<void> {
+  await purgeAudit(admin, sql`actor_user_id = ${userId}`);
+  await admin.execute(sql`DELETE FROM sessions WHERE user_id = ${userId}`);
+  await admin.execute(sql`DELETE FROM user_roles WHERE user_id = ${userId}`);
+  await admin.execute(sql`DELETE FROM users WHERE id = ${userId}`);
 }
 
 export async function destroyTenant(admin: Database, tenant: TenantFixture): Promise<void> {

@@ -1,4 +1,4 @@
-import { Controller, Get, HttpStatus, Param, ParseUUIDPipe, Query } from '@nestjs/common';
+import { Controller, Get, HttpStatus, Param, ParseUUIDPipe } from '@nestjs/common';
 import { ERROR_CODES, PERMISSIONS } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { eq } from 'drizzle-orm';
@@ -8,6 +8,7 @@ import { RequestContext } from '../common/context/request-context';
 import { TenantDatabase } from '../database/tenant-database.service';
 import { PermissionEvaluator } from '../auth/permission-evaluator.service';
 import type { ResolvedPrincipal } from '../auth/auth.guard';
+import { AdvisoryTenantIds } from './advisory-identifier';
 
 /**
  * The minimum tenant-scoped read surface Phase 1B.3 needs.
@@ -44,13 +45,16 @@ export class TenancyController {
    * Workspaces in the current organization.
    *
    * The organization comes from the resolved tenant context and from nowhere
-   * else. A caller-supplied `orgId` query parameter is accepted only as a
-   * cross-check — if it disagrees with the resolved context the request is
-   * refused rather than honoured or quietly filtered to nothing
-   * (`TENANCY.md` §2b).
+   * else. A caller-supplied `orgId` query parameter is advisory: the declaration
+   * below hands it to `AdvisoryTenantGuard`, which refuses the request before
+   * the handler runs if it disagrees with the resolved context, rather than
+   * honouring it or quietly filtering to nothing (`TENANCY.md` §2b, ADR-004).
+   * There is deliberately no comparison written here — one shared mechanism,
+   * not a copy per endpoint.
    */
   @Get('workspaces')
-  async listWorkspaces(@Query('orgId') advisoryOrgId?: string) {
+  @AdvisoryTenantIds({ level: 'organization', source: 'query', key: 'orgId' })
+  async listWorkspaces() {
     const principal = this.principal();
     const orgId = principal.tenant.orgId;
 
@@ -59,14 +63,6 @@ export class TenancyController {
         status: HttpStatus.BAD_REQUEST,
         code: ERROR_CODES.TENANCY_CONTEXT_REQUIRED,
         message: 'No organization context is established for this request',
-      });
-    }
-
-    if (advisoryOrgId && advisoryOrgId !== orgId) {
-      throw new AppException({
-        status: HttpStatus.FORBIDDEN,
-        code: ERROR_CODES.TENANCY_CONTEXT_MISMATCH,
-        message: 'The requested organization does not match your resolved context',
       });
     }
 

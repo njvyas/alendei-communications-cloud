@@ -27,6 +27,16 @@ No certification (SOC 2, ISO 27001) is claimed anywhere in this document or by t
 | PII masking | Contact PII fields (`contacts`, `contact_identities`, message `recipient`/`content`) flagged at the schema level; structured logs redact/mask these fields by default, full values require an explicit, audited "reveal" action |
 | Provider credential encryption | Credentials stored via `credential_ref` pointer (`DATABASE.md` §3); actual secret material lives only in the secrets backend, fetched at call time, never persisted in application DB rows |
 
+## 2a. Tenant-context controls
+
+| Control | Approach |
+|---|---|
+| Tenant context is derived, never asserted | Resolved once per request from the verified credential and current `user_roles` state; no token claim carries tenancy (ADR-003 D-3, `TENANCY.md` §2a) |
+| Context is transaction-local | Established with `SET LOCAL` inside the request's own transaction, so it resets at transaction end on commit **and** rollback. A connection-level `SET` is never used, and a pooled connection therefore cannot carry one tenant's context into another's work — proven against a real pool on both the commit and the fault-injected error path (`TESTING.md` §6h) |
+| Client-supplied tenant identifiers are cross-checked | One declarative mechanism, `AdvisoryTenantGuard`, running after authentication and before the handler. A contradiction is `403 TENANCY_CONTEXT_MISMATCH`; a repeated, structured, malformed or empty identifier is `400 VALIDATION_FAILED`. Never substituted, never silently emptied, never resolved by parameter order (`TENANCY.md` §2b, ADR-004 D-3/D-4) |
+| Organization selection cannot confer access | `X-Acc-Organization` selects among organizations already in scope; one outside scope is refused, not substituted (ADR-003 D-4) |
+| Below organization level, the application is the only boundary | RLS carries no workspace or team term (`TENANCY.md` §3a), so target-scope authorization through `PermissionEvaluator` is mandatory on every scoped operation (`RBAC.md` §2, ADR-003 D-5) |
+
 ## 3. Secrets management
 
 Abstracted behind a `SecretsPort` so the backend is swappable across environments/clouds: HashiCorp Vault (self-hosted/private cloud), AWS Secrets Manager + KMS, Azure Key Vault, GCP Secret Manager. Application code never reads a raw secret from environment variables in production — env vars hold only the *reference* (e.g. a Vault path or ARN), resolved at startup/call-time with short-lived caching. Secret rotation is a first-class operation (`provider_credentials.rotated_at`), and rotation must not require a redeploy for provider-scoped secrets (consistent with `PROVIDER_ADAPTER.md` §4).

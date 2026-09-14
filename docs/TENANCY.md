@@ -177,6 +177,17 @@ A platform admin is not exempt: holding `platform` scope puts every organization
 
 The distinction matters for a specific, common case: a console user holding an organization-level grant may legitimately pass `workspace_id` to say "show me this workspace". That is a filter within an already-authorized scope. It is not, and can never become, a claim of access — if the named workspace is not beneath the resolved organization, the request is rejected rather than filtered to nothing.
 
+#### How the cross-check is implemented (Phase 1B.4, ADR-004 D-3/D-4)
+
+One mechanism, not a comparison per endpoint. A handler *declares* the advisory identifiers it accepts — their level, where they arrive from, and whether they are required — and `AdvisoryTenantGuard` cross-checks every one of them after authentication and before the handler runs. There is deliberately no check left to write at the call site, and therefore none to forget: per-handler copies are how one endpoint ends up with the check and the next one without it, with nothing visibly wrong in either file.
+
+What it is, precisely:
+
+- **An assertion against the already-resolved context, never a resolver.** It reads no database. It can refuse a request; it can never widen one, substitute an identifier, or return an empty result in place of a refusal.
+- **Not authorization.** Whether a principal may act *on* a scope remains `PermissionEvaluator`'s question, asked with the target and its ancestry loaded (`RBAC.md` §2, ADR-003 D-5). This answers only whether the supplied identifier contradicts the derived context.
+- **Silent about levels the context does not pin.** An organization-scoped principal's grant covers every workspace beneath it, so a supplied `workspace_id` contradicts nothing that can be known without reading tenancy rows — and reading them here is exactly the alternate resolver this must not become. That case is handed on to target-scope authorization, to RLS, and to a `404` that echoes no identifier (`API.md` §3a). A principal pinned to a workspace or a team *is* cross-checked against it, which matters because RLS carries no term below organization (§3a).
+- **Deterministic and fail-closed about shape.** A repeated or structured identifier (`?org_id=A&org_id=B`) has no defensible single value, so it is `400 VALIDATION_FAILED` rather than resolved by parameter order. A malformed or empty identifier is refused, not treated as absent. A principal with no admissible identifier at a pinned level refuses every value rather than admitting any.
+
 ## 3. Isolation by layer
 
 | Layer | Mechanism | Notes |
@@ -299,6 +310,8 @@ Every worker's DB access follows the same shape as an HTTP request handler, and 
 
 **Never** issue a session-level `SET` (as opposed to `SET LOCAL` inside a transaction) for tenant context, and never let a worker reuse a pooled connection across two different tenants' jobs without each job going through steps 4–7 independently — `SET LOCAL`'s automatic reset at transaction end is precisely what makes connection pooling safe here without a manual "reset context" step that could be forgotten under error/exception paths. This rule is enforced structurally (a shared worker-harness utility wraps every consumer/job handler with steps 3–7, so individual job implementations cannot opt out) rather than left to each worker's author to remember.
 
+**Implementation status (ADR-004 D-5).** Steps 4–7 exist now, for HTTP and workers alike, as the single sanctioned helper `withTenantTransaction` — and the property this section depends on is proven against a real pool rather than assumed: two organizations' work on one physical connection stay isolated, a query with no context established sees nothing, and a fault injected mid-transaction leaves neither the write nor the context behind (`TESTING.md` §6h). The **harness that makes steps 3–7 non-optional for a worker** is deferred to Phase 2, with the first real consumer. Phase 1B has no consumer, poller or job, and a harness with none has no execution semantics to define and nothing to validate against — its envelope contract, retry behaviour and outbox interaction are all decided by the first consumer, and one guessed at in advance would be rewritten by it or worked around. The rule above is unchanged and binding; what is deferred is the wrapper, not the mechanism.
+
 ## 6. Preventing cross-tenant and cross-scope access — the complete list
 
 Every mechanism that stops a principal reaching outside its scope, in one place, so a review has a single checklist:
@@ -318,7 +331,8 @@ Every mechanism that stops a principal reaching outside its scope, in one place,
 | Discovering out-of-scope resources through a list endpoint | Listings are scope-filtered; absence rather than `403` (§4a) |
 | Probing for existence by id | Out-of-scope fetch returns `404` with no echo of the supplied identifier (§4a) |
 | A worker acting under the wrong tenant | Context comes from the event/job envelope's designated authoritative fields, inside the job's own transaction (§5) |
-| Context leaking between tenants on a pooled connection | `SET LOCAL` resets at transaction end, on commit **and** rollback (§3a, `DATABASE.md` §14a) |
+| Context leaking between tenants on a pooled connection | `SET LOCAL` resets at transaction end, on commit **and** rollback (§3a, `DATABASE.md` §14a); proven against a real pool on both paths (`TESTING.md` §6h) |
+| Supplying a `workspace_id`/`team_id` that contradicts the resolved context | One declarative cross-check, `AdvisoryTenantGuard`, refusing with `403` before the handler runs (§2b, ADR-004 D-3) |
 | Widening a WebSocket connection's scope after connect | Scope is fixed by the ticket; subscriptions outside it are refused (§4b) |
 | Replaying a WebSocket ticket | Single-use, short-lived, hash-stored (§4b) |
 

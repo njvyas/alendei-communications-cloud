@@ -2,6 +2,8 @@
 
 This is the living register of everything flagged as needing a product-owner decision, carrying scalability/security risk, or representing a tension between requirements that this document set resolved with an explicit, stated choice rather than silently picking one side. As of Phase 0.1 (the consolidated architecture consistency & hardening pass), every item that would have blocked a correct, unambiguous Phase 1 implementation has been resolved and is recorded in §1. Items in §2 are explicitly confirmed non-blocking — none of them affect the correctness of Phase 1 Foundation work. Phase 0.2 (final documentation-hardening pass before Phase 1 implementation — transaction-specific pricing, `requested_channel_id` hard-constraint semantics, attempt-level routing/pricing snapshots, idempotency `failed`-status semantics, and the broader engagement-platform product architecture, `ARCHITECTURE.md` §21) added B19–B22 below, all resolved. A follow-up Phase 0.2 correction pass added B23–B25 (multi-component pricing evaluation model, billable-transaction terminology generalization, and a residual reservation-accounting wording fix). Phase 0.3 (surgical documentation-consistency pass) added B26–B28 (Phase 5/Phase 7 billing-dependency de-conflation, removal of "distributed lock" as an implied Phase 5 deliverable, and an explicit Pricing-Evaluation-vs-Usage-Ledger HOW-vs-WHAT boundary statement). Phase 0.4 (final documentation freeze pass) added B29–B30 (made `usage_ledger.pricing_evaluation_id` the authoritative concrete foreign key to the pricing calculation that produced each ledger amount, demoting `rate_card_ref` to descriptive metadata; clarified `DR.md`'s Redis-loss wording so it cannot be read as Redis participating in fallback correctness). No Phase 0.2–0.4 change reopened or contradicted any earlier resolution; the architecture is frozen as of Phase 0.4.
 
+**Phase 1B.4 implementation feedback (B34)**: the Phase 1B.3 verification pass found that implementation and `ROADMAP.md` §4a had diverged — 1B.3 had necessarily absorbed the whole of 1B.4's scope-resolution and tenant-context deliverables, and had pulled `scopeCovers` and `PermissionEvaluator` forward from 1B.5, because the 1B.3 exit criterion (the authenticated chain proven end to end) is not demonstrable without them. Nothing was missing; the phase table was wrong. ADR-004 (§1d) records the delivered split, re-scopes 1B.4 to the three things genuinely unbuilt — this reconciliation, the pooled-connection hardening tests, and one generic advisory-identifier cross-check — and states why the worker/job tenant-context harness is deferred to Phase 2 rather than guessed at now.
+
 **Phase 1B planning feedback (B33)**: the planning review for the identity/tenancy/RBAC half of Phase 1B found nine decisions that had to be settled before implementation — bootstrap of the first platform admin, audit synchronization with no outbox available, JWT claim contents, multi-organization selection, where target-scope authorization runs, MFA's actual phase, refresh-token transport, the audit representation of an unknown-user login failure, and the API-key effective-permission model. Several of these were *documented as settled* in ways the repository contradicted. All are resolved in ADR-003 (§1c) and the affected documents are reconciled in this pass. One consequence (R4) requires a schema change that is deliberately not made in a documentation-only pass and is recorded as pending.
 
 **Phase 1B implementation feedback (B32)**: building the audit log surfaced a second set of genuine gaps — an over-broad `acc_auth` insert policy, an audit row that could not express three of the five canonical scope levels, a missing `causation_id`, a documented partitioning requirement the implementation did not meet, absent parent–child integrity, and an accidental interaction between `ON DELETE SET NULL` and the append-only trigger. All six are resolved in ADR-002 (§1b) and the affected documents are reconciled. As with B31, this is `ROADMAP.md` §1's `DOCUMENT` stage working as intended.
@@ -235,6 +237,65 @@ effective_permissions =
 ```
 
 An API key is permanently bound to its organization (`api_keys.org_id`) and that binding is never widened. A client-supplied `workspace_id` or `team_id` can **narrow** what a key acts on; it can never create authority the key does not already hold. A key cannot be created carrying a permission its creator does not hold — the intersection is computed at creation and re-checked at use, because the creator's own grants may since have been revoked.
+
+## 1d. ADR-004 — Phase 1B.4 scope, tenant-context hardening and the deferred worker harness
+
+**Status**: Accepted (Phase 1B.4, against `b8aebd3`). Records what Phase 1B.3 actually built versus what `ROADMAP.md` §4a assigned it, and re-scopes Phase 1B.4 accordingly. Extends ADR-003; supersedes nothing.
+
+### Context
+
+`ROADMAP.md` §4a assigned `ScopeResolver`, the `X-Acc-Organization` selector, `TenantDatabase.withRequestTenant()` and "RLS exercised by real requests" to Phase 1B.4, and `scopeCovers` plus `PermissionEvaluator` to Phase 1B.5.
+
+Implementation did not follow that split, for a reason visible only once the work started: the 1B.3 exit criterion is the authenticated chain proven end to end (`ROADMAP.md` §4a), and that chain *is* scope resolution, organization selection, tenant context and an RLS-filtered query. The chain could not be demonstrated without building them, and a demonstration built on stubs would have proven nothing. `PermissionEvaluator` followed for the same reason: `TenancyController` had to authorize its read, and the alternative was an ad-hoc check — precisely what ADR-003 D-5 forbids, and precisely the thing that is never removed later.
+
+So at `b8aebd3` the following are complete, tested and in production code rather than pending:
+
+| Capability | Roadmap phase | Actually delivered |
+|---|---|---|
+| `ScopeResolver` | 1B.4 | 1B.3 — `apps/api/src/auth/scope-resolver.service.ts` |
+| `X-Acc-Organization` selection | 1B.4 | 1B.3 — `ScopeResolver.selectOrganization` |
+| `withRequestTenant()` | 1B.4 | 1B.3 — `apps/api/src/database/tenant-database.service.ts` |
+| RLS exercised by real requests | 1B.4 | 1B.3 — `TenancyController`, proven in `auth-chain.int-spec.ts` |
+| `scopeCovers` | 1B.5 | 1B.3 — `packages/contracts/src/roles.ts` |
+| `PermissionEvaluator` | 1B.5 | 1B.3 — `apps/api/src/auth/permission-evaluator.service.ts` |
+
+### Decisions
+
+**D-1 — The phase boundary follows the code, not the plan.** These capabilities are not rebuilt, duplicated, renamed or artificially re-separated to make the repository match the original phase table. Re-deriving a working authorization path to satisfy a document is how a second authorization framework gets built, and two mechanisms that decide the same question are worse than one in the wrong phase. `ROADMAP.md` §4a is corrected to describe what happened instead.
+
+**D-2 — Phase 1B.4 is re-scoped to tenant-context hardening and closure.** What remains genuinely unbuilt, and is the whole of this phase:
+
+1. this documentation reconciliation;
+2. pooled-connection tenant-context tests — the `TESTING.md` §6h cases, against a real pool and real RLS;
+3. one generic advisory-identifier cross-check mechanism, replacing the hand-written comparison in `TenancyController`.
+
+**D-3 — The advisory-identifier cross-check is a guard, and is an assertion rather than a resolver.** A client-supplied organization, workspace or team identifier is advisory (`TENANCY.md` §2b). `AdvisoryTenantGuard` cross-checks every declared identifier against the context already resolved by the authentication path, and refuses a contradiction with `403 TENANCY_CONTEXT_MISMATCH`. It reads no database, resolves nothing, and can only ever narrow or refuse — never widen, never substitute, and never convert a refusal into an empty result.
+
+It is deliberately **not** a second authorization framework. `PermissionEvaluator` and `scopeCovers` are untouched: whether a principal may act *on* a scope is still their question, asked once the target and its ancestry are loaded. This answers only the narrower one — does the identifier the caller supplied contradict the context the server derived?
+
+Where the resolved context does not pin a level — an organization-scoped principal supplying a `workspace_id`, say — the guard has nothing to contradict, and says so rather than inventing an answer. Deciding that case here would mean loading tenancy rows to validate a hint, which is the alternate tenant resolver this mechanism must not become. It is handed on to the layers that can answer it with the row in hand: `PermissionEvaluator` for target-scope coverage, RLS for organization isolation, and `404`-without-echo for a row that was never visible (`API.md` §3a).
+
+**D-4 — A repeated or structured identifier is refused, never resolved.** `?org_id=A&org_id=B` has no defensible "the" value; choosing one would make a security decision depend on parameter order. Any non-string value — an array, or a structured parameter — is `400 VALIDATION_FAILED`, as is a malformed or empty one. Deterministic and fail-closed, in that order.
+
+**D-5 — The worker/job tenant-context harness stays deferred to Phase 2.** `TENANCY.md` §5 requires a shared harness wrapping every consumer/job handler in steps 3-7, so no worker can opt out. Phase 1B has no worker: no Kafka consumer, no outbox relay, no fallback-timer poller, no scheduled job.
+
+Building it now is rejected rather than forgotten. A harness with no consumer has no execution semantics to define and nothing to validate against — the shape of its envelope contract, its failure and retry behaviour, and its interaction with the outbox are all decided by the first real consumer, and a harness guessed at in advance would be rewritten by it or, worse, quietly worked around. The database-side guarantee it depends on is not deferred with it: `withTenantTransaction` is already the single sanctioned shape for both HTTP and worker access, and §6h's pooled-connection and error-path cases are proven in this phase against a real pool. What Phase 2 adds is the enforcement wrapper, not the mechanism.
+
+Consequently `TESTING.md` §6h is satisfied for the connection-pooling half at Gate B and explicitly *not* for the worker half — recorded the same way §6i records the deferred WebSocket gateway, rather than passed over.
+
+### Consequences
+
+- `ROADMAP.md` §4a's 1B.4 and 1B.5 rows are corrected to the delivered split, and 1B.4's exit criteria become the three items in D-2.
+- `TENANCY.md` §2b gains the shared mechanism as the named implementation of the advisory rule; §5 records the deferred harness and what is proven without it.
+- `TESTING.md` §6h is split into its satisfied and deferred halves, and gains §6k.5 for the advisory-identifier matrix.
+- `ARCHITECTURE.md` §4's `auth` and `tenancy` rows are corrected: `PermissionEvaluator` lives in `auth`, and `tenancy` owns the advisory cross-check.
+- `API.md` §3a's advisory-identifier rule gains its concrete error semantics.
+- `RBAC.md` §2 records that the one reusable target-scope mechanism shipped in 1B.3.
+- `SECURITY.md` §3 records the cross-check as a named control.
+
+### Residual risk
+
+The over-approximation ADR-003 left in `PermissionEvaluator.grantCarries` is unchanged — a principal holding a permission through any grant is treated as holding it through each. It is out of scope here and closes in Phase 1B.5 with per-grant permission sets. The advisory cross-check narrows the blast radius but does not substitute for it: the two answer different questions.
 
 ## 2. Non-blocking future decisions (confirmed — none of these affect Phase 1 correctness)
 

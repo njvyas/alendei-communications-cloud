@@ -126,8 +126,8 @@ ACC is built as a modular monolith-first NestJS codebase organized into bounded 
 | Module | Owns | Depends on |
 |---|---|---|
 | `iam` | Auth, sessions, API keys. MFA and SSO are reserved here but **not built in Phase 1B** (ADR-003 D-6, `DECISIONS.md` D6/D10) | `audit` |
-| `auth` | Request authentication and tenant-context resolution: `AuthGuard`, access-token issue/verify, `ScopeResolver`, `PermissionEvaluator`, auth rate limiting, CSRF. Registered globally so the API denies by default (Phase 1B.3) | `iam`, `audit` |
-| `tenancy` | Orgs, resellers, workspaces, teams, RBAC/ABAC. Owns the `PermissionEvaluator` every scoped service calls for target-scope authorization (ADR-003 D-5) | `iam`, `audit` |
+| `auth` | Request authentication and tenant-context resolution: `AuthGuard`, access-token issue/verify, `ScopeResolver`, `X-Acc-Organization` selection, `PermissionEvaluator`, auth rate limiting, CSRF. Registered globally so the API denies by default. All of it shipped in Phase 1B.3, including the parts `ROADMAP.md` originally scheduled for 1B.4/1B.5 — the 1B.3 exit criterion is the authenticated chain proven end to end, which is not demonstrable without them (ADR-004 D-1) | `iam`, `audit` |
+| `tenancy` | Orgs, resellers, workspaces, teams, RBAC/ABAC. Owns the advisory-identifier cross-check (`AdvisoryTenantGuard`), registered globally so any handler gets it by declaring the identifiers it accepts (`TENANCY.md` §2b, ADR-004 D-3). `PermissionEvaluator` itself lives in `auth`, alongside the scope resolution it depends on | `iam`, `audit` |
 | `contacts` | Contacts, identities, consent, suppression | `tenancy` |
 | `comms-api` | Public/internal message intake, idempotency | `tenancy`, `contacts` |
 | `orchestrator` | Message lifecycle state machine | `comms-api` |
