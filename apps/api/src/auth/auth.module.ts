@@ -7,9 +7,11 @@ import { AuthController } from './auth.controller';
 import { AuthGuard } from './auth.guard';
 import { AuthRateLimitService } from './auth-rate-limit.service';
 import { AuthService } from './auth.service';
+import { AuthorizationService } from './authorization.service';
 import { CsrfGuard } from './csrf.guard';
 import { AccessTokenService } from './jwt.service';
 import { PermissionEvaluator } from './permission-evaluator.service';
+import { ScopeChainResolver } from './scope-chain-resolver.service';
 import { ScopeResolver } from './scope-resolver.service';
 
 /**
@@ -30,12 +32,21 @@ import { ScopeResolver } from './scope-resolver.service';
   providers: [
     AccessTokenService,
     ScopeResolver,
+    ScopeChainResolver,
     PermissionEvaluator,
+    AuthorizationService,
     AuthRateLimitService,
     AuthService,
     { provide: APP_GUARD, useClass: CsrfGuard },
     { provide: APP_GUARD, useClass: AuthGuard },
   ],
-  exports: [AccessTokenService, ScopeResolver, PermissionEvaluator, AuthService],
+  exports: [
+    AccessTokenService,
+    ScopeResolver,
+    ScopeChainResolver,
+    PermissionEvaluator,
+    AuthorizationService,
+    AuthService,
+  ],
 })
 export class AuthModule {}

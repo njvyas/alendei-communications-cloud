@@ -4,6 +4,8 @@ export * from './auth.service';
 export * from './jwt.service';
 export * from './scope-resolver.service';
 export * from './permission-evaluator.service';
+export * from './scope-chain-resolver.service';
+export * from './authorization.service';
 export * from './auth-rate-limit.service';
 export * from './public.decorator';
 export * from './csrf.guard';

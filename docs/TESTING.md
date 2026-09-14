@@ -289,7 +289,15 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 
 **Layers.** Unit tests over the evaluator for the algebra; integration tests over real HTTP with real grants for the request path; security tests for the escalation attempts. The algebra is cheap enough to enumerate exhaustively and is, so the integration layer asserts the wiring rather than re-deriving the matrix.
 
-**Implemented for Phase 1B.5.1** (cases 1–12, 15, and the grant/role-state rows) in `apps/api/src/auth/permission-evaluator.spec.ts` (31 unit cases, permission sets read from `TENANT_ROLE_DEFINITIONS` rather than invented), `apps/api/test/coherent-grant.sec-spec.ts` (5 cases driving the real `/tenants/workspaces` endpoint) and `apps/api/test/api-key-binding-scope.sec-spec.ts` (17 cases). The remaining rows land with the increments that build their subjects.
+**Implemented for Phase 1B.5.1** (cases 1–12, 15, and the grant/role-state rows) in `apps/api/src/auth/permission-evaluator.spec.ts` (31 unit cases, permission sets read from `TENANT_ROLE_DEFINITIONS` rather than invented), `apps/api/test/coherent-grant.sec-spec.ts` (5 cases driving the real `/tenants/workspaces` endpoint) and `apps/api/test/api-key-binding-scope.sec-spec.ts` (17 cases).
+
+**Extended for Phase 1B.5.2** (cases 1–9, 13, 14, and target-ancestry provenance) across three suites:
+
+- `apps/api/test/scope-chain.int-spec.ts` (22 cases) — every level resolves to database truth, cross-checked against the rows independently of the fixture; nonexistent, id-less and wrong-kind targets all resolve to nothing rather than to a partial chain; cross-organization and cross-reseller targets are invisible; **the same target resolves identically under any tenant context that can see it**, which is what a resolver reading ancestry from the session rather than the row would fail; and a pooled-connection hygiene case re-asserting §6h across the new access path.
+- `apps/api/test/authorization-service.sec-spec.ts` (22 cases) — the §6b matrix through the boundary, `404`-not-`403` for unresolvable targets with no identifier echoed, the forged-ancestry matrix below, and the 1B.5.1 coherence invariant re-proven through the service rather than only at the evaluator.
+- `apps/api/src/auth/authorization-boundary.spec.ts` (6 cases) — structural: no controller imports `PermissionEvaluator`, no controller performs target-scope SQL, no hierarchy query inside the evaluator, no grant logic inside the resolver, and **`AuthorizationCheck` exposes no `chain` field**, so caller-supplied ancestry stays unrepresentable.
+
+**Forged ancestry (ADR-005 D-5).** Asserted as the strong property, not the weak one: it is not enough that bad input is rejected: the *authoritative* chain must decide. Each case runs under a tenant context that can see the target, so visibility is not the variable — a grant naming another organization cannot reach a workspace whose real parent is a different organization; the same for a grant naming another reseller, and for one naming another workspace as a team's parent; and a principal holding grants that between them name a wholly false chain still reaches nothing. Every case carries a positive control on the claimant's own rows, so a denial cannot be mistaken for a broken query.
 
 | # | Case | Expected |
 |---|---|---|
@@ -323,6 +331,11 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 | Permission provenance and scope provenance taken from different grants | 10–12 — **executed at 1B.5.1: 17 unit + 2 security tests fail** |
 | API-key creator intersection taken over the creator's flattened union | 15 — **executed at 1B.5.1: 5 security tests fail** |
 | API-key binding-scope coverage widened to any grant in the same organization | 15 — **executed at 1B.5.1: 4 security tests fail** |
+| Target organization ancestry taken from the caller-selected tenant context rather than the row | **executed at 1B.5.2: 2 integration + 1 security tests fail** |
+| Target reseller ancestry taken from the caller-selected tenant context rather than the row | **executed at 1B.5.2: 3 integration + 1 security tests fail** |
+| A caller-supplied `chain` permitted to override the resolved one | **executed at 1B.5.2: the boundary test fails** |
+| A controller bypassing `AuthorizationService` to call the evaluator with its own chain | **executed at 1B.5.2: 1 unit + 2 security tests fail** |
+| `principal.permissions` reintroduced as an authorization pre-check | **executed at 1B.5.2: 18 unit + 3 security tests fail** |
 | `scopeCovers` term dropped from `allows` | 4, 6, 8, 9 |
 | Permission term dropped from `allows` | 12 and every denial case |
 | `ScopeChainResolver` returns the request-supplied chain | 2, 4, 6 |

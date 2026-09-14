@@ -301,7 +301,7 @@ The over-approximation ADR-003 left in `PermissionEvaluator.grantCarries` is unc
 
 ## 1e. ADR-005 — Coherent-grant authorization
 
-**Status**: Accepted (Phase 1B.5 planning review against `9d946f1`). **D-1 to D-4 implemented in Phase 1B.5.1**; D-5 to D-9 govern later increments. Governs the authorization half of Phase 1B. Extends ADR-001 (scope hierarchy) and ADR-003 (D-5, target-scope authorization); supersedes nothing. Closes the over-approximation ADR-003 recorded and ADR-004 carried forward.
+**Status**: Accepted (Phase 1B.5 planning review against `9d946f1`). **D-1 to D-4 implemented in Phase 1B.5.1; D-5 implemented in Phase 1B.5.2**; D-6 to D-9 govern later increments. Governs the authorization half of Phase 1B. Extends ADR-001 (scope hierarchy) and ADR-003 (D-5, target-scope authorization); supersedes nothing. Closes the over-approximation ADR-003 recorded and ADR-004 carried forward.
 
 ### Context
 
@@ -379,6 +379,14 @@ Today a creator who is `read_only` in Org-1 and `org_admin` in Org-2 can mint a 
 `scopeCovers` is only as correct as the ancestry it is given, and coverage below organization level cannot be decided from ids alone. The chain is resolved inside the request's own tenant transaction, so RLS filters it: a target in another organization resolves to nothing, and that is a `404` without echo (`API.md` §3a), not a `403`. A chain taken from request input would be a complete bypass of the scope model, so this is stated as an invariant rather than left to each call site.
 
 This composes with, and does not replace, the advisory-identifier cross-check (ADR-004 D-3). That one refuses a *supplied* identifier that contradicts the resolved context, before the handler runs. This one establishes the *authoritative* ancestry of a target the handler has loaded. Neither substitutes for the other.
+
+**Implemented in Phase 1B.5.2**, with three notes worth recording because each was decided at implementation time rather than here:
+
+- **Placement.** This ADR anticipated `ScopeChainResolver` living in `tenancy`. It ships in `auth`, beside `ScopeResolver` — which already reads `organizations`, `workspaces` and `teams` for exactly this purpose. Putting it in `tenancy` would have forced `AuthModule` to import `TenancyModule`, re-ordering the global `APP_GUARD` registration that `AdvisoryTenantGuard` depends on (ADR-004). The module graph is unchanged instead.
+- **Ancestry is unrepresentable, not rejected.** `AuthorizationCheck` has no `chain` field, so there is no input through which forged ancestry could arrive. A test asserts the field's continued absence, because adding one would silently restore the whole class of attack.
+- **A behaviour change, deliberately made.** The controller previously synthesized `chain: { orgId }`, omitting the reseller term — so `scopeCovers` compared `undefined` against a reseller grant's scope and a **reseller-scoped principal was refused at an endpoint that tenant selection and RLS had both already admitted it to**. Fail-closed, untested, and contrary to §1a.4 of `TENANCY.md`. A database-resolved chain carries the reseller term and the documented model now holds; both the widening and its boundary (another reseller's organization stays unreachable) are asserted.
+
+The declarative `@RequiresPermission` half is **not** built. Extracting a target from a request has no established convention — the two live handlers target the resolved organization rather than a route parameter — and inventing one before the administration endpoints exist would fix the wrong shape. It moves to 1B.5.7 with §6n's route-table assertion, which depends on the same convention. The structural guarantee available today is enforced instead: no controller may import `PermissionEvaluator`.
 
 **D-6 — Refused authorization is audited with the actor's own scope; successful checks are not audited.**
 

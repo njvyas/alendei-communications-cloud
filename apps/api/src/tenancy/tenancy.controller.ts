@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { AppException } from '../common/errors/app.exception';
 import { RequestContext } from '../common/context/request-context';
 import { TenantDatabase } from '../database/tenant-database.service';
-import { PermissionEvaluator } from '../auth/permission-evaluator.service';
+import { AuthorizationService } from '../auth/authorization.service';
 import type { ResolvedPrincipal } from '../auth/auth.guard';
 import { AdvisoryTenantIds } from './advisory-identifier';
 
@@ -26,7 +26,7 @@ import { AdvisoryTenantIds } from './advisory-identifier';
 export class TenancyController {
   constructor(
     private readonly db: TenantDatabase,
-    private readonly permissions: PermissionEvaluator,
+    private readonly authorization: AuthorizationService,
   ) {}
 
   private principal(): ResolvedPrincipal {
@@ -66,19 +66,22 @@ export class TenancyController {
       });
     }
 
-    // Permission *and* scope coverage, through the shared evaluator — never an
-    // ad-hoc check (`RBAC.md` §2, ADR-003 D-5).
-    this.permissions.assert({
-      principal,
-      permission: PERMISSIONS.WORKSPACES_READ,
-      target: { scope: { scopeType: 'organization', scopeId: orgId }, chain: { orgId } },
-    });
+    // Authorization and the query share one tenant transaction, so the target's
+    // ancestry is read under exactly the tenant context the query runs in
+    // (ADR-005 D-5). The handler names the target and states no chain of its
+    // own — there is no longer anywhere for one to be assembled.
+    const rows = await this.db.withRequestTenant(async (tx) => {
+      await this.authorization.assert(tx, {
+        principal,
+        permission: PERMISSIONS.WORKSPACES_READ,
+        target: { scopeType: 'organization', scopeId: orgId },
+        resourceType: 'Organization',
+      });
 
-    // The query carries no tenant predicate of its own on purpose: RLS is what
-    // scopes it, so a missing application-side filter cannot leak another
-    // tenant's rows.
-    const rows = await this.db.withRequestTenant((tx) =>
-      tx
+      // The query carries no tenant predicate of its own on purpose: RLS is
+      // what scopes it, so a missing application-side filter cannot leak
+      // another tenant's rows.
+      return tx
         .select({
           id: schema.workspaces.id,
           orgId: schema.workspaces.orgId,
@@ -86,8 +89,8 @@ export class TenancyController {
           slug: schema.workspaces.slug,
           status: schema.workspaces.status,
         })
-        .from(schema.workspaces),
-    );
+        .from(schema.workspaces);
+    });
 
     return { workspaces: rows };
   }
@@ -113,14 +116,15 @@ export class TenancyController {
       });
     }
 
-    this.permissions.assert({
-      principal,
-      permission: PERMISSIONS.WORKSPACES_READ,
-      target: { scope: { scopeType: 'organization', scopeId: orgId }, chain: { orgId } },
-    });
+    const rows = await this.db.withRequestTenant(async (tx) => {
+      await this.authorization.assert(tx, {
+        principal,
+        permission: PERMISSIONS.WORKSPACES_READ,
+        target: { scopeType: 'organization', scopeId: orgId },
+        resourceType: 'Organization',
+      });
 
-    const rows = await this.db.withRequestTenant((tx) =>
-      tx
+      return tx
         .select({
           id: schema.workspaces.id,
           orgId: schema.workspaces.orgId,
@@ -129,8 +133,8 @@ export class TenancyController {
           status: schema.workspaces.status,
         })
         .from(schema.workspaces)
-        .where(eq(schema.workspaces.id, id)),
-    );
+        .where(eq(schema.workspaces.id, id));
+    });
 
     const workspace = rows[0];
     if (!workspace) {
