@@ -102,7 +102,13 @@ describe('API-key creator authority at the binding scope', () => {
     // half of a creator-side cross-product.
     const [empty] = await h.admin
       .insert(schema.roles)
-      .values({ orgId: orgA.orgId, key: 'empty_role', name: 'Empty', isSystemRole: false })
+      .values({
+        orgId: orgA.orgId,
+        key: 'empty_role',
+        name: 'Empty',
+        isSystemRole: false,
+        allowedScopeTypes: ['organization'],
+      })
       .returning({ id: schema.roles.id });
     emptyRoleId = empty!.id;
 

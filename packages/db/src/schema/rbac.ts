@@ -47,6 +47,17 @@ export const roles = pgTable(
     name: text('name').notNull(),
     description: text('description'),
     isSystemRole: boolean('is_system_role').notNull().default(false),
+    /**
+     * The scope levels at which this role may legitimately be granted
+     * (`RBAC.md` §7), mirroring `RoleDefinition.allowedScopeTypes`.
+     *
+     * Added in migration `0004` so a role carries the levels it was designed
+     * for. **Grant-time enforcement is Phase 1B.5.5's**, in the service layer;
+     * migration `0004` deliberately leaves `fn_validate_user_role_scope`
+     * untouched. Until then this column is authoritative data that nothing
+     * consults at grant time, which is why 1B.5.5 owns §6n case 28.
+     */
+    allowedScopeTypes: roleScopeType('allowed_scope_types').array().notNull(),
     ...timestamps(),
   },
   (table) => [
@@ -58,6 +69,21 @@ export const roles = pgTable(
       .where(sql`${table.orgId} IS NULL`),
     index('roles_org_id_idx').on(table.orgId),
     check('roles_key_format', sql`${table.key} ~ '^[a-z][a-z0-9_]{2,63}$'`),
+    // A role admitting no scope could never be granted anywhere — silently
+    // broken rather than restrictive.
+    check(
+      'roles_allowed_scope_types_non_empty',
+      sql`array_length(${table.allowedScopeTypes}, 1) >= 1`,
+    ),
+    // A platform role is designed for platform/reseller scope and nothing
+    // below; a tenant role for organization/workspace/team and nothing above.
+    check(
+      'roles_allowed_scope_types_level',
+      sql`CASE WHEN ${table.orgId} IS NULL
+            THEN ${table.allowedScopeTypes} <@ ARRAY['platform','reseller']::role_scope_type[]
+            ELSE ${table.allowedScopeTypes} <@ ARRAY['organization','workspace','team']::role_scope_type[]
+          END`,
+    ),
   ],
 );
 
@@ -119,9 +145,15 @@ export const userRoles = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
+    /**
+     * `RESTRICT`, not `CASCADE` (migration `0004`, ADR-005 D-8). Deleting a role
+     * must not silently revoke every grant of it: that would be a mass privilege
+     * revocation the database performed with no audit row for any individual
+     * revocation. Each revocation is an explicit, audited act first.
+     */
     roleId: uuid('role_id')
       .notNull()
-      .references(() => roles.id, { onDelete: 'cascade' }),
+      .references(() => roles.id, { onDelete: 'restrict' }),
     /**
      * The organization this grant lives in; NULL only for platform/reseller
      * scope. Derived and verified by the trigger, never trusted from the writer.

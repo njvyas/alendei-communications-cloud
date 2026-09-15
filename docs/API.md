@@ -12,9 +12,9 @@ All public and console APIs are served under `/api/v1`. Breaking changes ship as
 | `/ws/ticket` | `iam` | Mints a single-use, short-lived WebSocket connection ticket (§9). Issuance ships in Phase 1B; ticket *consumption* and the socket gateway are deferred (`DECISIONS.md` D15) |
 | `/tenants` | `tenancy` | Organization/workspace/team CRUD (scoped by caller's role) |
 | `/users` | `tenancy` | User invite/management |
-| `/roles` | `tenancy` | Role CRUD (custom roles). **Built in Phase 1B.5** (§3c) |
-| `/role-assignments` | `tenancy` | Scope-bound role grant and revocation. **Built in Phase 1B.5** (§3c) |
-| `/permissions` | `tenancy` | Permission catalogue (read-only, system-defined). **Built in Phase 1B.5** (§3c) |
+| `/roles` | `rbac` | Role CRUD (custom roles), plus read of the platform role definitions. **Built in Phase 1B.5.4** (§3c) |
+| `/role-assignments` | `rbac` | Scope-bound role grant and revocation. **Phase 1B.5.5 — not implemented** (§3c) |
+| `/permissions` | `rbac` | Permission catalogue (read-only, system-defined). **Built in Phase 1B.5.4** (§3c) |
 | `/channels` | `provider-registry` | Supported channel catalogue |
 | `/providers` | `provider-registry` | Provider CRUD, enable/disable/drain, capability config |
 | `/routing` | `provider-router` | Routing policy CRUD, versioning, activation |
@@ -124,26 +124,33 @@ The mechanism is the *absence* of a token rather than the presence of one: nothi
 
 ### 3c. Role and grant administration (Phase 1B.5)
 
+**Implementation status.** The **Roles** and **Permissions** tables below ship in Phase 1B.5.4 and are live. **Role assignments** and **authorization introspection** are **Phase 1B.5.5 / 1B.5.7 and NOT IMPLEMENTED** — they are specified here and marked, not built.
+
 Nine endpoints, deliberately small. Every mutation writes its audit row **in the same transaction** as the change (ADR-003 D-2); every target scope is checked through the shared evaluator against a coherent grant (§3a); every out-of-scope target is `404` without echo rather than `403`.
 
-**Roles** (module `tenancy`)
+**Roles** (module `rbac`) — **IMPLEMENTED, Phase 1B.5.4**
 
 | Method | Path | Permission | Target scope | Request | Response | Errors | Audit | Idempotency | Transaction |
 |---|---|---|---|---|---|---|---|---|---|
-| `GET` | `/roles` | `roles.read` | organization | — | `{roles:[{id,key,name,description,is_system_role,permissions[]}]}` | — | — | safe | one read-only tenant transaction |
-| `POST` | `/roles` | `roles.create` | organization | `{key,name,description?,permissions[]}` | `201` role | `409` duplicate key; `403` a permission outside the actor's effective grant authority | `role.created` | not idempotent; duplicate key is `409`, never a silent success | one transaction: role + `role_permissions` + audit |
-| `PATCH` | `/roles/:id` | `roles.update` | the role's organization | `{name?,description?,permissions?}` | `200` role | `404` unknown/out-of-scope; `403` as above; `409` system role permission edit | `role.updated` with full `before`/`after` | naturally idempotent | one transaction |
-| `DELETE` | `/roles/:id` | `roles.delete` | the role's organization | — | `204` | `404` unknown/out-of-scope; **`409` while any grant references it**; `409` system or platform role | `role.deleted` with `before` | `404` if already gone | one transaction |
+| `GET` | `/roles` | `roles.read` | organization | — | `{roles:[{id,key,name,description,orgId,isSystemRole,allowedScopeTypes[],permissions[],createdAt,updatedAt}]}` — the organization's own roles plus the readable platform definitions | — | — | safe | one read-only tenant transaction |
+| `GET` | `/roles/:id` | `roles.read` | organization | — | `200` role | `404` unknown or out-of-scope, with no echo of the id | — | safe | one read-only tenant transaction |
+| `POST` | `/roles` | `roles.create` | organization | `{key,name,description?,allowedScopeTypes[],permissions[]}` | `201` role | `409` duplicate key; `403` a permission outside the actor's effective grant authority, a `platform.*` permission, or an `allowedScopeTypes` outside organization/workspace/team; `400` malformed key or unknown permission | `role.created` | not idempotent; duplicate key is `409`, never a silent success | one transaction: role + `role_permissions` + audit |
+| `PATCH` | `/roles/:id` | `roles.update` | the role's organization | `{name?,description?,allowedScopeTypes?,permissions?}` | `200` role | `404` unknown/out-of-scope; `403` as above, **and `403` for any system or platform role** | `role.updated` with full `before`/`after` | naturally idempotent | one transaction |
+| `DELETE` | `/roles/:id` | `roles.delete` | the role's organization | — | `204` | `404` unknown/out-of-scope; **`409` while any grant references it** (and `ON DELETE RESTRICT` beneath it); `403` system or platform role | `role.deleted` with `before` | `404` if already gone | one transaction |
+
+`allowedScopeTypes` is persisted from Phase 1B.5.4 and returned on every role. It is **not enforced at grant time until Phase 1B.5.5** (`RBAC.md` §7) — a client must not infer that a grant outside it is currently refused.
+
+These endpoints are **unpaginated, unfiltered and unsorted**, matching the conventions that exist today. Normalizing them onto a shared list convention is Phase 1B.5.8's; a local convention invented here is exactly the churn that phase exists to prevent.
 
 `permissions` is a **complete replacement set**, not a delta. That is what lets the audit row describe the whole role rather than one edit, and it removes the add/remove endpoint pair that would otherwise need to stay consistent with each other.
 
-**Permissions** (module `tenancy`)
+**Permissions** (module `rbac`) — **IMPLEMENTED, Phase 1B.5.4**
 
 | Method | Path | Permission | Target scope | Response | Notes |
 |---|---|---|---|---|---|
 | `GET` | `/permissions` | `permissions.read` | organization | `{permissions:[{key,domain,action,description}]}` | The catalogue is system-defined and read-only. There is no permission CRUD |
 
-**Role assignments** (module `tenancy`)
+**Role assignments** (module `rbac`) — **PLANNED / NOT IMPLEMENTED, Phase 1B.5.5**
 
 | Method | Path | Permission | Target scope | Request | Response | Errors | Audit | Idempotency | Transaction |
 |---|---|---|---|---|---|---|---|---|---|
@@ -153,7 +160,7 @@ Nine endpoints, deliberately small. Every mutation writes its audit row **in the
 
 `POST /role-assignments` is the highest-risk endpoint in Phase 1B, and its target scope is **the scope being granted at** — not the actor's resolved context. That is what makes `RBAC.md` §7's non-escalation rule enforceable: the actor must cover the grant's scope and hold every permission the role carries *at that scope*.
 
-**Authorization introspection**
+**Authorization introspection** — **PLANNED / NOT IMPLEMENTED, Phase 1B.5.7**
 
 | Method | Path | Permission | Response |
 |---|---|---|---|
@@ -212,7 +219,7 @@ Consistent error envelope across all endpoints:
   "error": {
     "code": "MACHINE_READABLE_CODE",
     "message": "human-readable message",
-    "correlation_id": "uuid",
+    "correlationId": "uuid",
     "retryable": false,
     "details": {}
   }

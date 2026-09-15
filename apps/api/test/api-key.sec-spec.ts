@@ -119,9 +119,16 @@ describe('API-key authentication', () => {
         .select({ id: schema.permissions.id })
         .from(schema.permissions)
         .where(eq(schema.permissions.key, 'workspaces.read'));
-      await h.admin.execute(
-        sql`DELETE FROM role_permissions WHERE role_id = ${orgA.roleId} AND permission_id = ${permission!.id}`,
-      );
+      // `org_admin` is a system role, whose permission set migration `0004`
+      // protects outside a provisioning transaction. The fixture composed it
+      // under that flag and this edit declares the same one, rather than the
+      // guard being weakened so a test can reach past it.
+      await h.admin.transaction(async (tx) => {
+        await tx.execute(sql`select set_config('app.provisioning','on',true)`);
+        await tx.execute(
+          sql`DELETE FROM role_permissions WHERE role_id = ${orgA.roleId} AND permission_id = ${permission!.id}`,
+        );
+      });
 
       try {
         const after = await get('/tenants/workspaces', key.credential).expect(403);
@@ -129,10 +136,13 @@ describe('API-key authentication', () => {
         const me = await get('/auth/me', key.credential).expect(200);
         expect(me.body.permissions).not.toContain('workspaces.read');
       } finally {
-        await h.admin
-          .insert(schema.rolePermissions)
-          .values({ roleId: orgA.roleId, permissionId: permission!.id })
-          .onConflictDoNothing();
+        await h.admin.transaction(async (tx) => {
+          await tx.execute(sql`select set_config('app.provisioning','on',true)`);
+          await tx
+            .insert(schema.rolePermissions)
+            .values({ roleId: orgA.roleId, permissionId: permission!.id })
+            .onConflictDoNothing();
+        });
       }
     });
 

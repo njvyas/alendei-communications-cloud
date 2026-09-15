@@ -999,18 +999,25 @@ describe('audit_logs', () => {
       // organization is its audit history. Without this the test would pass on
       // the pre-existing `teams_org_id_organizations_id_fk` and prove nothing
       // about audit retention.
-      for (const table of [
-        'user_roles',
-        'role_permissions',
-        'roles',
-        'ws_tickets',
-        'api_keys',
-        'idempotency_keys',
-        'teams',
-        'workspaces',
-      ]) {
-        await db.admin.execute(sql`DELETE FROM ${sql.raw(table)} WHERE org_id = ${doomed.orgId}`);
-      }
+      // Migration `0004` protects a system role's definition outside a
+      // provisioning or platform-admin transaction, so this teardown declares
+      // the same transaction-local flag the fixture created it under rather
+      // than the guard being relaxed for a test.
+      await db.admin.transaction(async (tx) => {
+        await tx.execute(sql`select set_config('app.provisioning','on',true)`);
+        for (const table of [
+          'user_roles',
+          'role_permissions',
+          'roles',
+          'ws_tickets',
+          'api_keys',
+          'idempotency_keys',
+          'teams',
+          'workspaces',
+        ]) {
+          await tx.execute(sql`DELETE FROM ${sql.raw(table)} WHERE org_id = ${doomed.orgId}`);
+        }
+      });
 
       // A clean foreign-key refusal, not a confusing append-only trigger error:
       // audit history is retained and the organization is deactivated instead

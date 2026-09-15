@@ -134,7 +134,13 @@ export async function createTenant(admin: Db, label: string): Promise<TenantFixt
     .returning({ id: schema.apiKeys.id });
   const [role] = await admin
     .insert(schema.roles)
-    .values({ orgId: org!.id, key: 'org_admin', name: 'Organization Admin', isSystemRole: true })
+    .values({
+      orgId: org!.id,
+      key: 'org_admin',
+      name: 'Organization Admin',
+      isSystemRole: true,
+      allowedScopeTypes: ['organization'],
+    })
     .returning({ id: schema.roles.id });
 
   await admin.insert(schema.userRoles).values({
@@ -182,8 +188,15 @@ export async function destroyTenant(admin: Db, tenant: TenantFixture): Promise<v
   // is never hard-deleted in production either (ADR-002).
   await purgeAuditRows(admin, tenant.orgId);
   await admin.execute(sql`DELETE FROM user_roles WHERE org_id = ${tenant.orgId}`);
-  await admin.execute(sql`DELETE FROM role_permissions WHERE org_id = ${tenant.orgId}`);
-  await admin.execute(sql`DELETE FROM roles WHERE org_id = ${tenant.orgId}`);
+  // Migration `0004` makes a system role's definition immutable outside a
+  // provisioning or platform-admin transaction, so teardown declares the same
+  // transaction-local flag the fixture created it under. One transaction,
+  // because `SET LOCAL` does not survive a statement on a pooled connection.
+  await admin.transaction(async (tx) => {
+    await tx.execute(sql`select set_config('app.provisioning','on',true)`);
+    await tx.execute(sql`DELETE FROM role_permissions WHERE org_id = ${tenant.orgId}`);
+    await tx.execute(sql`DELETE FROM roles WHERE org_id = ${tenant.orgId}`);
+  });
   await admin.execute(sql`DELETE FROM ws_tickets WHERE org_id = ${tenant.orgId}`);
   await admin.execute(sql`DELETE FROM api_keys WHERE org_id = ${tenant.orgId}`);
   await admin.execute(sql`DELETE FROM idempotency_keys WHERE org_id = ${tenant.orgId}`);

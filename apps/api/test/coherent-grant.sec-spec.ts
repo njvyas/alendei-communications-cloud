@@ -83,7 +83,13 @@ describe('coherent-grant authorization over HTTP', () => {
 
     const [narrow] = await h.admin
       .insert(schema.roles)
-      .values({ orgId: orgA.orgId, key: 'narrow_role', name: 'Narrow', isSystemRole: false })
+      .values({
+        orgId: orgA.orgId,
+        key: 'narrow_role',
+        name: 'Narrow',
+        isSystemRole: false,
+        allowedScopeTypes: ['organization', 'workspace'],
+      })
       .returning({ id: schema.roles.id });
     narrowRoleId = narrow!.id;
 

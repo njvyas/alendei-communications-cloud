@@ -301,7 +301,7 @@ The over-approximation ADR-003 left in `PermissionEvaluator.grantCarries` is unc
 
 ## 1e. ADR-005 — Coherent-grant authorization
 
-**Status**: Accepted (Phase 1B.5 planning review against `9d946f1`). **D-1 to D-4 implemented in Phase 1B.5.1; D-5 in Phase 1B.5.2; D-6 in Phase 1B.5.3**; D-7 to D-9 govern later increments. Governs the authorization half of Phase 1B. Extends ADR-001 (scope hierarchy) and ADR-003 (D-5, target-scope authorization); supersedes nothing. Closes the over-approximation ADR-003 recorded and ADR-004 carried forward.
+**Status**: Accepted (Phase 1B.5 planning review against `9d946f1`). **D-1 to D-4 implemented in Phase 1B.5.1; D-5 in Phase 1B.5.2; D-6 in Phase 1B.5.3; D-8's schema half in Phase 1B.5.4**; D-7 and the remainder govern later increments. Governs the authorization half of Phase 1B. Extends ADR-001 (scope hierarchy) and ADR-003 (D-5, target-scope authorization); supersedes nothing. Closes the over-approximation ADR-003 recorded and ADR-004 carried forward.
 
 ### Context
 
@@ -454,7 +454,7 @@ No `revoked_at` column on `user_roles`. A revocation column would become a secon
   |---|---|---|
   | The comment bounding the over-approximation on the grounds that no endpoint targets below organization level — the direction is inverted (see Context) | `apps/api/src/auth/permission-evaluator.service.ts` | ✅ 1B.5.1, with the correction itself |
   | The API-key creator intersection taken over the creator's flattened union, contradicting `RBAC.md` §5c | `apps/api/src/auth/auth.guard.ts` | ✅ 1B.5.1 (D-4) |
-  | `RoleDefinition.allowedScopeTypes` — a documented constraint enforced nowhere. An unenforced documented constraint is worse than an absent one, so it is either enforced or deleted | `packages/contracts/src/roles.ts`, `RBAC.md` §7 | 1B.5.5 |
+  | `RoleDefinition.allowedScopeTypes` — a documented constraint enforced nowhere. An unenforced documented constraint is worse than an absent one, so it is either enforced or deleted | `packages/contracts/src/roles.ts`, `RBAC.md` §7 | **Schema in 1B.5.4** (`roles.allowed_scope_types`, migration `0004`); **grant-time enforcement in 1B.5.5**, which also owns §6n case 28. `ROADMAP.md` previously listed case 28 under 1B.5.4, contradicting this row and `RBAC.md` §7; corrected in 1B.5.4 in favour of this assignment, because case 28 tests a grant and no grant API exists until 1B.5.5 |
   | `TENANT_ROLE_DEFINITIONS` — defined, exported, and seeded by nothing. Only `PLATFORM_ROLE_DEFINITIONS` reaches the database | `packages/contracts/src/roles.ts`, `packages/db/src/cli/seed.ts` | 1B.5.4, seeding tenant roles at provisioning |
   | `AUDIT_ACTIONS.AUTHORIZATION_DENIED` — defined in the contract, written by no code path, and absent from `SECURITY_SENSITIVE_AUDIT_ACTIONS` | `packages/contracts/src/audit.ts` | 1B.5.3 (D-6) |
 
@@ -465,7 +465,7 @@ No `revoked_at` column on `user_roles`. A revocation column would become a secon
 - **Workspace and team isolation still has no database backstop.** RLS carries no workspace or team term (`TENANCY.md` §3a). D-1 makes the application layer *correct*; it does not make it *redundant*. This remains the highest residual risk in Phase 1B.
 - **A future endpoint can still omit the target-scope call.** Mitigated by a test asserting every scoped route performs exactly one target-scope check, not eliminated.
 - **ABAC is advertised and not implemented.** `RBAC.md` §1 describes RBAC *and* ABAC; only RBAC with scope coverage exists. Attribute conditions are deferred beyond Phase 1B (D20) and Gate B must say so rather than imply otherwise.
-- **`TENANT_ROLE_DEFINITIONS.allowedScopeTypes` is a documented constraint enforced nowhere**, and `TENANT_ROLE_DEFINITIONS` itself is defined and never seeded. Both close in Phase 1B.5 (1B.5.5 and 1B.5.4 respectively); an unenforced documented constraint is worse than none.
+- **`TENANT_ROLE_DEFINITIONS.allowedScopeTypes` is a documented constraint enforced nowhere**, and `TENANT_ROLE_DEFINITIONS` itself is defined and never seeded. Both close in Phase 1B.5 (1B.5.5 and 1B.5.4 respectively); an unenforced documented constraint is worse than none. **1B.5.4 closed the seeding half** with `TenantRoleProvisioner` — transaction-bound, idempotent, emitting `role.created` only for a role actually created — and gave `allowedScopeTypes` a column to live in; its integration with organization creation is deferred to 1B.8, which is the phase that introduces organization creation.
 - **Denial rows are attacker-influenceable in volume.** A valid principal can generate unbounded `authorization.denied` rows by probing. Accepted, and named as an additional trigger for the `audit_logs` partitioning decision deferred in ADR-002.
 
 ## 2. Non-blocking future decisions (confirmed — none of these affect Phase 1 correctness)

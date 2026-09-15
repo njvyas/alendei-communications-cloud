@@ -52,11 +52,16 @@ async function main(): Promise<void> {
             name: definition.name,
             description: definition.description,
             isSystemRole: true,
+            allowedScopeTypes: [...definition.allowedScopeTypes],
           })
           .onConflictDoUpdate({
             target: schema.roles.key,
             targetWhere: sql`${schema.roles.orgId} IS NULL`,
-            set: { name: definition.name, description: definition.description },
+            set: {
+              name: definition.name,
+              description: definition.description,
+              allowedScopeTypes: [...definition.allowedScopeTypes],
+            },
           })
           .returning({ id: schema.roles.id });
 

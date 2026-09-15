@@ -13,6 +13,7 @@ import { IamModule } from './iam/iam.module';
 import { HttpMetricsInterceptor } from './observability/http-metrics.interceptor';
 import { LoggingModule } from './observability/logging.module';
 import { ObservabilityModule } from './observability/observability.module';
+import { RbacModule } from './rbac/rbac.module';
 import { RedisModule } from './redis/redis.module';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { SecretsModule } from './secrets/secrets.module';
@@ -38,6 +39,7 @@ import { SecretsModule } from './secrets/secrets.module';
     RedisModule,
     HealthModule,
     TenancyModule,
+    RbacModule,
   ],
   providers: [
     { provide: APP_PIPE, useValue: validationPipe() },

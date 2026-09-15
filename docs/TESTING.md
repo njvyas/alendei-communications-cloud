@@ -309,6 +309,21 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 - **Transaction semantics** — the record survives the surrounding transaction rolling back, both when the refusal itself causes the rollback and when something unrelated does; and it is committed *before* the refusal reaches the caller.
 - **Pool exhaustion** — the record is written on a second connection checked out of the same pool the caller's transaction already holds one from, so `DATABASE_POOL_MAX=1` is the one configuration in which it can never obtain one. With a `max: 1` pool the denial fails closed and *bounded* — `pg` ends the queued acquisition at `connectionTimeoutMillis` (five seconds by default in `createPool`) rather than hanging — and the failure surfaces as a `500`, never as a plain `403` claiming an audited refusal. The same service on a `max: 2` pool records normally, so the condition is a resource limit and not a poisoned path.
 
+**Role administration (Phase 1B.5.4, `RBAC.md` §§7-8).** `apps/api/test/role-administration.sec-spec.ts` (46 cases), over real HTTP against real rows:
+
+- **Reading** — an organization sees its own roles and the readable platform definitions, never another tenant's; `allowedScopeTypes` is exposed on every role; the permission catalogue is returned; a principal without `roles.read` is refused.
+- **Creating** — key, name, `allowedScopeTypes` and the permission set persist; a duplicate key in the same organization is `409` while the same key in a different one is fine; malformed keys, unknown permissions and an empty `allowedScopeTypes` are `400`.
+- **Composition authority** — a permission the actor does not hold at that organization is refused, on update as well as create, and nothing is created when it is. A `platform.*` permission on a tenant role is refused. A workspace-scoped principal cannot compose at the organization at all.
+- **System-role protection, at both layers** — the service refuses update and delete of a tenant system role and of a platform role; and with the service bypassed entirely, migration `0004`'s triggers refuse the same mutation, refuse a system role's permission set being edited, and refuse a custom role being *promoted* into a system role.
+- **Cross-tenant** — another organization's role is `404` rather than `403`, and a real foreign id is byte-for-byte indistinguishable from an unknown one apart from the correlation id; update and delete are `404` likewise; RLS returns zero rows with application authorization bypassed; the two tenants sit under different resellers.
+- **§6n case 17** — a permission removed from a role through the administration API is denied on the **next request** with the same token, with a positive control before the removal, and the removal is audited as `role.updated`.
+- **§6n case 18** — deletion while grants exist is `409` with the grants and the role intact; `ON DELETE RESTRICT` refuses it with the service bypassed; it succeeds once the grant is revoked; `role.deleted` is written only for the successful deletion. A concurrent grant-and-delete cannot both win, and no orphaned grant survives either way.
+- **API keys** — a key whose scopes withhold role administration cannot reach the surface, however wide its creator.
+- **Denial auditing still holds** — a refused role read writes `authorization.denied` carrying the actor's *own* workspace scope, not the organization it reached for (Phase 1B.5.3).
+- **`TenantRoleProvisioner`** — seeds every canonical tenant role with its `allowedScopeTypes` and permission set; a second run creates nothing and writes **exactly** no further `role.created` rows; a caller failing *after* provisioning returned rolls the whole seeding back, audit rows included; it creates no organization; and `missingRoles` reports without writing.
+
+**Not asserted here, deliberately:** §6n case 28. This phase gives `allowed_scope_types` its value; enforcing it at grant time is Phase 1B.5.5's, and there is no grant API to enforce it through yet.
+
 **Forged ancestry (ADR-005 D-5).** Asserted as the strong property, not the weak one: it is not enough that bad input is rejected: the *authoritative* chain must decide. Each case runs under a tenant context that can see the target, so visibility is not the variable — a grant naming another organization cannot reach a workspace whose real parent is a different organization; the same for a grant naming another reseller, and for one naming another workspace as a team's parent; and a principal holding grants that between them name a wholly false chain still reaches nothing. Every case carries a positive control on the claimant's own rows, so a denial cannot be mistaken for a broken query.
 
 | # | Case | Expected |
@@ -354,6 +369,12 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 | The attempted target scope written as the actor's scope | **executed at 1B.5.3: 3 security tests fail** |
 | An unresolved (`404`) target audited as a denial | **executed at 1B.5.3: 3 security tests fail** |
 | Credential-bearing request data added to denial metadata | **executed at 1B.5.3: 2 security tests fail** |
+| The role-composition authority guard removed | **executed at 1B.5.4: 3 security tests fail** |
+| System-role protection removed from the service | **executed at 1B.5.4: 4 security tests fail** |
+| The grants-exist check removed before role deletion | **executed at 1B.5.4: 3 security tests fail** |
+| `TenantRoleProvisioner`'s already-present skip removed | **executed at 1B.5.4: 1 security test fails** — `onConflictDoNothing` still prevents the duplicate row and the early return still suppresses the audit, so only the idempotency assertion detects it, which is the layering working |
+| `user_roles.role_id` reverted to `ON DELETE CASCADE` in the database | **executed at 1B.5.4: the `ON DELETE RESTRICT` case fails** |
+| `trg_roles_protect_system` dropped from the database | **executed at 1B.5.4: the service-bypassed case fails** |
 | `scopeCovers` term dropped from `allows` | 4, 6, 8, 9 |
 | Permission term dropped from `allows` | 12 and every denial case |
 | `ScopeChainResolver` returns the request-supplied chain | 2, 4, 6 |

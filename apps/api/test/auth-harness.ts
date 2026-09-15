@@ -134,29 +134,40 @@ export async function createTenant(
     .values({ email, status: 'active', passwordHash: digest, passwordUpdatedAt: new Date() })
     .returning({ id: schema.users.id });
 
-  const [role] = await admin
-    .insert(schema.roles)
-    .values({
-      orgId: org!.id,
-      key: TENANT_ROLE_KEYS.ORG_ADMIN,
-      name: 'Organization Admin',
-      isSystemRole: true,
-    })
-    .returning({ id: schema.roles.id });
+  // `org_admin` is a seeded system role, and migration `0004` makes a system
+  // role's definition immutable outside a provisioning or platform-admin
+  // transaction. The fixture therefore composes it exactly as
+  // `TenantRoleProvisioner` does — declaring `app.provisioning`
+  // transaction-locally — rather than the guard being relaxed for tests.
+  const role = await admin.transaction(async (tx) => {
+    await tx.execute(sql`select set_config('app.provisioning','on',true)`);
 
-  // The org_admin role needs the permissions the tenancy read surface checks.
-  for (const key of ['workspaces.read', 'users.read', 'organizations.read']) {
-    const [permission] = await admin
-      .select({ id: schema.permissions.id })
-      .from(schema.permissions)
-      .where(eq(schema.permissions.key, key));
-    if (permission) {
-      await admin
-        .insert(schema.rolePermissions)
-        .values({ roleId: role!.id, permissionId: permission.id })
-        .onConflictDoNothing();
+    const [created] = await tx
+      .insert(schema.roles)
+      .values({
+        orgId: org!.id,
+        key: TENANT_ROLE_KEYS.ORG_ADMIN,
+        name: 'Organization Admin',
+        isSystemRole: true,
+        allowedScopeTypes: ['organization'],
+      })
+      .returning({ id: schema.roles.id });
+
+    // The org_admin role needs the permissions the tenancy read surface checks.
+    for (const key of ['workspaces.read', 'users.read', 'organizations.read']) {
+      const [permission] = await tx
+        .select({ id: schema.permissions.id })
+        .from(schema.permissions)
+        .where(eq(schema.permissions.key, key));
+      if (permission) {
+        await tx
+          .insert(schema.rolePermissions)
+          .values({ roleId: created!.id, permissionId: permission.id })
+          .onConflictDoNothing();
+      }
     }
-  }
+    return created;
+  });
 
   await admin.insert(schema.userRoles).values({
     userId: user!.id,
@@ -243,18 +254,25 @@ export async function destroyTenant(admin: Database, tenant: TenantFixture): Pro
   await admin.execute(sql`ALTER TABLE audit_logs ENABLE TRIGGER trg_audit_logs_append_only`);
 
   await admin.execute(sql`DELETE FROM sessions WHERE user_id = ${tenant.userId}`);
-  for (const table of [
-    'user_roles',
-    'role_permissions',
-    'roles',
-    'ws_tickets',
-    'api_keys',
-    'idempotency_keys',
-    'teams',
-    'workspaces',
-  ]) {
-    await admin.execute(sql`DELETE FROM ${sql.raw(table)} WHERE org_id = ${tenant.orgId}`);
-  }
+  // System roles and their permission sets are protected by migration `0004`,
+  // so teardown declares the same transaction-local provisioning flag the
+  // fixture created them under. One transaction, because `SET LOCAL` does not
+  // survive a statement on a pooled connection.
+  await admin.transaction(async (tx) => {
+    await tx.execute(sql`select set_config('app.provisioning','on',true)`);
+    for (const table of [
+      'user_roles',
+      'role_permissions',
+      'roles',
+      'ws_tickets',
+      'api_keys',
+      'idempotency_keys',
+      'teams',
+      'workspaces',
+    ]) {
+      await tx.execute(sql`DELETE FROM ${sql.raw(table)} WHERE org_id = ${tenant.orgId}`);
+    }
+  });
   await admin.execute(sql`DELETE FROM users WHERE id = ${tenant.userId}`);
   await admin.execute(sql`DELETE FROM organizations WHERE id = ${tenant.orgId}`);
   await admin.execute(sql`DELETE FROM resellers WHERE id = ${tenant.resellerId}`);

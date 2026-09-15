@@ -80,6 +80,18 @@ The consequence is deliberate. The record **survives a later rollback of the sur
 
 **Only an attempted operation is recorded.** A target that never resolved is a `404` and writes nothing: no authorizable target was established, so there is nothing to deny — and auditing it would make the trail an existence oracle for anyone who can read it. The non-throwing capability probe used for listings and UI affordances writes nothing either; it asks a hypothetical, and recording it would put a row behind every rendered button.
 
+### Role administration (Phase 1B.5.4)
+
+Role administration composes privilege, so every mutation is security-sensitive and every one is audited inside its own transaction: `role.created`, `role.updated` and `role.deleted` already sit in `SECURITY_SENSITIVE_AUDIT_ACTIONS`, so an audit failure rolls the role change back with it.
+
+Three properties are worth stating because each is enforced at two layers, and the second layer is what holds when the first is bypassed:
+
+- **Composition never exceeds the actor's own authority.** A role may carry only permissions the actor itself holds at that organization, asked one at a time through `AuthorizationService` — never against `principal.permissions`, which ADR-005 removed from the decision path precisely so a permission held at a narrower scope cannot authorize composition at a wider one. Without this guard, `roles.create` is a universal escalation primitive: compose a role carrying anything, have it granted later.
+- **System roles are untouchable by a tenant.** Service layer for the `403`; `fn_protect_system_roles` and `fn_protect_system_role_permissions` (migration `0004`) for the control. Both admit only a transaction declaring `app.is_platform_admin` or `app.provisioning`, neither of which an application principal can set.
+- **Deletion is never a silent mass revocation.** `409` while grants exist, and `ON DELETE RESTRICT` underneath it, so each revocation stays an explicit, individually audited act (ADR-005 D-8).
+
+A platform permission still cannot reach a tenant role: `fn_validate_role_permission` has refused that since migration `0000`, and the service refuses it first so the caller sees a `403` rather than a constraint error.
+
 The error **response** carries `403 AUTHZ_SCOPE_DENIED` and echoes no target — the identifier appears in the audit row and in operator logs, never to the caller (`API.md` §3a).
 
 Successful authorization checks are **not** audited. The operation is — `role.created`, `user_role.granted` and the rest. One row per check per request would bury the records that carry forensic value, so this is a deliberate rejection rather than an omission.

@@ -187,6 +187,11 @@ describe('platform bootstrap', () => {
     await expectRejected(
       inRollback(async (tx) => {
         await tx.execute(sql`DELETE FROM user_roles WHERE scope_type = 'platform'`);
+        // Migration `0004` makes a system role's permission set immutable
+        // outside a platform-admin or provisioning transaction. Removing the
+        // seeded role is precisely what this case is simulating, so it declares
+        // the same flag `seed.ts` uses to install it.
+        await tx.execute(sql`select set_config('app.is_platform_admin','on',true)`);
         await tx.execute(
           sql`DELETE FROM role_permissions WHERE role_id IN
               (SELECT id FROM roles WHERE key = ${PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN} AND org_id IS NULL)`,
