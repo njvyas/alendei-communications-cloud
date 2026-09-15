@@ -169,13 +169,17 @@ These endpoints are **unpaginated, unfiltered and unsorted**, matching the conve
 
 These endpoints are **unpaginated** and carry only the three filters named above; the list conventions are Phase 1B.5.8's.
 
-**Authorization introspection** — **PLANNED / NOT IMPLEMENTED, Phase 1B.5.7**
+**Authorization introspection** — **IMPLEMENTED, Phase 1B.5.7**
 
 | Method | Path | Permission | Response |
 |---|---|---|---|
-| `GET` | `/auth/me/authorization` | none — self only | `{grants:[{role_id,role_key,scope_type,scope_id,permissions[]}], organization_ids[]}` |
+| `GET` | `/auth/me/authorization` | none — self only, no target scope | `{actorType, userId, apiKeyId, grants:[{roleId,roleKey,scopeType,scopeId,orgId,permissions[]}], organizationIds[], isPlatformAdmin}` |
 
-Grants are returned **as grants**, not flattened. A console cannot render a correct permissions UI from a union, and handing it one is how an incorrect flattened model gets reinvented client-side. It discloses nothing the principal could not already derive, exactly as `authorized_organization_ids` on `/auth/me` already does. Self-only: there is no cross-user effective-permission endpoint in Phase 1B (`DECISIONS.md` D23).
+Grants are returned **as grants**, not flattened. A console cannot render a correct permissions UI from a union, and handing it one is how an incorrect flattened model gets reinvented client-side — each entry carries the scope its permissions are held at, and the response contains no union field at all. It discloses nothing the principal could not already derive, exactly as `authorizedOrganizationIds` on `/auth/me` already does.
+
+**Self-only structurally.** The subject is the authenticated principal; there is no path segment, query parameter or body field that names anyone else, so there is nowhere to put a forged identifier (`DECISIONS.md` D23). For an API-key principal the grants are the key's *effective* authority, already intersected at its binding scope (§3).
+
+**Field naming is camelCase**, as everywhere else in this API. This row previously showed snake_case, which the implementation has never used.
 
 **Deliberately excluded from Phase 1B.5**
 

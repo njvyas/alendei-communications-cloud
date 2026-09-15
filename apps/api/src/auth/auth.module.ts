@@ -1,9 +1,10 @@
 import { Global, Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 
 import { IamModule } from '../iam/iam.module';
 import { AuthController } from './auth.controller';
+import { AuthorizationCoverageInterceptor } from './authorization-coverage.interceptor';
 import { AuthGuard } from './auth.guard';
 import { AuthRateLimitService } from './auth-rate-limit.service';
 import { AuthService } from './auth.service';
@@ -39,6 +40,7 @@ import { ScopeResolver } from './scope-resolver.service';
     AuthService,
     { provide: APP_GUARD, useClass: CsrfGuard },
     { provide: APP_GUARD, useClass: AuthGuard },
+    { provide: APP_INTERCEPTOR, useClass: AuthorizationCoverageInterceptor },
   ],
   exports: [
     AccessTokenService,

@@ -7,6 +7,7 @@ import { AppException } from '../common/errors/app.exception';
 import { RequestContext } from '../common/context/request-context';
 import { TenantDatabase } from '../database/tenant-database.service';
 import { AuthorizationService } from '../auth/authorization.service';
+import { RequiresPermission } from '../auth/requires-permission.decorator';
 import type { ResolvedPrincipal } from '../auth/auth.guard';
 import { AdvisoryTenantIds } from './advisory-identifier';
 
@@ -53,6 +54,7 @@ export class TenancyController {
    * not a copy per endpoint.
    */
   @Get('workspaces')
+  @RequiresPermission(PERMISSIONS.WORKSPACES_READ)
   @AdvisoryTenantIds({ level: 'organization', source: 'query', key: 'orgId' })
   async listWorkspaces() {
     const principal = this.principal();
@@ -105,6 +107,7 @@ export class TenancyController {
    * that absence is the point, and is what the cross-tenant test proves.
    */
   @Get('workspaces/:id')
+  @RequiresPermission(PERMISSIONS.WORKSPACES_READ)
   async getWorkspace(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
     const orgId = principal.tenant.orgId;

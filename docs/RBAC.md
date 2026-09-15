@@ -51,6 +51,48 @@ Both checks run server-side, after tenant context resolution, never based on cli
 
 Policy evaluation is designed as pluggable (conceptually OPA/Rego-compatible rule shape) so ABAC rules can be authored/updated without a code deploy in a later phase — the interface is fixed in Phase 0/1; the policy authoring UI is a later-phase deliverable (see `ROADMAP.md`).
 
+## 2a. Declaring a route's permission (Phase 1B.5.7)
+
+Every route states its authorization posture on itself, and §6n case 30 asserts that against the container's own route table rather than by review.
+
+| Decorator | Meaning |
+|---|---|
+| `@Public()` | No authentication. Login, refresh, health, metrics — and additionally allow-listed by path in the coverage suite, so marking a new route public is not by itself enough to pass unnoticed |
+| `@RequiresPermission(p)` | A target-scope check is required, and `p` is named on the route |
+| `@AuthorizationExempt(reason)` | Authenticated, but about the caller rather than a tenant resource, with the reason recorded on the route |
+
+A route in none of them fails the suite. That is the whole of case 30: a new endpoint cannot ship unprotected by omission.
+
+**The decorator declares; it does not enforce.** This is forced by ADR-005 D-5 and is worth stating plainly, because the opposite is the obvious design. The chain a coverage decision rests on must be read inside the request's **own tenant transaction** — the same `SET LOCAL` transaction the business query runs in — so RLS filters it and an out-of-tenant target is invisible rather than merely unauthorized. A Nest guard runs before the handler and therefore before that transaction exists. A guard that authorized would have to open one of its own, putting the decision and the mutation in two different transactions and leaving a window between them in which a grant can be revoked. That time-of-check/time-of-use gap is why 1B.5.2 deferred this decorator rather than shipping a guard that looked right.
+
+Enforcement therefore stays in `AuthorizationService.assert`, inside the handler's transaction, before any mutation. The decorator supplies two things that were genuinely missing: the declaration case 30 asserts against, and a runtime cross-check.
+
+**The runtime cross-check.** `AuthorizationCoverageInterceptor` compares the declared permission against the checks `AuthorizationService` recorded during the request, and fails the response closed on a mismatch. What it buys differs by method, and the difference matters:
+
+- For a **read**, the response is suppressed before it reaches the caller, so no unauthorized data is disclosed.
+- For a **mutation**, the write has already committed when the interceptor runs. The response still fails closed and the operator gets a loud error, but the guarantee that a mutation was authorized comes from the service's check running before it — not from here. The structural guarantee is case 30, which fails the build rather than the request.
+
+It never authorizes anything: it compares what was declared with what was done, and a mismatch is a programming error reported as one. A refusal still counts as a check having happened, so a legitimate `403` is not converted into a `500`.
+
+**Execution order**, end to end:
+
+```
+CorrelationMiddleware      correlation id, request context
+  → CsrfGuard              non-simple header on cookie-credentialed routes
+  → AuthGuard              credential → AuthPrincipal → RequestContext
+                           → ScopeResolver → tenant context (X-Acc-Organization)
+  → AdvisoryTenantGuard    advisory identifiers cross-checked, or refused
+  → handler                opens the tenant transaction (SET LOCAL)
+      → AuthorizationService.assert   chain read + coherent-grant decision,
+                                      recorded for coverage; denial audited
+      → the business query or mutation, in that same transaction
+  → AuthorizationCoverageInterceptor  declared vs. performed; fail closed
+```
+
+Authorization happens inside the handler's transaction and **before** the mutation it guards; nothing in this phase moved a check after one.
+
+**Deferred targets.** Two routes cannot name their target statically, and both say so on the route with a reason: granting a role targets the scope named in the body, and revoking one targets the scope on the stored row. Neither is knowable from route metadata, and guessing either would be the forged-target defect ADR-005 D-5 exists to prevent. Every other scoped route targets the request's resolved organization.
+
 ## 3. Platform-level roles (fixed, not tenant-configurable)
 
 These roles have `roles.org_id IS NULL`, which is what marks a role as platform-level (`DATABASE.md` §2). They are seeded, not editable by tenants, and may only be granted by an existing platform admin (§7).

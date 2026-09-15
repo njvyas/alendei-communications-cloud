@@ -324,6 +324,7 @@ The **entire** implemented API surface at `6e84d7c`:
 | `PATCH` | `/api/v1/roles/:id` | IMPLEMENTED, 1B.5.4 |
 | `DELETE` | `/api/v1/roles/:id` | IMPLEMENTED, 1B.5.4 |
 | `GET` | `/api/v1/permissions` | IMPLEMENTED, 1B.5.4 (unpaginated) |
+| `GET` | `/api/v1/auth/me/authorization` | IMPLEMENTED, 1B.5.7 |
 | `GET` | `/api/v1/role-assignments` | IMPLEMENTED, 1B.5.5 (unpaginated; 3 filters) |
 | `POST` | `/api/v1/role-assignments` | IMPLEMENTED, 1B.5.5 |
 | `GET` | `/api/v1/role-assignments/:id` | IMPLEMENTED, 1B.5.5 |
@@ -437,6 +438,49 @@ administrator un-revocable in its own UI as a courtesy — though the backend is
 what enforces it, including for callers that never touch this API.
 
 **Still unpaginated**, like every list today; §13 applies.
+
+## 30c. Authorization view — IMPLEMENTED (Phase 1B.5.7)
+
+`GET /api/v1/auth/me/authorization` returns the caller's own effective
+authorization. **This is the endpoint a console should build its permissions UI
+from** — not `/auth/me`'s `permissions` list.
+
+```jsonc
+{
+  "actorType": "user",                 // or "api_key"
+  "userId": "uuid|null", "apiKeyId": "uuid|null",
+  "grants": [
+    {
+      "roleId": "uuid", "roleKey": "org_admin",
+      "scopeType": "organization",     // reseller | organization | workspace | team | platform
+      "scopeId": "uuid|null",
+      "orgId": "uuid|null",
+      "permissions": ["roles.read", "workspaces.read"]   // sorted
+    }
+  ],
+  "organizationIds": ["uuid"],
+  "isPlatformAdmin": false
+}
+```
+
+Four things the frontend must build against:
+
+- **Grants are not flattened, and must not be flattened by the client.** A
+  permission appears under the grant that carries it, at the scope that grant
+  covers. Holding `teams.create` in one workspace is **not** holding it across
+  the organization, and collapsing `grants` into a `Set` of permission strings
+  reintroduces exactly the bug the backend removed. To decide whether an action
+  is available at a scope, look for a **single grant** that both carries the
+  permission and covers that scope — never a union across grants.
+- **`/auth/me`'s `permissions` remains a rendering hint only** (§3), and is the
+  flattened list. Prefer this endpoint wherever the scope matters.
+- **Self-only.** There is no parameter for another user and no cross-user
+  variant; a `userId` in the path, query or body is ignored or `404`s.
+- **API keys** see the key's effective authority, already intersected at its
+  binding scope — narrower than its creator's, by design.
+
+The endpoint requires authentication and performs no target-scope check, so it
+never returns `403` for scope reasons and writes no denial audit.
 
 ## 31. Related
 

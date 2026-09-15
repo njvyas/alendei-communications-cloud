@@ -10,13 +10,14 @@ import {
   Patch,
   Post,
 } from '@nestjs/common';
-import { ERROR_CODES } from '@acc/contracts';
+import { ERROR_CODES, PERMISSIONS } from '@acc/contracts';
 
 import { AppException } from '../common/errors/app.exception';
 import { RequestContext } from '../common/context/request-context';
 import { TenantDatabase } from '../database/tenant-database.service';
 import type { ResolvedPrincipal } from '../auth/auth.guard';
 import { CreateRoleDto, UpdateRoleDto } from './role.dto';
+import { RequiresPermission } from '../auth/requires-permission.decorator';
 import { RoleAdministrationService } from './role-administration.service';
 
 /**
@@ -54,6 +55,7 @@ export class RolesController {
   }
 
   @Get()
+  @RequiresPermission(PERMISSIONS.ROLES_READ)
   async list() {
     const principal = this.principal();
     const roles = await this.db.withRequestTenant((tx) => this.roles.list(tx, principal));
@@ -61,12 +63,14 @@ export class RolesController {
   }
 
   @Get(':id')
+  @RequiresPermission(PERMISSIONS.ROLES_READ)
   async get(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
     return this.db.withRequestTenant((tx) => this.roles.get(tx, principal, id));
   }
 
   @Post()
+  @RequiresPermission(PERMISSIONS.ROLES_CREATE)
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() dto: CreateRoleDto) {
     const principal = this.principal();
@@ -82,12 +86,14 @@ export class RolesController {
   }
 
   @Patch(':id')
+  @RequiresPermission(PERMISSIONS.ROLES_UPDATE)
   async update(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: UpdateRoleDto) {
     const principal = this.principal();
     return this.db.withRequestTenant((tx) => this.roles.update(tx, principal, id, dto));
   }
 
   @Delete(':id')
+  @RequiresPermission(PERMISSIONS.ROLES_DELETE)
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
@@ -110,6 +116,7 @@ export class PermissionsController {
   ) {}
 
   @Get()
+  @RequiresPermission(PERMISSIONS.PERMISSIONS_READ)
   async list() {
     const principal = RequestContext.get()?.principal as ResolvedPrincipal | null | undefined;
     if (!principal) {

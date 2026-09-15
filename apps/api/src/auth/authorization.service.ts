@@ -9,6 +9,7 @@ import {
 import type { Transaction } from '@acc/db';
 
 import { AppException } from '../common/errors/app.exception';
+import { RequestContext } from '../common/context/request-context';
 import { actorFromPrincipal } from '../audit/audit-actor';
 import { AuditWriter } from '../audit/audit-writer.service';
 import { TenantDatabase } from '../database/tenant-database.service';
@@ -87,6 +88,11 @@ export class AuthorizationService {
    * and a second code path is a second thing to get wrong.
    */
   async assert(tx: Transaction, request: AuthorizationCheck): Promise<void> {
+    // Recorded before the decision, and regardless of it: the coverage
+    // cross-check asks whether this route looked, not what the answer was, and
+    // a refusal is still a check that happened.
+    RequestContext.recordAuthorizationCheck(String(request.permission));
+
     const chain = await this.chains.resolve(tx, request.target);
 
     if (chain === null) {

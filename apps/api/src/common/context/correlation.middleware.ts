@@ -44,6 +44,7 @@ export class CorrelationMiddleware implements NestMiddleware {
       principal: null,
       ip: req.ip ?? null,
       userAgent: firstHeader(req.headers['user-agent']),
+      authorizationChecks: [],
     };
 
     res.setHeader(CORRELATION_ID_HEADER, store.correlationId);

@@ -18,6 +18,20 @@ export interface RequestContextStore {
   principal: AuthPrincipal | null;
   ip: string | null;
   userAgent: string | null;
+  /**
+   * Target-scope checks performed during this request (Phase 1B.5.7).
+   *
+   * Written by `AuthorizationService.assert` and read by
+   * `AuthorizationCoverageInterceptor`, which verifies that the permission a
+   * route declared was actually checked. It is a record of what happened, never
+   * an input to a decision — nothing authorizes anything by consulting it.
+   *
+   * Optional and lazily created: it is bookkeeping the runtime fills in, not
+   * something a caller opening a context has to know to supply. A store built
+   * without it behaves as one with no checks recorded, which is the
+   * fail-closed direction for the interceptor that reads it.
+   */
+  authorizationChecks?: string[];
 }
 
 const storage = new AsyncLocalStorage<RequestContextStore>();
@@ -48,5 +62,22 @@ export const RequestContext = {
   setTraceId(traceId: string): void {
     const store = storage.getStore();
     if (store) store.traceId = traceId;
+  },
+
+  /**
+   * Records that a target-scope check ran for `permission`.
+   *
+   * Append-only and unconditional: a check that was performed and refused is
+   * still a check that was performed, and the coverage cross-check asks whether
+   * the route looked, not what the answer was.
+   */
+  recordAuthorizationCheck(permission: string): void {
+    const store = storage.getStore();
+    if (!store) return;
+    (store.authorizationChecks ??= []).push(permission);
+  },
+
+  authorizationChecks(): readonly string[] {
+    return storage.getStore()?.authorizationChecks ?? [];
   },
 };

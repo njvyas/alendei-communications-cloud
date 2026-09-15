@@ -118,6 +118,20 @@ A platform with no administrator is unrecoverable through the API: nothing left 
 
 **No bypass exists.** A tenant principal cannot see a platform grant at all — RLS hides it — and an API key is bounded by its binding scope, so neither can reach the mutation. `acc_app` holds neither superuser nor `BYPASSRLS`, and the suite asserts both.
 
+### Route authorization coverage (Phase 1B.5.7)
+
+Every registered route declares its posture — `@Public()`, `@RequiresPermission`, or `@AuthorizationExempt` with a reason — and §6n case 30 asserts that against the container's own route table. A route that declares nothing fails the suite the moment it is registered, so an endpoint cannot ship unprotected by omission. At this phase: **23 routes — 12 scoped, 5 identity exemptions, 6 public.**
+
+`@RequiresPermission` is a declaration, not the enforcement, and the reason is ADR-005 D-5: the chain a decision rests on must be read inside the request's own tenant transaction, which does not exist when a guard runs. A guard that authorized would split the decision and the mutation across two transactions and leave a window between them. Enforcement stays in `AuthorizationService.assert` inside the handler's transaction, before the mutation; `AuthorizationCoverageInterceptor` cross-checks at runtime that the declared permission was actually asked for, suppressing the response when it was not. `RBAC.md` §2a states exactly what that buys for reads versus mutations.
+
+### Self-only authorization introspection (Phase 1B.5.7)
+
+`GET /auth/me/authorization` returns the caller's own grants **as grants**, never flattened. A console cannot render a correct permissions UI from a union, and handing it one is how the defect ADR-005 removed from the backend gets reinvented in the client: an actor holding `teams.create` in one workspace and `role_assignments.grant` across the organization must be able to tell from the response that it cannot confer the former at the latter. Each entry carries the scope its permissions are held at, and the response contains no union at all.
+
+**Self-only structurally, not by check.** The subject is the authenticated principal and there is nowhere to name anyone else — no path segment, no query parameter, no body. A cross-user variant would be an enumeration surface with no Phase 1B consumer (`DECISIONS.md` D23), and the way to not build one is to leave nowhere to put the identifier. The suite tries a path variant, a query parameter and a body field, and none changes the subject.
+
+It discloses nothing the caller could not already derive by attempting each operation, and no credential material. For an API-key principal the grants are the key's *effective* authority — the Phase 1B.5.1 binding-scope intersection — so a permission its creator holds only elsewhere never appears.
+
 The error **response** carries `403 AUTHZ_SCOPE_DENIED` and echoes no target — the identifier appears in the audit row and in operator logs, never to the caller (`API.md` §3a).
 
 Successful authorization checks are **not** audited. The operation is — `role.created`, `user_role.granted` and the rest. One row per check per request would bury the records that carry forensic value, so this is a deliberate rejection rather than an omission.

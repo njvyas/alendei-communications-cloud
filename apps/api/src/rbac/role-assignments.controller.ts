@@ -10,13 +10,14 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { ERROR_CODES } from '@acc/contracts';
+import { ERROR_CODES, PERMISSIONS } from '@acc/contracts';
 
 import { AppException } from '../common/errors/app.exception';
 import { RequestContext } from '../common/context/request-context';
 import { TenantDatabase } from '../database/tenant-database.service';
 import type { ResolvedPrincipal } from '../auth/auth.guard';
 import { CreateAssignmentDto, ListAssignmentsQueryDto } from './role-assignment.dto';
+import { RequiresPermission } from '../auth/requires-permission.decorator';
 import { RoleAssignmentService } from './role-assignment.service';
 
 /**
@@ -51,6 +52,7 @@ export class RoleAssignmentsController {
   }
 
   @Get()
+  @RequiresPermission(PERMISSIONS.ROLE_ASSIGNMENTS_READ)
   async list(@Query() query: ListAssignmentsQueryDto) {
     const principal = this.principal();
     const assignments = await this.db.withRequestTenant((tx) =>
@@ -60,12 +62,19 @@ export class RoleAssignmentsController {
   }
 
   @Get(':id')
+  @RequiresPermission(PERMISSIONS.ROLE_ASSIGNMENTS_READ)
   async get(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
     return this.db.withRequestTenant((tx) => this.assignments.get(tx, principal, id));
   }
 
   @Post()
+  @RequiresPermission(PERMISSIONS.ROLE_ASSIGNMENTS_GRANT, {
+    target: 'deferred',
+    because:
+      'the target is the scope named in the body, which no route metadata can know — ' +
+      'guessing it would be the forged-target defect ADR-005 D-5 exists to prevent',
+  })
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() dto: CreateAssignmentDto) {
     const principal = this.principal();
@@ -80,6 +89,10 @@ export class RoleAssignmentsController {
   }
 
   @Delete(':id')
+  @RequiresPermission(PERMISSIONS.ROLE_ASSIGNMENTS_REVOKE, {
+    target: 'deferred',
+    because: 'the target is the scope on the stored row, knowable only once it is loaded',
+  })
   @HttpCode(HttpStatus.NO_CONTENT)
   async revoke(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
