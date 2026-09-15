@@ -297,6 +297,18 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 - `apps/api/test/authorization-service.sec-spec.ts` (22 cases) — the §6b matrix through the boundary, `404`-not-`403` for unresolvable targets with no identifier echoed, the forged-ancestry matrix below, and the 1B.5.1 coherence invariant re-proven through the service rather than only at the evaluator.
 - `apps/api/src/auth/authorization-boundary.spec.ts` (6 cases) — structural: no controller imports `PermissionEvaluator`, no controller performs target-scope SQL, no hierarchy query inside the evaluator, no grant logic inside the resolver, and **`AuthorizationCheck` exposes no `chain` field**, so caller-supplied ancestry stays unrepresentable.
 
+**Denial auditing (Phase 1B.5.3, ADR-005 D-6).** `apps/api/test/authorization-denial-audit.sec-spec.ts` (25 cases), against real rows and the real `AuditWriter`:
+
+- **Written** — a resolved target the principal cannot reach produces exactly one `authorization.denied` row, attributed to the authenticated principal, carrying the attempted permission, the attempted target in `resource_id` and `metadata`, the resource type (explicit, and defaulted to the target level), the request correlation id, and `outcome='denied'`.
+- **Actor scope** — the row records where the actor *legitimately* was, never where it reached. A workspace-pinned principal denied at a sibling workspace records its own workspace, and the derived tenancy follows it; the attempted target never appears as the actor's scope. Narrowest-first selection is asserted separately.
+- **Not written** — a successful authorization, a nonexistent target, an RLS-invisible foreign target, a cross-reseller target, and the non-throwing capability probe all write nothing. An unknown id and a real foreign one are indistinguishable in the audit trail as well as in the response, so the trail cannot become an existence oracle.
+- **Audited because resolved** — a sibling workspace *is* resolvable (RLS carries no workspace term), so its refusal is a real attempt and is recorded.
+- **API keys** — attributed by key id with no user actor, and the record is asserted to contain no credential material: not the key secret, not an Argon2 digest, not a key prefix, not a bearer or refresh token.
+- **Metadata shape** — exactly four fields (`permission`, `attemptedScopeType`, `attemptedScopeId`, `denialReason`), `before`/`after` null, and no key the redactor would treat as sensitive. No request, headers, principal, token or cookies.
+- **Fail closed** — with `AuditWriter` made to fail, the audit failure propagates rather than being swallowed into a plain `403`, nothing is recorded, and the request never proceeds.
+- **Transaction semantics** — the record survives the surrounding transaction rolling back, both when the refusal itself causes the rollback and when something unrelated does; and it is committed *before* the refusal reaches the caller.
+- **Pool exhaustion** — the record is written on a second connection checked out of the same pool the caller's transaction already holds one from, so `DATABASE_POOL_MAX=1` is the one configuration in which it can never obtain one. With a `max: 1` pool the denial fails closed and *bounded* — `pg` ends the queued acquisition at `connectionTimeoutMillis` (five seconds by default in `createPool`) rather than hanging — and the failure surfaces as a `500`, never as a plain `403` claiming an audited refusal. The same service on a `max: 2` pool records normally, so the condition is a resource limit and not a poisoned path.
+
 **Forged ancestry (ADR-005 D-5).** Asserted as the strong property, not the weak one: it is not enough that bad input is rejected: the *authoritative* chain must decide. Each case runs under a tenant context that can see the target, so visibility is not the variable — a grant naming another organization cannot reach a workspace whose real parent is a different organization; the same for a grant naming another reseller, and for one naming another workspace as a team's parent; and a principal holding grants that between them name a wholly false chain still reaches nothing. Every case carries a positive control on the claimant's own rows, so a denial cannot be mistaken for a broken query.
 
 | # | Case | Expected |
@@ -336,6 +348,12 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 | A caller-supplied `chain` permitted to override the resolved one | **executed at 1B.5.2: the boundary test fails** |
 | A controller bypassing `AuthorizationService` to call the evaluator with its own chain | **executed at 1B.5.2: 1 unit + 2 security tests fail** |
 | `principal.permissions` reintroduced as an authorization pre-check | **executed at 1B.5.2: 18 unit + 3 security tests fail** |
+| The `authorization.denied` write removed | **executed at 1B.5.3: 17 security tests fail** |
+| The denial record written into the caller's (rolling-back) transaction instead of its own | **executed at 1B.5.3: 16 security tests fail** |
+| An `AuditWriter` failure swallowed instead of propagated | **executed at 1B.5.3: 1 security test fails** — the request still refuses, so only the non-swallowing assertion detects it, which is the precise property at stake |
+| The attempted target scope written as the actor's scope | **executed at 1B.5.3: 3 security tests fail** |
+| An unresolved (`404`) target audited as a denial | **executed at 1B.5.3: 3 security tests fail** |
+| Credential-bearing request data added to denial metadata | **executed at 1B.5.3: 2 security tests fail** |
 | `scopeCovers` term dropped from `allows` | 4, 6, 8, 9 |
 | Permission term dropped from `allows` | 12 and every denial case |
 | `ScopeChainResolver` returns the request-supplied chain | 2, 4, 6 |

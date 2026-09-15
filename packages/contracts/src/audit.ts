@@ -104,8 +104,16 @@ export function anonymousLoginFailureActor(): Pick<
 /**
  * Actions classified as security-sensitive (`SECURITY.md` §4): their audit write
  * is synchronous and failing it fails the request.
+ *
+ * `AUTHORIZATION_DENIED` is here for the same reason as the mutations: a refused
+ * escalation is precisely the event worth having a record of (`RBAC.md` §7), so
+ * a denial whose record could not be written must not be reported as an
+ * ordinary refusal. It differs from the others only in what it couples to —
+ * having no business mutation of its own, it commits in its own transaction
+ * before the refusal is raised (ADR-005 D-6).
  */
 export const SECURITY_SENSITIVE_AUDIT_ACTIONS: readonly AuditAction[] = Object.freeze([
+  AUDIT_ACTIONS.AUTHORIZATION_DENIED,
   AUDIT_ACTIONS.API_KEY_CREATED,
   AUDIT_ACTIONS.API_KEY_REVOKED,
   AUDIT_ACTIONS.ROLE_CREATED,

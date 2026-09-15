@@ -72,7 +72,13 @@ The security-sensitive **classification is retained and used** even though both 
 
 An attacker-supplied target must never become the record of where the actor legitimately was: the derived tenancy columns are what a later query filters on, so recording an attempted scope as the actor's scope would file the record under a tenant the actor was never in. The attempted target belongs in metadata, where it is operator context rather than a tenancy claim.
 
-The record is written **synchronously, in its own transaction**, and a failed audit write fails the request closed. A refusal has no business transaction to couple to, and coupling it to one would turn a `403` into a `500`; the caller receives a refusal either way, so the guarantee costs nothing. `authorization.denied` is classified security-sensitive for the same reason every other privilege event is.
+The record is written **synchronously, in its own transaction, and committed before the refusal is raised** (Phase 1B.5.3). The separate transaction is not a convenience: the refusal is thrown out of the caller's own transaction, which rolls it back — a record written there would be discarded every single time, and the control would report nothing while appearing to work. Committing separately is what makes the record exist.
+
+The consequence is deliberate. The record **survives a later rollback of the surrounding request**, because the attempt happened and whether the request went on to fail for some other reason does not unmake it.
+
+**Fail closed.** The audit failure is never caught and converted into an ordinary refusal: if the record cannot be written, that failure propagates instead of the `403`, the request still does not proceed, and the operator sees why in the logs. The requester sees a generic `500` carrying only a correlation id — the audit failure is observable to the operator, opaque to the caller (`API.md` §7). `authorization.denied` is classified security-sensitive for the same reason every other privilege event is.
+
+**Only an attempted operation is recorded.** A target that never resolved is a `404` and writes nothing: no authorizable target was established, so there is nothing to deny — and auditing it would make the trail an existence oracle for anyone who can read it. The non-throwing capability probe used for listings and UI affordances writes nothing either; it asks a hypothetical, and recording it would put a row behind every rendered button.
 
 The error **response** carries `403 AUTHZ_SCOPE_DENIED` and echoes no target — the identifier appears in the audit row and in operator logs, never to the caller (`API.md` §3a).
 

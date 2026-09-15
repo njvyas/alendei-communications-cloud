@@ -29,6 +29,7 @@ import { AuthorizationService } from '../src/auth/authorization.service';
 import { TenantDatabase } from '../src/database/tenant-database.service';
 import { CredentialService } from '../src/iam/credential.service';
 import { AppException } from '../src/common/errors/app.exception';
+import { RequestContext } from '../src/common/context/request-context';
 import {
   PASSWORD,
   PREFIX,
@@ -121,11 +122,20 @@ describe('AuthorizationService', () => {
     permissions,
   });
 
+  /**
+   * A principal for the tenant fixtures.
+   *
+   * `userId` is a **real** `users` row, not a synthetic string: a denial now
+   * writes an audit record, and `audit_logs.actor_user_id` is a foreign key —
+   * so an invented actor is refused by the database. That refusal is the
+   * fail-closed path working, but it would mask the behaviour these tests are
+   * actually about.
+   */
   const principalOf = (roles: RoleGrant[]): AuthPrincipal => ({
     actorType: 'user',
-    userId: 'u1',
+    userId: orgA.userId,
     apiKeyId: null,
-    sessionId: 's1',
+    sessionId: null,
     tenant: { orgId: orgA.orgId, workspaceId: null, resellerId: null, isPlatformAdmin: false },
     roles,
     permissions: [...new Set(roles.flatMap((r) => r.permissions))],
@@ -138,6 +148,29 @@ describe('AuthorizationService', () => {
     resellerId: t.resellerId,
   });
 
+  /**
+   * Runs `work` inside a request context, as every production caller does.
+   *
+   * A denial now writes an audit row, and an audit row without a correlation id
+   * is refused outright (`AuditWriter.buildValues`) — so a service test that
+   * omitted the ambient context would exercise the fail-closed path instead of
+   * the behaviour under test. Supplying it here is what makes these tests
+   * reflect production rather than a bare service call.
+   */
+  const inRequest = <T>(principal: AuthPrincipal, work: () => Promise<T>): Promise<T> =>
+    RequestContext.run(
+      {
+        correlationId: uuidv7(),
+        requestId: uuidv7(),
+        causationId: null,
+        traceId: null,
+        principal,
+        ip: null,
+        userAgent: null,
+      },
+      work,
+    );
+
   const allows = (
     session: TenantSession,
     principal: AuthPrincipal,
@@ -145,8 +178,10 @@ describe('AuthorizationService', () => {
     scopeId: string | null,
     permission: string = READ,
   ): Promise<boolean> =>
-    db.withTenant(session, (tx) =>
-      authz.allows(tx, { principal, permission, target: { scopeType, scopeId } }),
+    inRequest(principal, () =>
+      db.withTenant(session, (tx) =>
+        authz.allows(tx, { principal, permission, target: { scopeType, scopeId } }),
+      ),
     );
 
   /** The thrown status, so `403` and `404` can be told apart. */
@@ -157,13 +192,15 @@ describe('AuthorizationService', () => {
     scopeId: string | null,
   ): Promise<number | 'allowed'> => {
     try {
-      await db.withTenant(session, (tx) =>
-        authz.assert(tx, {
-          principal,
-          permission: READ,
-          target: { scopeType, scopeId },
-          resourceType: 'Workspace',
-        }),
+      await inRequest(principal, () =>
+        db.withTenant(session, (tx) =>
+          authz.assert(tx, {
+            principal,
+            permission: READ,
+            target: { scopeType, scopeId },
+            resourceType: 'Workspace',
+          }),
+        ),
       );
       return 'allowed';
     } catch (error) {
@@ -348,13 +385,15 @@ describe('AuthorizationService', () => {
       const p = principalOf([grant('organization', orgA.orgId, orgA.orgId)]);
       let thrown: unknown;
       try {
-        await db.withTenant(sessionFor(orgA), (tx) =>
-          authz.assert(tx, {
-            principal: p,
-            permission: READ,
-            target: { scopeType: 'workspace', scopeId: orgB.workspaceId },
-            resourceType: 'Workspace',
-          }),
+        await inRequest(p, () =>
+          db.withTenant(sessionFor(orgA), (tx) =>
+            authz.assert(tx, {
+              principal: p,
+              permission: READ,
+              target: { scopeType: 'workspace', scopeId: orgB.workspaceId },
+              resourceType: 'Workspace',
+            }),
+          ),
         );
       } catch (error) {
         thrown = error;

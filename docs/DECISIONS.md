@@ -301,7 +301,7 @@ The over-approximation ADR-003 left in `PermissionEvaluator.grantCarries` is unc
 
 ## 1e. ADR-005 — Coherent-grant authorization
 
-**Status**: Accepted (Phase 1B.5 planning review against `9d946f1`). **D-1 to D-4 implemented in Phase 1B.5.1; D-5 implemented in Phase 1B.5.2**; D-6 to D-9 govern later increments. Governs the authorization half of Phase 1B. Extends ADR-001 (scope hierarchy) and ADR-003 (D-5, target-scope authorization); supersedes nothing. Closes the over-approximation ADR-003 recorded and ADR-004 carried forward.
+**Status**: Accepted (Phase 1B.5 planning review against `9d946f1`). **D-1 to D-4 implemented in Phase 1B.5.1; D-5 in Phase 1B.5.2; D-6 in Phase 1B.5.3**; D-7 to D-9 govern later increments. Governs the authorization half of Phase 1B. Extends ADR-001 (scope hierarchy) and ADR-003 (D-5, target-scope authorization); supersedes nothing. Closes the over-approximation ADR-003 recorded and ADR-004 carried forward.
 
 ### Context
 
@@ -394,7 +394,16 @@ The declarative `@RequiresPermission` half is **not** built. Extracting a target
 
 A denial has no business transaction to couple to, so it is written **synchronously in its own transaction**, and a failed audit write fails the request closed. The caller receives a refusal either way — the request was never going to succeed — so the coupling costs nothing and the record is guaranteed. `authorization.denied` is therefore added to `SECURITY_SENSITIVE_AUDIT_ACTIONS`, where it is currently missing.
 
-**Successful authorization checks are deliberately not audited.** The *operation* is audited — `role.created`, `user_role.granted` and the rest. Recording every successful check would write a row per check per request and bury the trail that has forensic value. This is a rejection, not an omission.
+**Successful authorization checks are deliberately not audited.** The *operation* is audited — `role.created`, `user_role.granted` and the rest. Recording every successful check would write a row per check per request and bury the trail that has forensic value. This is a rejection, not an omission. The same reasoning excludes the non-throwing capability probe used for listings and UI affordances: it asks a hypothetical, not an attempt.
+
+**Implemented in Phase 1B.5.3**, owned by `AuthorizationService`. `PermissionEvaluator` and `ScopeChainResolver` remain free of audit concerns; the evaluator's refusal is caught, recorded, and rethrown untouched, so there is still exactly one definition of what a denial looks like to a caller.
+
+Two notes worth recording because the separate transaction was challenged during implementation and re-confirmed:
+
+- **Why the caller's transaction cannot be used.** The refusal is thrown *out of* the transaction the caller opened, which rolls it back. A denial record written there would be discarded on every single denial — the control would report nothing while appearing to work. The record is therefore committed in its own transaction *before* the refusal is raised. Its durability across a later rollback of the surrounding request is the intended behaviour, not a side effect: the attempt happened.
+- **Actor scope is narrowest-first** — workspace, else organization, else reseller, else platform — and no fallback is invented. A principal with no resolved scope cannot be described honestly and the `audit_logs` RLS policy would refuse the row regardless, so that case fails closed and loudly. It is defensive: every reachable path resolves a tenant context before any authorization check.
+
+**Residual risk accepted here:** the denial audit acquires a second pooled connection while the caller's transaction still holds one. Under enough *concurrent* denials to exhaust `DATABASE_POOL_MAX`, the second acquisition waits and is bounded by `connectionTimeoutMillis`, after which the request fails closed with a generic `500` rather than a `403`. Denials are rare relative to pool size, the failure direction is safe, and the alternative — coupling to the caller's transaction — loses the record entirely. Revisit if denial volume ever approaches pool capacity.
 
 **D-7 — The at-least-one-active-platform-admin invariant is enforced by a database trigger taking `pg_advisory_xact_lock`.**
 

@@ -263,7 +263,9 @@ A duplicate grant is refused by the partial unique indexes on `user_roles` and s
 
 **Grants take effect on the next request, not mid-request.** Authorization is re-derived per request from current database state (ADR-003 D-3), so a grant committed during request *n* applies from request *n+1*. This is a consequence of re-derivation rather than a limitation to work around, and it means a revocation is effective immediately on the next call rather than at token expiry.
 
-**Refused attempts are audited as deliberately as successful ones.** `audit_logs.outcome = 'denied'` exists for this, and a rejected escalation is precisely the event worth having a record of. A refusal by the authorization layer itself is recorded as `authorization.denied` with the actor's own legitimate scope and the attempted target in metadata (`SECURITY.md` §4, ADR-005 D-6).
+**Refused attempts are audited as deliberately as successful ones.** `audit_logs.outcome = 'denied'` exists for this, and a rejected escalation is precisely the event worth having a record of. A refusal by the authorization layer itself is recorded as `authorization.denied` with the actor's own legitimate scope and the attempted target in metadata (`SECURITY.md` §4, ADR-005 D-6), implemented in Phase 1B.5.3 and owned by `AuthorizationService`.
+
+The actor's scope is recorded **narrowest-first** — workspace, else organization, else reseller, else platform — because that is the most truthful statement of where the actor was: a principal pinned to one workspace did not act "in the organization", and recording it that way would overstate its reach on a permanent record. No fallback scope is invented for a principal with no resolved context; the row is refused and the request fails closed, which is defensive only, since every reachable path resolves a tenant context before any authorization check.
 
 ## 9. Related
 

@@ -1,8 +1,17 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
-import { ERROR_CODES, type AuthPrincipal, type PermissionKey, type ScopeRef } from '@acc/contracts';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import {
+  AUDIT_ACTIONS,
+  ERROR_CODES,
+  type AuthPrincipal,
+  type PermissionKey,
+  type ScopeRef,
+} from '@acc/contracts';
 import type { Transaction } from '@acc/db';
 
 import { AppException } from '../common/errors/app.exception';
+import { actorFromPrincipal } from '../audit/audit-actor';
+import { AuditWriter } from '../audit/audit-writer.service';
+import { TenantDatabase } from '../database/tenant-database.service';
 import { PermissionEvaluator } from './permission-evaluator.service';
 import { ScopeChainResolver } from './scope-chain-resolver.service';
 
@@ -57,9 +66,13 @@ export interface AuthorizationCheck {
  */
 @Injectable()
 export class AuthorizationService {
+  private readonly logger = new Logger(AuthorizationService.name);
+
   constructor(
     private readonly chains: ScopeChainResolver,
     private readonly evaluator: PermissionEvaluator,
+    private readonly audit: AuditWriter,
+    private readonly db: TenantDatabase,
   ) {}
 
   /**
@@ -93,11 +106,123 @@ export class AuthorizationService {
       });
     }
 
-    this.evaluator.assert({
-      principal: request.principal,
-      permission: request.permission,
-      target: { scope: request.target, chain },
-    });
+    try {
+      this.evaluator.assert({
+        principal: request.principal,
+        permission: request.permission,
+        target: { scope: request.target, chain },
+      });
+    } catch (denial) {
+      // Record first, refuse second. The evaluator remains the sole author of
+      // the refusal — it is rethrown untouched — so there is still exactly one
+      // definition of what a denial looks like to a caller.
+      await this.recordDenial(request);
+      throw denial;
+    }
+  }
+
+  /**
+   * Writes the `authorization.denied` record, in its own transaction, before
+   * the refusal is raised (ADR-005 D-6).
+   *
+   * **Why not the caller's transaction.** The refusal is thrown out of the very
+   * transaction the caller opened, which rolls it back — so a denial record
+   * written there would be discarded every time, and the control would report
+   * nothing while appearing to work. A denial has no business mutation to
+   * commit alongside in any case: the request was never going to change
+   * anything. Committing separately, before the throw, is what makes the record
+   * exist.
+   *
+   * The consequence is deliberate: the record survives a later rollback of the
+   * surrounding request. That is correct for a security event — the attempt
+   * happened, and whether the request went on to fail for some other reason
+   * does not unmake it.
+   *
+   * **Fail closed.** Nothing here is caught. If the record cannot be written,
+   * that failure propagates instead of the `403`, the request still does not
+   * proceed, and the operator sees why. Reporting a plain refusal while
+   * silently losing its record is the one outcome this must never produce.
+   */
+  private async recordDenial(request: AuthorizationCheck): Promise<void> {
+    const { principal } = request;
+    const actorScope = this.actorScope(principal);
+
+    try {
+      await this.db.withTenant(
+        {
+          orgId: principal.tenant.orgId,
+          workspaceId: principal.tenant.workspaceId,
+          resellerId: principal.tenant.resellerId,
+          userId: principal.userId,
+          isPlatformAdmin: principal.tenant.isPlatformAdmin,
+        },
+        (auditTx) =>
+          this.audit.record(
+            {
+              // The actor's own legitimate scope — never the scope it tried to
+              // reach. The database derives this row's tenancy from this pair,
+              // so naming the attempted target here would file the record under
+              // a tenant the actor was never in (ADR-005 D-6).
+              scopeType: actorScope.scopeType,
+              scopeId: actorScope.scopeId,
+              ...actorFromPrincipal(principal),
+              action: AUDIT_ACTIONS.AUTHORIZATION_DENIED,
+              // The attempted target, kept separate from the actor's scope.
+              resourceType: request.resourceType ?? request.target.scopeType,
+              resourceId: request.target.scopeId,
+              outcome: 'denied',
+              before: null,
+              after: null,
+              // Structured and minimal. Enough to answer "who tried to do what,
+              // where, and why were they refused" — and deliberately not the
+              // request, the headers, the principal or the token, none of which
+              // an append-only row should ever carry.
+              metadata: {
+                permission: request.permission,
+                attemptedScopeType: request.target.scopeType,
+                attemptedScopeId: request.target.scopeId,
+                denialReason: ERROR_CODES.AUTHZ_SCOPE_DENIED,
+              },
+            },
+            auditTx,
+          ),
+      );
+    } catch (failure) {
+      // Observable to the operator, opaque to the requester: the exception
+      // filter renders an unrecognized error as a generic `500` carrying only
+      // the correlation id (`API.md` §7).
+      this.logger.error(
+        `failed to record ${AUDIT_ACTIONS.AUTHORIZATION_DENIED} for ${String(request.permission)} at ${request.target.scopeType}`,
+        failure instanceof Error ? failure.stack : String(failure),
+      );
+      throw failure;
+    }
+  }
+
+  /**
+   * The scope the actor legitimately occupies, narrowest first.
+   *
+   * Narrowest wins because it is the most truthful statement of where the actor
+   * was: a principal pinned to one workspace did not act "in the organization",
+   * and recording it that way would overstate its reach on a permanent record.
+   *
+   * No fallback is invented. A principal with no resolved scope at all cannot
+   * be described honestly, and the `audit_logs` RLS policy would refuse the row
+   * regardless — so this fails closed and loudly rather than guessing. It is
+   * defensive: every reachable path resolves a tenant context long before an
+   * authorization check, and `TenancyController` refuses without one.
+   */
+  private actorScope(principal: AuthPrincipal): ScopeRef {
+    const { orgId, workspaceId, resellerId, isPlatformAdmin } = principal.tenant;
+
+    if (orgId && workspaceId) return { scopeType: 'workspace', scopeId: workspaceId };
+    if (orgId) return { scopeType: 'organization', scopeId: orgId };
+    if (resellerId) return { scopeType: 'reseller', scopeId: resellerId };
+    if (isPlatformAdmin) return { scopeType: 'platform', scopeId: null };
+
+    throw new Error(
+      'audit: cannot record authorization.denied — the principal has no resolved scope to attribute it to',
+    );
   }
 
   /**
@@ -106,6 +231,12 @@ export class AuthorizationService {
    * An unresolvable target is `false` — the same fail-closed answer, without
    * choosing between `403` and `404` for a caller that is not being told
    * either.
+   *
+   * **Deliberately unaudited.** `authorization.denied` records an *attempted
+   * operation* that was refused. This form asks a hypothetical — may this
+   * principal do this, so the listing can omit a row or the console can grey out
+   * a button — and auditing it would write one row per candidate per render,
+   * burying the refusals that represent something someone actually tried.
    */
   async allows(tx: Transaction, request: AuthorizationCheck): Promise<boolean> {
     const chain = await this.chains.resolve(tx, request.target);
