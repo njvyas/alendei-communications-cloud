@@ -324,11 +324,15 @@ The **entire** implemented API surface at `6e84d7c`:
 | `PATCH` | `/api/v1/roles/:id` | IMPLEMENTED, 1B.5.4 |
 | `DELETE` | `/api/v1/roles/:id` | IMPLEMENTED, 1B.5.4 |
 | `GET` | `/api/v1/permissions` | IMPLEMENTED, 1B.5.4 (unpaginated) |
+| `GET` | `/api/v1/role-assignments` | IMPLEMENTED, 1B.5.5 (unpaginated; 3 filters) |
+| `POST` | `/api/v1/role-assignments` | IMPLEMENTED, 1B.5.5 |
+| `GET` | `/api/v1/role-assignments/:id` | IMPLEMENTED, 1B.5.5 |
+| `DELETE` | `/api/v1/role-assignments/:id` | IMPLEMENTED, 1B.5.5 |
 | `GET` | `/api/v1/tenants/workspaces/:id` | IMPLEMENTED |
 | `GET` | `/health`, `/health/live`, `/health/ready` | IMPLEMENTED |
 | `GET` | `/metrics` | IMPLEMENTED (Prometheus, not for UI) |
 
-**Everything else listed in `API.md` §2 — `/users`, `/role-assignments`,
+**Everything else listed in `API.md` §2 — `/users`,
 `/organizations`, `/resellers`, `/teams`, `/api-keys`, `/audit`,
 `/messages`, `/providers`, `/channels`, `/routing`, `/campaigns`, `/contacts`,
 `/templates`, `/billing`, `/wallets`, `/reports`, `/webhook-endpoints` — is
@@ -378,6 +382,54 @@ Four behaviours the frontend must build against:
 
 Deletion returns `409` `RESOURCE_CONFLICT` while any user still holds the role —
 revoke the grants first. There is no grant API yet (§30).
+
+**Still unpaginated**, like every list today; §13 applies.
+
+## 30b. Role assignments — IMPLEMENTED (Phase 1B.5.5)
+
+An assignment, as returned by every `/role-assignments` endpoint:
+
+```jsonc
+{
+  "id": "uuid", "userId": "uuid", "roleId": "uuid", "roleKey": "campaign_reviewer",
+  "orgId": "uuid|null",                  // derived by the database, never sent
+  "scopeType": "organization",           // reseller | organization | workspace | team
+  "scopeId": "uuid",
+  "grantedBy": "uuid|null", "createdAt": "ISO-8601"
+}
+```
+
+`GET /role-assignments` wraps it as `{ "assignments": [...] }` and accepts
+`userId`, `scopeType` and `scopeId` as query filters; the single-resource
+endpoints return it bare.
+
+`POST` takes `{ userId, roleId, scopeType, scopeId }`. Five things the frontend
+must build against:
+
+- **`platform` is not an accepted `scopeType`** — sending it is a `400`.
+  Platform grants are made out of band (`RBAC.md` §5b).
+- **`422 AUTHZ_SCOPE_TYPE_NOT_ADMITTED` is not an authorization failure.** It
+  means the role is not designed to exist at that level;
+  `error.details.allowedScopeTypes` lists the levels it does admit, and
+  `details.requested` echoes what was sent. Render it against the scope picker,
+  not as "you lack permission". A role's `allowedScopeTypes` is readable from
+  `/roles`, so a correct picker can prevent this case entirely.
+- **`403 AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION` names the offending keys** in
+  `error.details.rejected` — usable directly as field-level feedback. It means
+  the role carries a permission the *caller* does not hold at that scope.
+- **`404` covers three different situations deliberately** — an unknown scope, a
+  scope in another tenant, and an unreachable target user are all `404` with no
+  identifier echoed. The frontend must not present any of them as "exists but
+  forbidden".
+- **`409` means either a duplicate grant or a disabled target user**; the
+  message distinguishes them, the code does not.
+
+`DELETE` returns `204`, or `404` if the assignment is already gone — a repeated
+delete is safe and idempotent from the caller's point of view. Revocation takes
+effect on the **next request**, not at token expiry.
+
+**Not yet enforced:** a revocation that would remove the last platform
+administrator is specified as `409` but is **Phase 1B.5.6 — NOT IMPLEMENTED**.
 
 **Still unpaginated**, like every list today; §13 applies.
 

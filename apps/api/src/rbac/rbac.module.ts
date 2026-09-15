@@ -3,6 +3,8 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { PermissionsController, RolesController } from './roles.controller';
 import { RoleAdministrationService } from './role-administration.service';
+import { RoleAssignmentService } from './role-assignment.service';
+import { RoleAssignmentsController } from './role-assignments.controller';
 import { TenantRoleProvisioner } from './tenant-role-provisioner.service';
 
 /**
@@ -20,8 +22,8 @@ import { TenantRoleProvisioner } from './tenant-role-provisioner.service';
  */
 @Module({
   imports: [AuthModule],
-  controllers: [RolesController, PermissionsController],
-  providers: [RoleAdministrationService, TenantRoleProvisioner],
-  exports: [RoleAdministrationService, TenantRoleProvisioner],
+  controllers: [RolesController, PermissionsController, RoleAssignmentsController],
+  providers: [RoleAdministrationService, RoleAssignmentService, TenantRoleProvisioner],
+  exports: [RoleAdministrationService, RoleAssignmentService, TenantRoleProvisioner],
 })
 export class RbacModule {}

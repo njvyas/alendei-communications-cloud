@@ -324,6 +324,24 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 
 **Not asserted here, deliberately:** §6n case 28. This phase gives `allowed_scope_types` its value; enforcing it at grant time is Phase 1B.5.5's, and there is no grant API to enforce it through yet.
 
+**Role assignment (Phase 1B.5.5, `RBAC.md` §§7-8b).** `apps/api/test/role-assignment.sec-spec.ts` (47 cases), over real HTTP against real rows. It closes §6n cases 16, 21, 22, 26, 27, 28 and 29:
+
+- **Granting within authority** — at the organization, at a child workspace and at a child team; listing with the `userId` filter; reading one by id.
+- **§6n case 28** — a grant at a scope type the role does not admit is `422 AUTHZ_SCOPE_TYPE_NOT_ADMITTED` with the role's admitted levels in `details`, nothing is written, the admitted level is accepted as the positive control, and the refusal is asserted **not** to be `AUTHZ_SCOPE_DENIED` — the actor was entitled, so calling it a scope denial would misinform an administrator.
+- **§6n cases 21, 22** — a role carrying a permission the actor lacks at that scope is refused; the same permission one level above the actor's grant is refused; a sibling workspace is refused. **Case 22b is the flattened-union discriminator**: an actor holding `role_assignments.grant` across the organization and `teams.create` in one workspace has `teams.create` in `principal.permissions` (asserted via `/auth/me`) and still may not confer it at the organization — only in the workspace where one coherent grant carries it. Same actor, same role, two scopes.
+- **§6n case 27** — a self-grant within the actor's own authority is allowed and confers nothing new.
+- **Cross-tenant and cross-reseller** — another organization's scope is `404` with no id echoed; a real foreign scope and a nonexistent one are byte-identical apart from the correlation id; another organization's role and another organization's assignment are both `404`.
+- **Platform boundary** — a platform role is `403 AUTHZ_PLATFORM_ROLE_REQUIRED`; `platform` scope is `400`, unrepresentable in the DTO; **§6n case 26** re-asserts `fn_validate_user_role_scope` raising with the service bypassed.
+- **§6n case 29 and revocation** — a duplicate is `409`; the same role at a different scope is not a duplicate; a repeated delete is `404`; revocation at a scope the actor does not cover is `403`.
+- **§6n case 16** — a revoked grant is denied on the **next request** with the same token, with a permission-less second grant retained so the refusal is an authorization refusal rather than a lost tenant context.
+- **Disabled and missing principals** — granting to a disabled user is `409`, to an unknown user `404`, an unknown role `404`; a disabled actor loses the surface entirely.
+- **API-key binding scope** — a key without role-assignment scopes cannot list, read, grant or revoke; and a key whose creator is an organization admin can grant inside its binding but not outside it, whatever its creator holds elsewhere.
+- **RLS backstop, service bypassed** — cross-organization reads return zero rows, a cross-organization insert is refused, a cross-organization delete removes nothing, and cross-reseller isolation holds.
+- **Audit** — `user_role.granted` is written at the grant's own scope; `user_role.revoked` on revocation; a refused grant writes `authorization.denied` carrying the actor's *own* workspace scope; and with `AuditWriter` failing, the grant rolls back with its record.
+- **Concurrency** — two identical concurrent grants yield exactly one `201` and one `409` with one row; a grant racing its role's deletion leaves no orphan; two concurrent revocations yield one `204` and one `404`; two concurrent escalation attempts both fail and write nothing.
+
+**Not asserted here:** the last-platform-admin invariant on revocation — Phase 1B.5.6's, with the advisory-lock trigger that makes it hold under concurrency.
+
 **Forged ancestry (ADR-005 D-5).** Asserted as the strong property, not the weak one: it is not enough that bad input is rejected: the *authoritative* chain must decide. Each case runs under a tenant context that can see the target, so visibility is not the variable — a grant naming another organization cannot reach a workspace whose real parent is a different organization; the same for a grant naming another reseller, and for one naming another workspace as a team's parent; and a principal holding grants that between them name a wholly false chain still reaches nothing. Every case carries a positive control on the claimant's own rows, so a denial cannot be mistaken for a broken query.
 
 | # | Case | Expected |
@@ -375,6 +393,14 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 | `TenantRoleProvisioner`'s already-present skip removed | **executed at 1B.5.4: 1 security test fails** — `onConflictDoNothing` still prevents the duplicate row and the early return still suppresses the audit, so only the idempotency assertion detects it, which is the layering working |
 | `user_roles.role_id` reverted to `ON DELETE CASCADE` in the database | **executed at 1B.5.4: the `ON DELETE RESTRICT` case fails** |
 | `trg_roles_protect_system` dropped from the database | **executed at 1B.5.4: the service-bypassed case fails** |
+| `allowedScopeTypes` grant-time enforcement removed | **executed at 1B.5.5: 3 security tests fail** |
+| The actor-authority (composition) check removed from grant | **executed at 1B.5.5: 2 security tests fail** |
+| Grant authorized at the actor's own organization instead of the scope being granted at | **executed at 1B.5.5: 3 security tests fail** |
+| Platform-role protection removed from grant | **executed at 1B.5.5: 1 security test fails** |
+| `unheldPermissions` rewritten against the flattened `principal.permissions` | **executed at 1B.5.5: 1 security test fails** — case 22b, and *only* case 22b, which is why it exists: every other escalation case names a permission the actor lacks entirely, where the union and the coherent-grant rule agree |
+| RLS disabled on `user_roles` | **executed at 1B.5.5: 2 security tests fail** |
+| The denial-audit failure swallowed instead of propagated | **executed at 1B.5.5: 2 security tests fail** |
+| API-key creator intersection taken at the creator's widest scope instead of the binding | **executed at 1B.5.5: 5 security tests fail** |
 | `scopeCovers` term dropped from `allows` | 4, 6, 8, 9 |
 | Permission term dropped from `allows` | 12 and every denial case |
 | `ScopeChainResolver` returns the request-supplied chain | 2, 4, 6 |

@@ -226,6 +226,52 @@ export class AuthorizationService {
   }
 
   /**
+   * Which of `permissions` the principal does **not** hold at `target`.
+   *
+   * The same coherent-grant question `allows` asks, asked about a *set* in one
+   * pass: the chain is resolved once and the evaluator — which is pure given a
+   * resolved chain — decides each permission in memory. Query cost is therefore
+   * constant in the number of permissions rather than linear in it.
+   *
+   * That difference is the reason this exists. Role administration asks this
+   * question about every permission a role carries, and asking it by calling
+   * `allows` in a loop re-resolves the same ancestry once per permission — a
+   * chain read per candidate, growing with the role. Here the boundary is still
+   * the only thing that answers, and it answers with a predictable cost.
+   *
+   * Returns the unheld permissions rather than a boolean because every caller
+   * needs to say *which* ones were refused: a role-composition or grant refusal
+   * that cannot name the offending permission is not actionable.
+   *
+   * An unresolvable target yields every permission as unheld — the same
+   * fail-closed answer `allows` gives, without choosing a status for a caller
+   * that is not being told one.
+   */
+  async unheldPermissions(
+    tx: Transaction,
+    request: {
+      readonly principal: AuthPrincipal;
+      readonly permissions: readonly (PermissionKey | string)[];
+      readonly target: ScopeRef;
+    },
+  ): Promise<readonly string[]> {
+    const candidates = [...new Set(request.permissions)];
+    if (candidates.length === 0) return [];
+
+    const chain = await this.chains.resolve(tx, request.target);
+    if (chain === null) return candidates;
+
+    return candidates.filter(
+      (permission) =>
+        !this.evaluator.allows({
+          principal: request.principal,
+          permission,
+          target: { scope: request.target, chain },
+        }),
+    );
+  }
+
+  /**
    * Non-throwing form, for filtering listings and rendering capability flags.
    *
    * An unresolvable target is `false` — the same fail-closed answer, without

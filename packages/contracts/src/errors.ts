@@ -37,6 +37,14 @@ export const ERROR_CODES = {
   AUTHZ_SCOPE_DENIED: 'AUTHZ_SCOPE_DENIED',
   AUTHZ_PLATFORM_ROLE_REQUIRED: 'AUTHZ_PLATFORM_ROLE_REQUIRED',
   AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION: 'AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION',
+  /**
+   * The role was granted at a scope level its `allowedScopeTypes` does not
+   * admit (`RBAC.md` §7, Phase 1B.5.5). Distinct from `AUTHZ_SCOPE_DENIED`,
+   * which says the *actor* could not reach the scope: this says the request was
+   * well-formed and the actor was entitled, but the role was never designed to
+   * exist at that level. `API.md` §3c renders it `422`.
+   */
+  AUTHZ_SCOPE_TYPE_NOT_ADMITTED: 'AUTHZ_SCOPE_TYPE_NOT_ADMITTED',
 
   // --- Tenancy -------------------------------------------------------------
   TENANCY_CONTEXT_REQUIRED: 'TENANCY_CONTEXT_REQUIRED',

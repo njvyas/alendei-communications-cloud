@@ -355,15 +355,15 @@ export class RoleAdministrationService {
       });
     }
 
-    const unheld: string[] = [];
-    for (const permission of new Set(permissions)) {
-      const held = await this.authorization.allows(tx, {
-        principal,
-        permission,
-        target: { scopeType: 'organization', scopeId: orgId },
-      });
-      if (!held) unheld.push(permission);
-    }
+    // One chain resolve for the whole set rather than one per permission. The
+    // boundary is still the only thing that answers; `unheldPermissions` just
+    // asks it about a set, so cost does not grow with the size of the role
+    // (Phase 1B.5.5).
+    const unheld = await this.authorization.unheldPermissions(tx, {
+      principal,
+      permissions: [...permissions],
+      target: { scopeType: 'organization', scopeId: orgId },
+    });
 
     if (unheld.length > 0) {
       throw new AppException({
@@ -372,7 +372,7 @@ export class RoleAdministrationService {
         message: 'A role cannot carry a permission you do not hold at this organization',
         // The rejected keys are the caller's own input, so echoing them
         // discloses nothing it did not send.
-        details: { rejected: unheld },
+        details: { rejected: [...unheld] },
       });
     }
   }

@@ -124,7 +124,7 @@ The mechanism is the *absence* of a token rather than the presence of one: nothi
 
 ### 3c. Role and grant administration (Phase 1B.5)
 
-**Implementation status.** The **Roles** and **Permissions** tables below ship in Phase 1B.5.4 and are live. **Role assignments** and **authorization introspection** are **Phase 1B.5.5 / 1B.5.7 and NOT IMPLEMENTED** — they are specified here and marked, not built.
+**Implementation status.** **Roles** and **Permissions** ship in Phase 1B.5.4; **role assignments** ship in Phase 1B.5.5. All three are live. **Authorization introspection** is **Phase 1B.5.7 and NOT IMPLEMENTED** — specified here and marked, not built.
 
 Nine endpoints, deliberately small. Every mutation writes its audit row **in the same transaction** as the change (ADR-003 D-2); every target scope is checked through the shared evaluator against a coherent grant (§3a); every out-of-scope target is `404` without echo rather than `403`.
 
@@ -150,15 +150,22 @@ These endpoints are **unpaginated, unfiltered and unsorted**, matching the conve
 |---|---|---|---|---|---|
 | `GET` | `/permissions` | `permissions.read` | organization | `{permissions:[{key,domain,action,description}]}` | The catalogue is system-defined and read-only. There is no permission CRUD |
 
-**Role assignments** (module `rbac`) — **PLANNED / NOT IMPLEMENTED, Phase 1B.5.5**
+**Role assignments** (module `rbac`) — **IMPLEMENTED, Phase 1B.5.5**
 
 | Method | Path | Permission | Target scope | Request | Response | Errors | Audit | Idempotency | Transaction |
 |---|---|---|---|---|---|---|---|---|---|
-| `GET` | `/role-assignments` | `role_assignments.read` | organization | query `user_id?`, `scope_type?`, `scope_id?` | `{assignments:[{id,user_id,role_id,scope_type,scope_id,granted_by,created_at}]}` | — | — | safe | one read-only tenant transaction |
-| `POST` | `/role-assignments` | `role_assignments.grant` | **the scope being granted at** | `{user_id,role_id,scope_type,scope_id}` | `201` assignment | `403` scope outside the actor's own scope set, or a permission outside its effective grant authority at that scope; `422` scope type not admitted by the role; `409` duplicate | `user_role.granted` | duplicate is `409` | one transaction: advisory lock → insert → audit |
-| `DELETE` | `/role-assignments/:id` | `role_assignments.revoke` | the grant's scope | — | `204` | `404` unknown/out-of-scope; **`409` if it would remove the last active platform administrator** | `user_role.revoked` | `404` if already gone | one transaction: advisory lock → delete → invariant re-check → audit |
+| `GET` | `/role-assignments` | `role_assignments.read` | organization | query `userId?`, `scopeType?`, `scopeId?` | `{assignments:[{id,userId,roleId,roleKey,orgId,scopeType,scopeId,grantedBy,createdAt}]}` | — | — | safe | one read-only tenant transaction |
+| `GET` | `/role-assignments/:id` | `role_assignments.read` | organization | — | `200` assignment | `404` unknown or out-of-scope, with no echo of the id | — | safe | one read-only tenant transaction |
+| `POST` | `/role-assignments` | `role_assignments.grant` | **the scope being granted at** | `{userId,roleId,scopeType,scopeId}` | `201` assignment | `404` scope or role out of reach (never confirmed to exist), or target user unreachable; `403 AUTHZ_SCOPE_DENIED` scope outside the actor's own scope set; `403 AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION` a permission outside its effective grant authority at that scope, naming the offending keys; `403 AUTHZ_PLATFORM_ROLE_REQUIRED` a platform role; `422 AUTHZ_SCOPE_TYPE_NOT_ADMITTED` scope type not admitted by the role; `409` duplicate, or a disabled target user | `user_role.granted` at the grant's scope | duplicate is `409`, decided by the unique index rather than by a check-then-insert | one transaction: guards → insert → audit |
+| `DELETE` | `/role-assignments/:id` | `role_assignments.revoke` | the grant's scope, read from the stored row | — | `204` | `404` unknown, out-of-scope or already gone; `403` if the actor does not cover the grant's own scope; **`409` if it would remove the last active platform administrator — Phase 1B.5.6, NOT YET ENFORCED** | `user_role.revoked` | `404` if already gone; two concurrent revocations yield one `204` and one `404` | one transaction: authorize → conditional delete → audit |
 
-`POST /role-assignments` is the highest-risk endpoint in Phase 1B, and its target scope is **the scope being granted at** — not the actor's resolved context. That is what makes `RBAC.md` §7's non-escalation rule enforceable: the actor must cover the grant's scope and hold every permission the role carries *at that scope*.
+`POST /role-assignments` is the highest-risk endpoint in Phase 1B, and its target scope is **the scope being granted at** — not the actor's resolved context. That is what makes `RBAC.md` §7's non-escalation rule enforceable: the actor must cover the grant's scope and hold every permission the role carries *at that scope*, decided per coherent grant rather than against the flattened `principal.permissions`.
+
+`scopeType` accepts `reseller`, `organization`, `workspace` and `team`. **`platform` is not representable**: a platform grant is made by the bootstrap CLI under a documented elevation (`RBAC.md` §5b), and leaving it out of the request shape means the refusal does not depend on a guard remembering to run.
+
+**Query cost is constant per request**, independent of how many permissions the role carries: the scope chain is resolved once per check and the evaluator then decides in memory. `GET` list and `GET` detail are 2 queries, `DELETE` is 4, `POST` is 7 — plus the six `SET LOCAL` statements every tenant transaction issues. There is no N+1.
+
+These endpoints are **unpaginated** and carry only the three filters named above; the list conventions are Phase 1B.5.8's.
 
 **Authorization introspection** — **PLANNED / NOT IMPLEMENTED, Phase 1B.5.7**
 

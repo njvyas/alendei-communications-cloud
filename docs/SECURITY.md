@@ -92,6 +92,20 @@ Three properties are worth stating because each is enforced at two layers, and t
 
 A platform permission still cannot reach a tenant role: `fn_validate_role_permission` has refused that since migration `0000`, and the service refuses it first so the caller sees a `403` rather than a constraint error.
 
+### Role assignment (Phase 1B.5.5)
+
+`POST /role-assignments` is the highest-risk endpoint in Phase 1B: it is the API that confers privilege, so a gap is not a bug in one feature but a general escalation primitive. Four properties are worth stating plainly.
+
+**Authorization is checked at the scope being granted at, not the actor's context.** That single substitution is what makes `RBAC.md` §7's non-escalation rule enforceable — an organization admin naming another organization's workspace is refused, and refused with `404`, so the endpoint does not confirm that the workspace exists.
+
+**Composition authority is coherent-grant, and the suite proves it is.** Every permission the role carries must be held by the actor *at that scope*, asked through `AuthorizationService.unheldPermissions`. The case that separates this from the flattened union is asserted directly: an actor holding `role_assignments.grant` across the organization and `teams.create` in one workspace has `teams.create` in `principal.permissions`, and still may not confer it at the organization — only in the workspace where one coherent grant carries it. Replacing the check with `principal.permissions.includes(...)` fails the suite.
+
+**A tenant principal cannot manufacture platform privilege.** Platform roles (`roles.org_id IS NULL`) are refused at this surface outright, and `platform` is not a representable scope type in the request DTO at all — the refusal does not depend on a guard remembering to run.
+
+**The database remains the correctness boundary for every race.** Duplicate grants are settled by `user_roles`' partial unique indexes rather than by a check-then-insert; a grant racing its role's deletion is settled by the foreign key's row lock against `ON DELETE RESTRICT`, so no grant can survive whose role is gone; concurrent revocations are settled by the conditional delete's row lock. None of these rest on application-level ordering.
+
+**Deliberately absent:** the last-platform-admin invariant on revocation. It is Phase 1B.5.6's, with the advisory-lock trigger that makes it hold under concurrency (ADR-005 D-7). A service-only count would look like an invariant while losing under write skew, which is worse than not having one.
+
 The error **response** carries `403 AUTHZ_SCOPE_DENIED` and echoes no target — the identifier appears in the audit row and in operator logs, never to the caller (`API.md` §3a).
 
 Successful authorization checks are **not** audited. The operation is — `role.created`, `user_role.granted` and the rest. One row per check per request would bury the records that carry forensic value, so this is a deliberate rejection rather than an omission.
