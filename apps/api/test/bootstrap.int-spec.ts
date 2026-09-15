@@ -214,8 +214,16 @@ describe('platform bootstrap', () => {
         sql`SELECT id FROM roles WHERE key = ${PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN} AND org_id IS NULL`,
       )
     ).rows;
-    const [victim] = (await admin.db.execute<{ id: string }>(sql`SELECT id FROM users LIMIT 1`))
-      .rows;
+    // Its own subject, rather than whichever user happens to be lying around:
+    // borrowing one makes the case depend on suite ordering, and it fails
+    // outright against a freshly reset database where `users` is empty.
+    const [victim] = (
+      await admin.db.execute<{ id: string }>(
+        sql`INSERT INTO users (email, status, password_hash, password_updated_at)
+            VALUES (${`trigger-victim-${uuidv7()}@example.test`}, 'active', 'x', now())
+            RETURNING id`,
+      )
+    ).rows;
 
     await expectRejected(
       withTenantTransaction(admin.db, {}, async (tx) => {
@@ -227,6 +235,8 @@ describe('platform bootstrap', () => {
       }),
       /may only be granted by a platform admin/,
     );
+
+    await admin.db.execute(sql`DELETE FROM users WHERE id = ${victim!.id}`);
   });
 
   it('leaves no platform grant able to exist without the trigger agreeing', async () => {

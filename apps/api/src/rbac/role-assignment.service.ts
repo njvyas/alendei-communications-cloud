@@ -6,8 +6,8 @@ import {
   type ScopeRef,
   type ScopeType,
 } from '@acc/contracts';
-import { schema, type Transaction } from '@acc/db';
-import { and, asc, eq, type SQL } from 'drizzle-orm';
+import { PLATFORM_ADMIN_LOCK_KEY, schema, type Transaction } from '@acc/db';
+import { and, asc, eq, sql, type SQL } from 'drizzle-orm';
 
 import { AppException } from '../common/errors/app.exception';
 import { actorFromPrincipal } from '../audit/audit-actor';
@@ -236,6 +236,12 @@ export class RoleAssignmentService {
       resourceType: 'Role assignment',
     });
 
+    // The last-platform-admin invariant (ADR-005 D-7). Only for a platform
+    // grant: every other revocation takes no lock and runs no count.
+    if (assignment.scopeType === 'platform') {
+      await this.assertPlatformAdminRemains(tx, assignment.id);
+    }
+
     // Conditional delete rather than a read-then-delete: two concurrent
     // revocations of the same assignment must not both report success, and the
     // row lock is what decides which one did the work.
@@ -424,6 +430,56 @@ export class RoleAssignmentService {
         status: HttpStatus.CONFLICT,
         code: ERROR_CODES.RESOURCE_CONFLICT,
         message: 'A disabled user cannot be granted a role',
+      });
+    }
+  }
+
+  /**
+   * Refuses a revocation that would leave the platform with no active
+   * administrator (ADR-005 D-7).
+   *
+   * **This is the message, not the guarantee.** `fn_assert_platform_admin_remains`
+   * (migration `0005`) is what actually holds the invariant, including against a
+   * migration script or an admin tool that never reaches this service. What this
+   * adds is a clean `409` with a code the caller can act on, instead of a
+   * `restrict_violation` surfacing as a generic `500`.
+   *
+   * **Why the lock is taken here and not left to the trigger.** Both take the
+   * same key, so either alone would serialise correctly. Taking it *before* the
+   * DELETE gives this path the lock ordering ADR-005 D-7 describes — advisory
+   * lock first, row locks second — which is what keeps it free of any cycle with
+   * a concurrent revocation that has already locked a row this transaction will
+   * need. The trigger then re-acquires the same key, which within one
+   * transaction is a no-op.
+   *
+   * The count deliberately mirrors the trigger's exactly: an active user holding
+   * a grant at `platform` scope. It is the authorization model's own definition
+   * of a platform administrator — `ScopeResolver` derives `isPlatformAdmin` as
+   * "holds some grant at platform scope" — and not a second notion invented for
+   * this check, which would drift.
+   */
+  private async assertPlatformAdminRemains(tx: Transaction, excludingId: string): Promise<void> {
+    await tx.execute(sql`select pg_advisory_xact_lock(${PLATFORM_ADMIN_LOCK_KEY})`);
+
+    const { rows } = await tx.execute<{ remaining: string }>(sql`
+      SELECT count(*) AS remaining
+      FROM user_roles ur
+      JOIN users u ON u.id = ur.user_id
+      WHERE ur.scope_type = 'platform'
+        AND u.status = 'active'
+        AND ur.id <> ${excludingId}
+    `);
+
+    if (Number(rows[0]?.remaining ?? 0) === 0) {
+      throw new AppException({
+        // `409`, not `403`: the actor was authorized and the request
+        // well-formed — the platform may simply not enter that state, and the
+        // remedy is to appoint another administrator first, not to acquire more
+        // authority.
+        status: HttpStatus.CONFLICT,
+        code: ERROR_CODES.AUTHZ_LAST_PLATFORM_ADMIN,
+        message:
+          'This is the last active platform administrator; appoint another before revoking it',
       });
     }
   }

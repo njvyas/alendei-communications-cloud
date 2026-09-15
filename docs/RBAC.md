@@ -235,11 +235,39 @@ Each guard names the layer that enforces it, because a guard that exists only in
 | **No smuggling platform power into a tenant role.** A `platform.*` permission cannot be attached to a role with `roles.org_id IS NOT NULL`, closing escalation by custom role composition. | `fn_validate_role_permission` (`DATABASE.md` §2) |
 | **No forged `org_id` on a grant.** `user_roles.org_id` is derived by the trigger from the resolved scope chain, never taken from the writer. | `fn_validate_user_role_scope` |
 | **No upward administration.** An actor cannot modify its own scope's parent — an organization admin cannot reassign their organization's reseller. | Service layer + RLS (`TENANCY.md` §3a) |
-| **At least one active platform administrator always remains.** Revoking the last platform grant, disabling its holder, or deleting the role is refused. | Service layer (clear `409`) **and** a database trigger taking `pg_advisory_xact_lock`, which is what makes it hold under concurrency (ADR-005 D-7) |
+| **At least one active platform administrator always remains.** Revoking the last platform grant, disabling its holder, deleting its holder, or deleting the role is refused. | Service layer (clear `409 AUTHZ_LAST_PLATFORM_ADMIN`) **and** `fn_assert_platform_admin_remains` taking `pg_advisory_xact_lock` (migration `0005`), which is what makes it hold under concurrency (ADR-005 D-7). Phase 1B.5.6 — see §7a |
 | **No unaudited mass revocation through role deletion.** Deleting a role while grants of it exist is refused, so every revocation is an explicit, individually audited act rather than a cascade. | Service layer (`409`) **and** `ON DELETE RESTRICT` (migration `0004`, ADR-005 D-8), Phase 1B.5.4. The service check is the message; the constraint is what holds with the service bypassed |
 | **No rewriting a system role.** `roles.is_system_role` marks the seeded platform and tenant roles. A tenant principal holding `roles.update` composes roles *within* an organization; it does not get to redefine what `org_admin` means, nor promote a custom role into a system one. | Service layer (`403`) **and** `fn_protect_system_roles` / `fn_protect_system_role_permissions` (migration `0004`), Phase 1B.5.4. Both triggers admit only a transaction that has declared `app.is_platform_admin` (the seeder, the bootstrap CLI) or `app.provisioning` (`TenantRoleProvisioner`) — neither of which any application principal can set |
 | **No grant at a scope level the role was never designed for.** `RoleDefinition.allowedScopeTypes` bounds where a seeded role may be granted — `org_admin` at `organization` only, `agent` at `organization`/`workspace`/`team`. | Schema from Phase 1B.5.4 (`roles.allowed_scope_types`, migration `0004`); **enforced at grant time from Phase 1B.5.5** in `RoleAssignmentService`, closing §6n case 28. The refusal is `422 AUTHZ_SCOPE_TYPE_NOT_ADMITTED`, deliberately **not** `403`: the actor was entitled and the request well-formed — the role simply does not exist at that level, and collapsing the two would tell an administrator it lacked authority it actually has |
 | **No conferring authority a credential's creator never held at its binding.** An API key's effective permissions intersect its creator's authority *at the key's own binding scope*, so a creator cannot mint a key carrying permissions it holds only in another workspace or another organization (§5c). | Service layer (`AuthGuard`), Phase 1B.5.1 |
+
+### 7a. The last-platform-admin invariant (Phase 1B.5.6)
+
+**The definition, and there is only one.** A *valid platform administrator* is a user with `users.status = 'active'` holding a `user_roles` row at `scope_type = 'platform'`. That row necessarily references a platform role (`roles.org_id IS NULL`), because `fn_validate_user_role_scope` admits nothing else at that scope. It is the authorization model's own definition — `ScopeResolver` derives `isPlatformAdmin` as "holds some grant at platform scope" — and authorization, the invariant, the tests and this document all use it. No second notion of administrator exists.
+
+Two consequences worth stating, because both are easy to assume the other way:
+
+- **`alendei_support` counts.** It is a platform role granted at platform scope, so it sets `isPlatformAdmin` and carries platform reach. The invariant preserves *platform reach*, which is what the authorization model means by the term — not specifically super-admin capability.
+- **`reseller_admin` does not.** It is a platform role, but it is granted at `reseller` scope, and scope is what decides.
+
+**"Active" is load-bearing.** A disabled user cannot authenticate, so a grant it holds confers nothing and must not satisfy the invariant.
+
+**Four paths can violate it, and all four are closed:**
+
+| # | Path | Closed by |
+|---|---|---|
+| 1 | Revoking the grant | `DELETE /role-assignments/:id` → `409 AUTHZ_LAST_PLATFORM_ADMIN`; trigger beneath it |
+| 2 | Disabling the holder | Trigger on `users` (UPDATE OF `status`). **No HTTP surface exists yet** — user lifecycle is Phase 1B.6 — and the database closes it regardless |
+| 3 | Deleting the holder | Cascade from `users` to `user_roles` fires the `user_roles` trigger. Not one of ADR-005 D-7's three; found in 1B.5.6 |
+| 4 | Deleting the role | Already closed twice: system roles are immutable (1B.5.4) and `ON DELETE RESTRICT` refuses the delete while grants exist |
+
+**Why the database and not only the service.** The same reason §6 gives for cross-tenant grants: a guard that exists only in the service is a different quality of assurance, and a migration script or admin tool bypasses it. The service check exists to turn a `restrict_violation` into a `409` a caller can act on; the trigger is the guarantee.
+
+**Why `409` and not `403`.** The actor held the authority and the request was well-formed — the platform may simply not enter that state. The remedy is to appoint another administrator first, not to acquire more permission, and a `403` would send an administrator looking for authority it already has.
+
+**Concurrency.** An application count cannot hold this invariant: two transactions each count two administrators, each remove a *different* one, and both commit, because under `READ COMMITTED` neither sees the other's uncommitted delete and no row they wrote overlaps. `fn_assert_platform_admin_remains` takes `pg_advisory_xact_lock(PLATFORM_ADMIN_LOCK_KEY)` before counting, which serialises exactly the mutators of this invariant and releases on commit *and* rollback. The key is a single constant exported from `@acc/db`; a second key would silently disable the guarantee, so the test suite asserts the constant and the function body agree.
+
+**Contention is confined to platform-admin mutations.** Both triggers carry `WHEN` clauses — a deleted row that is not a platform grant, and a status change that is not a departure from `active`, never reach the function and so take no lock and run no count. Ordinary tenant role revocation is entirely unaffected.
 
 Every role grant and revocation is audit-logged without exception, including the attempts that were refused (`SECURITY.md` §4) — a rejected escalation attempt is precisely the event worth having a record of. `audit_logs.outcome` carries `denied` for exactly this purpose, and the audit row records the scope the attempt was made at on the same five-level enum `user_roles.scope_type` uses (`DATABASE.md` §12, ADR-002), so a refused escalation and the grant it targeted are directly comparable.
 

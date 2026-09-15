@@ -342,6 +342,15 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 
 **Not asserted here:** the last-platform-admin invariant on revocation — Phase 1B.5.6's, with the advisory-lock trigger that makes it hold under concurrency.
 
+**Last-platform-admin invariant (Phase 1B.5.6, ADR-005 D-7, `RBAC.md` §7a).** `apps/api/test/platform-admin-liveness.sec-spec.ts` (27 cases). The suite clears every platform grant before it starts and between cases, so it owns the administrator population outright — reasoning about "the last administrator" against a floating baseline is how a liveness test comes to pass for the wrong reason.
+
+- **The definition** — the advisory-lock constant in `@acc/db` and the function body are asserted equal, because a second key would silently disable the guarantee; both triggers are asserted present on the right tables; an `alendei_support` grant at platform scope counts and a `reseller_admin` grant at reseller scope does not; a disabled holder stops counting.
+- **Through the API** — the last one is `409 AUTHZ_LAST_PLATFORM_ADMIN` and explicitly *not* `AUTHZ_SCOPE_DENIED`; removal succeeds while another remains; the second removal of a pair is refused; the refused attempt leaves the assignment intact and writes no `user_role.revoked` row; ordinary tenant revocation is untouched.
+- **The database backstop, service bypassed** — the last grant's deletion, disabling the last holder, and deleting the last holder's user row through the cascade are each refused; disabling a non-administrator is allowed; path 4 stays closed; and `acc_app` cannot bypass it either.
+- **Concurrency, six cases** — two concurrent removals of two different administrators when exactly two exist yield one `204` and one `409`; two concurrent removals of the same one yield `204` and `404`; a removal racing a disable; four concurrent removals against two administrators; and a removal racing a cascade delete. **Every one re-reads the database and asserts at least one administrator remains** — status codes alone would not show the invariant holding.
+- **No bypass** — a tenant principal cannot reach a platform assignment, an API key cannot, and `acc_app` holds neither `rolsuper` nor `rolbypassrls`.
+- **Rollback** — a refused revocation rolls back its assignment and its audit row together, and the advisory lock is released on rollback, so the next attempt is not blocked. A leaked lock would deadlock every subsequent platform-admin mutation, so that case would hang rather than fail.
+
 **Forged ancestry (ADR-005 D-5).** Asserted as the strong property, not the weak one: it is not enough that bad input is rejected: the *authoritative* chain must decide. Each case runs under a tenant context that can see the target, so visibility is not the variable — a grant naming another organization cannot reach a workspace whose real parent is a different organization; the same for a grant naming another reseller, and for one naming another workspace as a team's parent; and a principal holding grants that between them name a wholly false chain still reaches nothing. Every case carries a positive control on the claimant's own rows, so a denial cannot be mistaken for a broken query.
 
 | # | Case | Expected |
@@ -401,6 +410,14 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 | RLS disabled on `user_roles` | **executed at 1B.5.5: 2 security tests fail** |
 | The denial-audit failure swallowed instead of propagated | **executed at 1B.5.5: 2 security tests fail** |
 | API-key creator intersection taken at the creator's widest scope instead of the binding | **executed at 1B.5.5: 5 security tests fail** |
+| The service last-admin check removed | **executed at 1B.5.6: 7 security tests fail** — the trigger still refuses, so the invariant holds; what is lost is the clean `409`, which is exactly what the service check is for |
+| `pg_advisory_xact_lock` removed from `fn_assert_platform_admin_remains` | **executed at 1B.5.6: the race cases fail on roughly two runs in three, and the structural assertion fails every run** — which is why that assertion exists: a race detector alone is a probabilistic guard against the one mutation that matters most |
+| Both liveness triggers dropped | **executed at 1B.5.6: all 27 fail** |
+| Only the `user_roles` liveness trigger dropped | **executed at 1B.5.6: 6 security tests fail** |
+| The `status = 'active'` term dropped from the count | **executed at 1B.5.6: 1 security test fails** |
+| The `409` rendered as `403 AUTHZ_SCOPE_DENIED` | **executed at 1B.5.6: 7 security tests fail** |
+| The authorization boundary removed from revoke | **executed at 1B.5.6: 1 security test fails** |
+| API-key creator intersection taken at the creator's widest scope (re-run against this surface) | **executed at 1B.5.6: 5 security tests fail** |
 | `scopeCovers` term dropped from `allows` | 4, 6, 8, 9 |
 | Permission term dropped from `allows` | 12 and every denial case |
 | `ScopeChainResolver` returns the request-supplied chain | 2, 4, 6 |

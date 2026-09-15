@@ -45,6 +45,15 @@ export const ERROR_CODES = {
    * exist at that level. `API.md` §3c renders it `422`.
    */
   AUTHZ_SCOPE_TYPE_NOT_ADMITTED: 'AUTHZ_SCOPE_TYPE_NOT_ADMITTED',
+  /**
+   * The operation would leave the platform with no active administrator
+   * (ADR-005 D-7, Phase 1B.5.6). Rendered `409`: the actor was authorized and
+   * the request well-formed — the platform simply may not enter that state, and
+   * the caller's remedy is to appoint another administrator first, not to
+   * acquire more authority. Reporting it as `403` would send an administrator
+   * looking for a permission it already holds.
+   */
+  AUTHZ_LAST_PLATFORM_ADMIN: 'AUTHZ_LAST_PLATFORM_ADMIN',
 
   // --- Tenancy -------------------------------------------------------------
   TENANCY_CONTEXT_REQUIRED: 'TENANCY_CONTEXT_REQUIRED',

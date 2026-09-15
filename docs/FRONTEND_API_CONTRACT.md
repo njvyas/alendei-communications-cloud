@@ -428,8 +428,13 @@ must build against:
 delete is safe and idempotent from the caller's point of view. Revocation takes
 effect on the **next request**, not at token expiry.
 
-**Not yet enforced:** a revocation that would remove the last platform
-administrator is specified as `409` but is **Phase 1B.5.6 — NOT IMPLEMENTED**.
+**`409 AUTHZ_LAST_PLATFORM_ADMIN`** — IMPLEMENTED (Phase 1B.5.6). A revocation
+that would leave the platform with no active administrator is refused. It is a
+`409`, not a `403`: the caller had the authority, and the remedy is to appoint
+another administrator first, not to acquire more permission. A console should
+say so rather than rendering it as an access error, and should keep at least one
+administrator un-revocable in its own UI as a courtesy — though the backend is
+what enforces it, including for callers that never touch this API.
 
 **Still unpaginated**, like every list today; §13 applies.
 

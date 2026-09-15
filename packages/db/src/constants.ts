@@ -26,3 +26,21 @@ export const SESSION_VARS = {
 
 /** The seeded reseller that organizations without an external reseller belong to. */
 export const PLATFORM_DEFAULT_RESELLER_SLUG = 'alendei-direct';
+
+/**
+ * The advisory-lock key serialising every mutation that could remove the last
+ * active platform administrator (ADR-005 D-7, migration `0005`).
+ *
+ * The value is arbitrary; that it is a **single shared constant** is not. The
+ * invariant is "at least one row exists", which no per-row constraint can
+ * express and which an application count cannot hold under `READ COMMITTED` —
+ * two transactions each counting two admins, each removing a different one, and
+ * both committing is textbook write skew. `pg_advisory_xact_lock` serialises
+ * exactly the three mutators of this invariant and releases on commit *and*
+ * rollback, the same property that makes `SET LOCAL` safe.
+ *
+ * A second key would silently disable the guarantee, which is why this is
+ * exported rather than written at each call site: `fn_assert_platform_admin_remains`
+ * and `RoleAssignmentService` must take the same one.
+ */
+export const PLATFORM_ADMIN_LOCK_KEY = 4_820_193_077n;

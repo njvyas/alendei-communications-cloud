@@ -301,7 +301,7 @@ The over-approximation ADR-003 left in `PermissionEvaluator.grantCarries` is unc
 
 ## 1e. ADR-005 — Coherent-grant authorization
 
-**Status**: Accepted (Phase 1B.5 planning review against `9d946f1`). **D-1 to D-4 implemented in Phase 1B.5.1; D-5 in Phase 1B.5.2; D-6 in Phase 1B.5.3; D-8's schema half in Phase 1B.5.4; the grant-administration and escalation guards in Phase 1B.5.5**; D-7 (last-platform-admin) governs Phase 1B.5.6. Governs the authorization half of Phase 1B. Extends ADR-001 (scope hierarchy) and ADR-003 (D-5, target-scope authorization); supersedes nothing. Closes the over-approximation ADR-003 recorded and ADR-004 carried forward.
+**Status**: Accepted (Phase 1B.5 planning review against `9d946f1`). **D-1 to D-4 implemented in Phase 1B.5.1; D-5 in Phase 1B.5.2; D-6 in Phase 1B.5.3; D-8's schema half in Phase 1B.5.4; the grant-administration and escalation guards in Phase 1B.5.5; D-7 in Phase 1B.5.6.** Every decision in this ADR is now implemented. Governs the authorization half of Phase 1B. Extends ADR-001 (scope hierarchy) and ADR-003 (D-5, target-scope authorization); supersedes nothing. Closes the over-approximation ADR-003 recorded and ADR-004 carried forward.
 
 ### Context
 
@@ -422,7 +422,13 @@ An application-level count cannot enforce it. Two concurrent transactions each c
 | Partial unique index / CHECK | **Rejected.** Constraints are per-row and cannot express "at least one row exists" |
 | **`pg_advisory_xact_lock`** | **Chosen.** Serialises exactly the three mutators of this invariant, releases automatically on commit *and* rollback — the same property that makes `SET LOCAL` safe — requires no isolation change, and contends only between platform-admin mutations, which are rare |
 
-The lock key is a fixed constant exported from `@acc/db`, so every call site takes the same lock; a second key would silently disable the guarantee. The lock is taken **before** any row lock in these paths, and that ordering is what keeps the paths deadlock-free.
+The lock key is a fixed constant exported from `@acc/db` (`PLATFORM_ADMIN_LOCK_KEY`), so every call site takes the same lock; a second key would silently disable the guarantee, and the suite asserts the constant and the function body agree rather than trusting review. The service takes it **before** the DELETE, so that path's ordering is advisory lock first and row locks second; the trigger re-acquires the same key, which within one transaction is a no-op.
+
+**Implemented in Phase 1B.5.6**, with three refinements worth recording:
+
+- **A fourth violation path.** Deleting the *user* cascades to `user_roles` and so performs a real DELETE on the guarded table. It is covered because the trigger sits on the table rather than on an API path — which is the argument for putting it there.
+- **Row-level `AFTER` triggers with `WHEN` clauses**, not statement-level with transition tables. PostgreSQL forbids transition tables on a trigger with a column list, and dropping `UPDATE OF status` would fire the guard on every `users` write, `last_login_at` on each sign-in included. `AFTER … FOR EACH ROW` is equivalent here because PostgreSQL queues AFTER-row triggers and fires them once the statement has completed, so every invocation observes the final state and a collectively-safe multi-row statement is never refused on an intermediate one. The `WHEN` clause is what keeps ordinary tenant revocation free of the lock entirely.
+- **The invariant is one plain function** called by two thin trigger wrappers, rather than duplicated per path. A trigger function cannot be invoked from another trigger function in any case, and two copies would eventually disagree.
 
 Enforcement lives in the database, for the reason `RBAC.md` §6 already gives for cross-tenant grants: a guard that exists only in the service is a different quality of assurance, and a migration script or admin tool bypasses it. The service keeps its own check for a clear `409`; the trigger is the guarantee.
 

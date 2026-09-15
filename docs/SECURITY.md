@@ -106,6 +106,18 @@ A platform permission still cannot reach a tenant role: `fn_validate_role_permis
 
 **Deliberately absent:** the last-platform-admin invariant on revocation. It is Phase 1B.5.6's, with the advisory-lock trigger that makes it hold under concurrency (ADR-005 D-7). A service-only count would look like an invariant while losing under write skew, which is worse than not having one.
 
+### The last-platform-admin invariant (Phase 1B.5.6)
+
+> At every committed state there exists at least one user with `status = 'active'` holding a grant at `platform` scope.
+
+A platform with no administrator is unrecoverable through the API: nothing left can appoint one, and the only way back is the bootstrap CLI run by whoever holds database credentials. That is why this is a correctness invariant enforced in the database rather than a validation in a handler.
+
+**It is enforced where it cannot be bypassed.** `fn_assert_platform_admin_remains` (migration `0005`) sits on `user_roles` DELETE and `users` UPDATE OF `status`, so it holds against the API, against a direct `acc_app` statement, against the cascade from deleting a user, and against a migration script or admin tool. `RoleAssignmentService` keeps its own check purely so the caller receives `409 AUTHZ_LAST_PLATFORM_ADMIN` rather than a `restrict_violation` rendered as a generic `500`.
+
+**Concurrency is the whole difficulty.** An application count is write-skew-prone — two transactions each counting two administrators, each removing a different one, both committing. The function takes `pg_advisory_xact_lock` on a single key exported from `@acc/db` before counting, which serialises exactly the mutators of this invariant and releases on commit *and* rollback. The suite proves the property with six concurrent cases, and every one of them asserts the **final database state**, not the status codes: an invariant that returns the right errors while reaching a forbidden state has failed.
+
+**No bypass exists.** A tenant principal cannot see a platform grant at all — RLS hides it — and an API key is bounded by its binding scope, so neither can reach the mutation. `acc_app` holds neither superuser nor `BYPASSRLS`, and the suite asserts both.
+
 The error **response** carries `403 AUTHZ_SCOPE_DENIED` and echoes no target — the identifier appears in the audit row and in operator logs, never to the caller (`API.md` §3a).
 
 Successful authorization checks are **not** audited. The operation is — `role.created`, `user_role.granted` and the rest. One row per check per request would bury the records that carry forensic value, so this is a deliberate rejection rather than an omission.

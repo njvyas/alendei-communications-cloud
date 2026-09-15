@@ -36,6 +36,13 @@
       "when": 1789266000000,
       "tag": "0004_phase1b5_role_administration",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789266600000,
+      "tag": "0005_phase1b56_platform_admin_liveness",
+      "breakpoints": true
     }
   ]
 }
