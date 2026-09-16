@@ -11,6 +11,7 @@ import { DatabaseModule } from './database/database.module';
 import { HealthModule } from './health/health.module';
 import { HttpConventionsModule } from './common/http/http.module';
 import { IamModule } from './iam/iam.module';
+import { IdempotencyModule } from './idempotency/idempotency.module';
 import { HttpMetricsInterceptor } from './observability/http-metrics.interceptor';
 import { LoggingModule } from './observability/logging.module';
 import { ObservabilityModule } from './observability/observability.module';
@@ -37,6 +38,7 @@ import { SecretsModule } from './secrets/secrets.module';
     DatabaseModule,
     AuditModule,
     IamModule,
+    IdempotencyModule,
     AuthModule,
     RedisModule,
     HealthModule,

@@ -201,6 +201,19 @@ export class RoleAdministrationService {
     return view!;
   }
 
+  /**
+   * The target-scope check `create` performs, exposed so the idempotent replay
+   * path can perform the *same* one.
+   *
+   * A replay must satisfy current authorization — a previously successful
+   * request is not a credential — and it does not run `create`, so without this
+   * the check would have to be written a second time at the call site and the
+   * two would eventually drift. One definition, two entry points.
+   */
+  async assertMayCreate(tx: Transaction, principal: AuthPrincipal): Promise<void> {
+    await this.assertPermission(tx, principal, 'roles.create', this.requireOrg(principal));
+  }
+
   async create(
     tx: Transaction,
     principal: AuthPrincipal,

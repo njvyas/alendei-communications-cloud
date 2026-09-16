@@ -506,8 +506,59 @@ No `revoked_at` column on `user_roles`. A revocation column would become a secon
 | D22 | Platform-role administration through the API | Platform roles are the control plane's own authority; making them editable by any API caller would put the escalation guard inside the thing it guards | Immutable through the API. Administrable only by migration or seed, as `seed.ts` already does |
 | D23 | Cross-user authorization introspection (**self-only endpoint shipped in 1B.5.7**; no cross-user variant, and no parameter exists to request one) | The console cannot render a correct permissions UI from a flattened union, but "effective permissions of another user" is an enumeration surface with no Phase 1B consumer | `GET /auth/me/authorization` is self-only, disclosing nothing the principal could not already derive. No cross-user variant in Phase 1B |
 
+## 1f. ADR-006 — HTTP idempotency is one transaction, and only successes are stored
+
+**Status**: Accepted (Phase 1B.5.9). Implements `API.md` §4 and `DATABASE.md` §7.1. Extends ADR-005 D-5 (authorization inside the request's transaction); supersedes nothing.
+
+### Context
+
+`idempotency_keys`, its RLS policy and its `(org_id, endpoint, idempotency_key)` unique index have existed since migration `0000`, and `DATABASE.md` §7.1 already specified claim → mutate → finalize. What was missing was the implementation and three decisions the specification left open.
+
+### D-1 — The claim, the mutation and the finalize share **one** transaction
+
+The failure this mechanism exists to prevent is: the mutation commits, the process dies, the record is never finalized, and the retry mutates again. Ordering the two writes carefully does not close that window; only making them inseparable does. All three run inside one `withRequestTenant` transaction, so either everything commits or nothing does and **there is no crash window at all**.
+
+This is also why idempotency is **not an interceptor**. An interceptor runs outside the handler's transaction and would need one of its own — reopening exactly the gap. It is a service the handler's work is passed to as a closure, which keeps `AuthorizationService.assert` inside the request's own tenant transaction exactly as ADR-005 D-5 requires.
+
+The cost is stated plainly: a duplicate **blocks** on the in-flight original rather than being told to come back. `API.md` §4 previously specified an immediate `409 IDEMPOTENCY_REQUEST_IN_PROGRESS` for that case, which is only reachable if the claim commits separately — and that is the design this rejects. Blocking is also the better answer: the caller gets the real result instead of polling. The wait is bounded by `lock_timeout`, and exceeding it yields the documented retryable `409`.
+
+### D-2 — Concurrency is the unique index, not an application lock
+
+`INSERT … ON CONFLICT DO UPDATE … WHERE expires_at <= now()`. The unique index *is* the mutex and it is transactional: a second writer blocks on the row lock until the first commits or rolls back, then either finds a completed record to replay or takes the claim itself.
+
+| Mechanism | Why not / why |
+|---|---|
+| In-memory mutex | **Rejected.** Does not survive a second process, a second container, or a restart |
+| Redis lock | **Rejected as the boundary.** Redis is an accelerator and never a system of record (`DATABASE.md` §1); a correctness guarantee that evaporates when a cache does is not one |
+| Advisory lock | **Rejected.** A second lock to acquire and release for a guarantee the unique index already provides, transactionally |
+| **`ON CONFLICT` on the existing unique index** | **Chosen.** Already present, already transactional, releases with the transaction, and needs no new state |
+
+The `WHERE expires_at <= now()` clause makes expiry a *reclaim* rather than a collision: without it the unique index would refuse an expired key forever, and an expired key is by definition a fresh request.
+
+### D-3 — Only successful responses are stored
+
+Validation, authorization, business `4xx`, `5xx` and crashes all roll the transaction back, taking the claim with them. Nothing is cached and a retry is always permitted.
+
+The alternative — recording failures — means a database blip permanently poisons a key, which is a worse failure than the duplicate it would prevent. And storing a failure buys nothing here: the deterministic ones (a duplicate key, a refused escalation) reproduce themselves on retry from the underlying constraint or check.
+
+**The security consequence is the important one.** A refused request stores nothing, so there is nothing to replay; and a stored record is reached only after the *current* request has authenticated and been authorized, in the same transaction, by the same check the fresh path performs. A previously successful request is therefore never a credential. The replay path calls the endpoint's own `assertMay…` method rather than a second copy of the check, so the two cannot drift.
+
+### D-4 — The principal is part of the request fingerprint
+
+The key scope stays organization-wide (`DATABASE.md` §7.1's reasoning about workspace collisions stands), which alone would let one principal inside an organization present another's key and receive its stored response. The resolved principal's *identity* — never its credential — is therefore part of the SHA-256 fingerprint, so a different actor computes a different fingerprint and is refused as a payload mismatch.
+
+Actor columns were added (migration `0007`) for **diagnostics only**, not as a uniqueness term: making them part of the unique index would silently let two principals run one key as two separate mutations, which is a worse answer than a deterministic refusal.
+
+### Consequences
+
+- `API.md` §4 is rewritten: §4a classifies every mutating endpoint, §4b defines the effective request and canonicalization, §4c the outcomes.
+- The immediate-`409`-while-in-flight behaviour is replaced by bounded blocking, with `409` retained for the timeout.
+- Migration `0007` adds `actor_user_id`, `actor_api_key_id` and `correlation_id`.
+- Physical cleanup of expired records is **not** implemented; expiry is enforced at lookup, so correctness does not depend on a sweeper (§3).
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
+- **Expired idempotency records are not physically deleted.** Expiry is enforced at lookup — an expired record is reclaimed as a fresh request — so correctness never depends on a sweeper running. What is deferred is only reclaiming *space*: the table grows with one row per idempotent request until a retention job exists. Accepted because the volume at Phase 1B (two endpoints, control-plane traffic) is negligible, the index on `expires_at` is already in place for the eventual sweep, and a scheduler is out of scope for this phase (ADR-006).
 - **A fallback chain can theoretically result in a recipient receiving more than one physical message** if a deprioritized channel's delivery lands after escalation already occurred (no provider offers reliable recall). Accepted because preventing it entirely is not possible against external providers; mitigated by keeping wait windows sane and by billing/audit correctly reflecting only one authoritative delivery (`FALLBACK_ENGINE.md` §5).
 - **Exactly-once delivery is not guaranteed** at the transport level; only exactly-once *business outcome* is guaranteed, and this distinction is now stated identically across `PRD.md` §8a, `ARCHITECTURE.md` §9, and `DATABASE.md` §7.3 (Phase 0.1 verified these three do not drift from one another).
 - **No certification is claimed** for SOC 2/ISO 27001/DPDP/GDPR — only control-objective alignment, explicitly and repeatedly disclaimed in `SECURITY.md`.

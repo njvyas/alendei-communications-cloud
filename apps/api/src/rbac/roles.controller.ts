@@ -10,8 +10,10 @@ import {
   Patch,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
 import { ERROR_CODES, PERMISSIONS } from '@acc/contracts';
+import type { Response } from 'express';
 
 import { AppException } from '../common/errors/app.exception';
 import { RequestContext } from '../common/context/request-context';
@@ -24,6 +26,8 @@ import {
   UpdateRoleDto,
 } from './role.dto';
 import { RequiresPermission } from '../auth/requires-permission.decorator';
+import { IdempotencyKey } from '../idempotency/idempotency.decorator';
+import { IdempotencyService } from '../idempotency/idempotency.service';
 import { RoleAdministrationService } from './role-administration.service';
 
 /**
@@ -46,6 +50,7 @@ export class RolesController {
   constructor(
     private readonly db: TenantDatabase,
     private readonly roles: RoleAdministrationService,
+    private readonly idempotency: IdempotencyService,
   ) {}
 
   private principal(): ResolvedPrincipal {
@@ -78,21 +83,61 @@ export class RolesController {
     return { data };
   }
 
+  /**
+   * Creates a role, at most once per `Idempotency-Key` (`API.md` §4).
+   *
+   * The key is optional. Without one this behaves exactly as before — a
+   * duplicate key is already refused by the unique index as `409`, so
+   * idempotency adds the ability to tell a *successful retry* from a genuine
+   * duplicate rather than making an unsafe endpoint safe.
+   *
+   * `IdempotencyService.execute` opens the tenant transaction and hands the same
+   * `tx` to the work below, so authorization still runs inside the request's own
+   * transaction, before the mutation, exactly as it did (ADR-005 D-5).
+   */
   @Post()
   @RequiresPermission(PERMISSIONS.ROLES_CREATE)
   @HttpCode(HttpStatus.CREATED)
-  async create(@Body() dto: CreateRoleDto) {
+  async create(
+    @Body() dto: CreateRoleDto,
+    @IdempotencyKey() idempotencyKey: string | null,
+    @Res({ passthrough: true }) response: Response,
+  ) {
     const principal = this.principal();
-    const data = await this.db.withRequestTenant((tx) =>
-      this.roles.create(tx, principal, {
-        key: dto.key,
-        name: dto.name,
-        description: dto.description ?? null,
-        allowedScopeTypes: dto.allowedScopeTypes,
-        permissions: dto.permissions,
+    const outcome = await this.idempotency.execute({
+      key: idempotencyKey,
+      successStatus: HttpStatus.CREATED,
+      request: {
+        method: 'POST',
+        route: '/roles',
+        orgId: principal.tenant.orgId,
+        principal,
+        pathParams: {},
+        query: {},
+        body: dto,
+      },
+      // The same check `create` performs, run before a replay is returned so a
+      // stored response is never handed back on the strength of an old decision.
+      authorize: (tx) => this.roles.assertMayCreate(tx, principal),
+      // The work returns the **envelope**, not the inner resource, so what is
+      // stored is byte-identical to what was sent. Storing the resource and
+      // re-wrapping it on replay would let the two drift the moment the envelope
+      // changes.
+      work: async (tx) => ({
+        data: await this.roles.create(tx, principal, {
+          key: dto.key,
+          name: dto.name,
+          description: dto.description ?? null,
+          allowedScopeTypes: dto.allowedScopeTypes,
+          permissions: dto.permissions,
+        }),
       }),
-    );
-    return { data };
+    });
+
+    // A replay reproduces the original status; a fresh execution matches the
+    // declared `@HttpCode`. Set explicitly so the two can never diverge.
+    response.status(outcome.status);
+    return outcome.body;
   }
 
   @Patch(':id')

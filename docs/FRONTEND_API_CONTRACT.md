@@ -19,8 +19,7 @@
 >
 > | Blocker | Closes in |
 > |---|---|
-> | `Idempotency-Key` is documented and has a table, but **no middleware reads it** — no mutating endpoint is replay-safe (§17) | 1B.5.9 |
-> | **No user lifecycle**: no invite, update, disable, or user list. A console cannot manage people | 1B.6 |
+> > | **No user lifecycle**: no invite, update, disable, or user list. A console cannot manage people | 1B.6 |
 > | **No organization, workspace, team or reseller CRUD** — only workspace *reads* exist (§30) | 1B.8 |
 > | **No API-key management** and **no audit read** endpoint | 1B.6 |
 > | **OpenAPI is effectively empty of business schemas** — 5 decorators, all on health. No typed client can be generated (§30) | 1B.9 |
@@ -282,14 +281,50 @@ being one. Ask if a screen needs it.
 `GET /auth/sessions` is deliberately unpaginated: self-only, and bounded by the
 server's max-sessions-per-user. It returns `{ data: [...] }` with **no `page`**.
 
-## 17. Idempotency — PLANNED / NOT IMPLEMENTED
+## 17. Idempotency — IMPLEMENTED (Phase 1B.5.9)
 
-`API.md` §4 defines the full semantics, an `idempotency_keys` table exists in the schema,
-and `idempotency-key` is in the CORS allow-list — but **no middleware, interceptor or
-service reads the header**. Nothing is deduplicated today. The frontend must not assume
-retry safety on any mutating endpoint.
+`Idempotency-Key: <opaque>` on the endpoints below. **Optional**; omit it and the
+endpoint behaves exactly as it always has.
 
-## 18. Optimistic concurrency — NOT IMPLEMENTED
+| Endpoint | Supported |
+|---|---|
+| `POST /api/v1/roles` | ✅ |
+| `POST /api/v1/role-assignments` | ✅ |
+| Everything else | Not needed — see below |
+
+**Key format**: 16–255 characters of `A-Za-z0-9`, `-`, `_`, `.`, `:`. Use a
+UUIDv4/v7. A malformed key is `400 IDEMPOTENCY_KEY_INVALID`.
+
+**Generate one key per logical operation and reuse it for every retry of that
+operation.** Do not generate a new key on retry — that is the one usage mistake
+the mechanism cannot protect you from.
+
+| You do | You get |
+|---|---|
+| Send a request with a key | It executes; the status and body are recorded |
+| **Retry the identical request with the same key** | The **original status and body, byte-for-byte**. No marker, no envelope change, nothing re-executed |
+| Send a *different* body with the same key | `422 IDEMPOTENCY_KEY_PAYLOAD_MISMATCH` |
+| Retry while the first is still in flight | It waits and then returns the original result. If the wait is too long, `409 IDEMPOTENCY_REQUEST_IN_PROGRESS` — retryable, so try again |
+| Retry after *any* failure (validation, `403`, `409`, `5xx`) | Nothing was stored; the key is still usable. A failed attempt never poisons a key |
+| Reuse a key after 24 hours | Treated as a fresh request |
+
+**Endpoints without idempotency are not oversights.** `PATCH /roles/:id` sends a
+complete replacement, so re-applying it converges. The `DELETE`s return `204` and
+a repeat is `404` — already idempotent. `POST /auth/login` and `/auth/refresh` are
+excluded deliberately: replaying a login would replay a **token**, and refresh
+rotation is single-use by design.
+
+**A key is not a credential.** It is scoped to your organization *and* to the
+principal that used it. Another user — even in the same organization, even with
+the same permissions — presenting your key is refused, and learns nothing about
+your request. Authorization is re-evaluated on **every** request including a
+replay: if you lose access between the original and the retry, the retry is
+refused rather than replaying the old success.
+
+**Correlation ids**: a replay carries **its own** `x-correlation-id`, not the
+original's. Do not expect them to match; quote the one you received.
+
+## 18. Optimistic concurrency## 18. Optimistic concurrency — NOT IMPLEMENTED
 
 No `ETag`/`If-Match` support and no `version` field on any API resource. `state_version`
 is designed for the message lifecycle (`ARCHITECTURE.md`) but no resource is exposed.

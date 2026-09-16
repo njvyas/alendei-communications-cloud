@@ -366,6 +366,18 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 - **Validation** — field, machine-readable rule and message on every issue; every failing field reported, not just the first; nested fields addressed by path (`permissions.0`); no SQL, stack or internal token anywhere in the body; and the correlation id matches the header.
 - **Unit** — `ListQuery` clamps above and below the bounds, reads exactly one row beyond the page, always orders by two terms, refuses unlisted sort fields, and carries no keyset predicate on page one. These assert what the HTTP suite structurally cannot: the DTO refuses an out-of-range `limit` before `ListQuery` ever sees it, so the clamp is unreachable from a request and invisible end to end.
 
+**HTTP idempotency (Phase 1B.5.9, `API.md` §4, ADR-006).** `apps/api/test/idempotency.sec-spec.ts` (29 cases) plus `request-fingerprint.spec.ts` (22) and `idempotency-key.spec.ts` (8) as unit suites.
+
+- **Unit — canonicalization** pulls in two directions and both are asserted: too strict and a client library reordering JSON turns a safe retry into a mismatch; too loose and two different requests share a fingerprint, which is the security failure. Key order insensitive at every depth, array order preserved, `undefined` and absent alike, explicit `null` distinct, number not confused with its string, nested object not confused with a flattened key.
+- **Unit — binding** asserts the fingerprint differs for a different body, route, method, organization, user, API key, path parameter and query parameter — and is *stable* across a different session, different resolved grants and reordered body keys.
+- **Unit — key validation**: alphabet and length bounds, whitespace trimmed rather than refused, injection-shaped keys refused, and the offending key never echoed back.
+- **Execution and replay** — the first request records `completed` with its status and actor; an identical repeat replays byte-identically and mutates nothing; the replayed envelope carries no marker; a reordered body still replays; without a key the endpoint behaves exactly as before; and the second endpoint behaves the same.
+- **A key is never a credential** — a different user in the *same organization* with the *same authority* is refused `422`; a different organization gets its own namespace rather than the other's response; RLS hides another tenant's record from the service's own query; an API key cannot replay the request of the user who created it; an unauthenticated caller gets `401`.
+- **Authorization is re-evaluated every time** — a refused request stores nothing, *still writes its `authorization.denied` row with the actor's own scope*, and an actor that loses its grant after a success is refused on replay rather than handed the stored response.
+- **Failures are not cached** — validation, business conflict and refused composition each leave no record, and the key remains usable for a corrected request.
+- **Correlation ids** — a replay carries its **own** id, and the record retains the *original* for diagnostics.
+- **Concurrency, six cases, each asserting the final database state rather than the statuses** — two and five concurrent identical requests each produce exactly one role and one record; the same key racing with different bodies yields `201`/`422` and at most one row; the same key racing across two organizations writes one row each; a rolled-back execution leaves the key free; and a first execution racing repeats never double-writes.
+
 **Forged ancestry (ADR-005 D-5).** Asserted as the strong property, not the weak one: it is not enough that bad input is rejected: the *authoritative* chain must decide. Each case runs under a tenant context that can see the target, so visibility is not the variable — a grant naming another organization cannot reach a workspace whose real parent is a different organization; the same for a grant naming another reseller, and for one naming another workspace as a team's parent; and a principal holding grants that between them name a wholly false chain still reaches nothing. Every case carries a positive control on the claimant's own rows, so a denial cannot be mistaken for a broken query.
 
 | # | Case | Expected |
@@ -449,6 +461,19 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 | `forbidNonWhitelisted` disabled (filter allow-listing) | **executed at 1B.5.8: 2 security tests fail** |
 | Validation field/rule mapping flattened | **executed at 1B.5.8: 5 security tests fail** |
 | The application tenant predicate removed from `GET /roles` | **executed at 1B.5.8: nothing fails — and that is the layering working.** RLS is the isolation boundary for this table, and the application predicate is redundant with it. Disabling RLS *as well* fails 5 tests, which is the honest demonstration of which layer holds |
+| The idempotency lookup removed (every request executes) | **executed at 1B.5.9: 18 security tests fail** |
+| The claim result ignored (work runs even on conflict) | **executed at 1B.5.9: 13 security tests fail** |
+| The request-hash comparison removed | **executed at 1B.5.9: 5 security tests fail** |
+| The **endpoint** dropped from the fingerprint | **executed at 1B.5.9: 1 unit test fails; the HTTP suite passes** — and that is honest layering: `endpoint` is part of the `(org_id, endpoint, key)` unique index, so the record is already per-endpoint and the hash term is belt-and-braces |
+| The **organization** dropped from the fingerprint | **executed at 1B.5.9: 1 unit test fails; the HTTP suite passes** — same reason: `org_id` leads the unique index, and RLS is the isolation boundary beneath it |
+| The **principal** dropped from the fingerprint | **executed at 1B.5.9: 3 unit and 2 security tests fail** — the principal is *not* in the unique index, so the fingerprint is the only enforcement, which is exactly why it is there |
+| A replay returned without authorizing the current request | **executed at 1B.5.9: 8 security tests fail** |
+| A fabricated response returned instead of the stored one | **executed at 1B.5.9: 6 security tests fail** |
+| The record finalized *before* the work runs | **executed at 1B.5.9: 6 security tests fail** |
+| The finalize moved into a separate transaction (crash window reopened) | **executed at 1B.5.9: 9 security tests fail** |
+| The original correlation id replayed as the current one | **executed at 1B.5.9: 2 security tests fail** |
+| RLS disabled on `idempotency_keys` | **executed at 1B.5.9: 1 security test fails** |
+| `idempotency_keys_scope_key` unique index dropped | **executed at 1B.5.9: 27 security tests fail** — it is the mutex, not merely a constraint |
 | `scopeCovers` term dropped from `allows` | 4, 6, 8, 9 |
 | Permission term dropped from `allows` | 12 and every denial case |
 | `ScopeChainResolver` returns the request-supplied chain | 2, 4, 6 |

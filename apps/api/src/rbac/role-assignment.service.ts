@@ -205,6 +205,25 @@ export class RoleAssignmentService {
    * commits against. The audit row is written in the same transaction, so a
    * failed audit takes the grant with it (`SECURITY.md` §4).
    */
+  /**
+   * Guard 1 of `grant`, exposed so the idempotent replay path performs the same
+   * check against the same target.
+   *
+   * A replay must satisfy current authorization, and it does not run `grant`.
+   * Writing the check again at the call site would put a second definition of
+   * "may this actor grant here" in the codebase, which is the drift ADR-005 D-1
+   * exists to prevent.
+   */
+  async assertMayGrant(tx: Transaction, principal: AuthPrincipal, target: ScopeRef): Promise<void> {
+    this.requireOrg(principal);
+    await this.authorization.assert(tx, {
+      principal,
+      permission: 'role_assignments.grant',
+      target,
+      resourceType: 'Scope',
+    });
+  }
+
   async grant(
     tx: Transaction,
     principal: AuthPrincipal,

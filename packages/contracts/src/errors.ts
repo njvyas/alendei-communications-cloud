@@ -67,8 +67,24 @@ export const ERROR_CODES = {
   WS_TICKET_ALREADY_CONSUMED: 'WS_TICKET_ALREADY_CONSUMED',
 
   // --- Idempotency (`API.md` §4) -------------------------------------------
+  /**
+   * A duplicate arrived while the original was still executing and the wait for
+   * it exceeded the lock timeout. Retryable: the original is committing or
+   * rolling back, and the next attempt gets a definite answer.
+   */
   IDEMPOTENCY_REQUEST_IN_PROGRESS: 'IDEMPOTENCY_REQUEST_IN_PROGRESS',
+  /**
+   * The key was already used for a *different* effective request — a different
+   * body, a different route, or a different principal. The same key must always
+   * mean the same request; accepting it would either replay someone else's
+   * result or silently perform a second, different mutation.
+   */
   IDEMPOTENCY_KEY_PAYLOAD_MISMATCH: 'IDEMPOTENCY_KEY_PAYLOAD_MISMATCH',
+  /**
+   * The supplied `Idempotency-Key` is not a well-formed key. Distinct from a
+   * mismatch: nothing was looked up, because the value could not be one.
+   */
+  IDEMPOTENCY_KEY_INVALID: 'IDEMPOTENCY_KEY_INVALID',
 
   // --- Pagination (`API.md` §8a) -------------------------------------------
   /**

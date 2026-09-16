@@ -192,17 +192,67 @@ Grants are returned **as grants**, not flattened. A console cannot render a corr
 
 ## 4. Idempotency
 
-This section is the API-facing view of the tier-1 mechanism defined canonically in `DATABASE.md` §7.1 — see that section before implementing; do not re-derive the semantics independently here.
+This section is the API-facing view of the tier-1 mechanism defined canonically in `DATABASE.md` §7.1 — see that section before implementing; do not re-derive the semantics independently here. **Implemented in Phase 1B.5.9** (ADR-006).
 
-- **Required** on endpoints that create billable or externally-visible side effects: `POST /messages`, `POST /campaigns/{id}/launch`, `POST /wallets/recharge`. **Optional but honored** on other mutating endpoints that opt in.
-- Callers supply `Idempotency-Key` (a caller-generated opaque string, recommended UUIDv4+). The key is scoped `(org_id, endpoint, key)` — never global, never workspace-only.
-- **Duplicate request, same payload**: if the original request already completed, the identical response (status + body) is returned verbatim — no re-execution, no new side effect.
-- **Duplicate request, first still in flight**: `409 Conflict`, error code `IDEMPOTENCY_REQUEST_IN_PROGRESS`, with a `Retry-After` hint. The server never guesses at what the in-flight request will produce.
-- **Same key, different payload**: `422 Unprocessable Entity`, error code `IDEMPOTENCY_KEY_PAYLOAD_MISMATCH` — reusing a key across different request bodies is rejected outright, never silently treated as either a replay or a new send.
-- **Retention**: keys expire 24h after creation by default, organization-configurable between a 1-hour minimum and 7-day maximum (`DATABASE.md` §7.1); a key reused after its own expiry is a fresh request with no collision.
-- This is strictly a **logical-message/API-call** dedup mechanism. It has no bearing on internal attempt identity (`DATABASE.md` §7.2) or on provider-side deduplication (`DATABASE.md` §7.3) — those are independent mechanisms further down the stack, not extensions of this header.
+### 4a. What it is, and what it is not
 
-## 5. Rate limiting
+Idempotency is **execution/replay coordination**: it records that a request ran and what it answered, so a retry after a network timeout returns the original answer instead of performing the work twice. It is **not** a business state machine — it never interprets, re-derives or re-validates the outcome, and the protected work is opaque to it.
+
+**Supported today** (opt-in via the header; absent, the endpoint behaves exactly as before):
+
+| Endpoint | Why |
+|---|---|
+| `POST /roles` | Creates a resource; a retry would otherwise be indistinguishable from a genuine duplicate |
+| `POST /role-assignments` | Confers privilege; the same |
+
+**Deliberately not supported, with reasons** — this is a classification, not an omission:
+
+| Endpoint | Why not |
+|---|---|
+| `GET`, `HEAD`, `OPTIONS` | Safe. There is nothing to execute twice |
+| `PATCH /roles/:id` | The permission set is a **complete replacement**, so the endpoint is already naturally idempotent — re-applying it converges on the same state |
+| `DELETE /roles/:id`, `DELETE /role-assignments/:id`, `DELETE /auth/sessions/:id` | `204`, and already naturally idempotent: a repeat is `404` because the row is gone, which is the honest answer and needs no stored response |
+| `POST /auth/login` | Replaying a login would replay a **token**, turning a stored response into a credential. Sessions are deliberately per-attempt |
+| `POST /auth/refresh` | Rotation is single-use **by design** (ADR-003): replay-detection there revokes the token family. Idempotency would directly contradict it |
+| `POST /auth/logout` | `204`, naturally idempotent |
+
+An endpoint is added to the first table only when a duplicate would cause a second side effect. Requiring the header for frontend convenience where it buys nothing is how a mechanism becomes ceremony.
+
+### 4b. The key, and what counts as "the same request"
+
+`Idempotency-Key: <opaque>` — 16 to 255 characters of `A-Za-z0-9`, `-`, `_`, `.`, `:`. A UUIDv7/v4 is the recommended form. The server assigns the value no meaning; the minimum length exists so a careless `1` does not collide inside a shared organization namespace. A malformed key is `400 IDEMPOTENCY_KEY_INVALID`, refused before any lookup.
+
+The key is stored against `(org_id, endpoint, idempotency_key)` — organization-wide so a caller cannot collide with itself across workspaces, and per endpoint so the same key on a different route is a separate request.
+
+**The effective request** is fingerprinted with SHA-256 over a canonical serialization of:
+
+`method` · `route pattern` · `orgId` · **the resolved principal's identity** (`actorType`, `actorUserId`, `actorApiKeyId`) · `pathParams` · `query` · `body`.
+
+Deliberately **excluded**, because a retry is by definition a different transport event and hashing any of it would defeat the mechanism: `Date`, request id, correlation id, causation id, user agent, source address, the `Authorization` header, cookies, and every other header.
+
+**Canonicalization**: object keys sorted at every depth, so a client library or proxy that reorders JSON does not turn a safe retry into a mismatch; array order preserved, because `[a,b]` and `[b,a]` are different requests; `undefined` and absent treated alike; explicit `null` distinct from absent.
+
+**Why the principal is in the hash.** The key scope is organization-wide, so without it one principal could present another's key and receive that principal's stored response. Binding identity into the fingerprint means a different actor computes a different fingerprint and is refused. The principal's *identity* is hashed; its credential never is.
+
+### 4c. Outcomes
+
+| Situation | Result |
+|---|---|
+| First request | Executes, stores status + body, returns them |
+| Identical repeat | **Replays the original status and body verbatim.** No re-execution, no marker added to the envelope |
+| Same key, different effective request — including a different principal | `422 IDEMPOTENCY_KEY_PAYLOAD_MISMATCH`. Nothing about the stored request is disclosed |
+| Concurrent duplicate | Blocks on the original, then replays it. On exceeding the wait, `409 IDEMPOTENCY_REQUEST_IN_PROGRESS` (retryable) |
+| Any failure — validation, authorization, business `4xx`, `5xx`, crash | **Nothing is stored.** The key is free for a genuine retry |
+| Key past its expiry | Reclaimed as a fresh request |
+| No organization context | `400 TENANCY_CONTEXT_REQUIRED` — the key namespace is org-scoped |
+
+**Only successes are stored**, and that is two guarantees at once. A transient database blip cannot permanently poison a key. And **a replay can never bypass authorization**: a refused request leaves nothing to replay, and a stored record is reached only *after* the current request has authenticated and had its own authorization evaluated, in the same transaction. A previously successful request is never a credential.
+
+**Correlation ids.** A replay is its own request and carries **its own** `x-correlation-id`; the original's is kept on the record for diagnostics and is never returned as the current request's. Confusing the two would make a replay untraceable.
+
+**Retention.** Records expire 24 hours after creation. Expiry is enforced at lookup — an expired record is reclaimed rather than replayed — so correctness does not depend on a sweeper. Physical deletion of expired rows is **not yet implemented**; see `DATABASE.md` §7.1.
+
+## 5. Rate limiting## 5. Rate limiting
 
 - Keyed by `(org_id, api_key_or_user, endpoint_class)`, using a Redis token bucket. **In Phase 1B this runs in-process in the API** — there is no API gateway in the Phase 1 deployment topology (`DEPLOYMENT.md`). Moving it to a gateway later is a deployment change, not a redesign; the key shape and limits are unchanged by where it runs.
 - Authentication endpoints carry their own stricter bucket (`RATE_LIMIT_AUTH_*`), and apply **two independent buckets** — one keyed by source IP and one by the target account — so that neither address rotation nor a spray across many accounts defeats the control on its own. A refusal from *either* refuses the attempt.

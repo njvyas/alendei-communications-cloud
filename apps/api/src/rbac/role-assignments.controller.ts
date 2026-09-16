@@ -9,8 +9,10 @@ import {
   ParseUUIDPipe,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
 import { ERROR_CODES, PERMISSIONS } from '@acc/contracts';
+import type { Response } from 'express';
 
 import { AppException } from '../common/errors/app.exception';
 import { RequestContext } from '../common/context/request-context';
@@ -18,6 +20,8 @@ import { TenantDatabase } from '../database/tenant-database.service';
 import type { ResolvedPrincipal } from '../auth/auth.guard';
 import { CreateAssignmentDto, ListAssignmentsQueryDto } from './role-assignment.dto';
 import { RequiresPermission } from '../auth/requires-permission.decorator';
+import { IdempotencyKey } from '../idempotency/idempotency.decorator';
+import { IdempotencyService } from '../idempotency/idempotency.service';
 import { RoleAssignmentService } from './role-assignment.service';
 
 /**
@@ -37,6 +41,7 @@ export class RoleAssignmentsController {
   constructor(
     private readonly db: TenantDatabase,
     private readonly assignments: RoleAssignmentService,
+    private readonly idempotency: IdempotencyService,
   ) {}
 
   private principal(): ResolvedPrincipal {
@@ -77,17 +82,44 @@ export class RoleAssignmentsController {
       'guessing it would be the forged-target defect ADR-005 D-5 exists to prevent',
   })
   @HttpCode(HttpStatus.CREATED)
-  async create(@Body() dto: CreateAssignmentDto) {
+  async create(
+    @Body() dto: CreateAssignmentDto,
+    @IdempotencyKey() idempotencyKey: string | null,
+    @Res({ passthrough: true }) response: Response,
+  ) {
     const principal = this.principal();
-    const data = await this.db.withRequestTenant((tx) =>
-      this.assignments.grant(tx, principal, {
-        userId: dto.userId,
-        roleId: dto.roleId,
-        scopeType: dto.scopeType,
-        scopeId: dto.scopeId,
+    const outcome = await this.idempotency.execute({
+      key: idempotencyKey,
+      successStatus: HttpStatus.CREATED,
+      request: {
+        method: 'POST',
+        route: '/role-assignments',
+        orgId: principal.tenant.orgId,
+        principal,
+        pathParams: {},
+        query: {},
+        body: dto,
+      },
+      // The same check `grant` performs, against the same target, run before a
+      // replay is returned.
+      authorize: (tx) =>
+        this.assignments.assertMayGrant(tx, principal, {
+          scopeType: dto.scopeType,
+          scopeId: dto.scopeId,
+        }),
+      // The envelope, so the stored snapshot is byte-identical to what was sent.
+      work: async (tx) => ({
+        data: await this.assignments.grant(tx, principal, {
+          userId: dto.userId,
+          roleId: dto.roleId,
+          scopeType: dto.scopeType,
+          scopeId: dto.scopeId,
+        }),
       }),
-    );
-    return { data };
+    });
+
+    response.status(outcome.status);
+    return outcome.body;
   }
 
   @Delete(':id')

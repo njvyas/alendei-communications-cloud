@@ -144,6 +144,18 @@ Three properties of the pagination and filtering conventions carry security weig
 
 One consequence worth recording: applying a query DTO to `GET /tenants/workspaces` means a bracketed parameter such as `orgId[]=` is now a `400` where it was previously ignored. The security property is unchanged and strictly stronger — before, the smuggled value had no effect; now the request carrying it does not execute (`API.md` §9a).
 
+### Idempotency is never an authorization bypass (Phase 1B.5.9)
+
+The way HTTP idempotency fails is not "a duplicate slips through" — it is "a previously successful request becomes a credential". Three properties prevent that, and each is asserted directly (ADR-006).
+
+**A replay is authorized before anything stored is disclosed.** The stored record is read inside the same tenant transaction as the current request, *after* that request has authenticated and had the endpoint's own target-scope check run against it — the same `assertMay…` method the fresh path calls, not a second copy. An actor that has since lost its grant gets its refusal, not the old response.
+
+**A refused request stores nothing.** Only successes are recorded, so a denial leaves no record to replay, and the `authorization.denied` audit row is still written exactly as Phase 1B.5.3 requires. Idempotency cannot suppress a required denial audit because it never reaches the point of storing one.
+
+**A key belongs to one principal in one organization.** The resolved principal's identity is part of the request fingerprint — its credential never is — so another actor presenting the key computes a different fingerprint and is refused as a payload mismatch, learning neither that a record exists nor what it contains. The organization is enforced twice over: in the unique index and by the table's RLS policy, which hides another tenant's record from the service's own query.
+
+The refusal deliberately discloses nothing: not the stored body, not the original actor, and not the fingerprint — which would say precisely what to change to make a key match someone else's request.
+
 The error **response** carries `403 AUTHZ_SCOPE_DENIED` and echoes no target — the identifier appears in the audit row and in operator logs, never to the caller (`API.md` §3a).
 
 Successful authorization checks are **not** audited. The operation is — `role.created`, `user_role.granted` and the rest. One row per check per request would bury the records that carry forensic value, so this is a deliberate rejection rather than an omission.
