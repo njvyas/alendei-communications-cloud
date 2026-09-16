@@ -639,6 +639,99 @@ describe('user administration', () => {
       expect(JSON.stringify(res.body)).not.toContain(orgB.orgId);
     });
 
+    /**
+     * The enumeration boundary, as a regression test rather than a claim.
+     *
+     * `users_email_key` is a **global** unique index, so a duplicate address is
+     * a `409` whether the existing identity sits in the caller's own
+     * organization or in another one under another reseller. `SECURITY.md` §8
+     * accepts that one bit of disclosure — "this address is registered
+     * somewhere" — as inherent to a single identity namespace, and states that
+     * nothing beyond it leaks.
+     *
+     * That second half is the part worth asserting mechanically, because it is
+     * the part a future change can quietly break: a helpful error message
+     * naming the owning organization, or a different code for the local case,
+     * would turn one bit into an oracle for *where* an address lives and what
+     * state it is in. Both refusals are therefore compared **byte for byte**
+     * after stripping only the correlation id, which is per-request by
+     * construction.
+     *
+     * The three plants differ in tenant, in reseller and in lifecycle state, so
+     * a response that varied along any of those axes would be caught.
+     */
+    it('the duplicate-address refusal is identical whichever tenant owns the address', async () => {
+      const mine = await plantMember(orgA, 'collide-local');
+      const theirs = await plantMember(orgB, 'collide-foreign');
+      const theirsInvited = await plantMember(orgB, 'collide-foreign-invited', {
+        status: 'invited',
+      });
+
+      const attempt = async (email: string) => {
+        const res = await api(adminToken)
+          .create({ ...validCreate('collide'), email })
+          .expect(409);
+        return res;
+      };
+
+      const local = await attempt(mine.email);
+      const foreign = await attempt(theirs.email);
+      const foreignInvited = await attempt(theirsInvited.email);
+
+      // Same status, same code, same retryability.
+      for (const res of [local, foreign, foreignInvited]) {
+        expect(res.status).toBe(409);
+        expect(res.body.error.code).toBe(ERROR_CODES.RESOURCE_CONFLICT);
+        expect(res.body.error.retryable).toBe(false);
+      }
+
+      // Byte-identical once the per-request correlation id is removed.
+      const strip = (res: request.Response) =>
+        JSON.stringify({
+          ...(res.body as { error: object }).error,
+          correlationId: '<per-request>',
+        });
+      expect(strip(foreign)).toBe(strip(local));
+      expect(strip(foreignInvited)).toBe(strip(local));
+
+      // And the same externally visible shape: no extra key appears on one and
+      // not another, `details` included.
+      for (const res of [local, foreign, foreignInvited]) {
+        expect(Object.keys(res.body as object)).toEqual(['error']);
+        expect(Object.keys((res.body as { error: object }).error).sort()).toEqual([
+          'code',
+          'correlationId',
+          'message',
+          'retryable',
+        ]);
+      }
+
+      // Nothing about ownership, location or state appears in any of them.
+      for (const res of [local, foreign, foreignInvited]) {
+        const body = JSON.stringify(res.body);
+        for (const secret of [
+          mine.userId,
+          theirs.userId,
+          theirsInvited.userId,
+          orgA.orgId,
+          orgB.orgId,
+          orgA.resellerId,
+          orgB.resellerId,
+          orgA.workspaceId,
+          orgB.workspaceId,
+          orgA.roleId,
+          orgB.roleId,
+          mine.email,
+          theirs.email,
+        ]) {
+          expect(body).not.toContain(secret);
+        }
+        for (const word of ['active', 'invited', 'disabled', 'organization', 'reseller', 'role']) {
+          expect(body.toLowerCase()).not.toContain(word);
+        }
+      }
+    });
+
     it('a malformed address is refused before anything is written', async () => {
       await api(adminToken)
         .create({ ...validCreate('bad'), email: 'not-an-address' })

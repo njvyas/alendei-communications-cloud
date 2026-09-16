@@ -330,10 +330,28 @@ describe('user lifecycle under concurrency', () => {
       expect(rows).toHaveLength(0);
     });
 
-    it('the refusal rolls back the session revocation with it', async () => {
+    /**
+     * **This is deliberately not the atomic-rollback proof**, and saying so is
+     * the point of the comment.
+     *
+     * `assertPlatformAdminRemains` throws at step 4 of `disable`, *before*
+     * `setStatus` and *before* `revokeAllForUser` — so no write of either kind
+     * has been attempted when the refusal is raised. What this case establishes
+     * is narrower and still worth having: a refused disable is inert, leaving
+     * both the status and the session rows exactly as it found them.
+     *
+     * A test that exercises nothing while being named as though it proved
+     * atomicity is worse than no test, because the next person to reorder
+     * `disable` will trust it. The property it appears to claim is proven by
+     * the audit-failure case below, which is the one reachable failure that
+     * lands *after* both writes.
+     */
+    it('a refused disable never reaches session revocation', async () => {
       const only = await plantAdminMember('sessions-intact');
       await tokenFor(only.email);
       await disable(only.userId).expect(409);
+
+      expect(await statusOf(only.userId)).toBe('active');
 
       const sessions = await h.admin
         .select({ revokedAt: schema.sessions.revokedAt })
@@ -341,6 +359,78 @@ describe('user lifecycle under concurrency', () => {
         .where(eq(schema.sessions.userId, only.userId));
       expect(sessions.length).toBeGreaterThan(0);
       for (const s of sessions) expect(s.revokedAt).toBeNull();
+    });
+
+    /**
+     * The atomicity proof: one failure *after* both writes rolls both back.
+     *
+     * `disable` claims that the status change, the session revocation and the
+     * audit row share one transaction, and the structure supports it —
+     * `withTenantTransaction` opens a single transaction and `SessionService`
+     * holds no database handle at all, so it cannot open a second one. Neither
+     * observation is a test, and both would survive a future change that moved
+     * one of the three writes onto its own connection.
+     *
+     * So the failure is caused rather than argued. The audit write is the only
+     * reachable point after the revocation — the liveness trigger fires at the
+     * `setStatus` statement, which is earlier — and `AuditWriter` is made to
+     * reject exactly as `role-assignment.sec-spec.ts` already does for the
+     * grant path. **No production seam is added for this**: the writer is
+     * resolved from the real container and its public method is stubbed for the
+     * duration of one request.
+     *
+     * The assertion is on both writes, not just the visible one. A design in
+     * which the status update rolled back while the revocation committed would
+     * pass a status-only check and would have signed a still-enabled user out
+     * of every device.
+     */
+    it('an audit failure after the revocation rolls back the status and the sessions together', async () => {
+      const member = await plantMember('atomic');
+      await tokenFor(member.email);
+
+      const live = await h.admin
+        .select({ id: schema.sessions.id })
+        .from(schema.sessions)
+        .where(eq(schema.sessions.userId, member.userId));
+      // A positive control: there is something for the revocation to revoke, so
+      // "still unrevoked" below cannot pass because nothing existed.
+      expect(live.length).toBeGreaterThan(0);
+
+      const audit = h.app.get((await import('../src/audit/audit-writer.service')).AuditWriter) as {
+        record: (...args: unknown[]) => Promise<void>;
+      };
+      const spy = jest.spyOn(audit, 'record').mockRejectedValue(new Error('audit unavailable'));
+
+      try {
+        const res = await disable(member.userId);
+        // Fails closed. The exception filter renders an unrecognized error as a
+        // generic `500` carrying only the correlation id, so the caller learns
+        // nothing about the audit subsystem.
+        expect(res.status).toBeGreaterThanOrEqual(400);
+      } finally {
+        spy.mockRestore();
+      }
+
+      // Both writes are gone, not one of them.
+      expect(await statusOf(member.userId)).toBe('active');
+
+      const sessions = await h.admin
+        .select({ revokedAt: schema.sessions.revokedAt, reason: schema.sessions.revokedReason })
+        .from(schema.sessions)
+        .where(eq(schema.sessions.userId, member.userId));
+      expect(sessions).toHaveLength(live.length);
+      for (const s of sessions) {
+        expect(s.revokedAt).toBeNull();
+        expect(s.reason).toBeNull();
+      }
+
+      // And the user can still act, which is the consequence that matters:
+      // a half-applied disable would have left them locked out with no record.
+      const stillWorks = await tokenFor(member.email);
+      await request(h.app.getHttpServer())
+        .get(url('/auth/me'))
+        .set('authorization', `Bearer ${stillWorks}`)
+        .expect(200);
     });
 
     it('case M — the trigger refuses it with the service bypassed entirely', async () => {
@@ -388,28 +478,78 @@ describe('user lifecycle under concurrency', () => {
   // Races. Final database state is the assertion.
   // ===========================================================================
   describe('races', () => {
-    it('two simultaneous disables of the same user produce one winner', async () => {
+    /**
+     * **"Exactly one winner" is not the property, and asserting it was wrong.**
+     *
+     * The lifecycle check is a read (`loadMember`) followed by an unconditional
+     * `UPDATE … WHERE id = ?`. Under `READ COMMITTED` two overlapping callers
+     * both observe `active` in their own snapshot, both pass the check, and the
+     * row lock merely serialises the writes — the second still matches and still
+     * returns its row. So **both may legitimately answer `200`**, and each is
+     * telling the truth: each transaction did perform the transition it saw.
+     *
+     * The original assertion demanded one `200` and one `409`. It passed only
+     * because the preceding cases in this file spaced the two requests apart;
+     * run in isolation it failed every time. That is a test asserting a
+     * scheduling accident, the same defect as the 1B.5.6 revocation race.
+     *
+     * Making it exactly-one would mean adding `AND status <> 'disabled'` to the
+     * UPDATE and reporting zero rows as the conflict. That is a production
+     * change, it is out of scope here, and it buys nothing at this layer: the
+     * committed state is identical either way, no privilege is conferred, and
+     * every session is revoked by both paths. It is recorded as a deferred
+     * refinement rather than made silently.
+     *
+     * What must hold, and is asserted:
+     *   - at least one caller succeeds — the transition is not lost;
+     *   - any caller that does not succeed fails with exactly the documented
+     *     lifecycle conflict, never a `500`, a `403` or a silent no-op;
+     *   - the committed state is `disabled`, deterministically;
+     *   - no session survives, whichever caller got there first.
+     */
+    it('simultaneous disables converge on disabled, and any loser sees the lifecycle conflict', async () => {
       const member = await plantMember('race-same');
-      const [a, b] = await Promise.all([
-        disable(member.userId).then((r) => r.status),
-        disable(member.userId).then((r) => r.status),
+      await tokenFor(member.email);
+
+      const results = await Promise.all([
+        disable(member.userId).then((r) => ({ status: r.status, code: r.body?.error?.code })),
+        disable(member.userId).then((r) => ({ status: r.status, code: r.body?.error?.code })),
       ]);
 
-      expect([a, b].filter((s) => s === 200)).toHaveLength(1);
-      expect([a, b].filter((s) => s === 409)).toHaveLength(1);
+      expect(results.filter((r) => r.status === 200).length).toBeGreaterThanOrEqual(1);
+      for (const loser of results.filter((r) => r.status !== 200)) {
+        expect(loser.status).toBe(409);
+        expect(loser.code).toBe(ERROR_CODES.USER_LIFECYCLE_CONFLICT);
+      }
+
+      // The final database state, which is deterministic even though the
+      // status codes are not.
       expect(await statusOf(member.userId)).toBe('disabled');
+      const sessions = await h.admin
+        .select({ revokedAt: schema.sessions.revokedAt })
+        .from(schema.sessions)
+        .where(eq(schema.sessions.userId, member.userId));
+      expect(sessions.length).toBeGreaterThan(0);
+      for (const session of sessions) expect(session.revokedAt).not.toBeNull();
     });
 
-    it('two simultaneous reactivations of the same user produce one winner', async () => {
+    /** The same read-then-write shape as the disable race above, and the same
+     * honest assertion: convergence on the committed state, with any loser
+     * carrying the documented conflict. */
+    it('simultaneous reactivations converge on active, and any loser sees the lifecycle conflict', async () => {
       const member = await plantMember('race-react');
       await disable(member.userId).expect(200);
 
-      const [a, b] = await Promise.all([
-        reactivate(member.userId).then((r) => r.status),
-        reactivate(member.userId).then((r) => r.status),
+      const results = await Promise.all([
+        reactivate(member.userId).then((r) => ({ status: r.status, code: r.body?.error?.code })),
+        reactivate(member.userId).then((r) => ({ status: r.status, code: r.body?.error?.code })),
       ]);
-      expect([a, b].filter((s) => s === 200)).toHaveLength(1);
-      expect([a, b].filter((s) => s === 409)).toHaveLength(1);
+
+      expect(results.filter((r) => r.status === 200).length).toBeGreaterThanOrEqual(1);
+      for (const loser of results.filter((r) => r.status !== 200)) {
+        expect(loser.status).toBe(409);
+        expect(loser.code).toBe(ERROR_CODES.USER_LIFECYCLE_CONFLICT);
+      }
       expect(await statusOf(member.userId)).toBe('active');
     });
 
@@ -577,6 +717,21 @@ describe('user lifecycle under concurrency', () => {
       expect([ERROR_CODES.AUTH_ACCOUNT_DISABLED, ERROR_CODES.AUTH_SESSION_REVOKED]).toContain(
         after.body.error.code,
       );
+
+      // The final database state, once both operations have settled. The
+      // refusal above is the security consequence; this is the state that
+      // produced it, and asserting only the first would let a disable that
+      // revoked sessions without changing the status pass.
+      expect(await statusOf(member.userId)).toBe('disabled');
+      const sessions = await h.admin
+        .select({ revokedAt: schema.sessions.revokedAt, reason: schema.sessions.revokedReason })
+        .from(schema.sessions)
+        .where(eq(schema.sessions.userId, member.userId));
+      expect(sessions.length).toBeGreaterThan(0);
+      for (const s of sessions) {
+        expect(s.revokedAt).not.toBeNull();
+        expect(s.reason).toBe('user_disabled');
+      }
     });
 
     it('a refresh racing a disable never yields a usable session', async () => {
@@ -616,6 +771,21 @@ describe('user lifecycle under concurrency', () => {
         .set('cookie', cookie)
         .set(CSRF_HEADER, '1')
         .expect(401);
+
+      // The final database state, once both operations have settled.
+      //
+      // The session *count* is deliberately not asserted: whether the rotation
+      // won the race decides whether a successor row exists, and pinning that
+      // would be asserting a scheduling accident. What must hold either way is
+      // that the user is disabled and that **no** session of theirs is live —
+      // including any successor the rotation minted before the disable landed.
+      expect(await statusOf(member.userId)).toBe('disabled');
+      const sessions = await h.admin
+        .select({ revokedAt: schema.sessions.revokedAt })
+        .from(schema.sessions)
+        .where(eq(schema.sessions.userId, member.userId));
+      expect(sessions.length).toBeGreaterThan(0);
+      for (const s of sessions) expect(s.revokedAt).not.toBeNull();
     });
   });
 });

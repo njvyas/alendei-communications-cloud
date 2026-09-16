@@ -393,6 +393,14 @@ A user's *identity* and a user's *authority* are administered separately, and th
 
 **Guard 5 is the one thing creation relaxes, and only for a user it created itself.** §8b's reachability probe asks whether the target already holds a grant this request can see — which a user created moments ago cannot, its first grant being the one under construction. The probe is skipped; the property is not. Reachability is established by construction: the caller authorized `users.invite` at its own organization and inserted the row in this transaction. Guards 1-4 run unchanged, and guard 1 — may this actor grant *at this scope* — is the escalation-bearing half. The relaxation is an in-process option with no field on any DTO, so no request can ask for it, and a structural test asserts it has exactly one caller (ADR-007 D-4).
 
+**Disable reaches the identity, not the membership — an accepted consequence of §1's model.** `users.status` is a column on a platform-level table, and this document has said since §5a.1 that a user is one identity with grants in possibly several organizations. The consequences follow directly and are accepted rather than worked around:
+
+- an administrator holding `users.disable` in **one** organization the user belongs to can disable them, which ends their access to **every** organization they belong to, including under other resellers;
+- `SessionService.revokeAllForUser` carries no organization predicate, so every session goes, not only those used against the acting organization;
+- the `user.disabled` audit row is filed at the acting organization's scope (§8, ADR-005 D-6), so an affected organization has no local record of it.
+
+The alternative is per-membership status, which means a membership table and a second notion of "active" for the evaluator, the liveness invariant and every future query to filter on — the same objection §8a records against soft-deleting roles, and a larger change than the behaviour warrants. The organization-local operation already exists and is the right one for "this person should not have access here": revoke their grants (§8b), which is scoped, individually audited, and leaves the account alone. `API.md` §3d and `FRONTEND_API_CONTRACT.md` §30d both state the distinction so a console does not present disable as an organization-local removal.
+
 **Deletion does not exist, at any layer.** `acc_app` holds no `DELETE` grant on `users` (migration `0000`), so it is unavailable rather than merely unimplemented, and the API offers no `DELETE` route to imply otherwise. Users are referenced by sessions, API keys, grants, idempotency records and audit rows; the trail must outlive the identity it describes (ADR-007 D-1).
 
 ## 9. Related

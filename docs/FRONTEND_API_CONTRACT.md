@@ -668,7 +668,7 @@ The user resource, as returned by **every** `/users` endpoint. This list is exha
 `users` has no organization column: a user's tenancy is entirely the grants they hold. Every endpoint here is scoped to **users holding at least one grant in the organization the request resolved to** — the one selected implicitly or named in `X-Acc-Organization` (§5). Two consequences to design around:
 
 - A user who exists but holds no grant in this organization is `404`, byte-for-byte the same answer as an id that was never issued. **Never present it as "exists but forbidden."**
-- A user who belongs to two organizations appears in both lists, and switching `X-Acc-Organization` changes which list they appear in. They are one identity with one id, not two records.
+- A user who belongs to two organizations appears in both lists, and switching `X-Acc-Organization` changes which list they appear in. They are one identity with one id, not two records. **This matters for disable — see below.**
 
 ### Creating a user
 
@@ -725,9 +725,19 @@ POST /api/v1/users/:id/reactivate   → 200 { data: user }   // status: "active"
 ```
 
 - **Disabling signs the person out immediately.** Every live session is revoked in the same transaction, and their access token stops working on their next request — not at token expiry. Any API key created by that person also stops conferring permissions.
+- **Disable is GLOBAL to the identity. It is not "remove from this organization".** A user may belong to several organizations, possibly under different resellers. `status` belongs to the person, not to a membership, so disabling them from your organization locks them out of **all** of them and revokes **all** their sessions — including ones they were using elsewhere. Do not label this button "Remove user", "Remove from organization" or "Revoke access"; label it as disabling the account and say what it reaches. If the user belongs to more than one organization, warn before confirming.
+- **The organization-local action is a different one: revoke their grants.** `DELETE /api/v1/role-assignments/:id` (§30b), for each grant the user holds in your organization, ends their access *here* and leaves their account and their other organizations untouched. Offer both, and make the difference legible:
+
+| What the operator means | Endpoint | Reach |
+|---|---|---|
+| "This person should not have access to **our** organization" | `DELETE /role-assignments/:id` | This organization only |
+| "This person's **account** should be shut off" | `POST /users/:id/disable` | Every organization, every session |
+
+  Most "remove this person" flows in a console mean the first. Defaulting to disable is the mistake this table exists to prevent.
+- **Your organization may see a user disappear without having done anything.** Another organization that shares the identity can disable it, and there is no audit record in *your* organization when that happens (the record is filed under the acting organization). If a user's `status` reads `disabled` and nobody on your side did it, that is the explanation, not a bug. Reactivation is available to you if you hold `users.reactivate` — but note it restores the account globally too.
 - **Reactivate does not always produce `active`.** A user who was disabled before they ever held a credential comes back as **`invited`**, because the database will not admit an `active` user with no credential. **Read `data.status` from the response** rather than assuming — this is the one place the endpoint's result is not fully predictable from the request.
 - **Reactivation does not restore sessions.** The person must sign in again — and if they came back as `invited`, they cannot until D16 lands.
-- **Repeating either is a `409 USER_LIFECYCLE_CONFLICT`**, with `error.details.status` carrying the current state. Use it to re-sync a stale list rather than showing a hard error: it usually means someone else got there first.
+- **Repeating either is a `409 USER_LIFECYCLE_CONFLICT`**, with `error.details.status` carrying the current state. Use it to re-sync a stale list rather than showing a hard error: it usually means someone else got there first. Two *simultaneous* calls are the one case where both may answer `200` — the transition is checked and applied under read-committed isolation, so two overlapping callers can both observe the prior state. The committed result is the same either way, so treat `200` and `409` alike: re-read the row and render `data.status`. Do not count successes.
 
 | Failure | Code | Meaning for the UI |
 |---|---|---|
