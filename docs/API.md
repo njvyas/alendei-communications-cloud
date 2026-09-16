@@ -11,9 +11,9 @@ All public and console APIs are served under `/api/v1`. Breaking changes ship as
 | `/auth` | `iam` | Login, refresh, logout, session management, `/auth/me`. **Built in Phase 1B.3.** No MFA challenge — MFA is not implemented (ADR-003 D-6) |
 | `/ws/ticket` | `iam` | Mints a single-use, short-lived WebSocket connection ticket (§9). Issuance ships in Phase 1B; ticket *consumption* and the socket gateway are deferred (`DECISIONS.md` D15) |
 | `/tenants` | `tenancy` | Organization/workspace/team CRUD (scoped by caller's role) |
-| `/users` | `tenancy` | User invite/management |
+| `/users` | `users` | User lifecycle administration: list, detail, create, profile update, disable, reactivate. **Built in Phase 1B.6.1** (§3d). Its own module rather than `tenancy`: `AuthModule` imports `IamModule` for the credential and session primitives, so a user controller placed there and needing `RoleAssignmentService` would close a cycle through `RbacModule` |
 | `/roles` | `rbac` | Role CRUD (custom roles), plus read of the platform role definitions. **Built in Phase 1B.5.4** (§3c) |
-| `/role-assignments` | `rbac` | Scope-bound role grant and revocation. **Phase 1B.5.5 — not implemented** (§3c) |
+| `/role-assignments` | `rbac` | Scope-bound role grant and revocation. **Built in Phase 1B.5.5** (§3c) |
 | `/permissions` | `rbac` | Permission catalogue (read-only, system-defined). **Built in Phase 1B.5.4** (§3c) |
 | `/channels` | `provider-registry` | Supported channel catalogue |
 | `/providers` | `provider-registry` | Provider CRUD, enable/disable/drain, capability config |
@@ -190,6 +190,69 @@ Grants are returned **as grants**, not flattened. A console cannot render a corr
 | `PUT /users/:id/roles` (set replacement) | A set replacement hides individual revocations from the audit trail. Revocation is an explicit act with its own record (`RBAC.md` §8b) |
 | Role permission add/remove endpoints | Subsumed by `PATCH /roles/:id`'s replacement set, with a complete `before`/`after` |
 
+
+### 3d. User lifecycle administration (Phase 1B.6.1)
+
+**Implementation status.** **IMPLEMENTED, Phase 1B.6.1.** Six endpoints. API-key management and audit read remain out of scope; invitation *delivery* is still blocked on `DECISIONS.md` D16.
+
+**The lifecycle model is the one migration `0000` already defined**, exposed rather than extended:
+
+```
+invited  ──(credential set out of band, D16)──▶  active  ──disable()──▶  disabled
+   ▲                                                ▲                       │
+   └──────────────── reactivate() ──────────────────┴───────────────────────┘
+```
+
+`users_active_requires_credential` enforces at the database that an `active` user holds a password or an MFA secret, so `invited` is precisely the state that cannot authenticate. That constraint is what makes the three states a model rather than a label, and it is why reactivation restores a credential-less user to `invited` rather than to `active` (ADR-007 D-2).
+
+**There is no `DELETE /users/:id`, and its absence is structural.** `acc_app` holds no `DELETE` grant on `users` (migration `0000`), so the application role could not perform one however the service were written. Users are referenced by `sessions`, `api_keys.created_by`, `user_roles`, `idempotency_keys.actor_user_id` and `audit_logs.actor_user_id`; an audit trail must outlive the identity it describes. Disable is the deletion semantics this system has, and a `DELETE` returning `204` while merely disabling would be a lie in the route table (ADR-007 D-1).
+
+**Tenancy, for a table that has none.** `users` carries no organization column: an identity is platform-level and its tenancy is entirely the grants it holds (`TENANCY.md` §1). Every endpoint here narrows to *users holding at least one grant in the request's organization*, beneath which `users_select` RLS still applies. The two are not redundant — RLS admits any user reachable through **any** organization in scope, which for a reseller admin is wider than the organization the request selected.
+
+| Method | Path | Permission | Target scope | Request | Response | Errors | Audit | Idempotency | Transaction |
+|---|---|---|---|---|---|---|---|---|---|
+| `GET` | `/users` | `users.read` | organization | `status?`, `email?`, plus `limit`/`cursor`/`sort` (§8) | `{data:[user], page}` | `400` bad cursor, sort or unknown parameter | — | safe | one read-only tenant transaction |
+| `GET` | `/users/:id` | `users.read` | organization | — | `{data:user}` | `404` unknown or not a member of this organization, with no echo of the id | — | safe | one read-only tenant transaction |
+| `POST` | `/users` | `users.invite` | organization | `{email, phone?, initialRole:{roleId, scopeType, scopeId}}` | `201 {data:user}` with `status: "invited"` | `409` address already registered; `404` role or scope out of reach; `403` the grant exceeds the actor's authority at that scope, or names a platform role; `422` scope type not admitted by the role; `400` malformed address or missing `initialRole` | `user.invited` **and** `user_role.granted`, both in the same transaction | **`Idempotency-Key` supported** (§4) | one transaction: authorize → insert → grant → audit |
+| `PATCH` | `/users/:id` | `users.update` | organization | `{phone?}` — `null` clears | `200 {data:user}` | `404`; `400` any other property | `user.updated`, only when something changed | naturally idempotent; no key | one transaction |
+| `POST` | `/users/:id/disable` | `users.disable` | organization | — | `200 {data:user}` | `404`; `409 USER_LIFECYCLE_CONFLICT` already disabled; **`409 AUTHZ_LAST_PLATFORM_ADMIN`** | `user.disabled` | not keyed — the transition is its own answer | one transaction: authorize → guard → status → revoke sessions → audit |
+| `POST` | `/users/:id/reactivate` | `users.reactivate` | organization | — | `200 {data:user}` | `404`; `409 USER_LIFECYCLE_CONFLICT` not disabled | `user.reactivated` | not keyed | one transaction |
+
+The user resource, in full — and the list is exhaustive:
+
+```jsonc
+{ "id": "uuid", "email": "a@b.test", "phone": "+91…|null",
+  "status": "invited|active|disabled",
+  "lastLoginAt": "ISO-8601|null", "createdAt": "ISO-8601", "updatedAt": "ISO-8601" }
+```
+
+**Nothing else is ever returned.** No `passwordHash`, no `passwordUpdatedAt`, no `mfaSecretRef`, no `mfaEnabled`, no session, token or API-key material. `password_hash` and `mfa_secret_ref` are credential material (`SECURITY.md` §1); `mfa_enabled` is withheld because MFA is not implemented at all (`RBAC.md` §5) and publishing the flag would imply a shipped control.
+
+**Role assignments are not embedded.** They are their own resource with their own read model — `GET /role-assignments?userId=` — and copying them here would be a second representation of authorization to keep in step with the first.
+
+**Creation takes no password, returns no password, and mints no credential.** A created user is `invited` and cannot authenticate. How an invited user comes to hold one is `DECISIONS.md` D16 and is still undecided; this phase neither guesses at it nor sends anything. No invitation email, SMS or WhatsApp message is sent by any code path.
+
+**`initialRole` is required, and that is the data model rather than a preference.** A user with no grant is invisible to the administrator who created them, to `GET /users` and to the `users_select` policy — the only remaining trace would be a `409` the next time someone tried the same address. The grant is made through `RoleAssignmentService` in the same transaction, with its five guards intact; only guard 5's reachability *probe* is skipped, because the user this transaction just created cannot yet hold the visible grant it looks for (ADR-007 D-4).
+
+**`email` is not editable.** Changing the login identity would have to settle case-normalized global uniqueness, whether live sessions survive, what an API key created by the old address means, whether the old address may be reclaimed, and how account recovery behaves across the change. The honest mechanism is a verified change flow that does not exist, and a `PATCH` that quietly rewrote the identity would be that flow's absence shipped as a feature. Deferred, explicitly.
+
+**Disabling a platform administrator.** The last-active-administrator invariant applies to this endpoint exactly as it does to `DELETE /role-assignments/:id`: `409 AUTHZ_LAST_PLATFORM_ADMIN`, with `trg_users_platform_admin_liveness` (migration `0005`) as the final authority beneath it. The service takes the same advisory lock first for the lock ordering ADR-005 D-7 describes, and a `restrict_violation` from a lost race is translated to the same `409` rather than surfacing as a `500`.
+
+**Sessions on disable: both controls, neither new.** `AuthGuard` re-reads the user on every request and refuses a non-active one, so a disabled user is locked out at their next request whatever happens to their session rows — that is the guarantee, and it does not depend on the endpoint. The endpoint additionally revokes every live session through the existing `SessionService`, in the same transaction, so the stored state agrees with it. Reactivation does **not** restore those sessions: it returns the ability to sign in, not the sessions that existed before.
+
+**Query cost is bounded and constant-shaped.** `GET /users` is one query over `users` with an `EXISTS` semi-join into `user_roles`, supported by `user_roles_org_user_id_idx` (migration `0008`) and bounded by the organization's own membership; there is no `COUNT(*)` and no N+1. Detail is 1 query, `PATCH` 3, disable 6, reactivate 5, create 9 — plus the six `SET LOCAL` statements every tenant transaction issues.
+
+**Deliberately excluded from Phase 1B.6.1**
+
+| Not built | Why |
+|---|---|
+| `DELETE /users/:id` | `acc_app` has no such grant, and the audit trail must outlive the identity. Disable is the deletion semantics (ADR-007 D-1) |
+| Invitation delivery, invitation tokens, administrator-set passwords | `DECISIONS.md` D16 is undecided. Inventing a token table or returning a temporary credential would be the unsafe workaround the decision exists to prevent |
+| Email change | Needs a verified change flow that does not exist — see above |
+| Free-text user search | Deferred with search generally (`FRONTEND_API_CONTRACT.md` §16). `email` is an exact, case-insensitive match, not a search |
+| `mfaEnabled` on the resource | MFA is not implemented; publishing the flag would imply otherwise |
+| API-key management, audit read | Phase 1B.6.2 and later |
+
 ## 4. Idempotency
 
 This section is the API-facing view of the tier-1 mechanism defined canonically in `DATABASE.md` §7.1 — see that section before implementing; do not re-derive the semantics independently here. **Implemented in Phase 1B.5.9** (ADR-006).
@@ -233,6 +296,8 @@ Deliberately **excluded**, because a retry is by definition a different transpor
 **Canonicalization**: object keys sorted at every depth, so a client library or proxy that reorders JSON does not turn a safe retry into a mismatch; array order preserved, because `[a,b]` and `[b,a]` are different requests; `undefined` and absent treated alike; explicit `null` distinct from absent.
 
 **Why the principal is in the hash.** The key scope is organization-wide, so without it one principal could present another's key and receive that principal's stored response. Binding identity into the fingerprint means a different actor computes a different fingerprint and is refused. The principal's *identity* is hashed; its credential never is.
+
+**Where the key is accepted.** `POST /roles`, `POST /role-assignments` (Phase 1B.5.9) and `POST /users` (Phase 1B.6.1). It is **not** accepted on `PATCH /users/:id`, whose repeat is already the same state, nor on the lifecycle operations `POST /users/:id/disable` and `/reactivate`, whose second call is a `409 USER_LIFECYCLE_CONFLICT` naming the current status — a definite answer a retrying client can act on, and a better one than replaying a `200` that reports a transition as happening now when it happened earlier.
 
 ### 4c. Outcomes
 
@@ -369,6 +434,7 @@ Filters and sort fields are **allow-listed per endpoint**. There is no generic f
 | `GET /roles` | `isSystemRole`, `key` | `key`, `createdAt` | `key` | `roles.read` @ organization |
 | `GET /permissions` | `domain` | `key`, `domain` | `key` | `permissions.read` @ organization |
 | `GET /role-assignments` | `userId`, `scopeType`, `scopeId` | `createdAt`, `scopeType` | `-createdAt` | `role_assignments.read` @ organization |
+| `GET /users` | `status`, `email` (exact, case-insensitive) | `createdAt`, `email`, `status` | `-createdAt` | `users.read` @ organization |
 | `GET /tenants/workspaces` | `status` (+ advisory `orgId`) | `name`, `createdAt` | `name` | `workspaces.read` @ organization |
 | `GET /auth/sessions` | — | — | — | self only |
 

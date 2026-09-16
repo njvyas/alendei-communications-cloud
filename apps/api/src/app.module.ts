@@ -18,6 +18,7 @@ import { ObservabilityModule } from './observability/observability.module';
 import { RbacModule } from './rbac/rbac.module';
 import { RedisModule } from './redis/redis.module';
 import { TenancyModule } from './tenancy/tenancy.module';
+import { UsersModule } from './users/users.module';
 import { SecretsModule } from './secrets/secrets.module';
 
 /**
@@ -44,6 +45,7 @@ import { SecretsModule } from './secrets/secrets.module';
     HealthModule,
     TenancyModule,
     RbacModule,
+    UsersModule,
   ],
   providers: [
     { provide: APP_PIPE, useValue: validationPipe() },

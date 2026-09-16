@@ -70,7 +70,7 @@ The audit log (1B.0) is complete. The remaining sub-phases are sequenced by actu
 | **1B.3** | Authentication and session lifecycle: login, refresh with rotation, logout, session revocation, `AuthGuard`, auth rate limiting | 1B.2 | `RequestContext.setPrincipal()` is called on every authenticated request; `/auth/me` returns a real principal; **plus the end-to-end chain criterion below** — ✅ complete, proven link by link in `auth-chain.int-spec.ts` |
 | **1B.4** | Tenant-context hardening and closure: pooled-connection contamination and error-path tests, one generic advisory-identifier cross-check (`AdvisoryTenantGuard`), documentation reconciliation | 1B.3 | §6h's pooled-connection and rollback cases pass against a real pool; no hand-written advisory cross-check remains in any controller; the shared mechanism is declarative and reusable |
 | **1B.5** | Authorization correctness and administration, in seven increments (below) | 1B.4 | Every increment's exit criterion met; the full §6b, §6e and §6n matrices pass, each with its mutation |
-| **1B.6** | Identity and credentials surface: user invite/update/disable, API-key create/list/revoke, `/audit` read | 1B.5 | The minimum endpoint set is live, audited, rate-limited and IDOR-safe. **Blocked until `DECISIONS.md` D16 (invitation-token delivery) is settled** |
+| **1B.6** | Identity and credentials surface, in three increments (below): user lifecycle, API-key management, `/audit` read | 1B.5 | The minimum endpoint set is live, audited and IDOR-safe. **No longer blocked on `DECISIONS.md` D16** — ADR-007 D-5 separates the lifecycle API from credential delivery, so 1B.6.1 ships without it and only *delivery* waits |
 | **1B.7** | Vertical slice, minimal console, Gate B | 1B.6 | Every Gate B criterion below is met |
 
 #### 1B.5 increments
@@ -105,6 +105,20 @@ Sequenced by dependency, and the order is load-bearing: the evaluator correction
 **Organization-creation integration is deferred to 1B.8.** `TenantRoleProvisioner` ships in 1B.5.4 as the sanctioned seeding mechanism and is tested directly, but no organization-creation path exists to call it yet — 1B.8 wires it in. It deliberately does not create organizations and offers no HTTP surface.
 
 Two deliberate departures from the obvious ordering. Denial auditing (1B.5.3) comes **before** administration, because it is part of every administrative endpoint's security contract rather than a follow-up to them. Escalation guards merge into 1B.5.5 rather than forming their own increment, because a grant endpoint without its non-escalation guard must not exist even transiently.
+
+#### 1B.6 increments
+
+| Step | Objective | Schema | Exit criterion |
+|---|---|---|---|
+| **1B.6.1** | User lifecycle administration: `GET/POST /users`, `GET/PATCH /users/:id`, `POST /users/:id/disable` and `/reactivate`; atomic create-and-initial-grant through the existing `RoleAssignmentService`; the `users.reactivate` permission; the `user.reactivated` audit action; the API-key creator-status fix | `0008` — `user_roles(org_id, user_id)` for the membership probe, the `users.reactivate` catalogue row and its attachment to the seeded roles. No column, no policy change | ✅ complete — 807 → 907 tests, none weakened; the disable path of `trg_users_platform_admin_liveness` proven end to end for the first time; 22 mutations executed, 20 detected and 2 recorded as surviving because a lower layer is the real boundary; `FRONTEND_API_CONTRACT.md` stays **DRAFT** with one blocker closed |
+| **1B.6.2** | API-key management: create, list, revoke. The binding-scope and creator-intersection semantics already exist and are enforced at authentication (`RBAC.md` §5c) — this is the surface that mints and retires keys, with the secret shown exactly once | none expected | not started |
+| **1B.6.3** | `/audit` read, with `audit.read` / `platform.audit.read` and the tenant-scoped filters `DATABASE.md` §12 implies | none expected | not started |
+
+**Credential delivery is still deferred, and that is what makes 1B.6.1 shippable.** `DECISIONS.md` D16 was recorded as blocking the whole of 1B.6. ADR-007 D-5 separates the two concerns instead: `POST /users` creates an `invited` identity and does not pretend to make it usable, so everything about lifecycle — listing, membership scoping, profile update, disable, reactivate, the liveness invariant, session revocation — ships and is tested now, and only the question of how a person first obtains a password waits for D16. Creating the user was never the hard part of that decision.
+
+**Deletion is not deferred; it is decided against** (ADR-007 D-1). `acc_app` has never held a `DELETE` grant on `users`, so the option was never available to the application role, and the audit trail must outlive the identity it describes. There is no `DELETE /users/:id` route and no `deleted_at` column.
+
+**A fourth mutation-testing outcome worth recording.** Removing the service-level last-platform-admin check from the disable path is **not** detectable through the API, because migration `0005`'s trigger refuses the same transition and `translateLivenessViolation` maps its `restrict_violation` onto the identical `409`. That is stronger than 1B.5.6's equivalent mutation, where removing the service check cost the clean error. What the service check buys here is the ADR-005 D-7 lock ordering and avoiding an aborted transaction in the common case — not the guarantee, which is the trigger's. Recorded rather than papered over with a test written to detect it.
 
 #### 1B.3 exit criterion — the authenticated chain, proven end to end
 

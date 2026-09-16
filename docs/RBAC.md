@@ -200,7 +200,17 @@ invited  ──activate(password)──▶  active  ──disable()──▶  di
 
 An `invited` user has no credential and cannot authenticate. A `disabled` user retains their digest — which is precisely why status is checked independently of password verification, and why a correct password for a disabled account is still a failed login.
 
-**How an invited user comes to set their password is not yet decided.** It requires either an invitation token delivered out of band or an administrator setting it directly, and neither is documented. Phase 1B.2 deliberately implements neither: `activate(userId, password)` takes the password directly, which is what the bootstrap CLI needs, and the delivery mechanism is recorded as a decision required before the `/users` invitation endpoint ships in Phase 1B.6 (`DECISIONS.md`). No invitation-token table is invented and no mail transport is assumed.
+**How an invited user comes to set their password is still not decided.** It requires either an invitation token delivered out of band or an administrator setting it directly, and neither is documented. Phase 1B.2 implemented neither: `activate(userId, password)` takes the password directly, which is what the bootstrap CLI needs, and the delivery mechanism is `DECISIONS.md` D16. No invitation-token table is invented and no mail transport is assumed.
+
+**Phase 1B.6.1 ships the lifecycle API without resolving D16**, which is what lets the two be separated at all. `POST /users` creates an `invited` identity and stops there: it accepts no password, returns no password, mints no temporary credential and sends nothing. The created user is exactly as usable as one the bootstrap CLI has not activated — which is to say not at all — and the credential-delivery question is answered when D16 is, without the API having guessed at it in the meantime. The transitions the API does own are `disable()` and a `reactivate()` that restores the state the CHECK admits:
+
+```
+invited  ──activate(password), out of band──▶  active  ──disable()──▶  disabled
+   ▲                                              ▲                        │
+   └──────────────── reactivate() ────────────────┴────────────────────────┘
+```
+
+`reactivate()` returns a user to `active` when a credential survives and to `invited` when none does. It is not a choice: `users_active_requires_credential` makes `active` unrepresentable for a credential-less user, and leaving them `disabled` would make a user who was disabled before ever activating permanently unrecoverable (ADR-007 D-2).
 
 ### 5b. Bootstrapping the first platform admin (ADR-003 D-1)
 
@@ -358,13 +368,32 @@ Revocation is authorized at **the grant's own scope**, read from the stored row 
 
 **`users` is platform-level and RLS cannot scope it**, so reachability of a grant target is established the only honest way available: the user must already hold at least one grant this request can see. A user in another tenant has none visible, so it is `404` — the same answer as an id that does not exist, which is what keeps the endpoint from becoming a user-enumeration oracle.
 
-**Not yet enforced:** the last-platform-admin invariant on revocation (`API.md` §3c's `409`). It is Phase 1B.5.6's, together with the advisory-lock trigger that makes it hold under concurrency (ADR-005 D-7).
+**The last-platform-admin invariant is enforced on revocation from Phase 1B.5.6** (§7a), and on user disable from Phase 1B.6.1 (§8c) — the same invariant, the same advisory lock, and the same trigger beneath both.
 
 **Grants take effect on the next request, not mid-request.** Authorization is re-derived per request from current database state (ADR-003 D-3), so a grant committed during request *n* applies from request *n+1*. This is a consequence of re-derivation rather than a limitation to work around, and it means a revocation is effective immediately on the next call rather than at token expiry.
 
 **Refused attempts are audited as deliberately as successful ones.** `audit_logs.outcome = 'denied'` exists for this, and a rejected escalation is precisely the event worth having a record of. A refusal by the authorization layer itself is recorded as `authorization.denied` with the actor's own legitimate scope and the attempted target in metadata (`SECURITY.md` §4, ADR-005 D-6), implemented in Phase 1B.5.3 and owned by `AuthorizationService`.
 
 The actor's scope is recorded **narrowest-first** — workspace, else organization, else reseller, else platform — because that is the most truthful statement of where the actor was: a principal pinned to one workspace did not act "in the organization", and recording it that way would overstate its reach on a permanent record. No fallback scope is invented for a principal with no resolved context; the row is refused and the request fails closed, which is defensive only, since every reachable path resolves a tenant context before any authorization check.
+
+### 8c. User lifecycle (Phase 1B.6.1)
+
+A user's *identity* and a user's *authority* are administered separately, and the split is the point: `UserAdministrationService` owns the first and owns none of the second.
+
+| Operation | Rule | Audit |
+|---|---|---|
+| Create | `users.invite` at the request's organization. Creates an `invited` identity — no credential is accepted, generated or returned — and confers its first grant **through `RoleAssignmentService.grant`**, in the same transaction, with guards 1-4 of §8b intact | `user.invited`, plus `user_role.granted` from the grant itself |
+| Update | `users.update`. Reaches `phone` and nothing else. `status`, `email`, roles and scopes are absent from the DTO, so the global `forbidNonWhitelisted` pipe refuses them as `400` rather than a guard having to remember to | `user.updated`, only when a value actually changed |
+| Disable | `users.disable`. Sets `status = 'disabled'`, revokes every live session in the same transaction, and is bounded by the liveness invariant (§7a) | `user.disabled` |
+| Reactivate | `users.reactivate`. Restores `active` when a credential survives, otherwise `invited` (§5a.1). Sessions are **not** restored | `user.reactivated` |
+
+**`users.reactivate` is a separate permission** rather than half of `users.disable`. Only reactivation can hand someone back the authority they held, including an administrator's; a permission named "disable" that also re-enabled would misdescribe what it confers, and every holder of it would silently acquire the other half. It is granted to `org_admin` (which already holds `users.disable`) and to `alendei_super_admin`, and to nothing else — withholding it from an organization that can disable would leave a tenant able to lock a colleague out with no path back.
+
+**The initial grant is required, and that follows from §6 rather than from product taste.** A user's organization *is* the set of grants it holds, so a user created with none is invisible to the administrator who created it, to `GET /users` and to the `users_select` policy. Creating one would not be a lean default; it would be a row nobody can see and nobody can reach.
+
+**Guard 5 is the one thing creation relaxes, and only for a user it created itself.** §8b's reachability probe asks whether the target already holds a grant this request can see — which a user created moments ago cannot, its first grant being the one under construction. The probe is skipped; the property is not. Reachability is established by construction: the caller authorized `users.invite` at its own organization and inserted the row in this transaction. Guards 1-4 run unchanged, and guard 1 — may this actor grant *at this scope* — is the escalation-bearing half. The relaxation is an in-process option with no field on any DTO, so no request can ask for it, and a structural test asserts it has exactly one caller (ADR-007 D-4).
+
+**Deletion does not exist, at any layer.** `acc_app` holds no `DELETE` grant on `users` (migration `0000`), so it is unavailable rather than merely unimplemented, and the API offers no `DELETE` route to imply otherwise. Users are referenced by sessions, API keys, grants, idempotency records and audit rows; the trail must outlive the identity it describes (ADR-007 D-1).
 
 ## 9. Related
 

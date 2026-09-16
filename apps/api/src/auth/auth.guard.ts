@@ -340,6 +340,17 @@ export class AuthGuard implements CanActivate {
    * reseller term is resolved because a reseller-scoped creator legitimately
    * covers the organizations beneath its reseller; omitting it would silently
    * strip a reseller admin's authority from every key it creates.
+   *
+   * **A creator who cannot sign in confers nothing** (Phase 1B.6.1). The
+   * intersection is recomputed per request precisely so a key cannot outlive the
+   * authority that produced it, and a disabled creator is that case: their
+   * grants still sit in `user_roles`, but `AuthGuard` refuses their own
+   * requests, so honouring the same grants through a credential they minted
+   * would leave a disabled administrator with a working key — the exact outcome
+   * disabling is for. The status is read from current state, in this
+   * transaction, alongside everything else here; a key whose creator is
+   * `invited` or `disabled` resolves to no permissions at all, the same answer
+   * as a key whose creator no longer exists.
    */
   private async creatorAuthorityAtBinding(
     tx: Transaction,
@@ -347,6 +358,9 @@ export class AuthGuard implements CanActivate {
     bindingScope: { scopeType: 'organization' | 'workspace'; scopeId: string },
     orgId: string,
   ): Promise<string[]> {
+    const creator = await this.users.findById(tx, creatorId);
+    if (!creator || !this.users.canAuthenticate(creator)) return [];
+
     const creatorScopes = await this.scopes.forUser(tx, creatorId);
 
     const chain: ScopeChain = {

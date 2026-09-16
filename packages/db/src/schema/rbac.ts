@@ -184,6 +184,15 @@ export const userRoles = pgTable(
     index('user_roles_role_id_idx').on(table.roleId),
     index('user_roles_org_id_idx').on(table.orgId),
     index('user_roles_scope_idx').on(table.scopeType, table.scopeId),
+    /**
+     * The organization-membership probe behind `GET /users` (migration `0008`).
+     *
+     * `users` carries no tenant column, so "the users of this organization" is
+     * expressed as `EXISTS (SELECT 1 FROM user_roles WHERE user_id = users.id
+     * AND org_id = ?)`. This index makes that an index-only semi-join instead
+     * of a scan of every grant in the organization per candidate row.
+     */
+    index('user_roles_org_user_id_idx').on(table.orgId, table.userId),
     // Keyset pagination for `GET /role-assignments` (migration `0006`).
     index('user_roles_org_created_at_id_idx').on(table.orgId, table.createdAt, table.id),
     index('user_roles_org_scope_type_id_idx').on(table.orgId, table.scopeType, table.id),

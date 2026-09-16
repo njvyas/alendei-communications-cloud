@@ -4,6 +4,7 @@
  * constraints and indexes, and time-sortable UUIDv7 primary keys.
  */
 import { sql } from 'drizzle-orm';
+import { ALL_PERMISSION_KEYS } from '@acc/contracts';
 
 import { connect, createTenant, destroyTenant, type Principals } from './harness';
 
@@ -138,6 +139,10 @@ describe('Phase 1 schema', () => {
       'ws_tickets_ticket_hash_key',
       'idempotency_keys_scope_key',
       'user_roles_scope_idx',
+      // The organization-membership probe behind `GET /users` (migration
+      // `0008`). `users` has no tenant column, so this index is the whole of
+      // what makes "the users of this organization" a bounded query.
+      'user_roles_org_user_id_idx',
       'permissions_key_key',
     ]) {
       expect(names.has(expected)).toBe(true);
@@ -199,6 +204,23 @@ describe('Phase 1 schema', () => {
       await destroyTenant(db.admin, a);
       await destroyTenant(db.admin, b);
     }
+  });
+
+  /**
+   * The catalogue in the database is the one the code checks against.
+   *
+   * `AuthorizationService` compares against permission *keys*; a key the code
+   * asserts but the catalogue lacks can never be attached to a role, so the
+   * endpoint guarding it is unreachable rather than unguarded — a failure that
+   * looks like a permissions bug and is actually a seeding one. Migration
+   * `0008` and `seed.ts` both write `users.reactivate`, and this is what says
+   * the two agree.
+   */
+  it('seeds every permission the code publishes', async () => {
+    const result = await db.admin.execute<{ key: string }>(sql`SELECT key FROM permissions`);
+    const seeded = new Set(result.rows.map((row) => row.key));
+    const missing = ALL_PERMISSION_KEYS.filter((key) => !seeded.has(key));
+    expect(missing).toEqual([]);
   });
 
   it('seeds the platform default reseller exactly once', async () => {

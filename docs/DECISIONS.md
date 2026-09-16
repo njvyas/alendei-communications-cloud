@@ -490,7 +490,7 @@ No `revoked_at` column on `user_roles`. A revocation column would become a secon
 | D6 | SSO/SAML/OIDC and full OAuth2 partner-integration implementation timing | Architecturally reserved (identity type defined in `API.md` §3); no Phase 1–8 work depends on it existing yet. Note: the per-organization IdP configuration column `DATABASE.md` §2 once implied is **not** present on `organizations` and is deferred with this decision | Reserved, not implemented; recommend deciding before Phase 9 |
 | D10 | MFA/TOTP implementation phase | Resolved out of Phase 1B by ADR-003 D-6: no library, configuration, table or flow exists, and the login path is simpler without a challenge branch. Nothing in Phases 1–2 depends on it | Out of Phase 1B; `users.mfa_enabled`/`mfa_secret_ref` remain reserved columns. Decide the implementing phase before any real customer PII or production tenant is onboarded |
 | D11 | Scope-set caching for per-request grant resolution | ADR-003 D-3 re-derives grants per request by design; caching is a measured optimization, not a correctness requirement, and a stale cache is an authorization risk | Uncached in Phase 1B; revisit with measurements |
-| D16 | How an invited user receives the ability to set a password | Phase 1B.2 implements `activate(userId, password)` as a service primitive, which is all the bootstrap CLI needs. A delivery mechanism requires either an invitation-token table or an administrator-set password, plus (for the token route) a mail transport that does not exist. Nothing in 1B.2–1B.5 depends on it | **Undecided — required before the `/users` invitation endpoint ships in Phase 1B.6.** Options: an `invitation_tokens` table with a hashed, short-lived, single-use token; or administrator-set initial passwords with forced rotation on first login |
+| D16 | How an invited user receives the ability to set a password | Phase 1B.2 implements `activate(userId, password)` as a service primitive, which is all the bootstrap CLI needs. A delivery mechanism requires either an invitation-token table or an administrator-set password, plus (for the token route) a mail transport that does not exist | **Still undecided, and no longer blocking the `/users` surface.** Phase 1B.6.1 ships user lifecycle *without* it (ADR-007 D-5): `POST /users` creates an `invited` identity, accepts no password, returns none and sends nothing, so a created user is exactly as usable as one the bootstrap CLI has not activated. What remains blocked is only credential *delivery* — a created user cannot sign in until this is decided. Options unchanged: an `invitation_tokens` table with a hashed, short-lived, single-use token; or administrator-set initial passwords with forced rotation on first login. Email change (ADR-007 D-3) needs the same machinery and is deferred with it |
 | D12 | Password reset / account recovery | No mail transport exists in Phase 1, and the flow is not in `API.md` §2's resource areas | Deferred; required before external users self-serve |
 | D13 | Account lockout (`users.locked_until`) beyond rate limiting | Redis rate limiting plus `auth.login.failed` audit covers Phase 1B's threat model; lockout adds a denial-of-service vector against a known address | Deferred; rate limiting only |
 | D14 | API-key rotation as a first-class operation with lineage | Revoke-plus-create already produces two audit rows describing the same change | Deferred |
@@ -555,6 +555,74 @@ Actor columns were added (migration `0007`) for **diagnostics only**, not as a u
 - The immediate-`409`-while-in-flight behaviour is replaced by bounded blocking, with `409` retained for the timeout.
 - Migration `0007` adds `actor_user_id`, `actor_api_key_id` and `correlation_id`.
 - Physical cleanup of expired records is **not** implemented; expiry is enforced at lookup, so correctness does not depend on a sweeper (§3).
+
+## 1g. ADR-007 — User lifecycle is disable, not deletion, and creation confers identity without credentials
+
+**Status**: Accepted (Phase 1B.6.1). Implements `API.md` §3d and `RBAC.md` §8c. Extends ADR-005 D-1/D-5/D-7; supersedes nothing. Does **not** resolve D16.
+
+### Context
+
+`users`, its three-state `status` enum and the `users_active_requires_credential` CHECK have existed since migration `0000`; `UserLifecycleService` has implemented `invite`/`activate`/`disable` as service primitives since Phase 1B.2. What was missing was an API, and four questions the schema left open: whether deletion exists, what reactivation restores, whether the login identity is editable, and whether a created user is usable.
+
+### D-1 — There is no hard delete, and its absence is structural rather than a policy
+
+`acc_app` holds no `DELETE` grant on `users` (migration `0000`), so the application role cannot perform one however the service is written — the security suite asserts the refusal is `42501 insufficient_privilege` rather than a policy returning zero rows. That grant was withheld deliberately and the reasoning still holds: users are referenced by `sessions`, `api_keys.created_by`, `user_roles`, `idempotency_keys.actor_user_id` and `audit_logs.actor_user_id`, and an audit trail must outlive the identity it describes. Deleting a user would either cascade those away or be refused, and the first is a silent, unbounded, unaudited change.
+
+| Option | Verdict |
+|---|---|
+| Hard `DELETE /users/:id` | **Rejected.** Needs a grant the role does not have, and destroys audit attribution. `user_roles` cascades, so it would also be a mass privilege revocation with no record of any individual revocation — the same defect ADR-005 D-8 closed for roles |
+| Soft delete (`deleted_at`) | **Rejected.** A second state the evaluator, the membership predicate and every future query must filter on, where one forgotten predicate silently resurrects an account. Identical to the reasoning in ADR-005 D-8 and `DECISIONS.md` D17 |
+| A `DELETE` route that disables | **Rejected.** It would answer `204` while leaving the row, which is a lie in the route table and in the client that reads it |
+| **Disable, with no `DELETE` route at all** | **Chosen.** The state already exists, already means something (the CHECK), and is already what the liveness trigger understands |
+
+A caller looking for deletion finds no route, rather than one whose semantics they have to read the documentation to distrust.
+
+### D-2 — Reactivation restores the state the CHECK admits, not always `active`
+
+`users_active_requires_credential` refuses `active` for a user holding neither a password nor an MFA secret. A user disabled before they ever activated therefore cannot be returned to `active`, and the three available answers are not equal:
+
+| Option | Verdict |
+|---|---|
+| Refuse with `409` | **Rejected.** D16 is unresolved, so there is no way to give them a credential — the user would be permanently unrecoverable, by a rule that exists to protect them |
+| Force `active` anyway | **Rejected.** The database refuses it, so this is a `500` dressed as a feature |
+| **Restore `invited` when no credential survives** | **Chosen.** It is exactly the state they were in before, the response says which state it reached, and the audit row records it |
+
+### D-3 — The login identity is not editable, and that is deferred rather than omitted
+
+`PATCH /users/:id` reaches `phone` and nothing else. Changing `email` would have to settle case-normalized global uniqueness, whether live sessions survive the change, what an API key created by the old identity means, whether the old address may be reclaimed, and how account recovery behaves across it. The honest mechanism is a verified change flow with a token, which does not exist and is the same missing machinery as D16. A `PATCH` that silently rewrote the identity would be that absence shipped as a feature.
+
+The cost is admitted: the update endpoint reaches one column. Adding a display-name column to make it look fuller was rejected — that is a schema change driven by the shape of an API rather than by a requirement (`DATABASE.md` §1).
+
+### D-4 — Creation and the initial grant are atomic, and the grant still goes through `RoleAssignmentService`
+
+A user's organization *is* the set of grants it holds (`TENANCY.md` §1), so a user created with none is invisible to the administrator who created it, to `GET /users` and to the `users_select` policy — the only remaining trace would be a `409` the next time someone tried the address. `initialRole` is therefore required, and the grant is made in the same transaction.
+
+It is made by calling `RoleAssignmentService.grant`, not by writing `user_roles`. A second writer of that table would be a second, unguarded way to confer privilege, which is precisely what `RBAC.md` §8b's five guards exist to prevent. One guard does not fit, and only one: guard 5 establishes reachability by requiring the target to already hold a grant this request can see, which a user created moments ago cannot — its first grant is the one under construction.
+
+| Option | Verdict |
+|---|---|
+| Write `user_roles` from the user service | **Rejected.** A second grant path with none of the five guards |
+| Weaken guard 5 for every caller (admit any user with no grants) | **Rejected.** That admits *any* unreferenced user in the database, from any tenant — it converts the probe into an enumeration surface |
+| Create first, grant in a second request | **Rejected.** Leaves an invisible, unreachable user behind whenever the second request does not arrive |
+| **Skip guard 5's probe only for a user this transaction created** | **Chosen.** Reachability is established by construction — the caller authorized `users.invite` at its own organization and inserted the row here. Guards 1-4 run unchanged, including guard 1, which is the escalation-bearing half |
+
+The relaxation is an in-process option with no field on any DTO, so no request can ask for it, and a structural test asserts it has exactly one caller.
+
+**A consequence worth stating: `INSERT … RETURNING` is not usable here.** PostgreSQL applies the `SELECT` policy to a `RETURNING` clause, and a user with no grant satisfies none of `users_select`'s three arms. The id is generated application-side, the insert returns nothing, and the row is read back after its grant exists — which doubles as the proof that it is reachable.
+
+### D-5 — No credential is accepted, generated or returned, and D16 stays open
+
+`POST /users` creates an `invited` identity: no password field, no password hash, no temporary credential, no invitation token, no email. That is what allows the lifecycle API to ship while D16 is undecided, and inventing any of those would be the unsafe workaround D16 exists to prevent. A created user is exactly as usable as one the bootstrap CLI has not activated.
+
+### Consequences
+
+- `API.md` gains §3d; `RBAC.md` gains §8c and §5a.1 is extended.
+- Migration `0008`: one index, the `users.reactivate` catalogue row, and its attachment to `alendei_super_admin` and the seeded `org_admin` roles. No column, no lifecycle timestamp, no policy change.
+- `users.reactivate` is a new permission, separate from `users.disable` (`RBAC.md` §8c).
+- `user.reactivated` is a new audit action; `user.invited` and `user.reactivated` join `SECURITY_SENSITIVE_AUDIT_ACTIONS`, which forces both to be written inside the transaction that performs them.
+- **One authentication change, and it is a fix rather than a feature**: the API-key creator-authority intersection now resolves to nothing when the creator is not `active`. Without it, disabling an administrator left every key they minted working — the exact outcome disabling is for (`SECURITY.md` §4).
+- `trg_users_platform_admin_liveness` (migration `0005`) gets its first HTTP caller. The service adds the clean `409` and the ADR-005 D-7 lock ordering; the trigger remains the authority, and a lost race's `restrict_violation` is translated to the same `409`.
+- **Accepted residual risk**: a global unique index on `email` makes `409` on creation a platform-wide existence signal for an address. Recorded in `SECURITY.md` §8 rather than mitigated; the alternatives are per-tenant identities or answering `201` for something not created.
 
 ## 3. Risks explicitly accepted by design (not oversights)
 

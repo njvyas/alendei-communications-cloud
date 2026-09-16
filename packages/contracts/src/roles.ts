@@ -118,6 +118,7 @@ export const TENANT_ROLE_DEFINITIONS: readonly RoleDefinition[] = Object.freeze(
       P.USERS_INVITE,
       P.USERS_UPDATE,
       P.USERS_DISABLE,
+      P.USERS_REACTIVATE,
       P.ROLES_CREATE,
       P.ROLES_UPDATE,
       P.ROLES_DELETE,

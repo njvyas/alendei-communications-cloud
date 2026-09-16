@@ -378,6 +378,14 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 - **Correlation ids** — a replay carries its **own** id, and the record retains the *original* for diagnostics.
 - **Concurrency, six cases, each asserting the final database state rather than the statuses** — two and five concurrent identical requests each produce exactly one role and one record; the same key racing with different bodies yields `201`/`422` and at most one row; the same key racing across two organizations writes one row each; a rolled-back execution leaves the key free; and a first execution racing repeats never double-writes.
 
+**User lifecycle (Phase 1B.6.1, `API.md` §3d, `RBAC.md` §8c).** Three suites, 102 cases, over real HTTP against real rows, plus one structural unit suite. `users` is the one administered table with **no tenant column**, so most of what is asserted here is a boundary the schema does not supply.
+
+- `apps/api/test/user-administration.sec-spec.ts` (70 cases) — **membership, not visibility**: `users_select` admits any user reachable through *any* organization in scope, and the endpoint narrows to the organization the request selected, so a reseller admin's list does not widen with its other memberships. Cross-organization and cross-reseller users are absent from the list and `404` on detail, with a real foreign id byte-identical to an unknown one apart from the correlation id. **Credential material** is asserted absent from list, detail, creation and every audit row — no digest, no `passwordUpdatedAt`, no `mfaSecretRef`, no `mfaEnabled`, no token — and the detail projection is asserted to be exactly the seven published fields. **Creation** produces an `invited` user with its first grant atomically, rolls the identity back when the grant is refused, refuses a platform role, refuses a role carrying a permission the actor lacks at that scope, and refuses a body carrying `password`, `passwordHash` or `status`. **Update** reaches `phone` and refuses `status`, `email`, `roleId`, `orgId`, `scopeId`, `passwordHash` and `isPlatformAdmin` as `400`. **Lifecycle** covers disable, double-disable `409`, reactivation to `active` with a credential and to `invited` without one, and sessions not being resurrected. **Authorization** covers each of the five permissions independently, a workspace-pinned actor refused at the organization, a forged `X-Acc-Organization`, and the denial audit row. **API keys** cover scope withholding, binding scope, and a key whose creator has since been disabled. **RLS with the service bypassed** covers cross-tenant read and write, and asserts `acc_app`'s missing `DELETE` grant as `42501` rather than a policy returning zero rows. **Idempotency** covers verbatim replay, payload mismatch, a different principal, and a replay refused once the replayer's authorization is gone.
+- `apps/api/test/user-lifecycle-concurrency.sec-spec.ts` (17 cases) — the liveness invariant through its **second** violation path, which until this phase had no HTTP surface: `trg_users_platform_admin_liveness`, `AFTER UPDATE OF status`. Every race asserts the final database state, not the status codes. Disabling the only active administrator is `409 AUTHZ_LAST_PLATFORM_ADMIN` with nothing written and the session revocation rolled back with it; the trigger refuses the same transition with the service bypassed entirely; two administrators disabling each other concurrently produce exactly one winner and leave one administrator; three concurrent disables leave one; a disable racing a role revocation leaves one; two concurrent creations of one address produce exactly one user and exactly one grant; two concurrent disables and two concurrent reactivations of one user each produce one winner; and a refresh racing a disable never yields a usable session.
+- `apps/api/src/users/user-administration-boundary.spec.ts` (15 unit cases) — structural, because each of these would look entirely reasonable in review and no behavioural test necessarily catches it: the service never writes `user_roles`, never deletes a user, never selects the whole `users` row, reads the password digest only inside an `IS NOT NULL` test, never reads `principal.permissions` or `principal.roles`, records all four audit rows inside the caller's transaction, and is the **only** caller of the create-and-grant relaxation — which no DTO exposes.
+
+**Two isolation cases exist because the controls would otherwise mask each other.** Disabling a user both changes `status` *and* revokes their sessions, so every test driven through the endpoint passes even with `AuthGuard`'s user-state check removed — the session check catches it instead. Two cases therefore change `status` **directly in the database**, leaving the session rows live, so the per-request re-read of the user is the only thing that can refuse the request. Without them the mutation "skip the current user-status check during authentication" survives, which is how it was found.
+
 **Forged ancestry (ADR-005 D-5).** Asserted as the strong property, not the weak one: it is not enough that bad input is rejected: the *authoritative* chain must decide. Each case runs under a tenant context that can see the target, so visibility is not the variable — a grant naming another organization cannot reach a workspace whose real parent is a different organization; the same for a grant naming another reseller, and for one naming another workspace as a team's parent; and a principal holding grants that between them name a wholly false chain still reaches nothing. Every case carries a positive control on the claimant's own rows, so a denial cannot be mistaken for a broken query.
 
 | # | Case | Expected |
@@ -403,6 +411,14 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 | 28 | Grant at a scope type `allowedScopeTypes` does not admit | refused |
 | 29 | Duplicate grant | `409` |
 | 30 | Every scoped route performs exactly one target-scope check | asserted against the registered route table, not by review |
+| 31 | A user of another organization listed, read, updated or disabled | absent from the list; `404` on the rest, indistinguishable from an unknown id |
+| 32 | A disabled user's unexpired access token, with **no session revoked** | `401` — the per-request user-state re-read is the only control in play |
+| 33 | A disabled user's refresh, with **no session revoked** | `401`, and nothing rotated |
+| 34 | Disabling the last active platform administrator | `409 AUTHZ_LAST_PLATFORM_ADMIN`; the trigger refuses it with the service bypassed |
+| 35 | Two administrators concurrently disabling each other | exactly one succeeds; the final count is `1`, read from the database |
+| 36 | An API key whose creator has since been disabled | no effective permissions at all |
+| 37 | `PATCH /users/:id` naming `status`, `email`, `roleId` or a scope | `400`; nothing moves |
+| 38 | Credential material in a user response or a user audit row | never present |
 
 **Mutation sensitivity.** Each mutation is applied, the suite is run, the named tests must fail, and the implementation is restored:
 
@@ -474,6 +490,27 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 | The original correlation id replayed as the current one | **executed at 1B.5.9: 2 security tests fail** |
 | RLS disabled on `idempotency_keys` | **executed at 1B.5.9: 1 security test fails** |
 | `idempotency_keys_scope_key` unique index dropped | **executed at 1B.5.9: 27 security tests fail** — it is the mutex, not merely a constraint |
+| The organization-membership predicate removed from `/users` | **executed at 1B.6.1: 56 security tests fail** — it is the whole tenant boundary for a table RLS scopes only by reachability |
+| `AuthorizationService.assert` removed from disable | **executed at 1B.6.1: 24 security tests fail** |
+| The coherent-grant rule replaced by the flattened `principal.permissions` | **executed at 1B.6.1: 3 security tests fail**, case J among them |
+| The active-user check removed from `AuthGuard` | **executed at 1B.6.1: 2 security tests fail — and only after cases 32/33 were added.** Driven through the endpoint it survives, because the disable also revokes sessions and the session check catches it. The two cases that change `status` directly in the database are what isolate this control, and they exist because the mutation survived without them |
+| The user-status check removed from refresh | **executed at 1B.6.1: 1 security test fails** — case 33, for the same reason |
+| The service last-platform-admin check removed from disable | **executed at 1B.6.1: nothing fails, and that is the layering working.** `trg_users_platform_admin_liveness` refuses the same transition and `translateLivenessViolation` maps its `restrict_violation` onto the identical `409`, so the two are indistinguishable to a caller. Stronger than the equivalent 1B.5.6 mutation, where removing the service check cost the clean error. What the service check buys is ADR-005 D-7's lock ordering and avoiding an aborted transaction in the common case — not the guarantee. No test was written to force detection |
+| Session revocation removed from disable | **executed at 1B.6.1: 3 security tests fail** |
+| `password_hash` added to the user projection | **executed at 1B.6.1: 2 security tests fail** |
+| The `user.disabled` audit write removed | **executed at 1B.6.1: 1 security test fails** |
+| `status` and `roleId` admitted by `UpdateUserDto` | **executed at 1B.6.1: 2 security tests fail** |
+| `forbidNonWhitelisted` disabled | **executed at 1B.6.1: 3 security tests fail** |
+| The requested id echoed in the not-found message | **executed at 1B.6.1: 1 security test fails** — the byte-identical-answers case, which is the only one that can see it |
+| `Idempotency-Key` ignored on `POST /users` | **executed at 1B.6.1: 4 security tests fail** |
+| A replay returned without authorizing the current request | **executed at 1B.6.1: 3 security tests fail** |
+| The API-key creator status check removed | **executed at 1B.6.1: 1 security test fails** — the control this phase added, and the only case that exercises it |
+| Reactivation forces `active` regardless of credential | **executed at 1B.6.1: 1 security test fails** |
+| The create-and-grant relaxation removed (control mutation) | **executed at 1B.6.1: 10 security tests fail** — confirming guard 5 really is unsatisfiable for a just-created user, so the relaxation is load-bearing rather than defensive |
+| RLS disabled on `users` | **executed at 1B.6.1: 2 security tests fail** |
+| `trg_users_platform_admin_liveness` dropped | **executed at 1B.6.1: 7 security tests fail** |
+| `users_email_key` dropped | **executed at 1B.6.1: 2 security tests fail** |
+| `acc_app` granted `DELETE` on `users` | **executed at 1B.6.1: 3 security tests fail** — the grant's absence is the guarantee, so granting it is the mutation |
 | `scopeCovers` term dropped from `allows` | 4, 6, 8, 9 |
 | Permission term dropped from `allows` | 12 and every denial case |
 | `ScopeChainResolver` returns the request-supplied chain | 2, 4, 6 |

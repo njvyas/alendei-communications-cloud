@@ -35,6 +35,35 @@ export interface GrantInput {
   readonly scopeId: string | null;
 }
 
+/**
+ * Narrow, argued relaxations of `grant`'s guards. There is exactly one, and it
+ * touches exactly one guard.
+ */
+export interface GrantOptions {
+  /**
+   * The target user was inserted by **this same transaction** (Phase 1B.6.1).
+   *
+   * Guard 5 establishes reachability the only honest way available for a table
+   * RLS cannot scope: the target must already hold a grant this request can
+   * see. A user created moments ago holds none — its first grant is the one
+   * being made — so the probe would refuse every atomic create-and-grant, and
+   * the alternative is a user administration service writing `user_roles`
+   * itself, which is the duplication `RBAC.md` §8b exists to prevent.
+   *
+   * What this skips is the *probe*, not the property. Reachability is instead
+   * established by construction: `UserAdministrationService` authorized
+   * `users.invite` at its own organization and inserted the row in this
+   * transaction, so the caller demonstrably reaches the target — it created
+   * it. Guards 1-4 are untouched, and guard 1 still decides whether the actor
+   * may grant at the named scope at all, which is the escalation-bearing half.
+   *
+   * It is not reachable from HTTP: `CreateAssignmentDto` has no such field, so
+   * only an in-process caller can pass it, and `user-administration-boundary.spec.ts`
+   * asserts which callers do.
+   */
+  readonly targetCreatedInThisTransaction?: boolean;
+}
+
 /** Allow-listed filters for `GET /role-assignments` (`API.md` §8b). */
 export interface ListAssignmentsFilter extends ListQueryInput {
   readonly userId?: string;
@@ -228,6 +257,7 @@ export class RoleAssignmentService {
     tx: Transaction,
     principal: AuthPrincipal,
     input: GrantInput,
+    options: GrantOptions = {},
   ): Promise<AssignmentView> {
     this.requireOrg(principal);
     const target: ScopeRef = { scopeType: input.scopeType, scopeId: input.scopeId };
@@ -250,8 +280,13 @@ export class RoleAssignmentService {
     // Guard 4 — §6n cases 21 and 22. One chain resolve, not one per permission.
     await this.assertWithinActorAuthority(tx, principal, role.id, target);
 
-    // Guard 5 — a real, reachable, active target user.
-    await this.assertAssignableUser(tx, input.userId);
+    // Guard 5 — a real, reachable, active target user. Skipped only for a user
+    // this transaction created, whose reachability is established by
+    // construction rather than by a probe that cannot yet succeed (see
+    // `GrantOptions`).
+    if (!options.targetCreatedInThisTransaction) {
+      await this.assertAssignableUser(tx, input.userId);
+    }
 
     const inserted = await this.insertGrant(tx, principal, input);
 

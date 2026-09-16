@@ -55,6 +55,21 @@ export const ERROR_CODES = {
    */
   AUTHZ_LAST_PLATFORM_ADMIN: 'AUTHZ_LAST_PLATFORM_ADMIN',
 
+  // --- User lifecycle (Phase 1B.6.1) ---------------------------------------
+  /**
+   * The user is not in a state the requested lifecycle transition applies to:
+   * already disabled, already active, or — on reactivation — holding no
+   * credential at all, which `users_active_requires_credential` makes
+   * unrepresentable as `active`.
+   *
+   * `409`, and one code rather than three. The actor was authorized and the
+   * request well-formed; what is wrong is the *current state*, and `details`
+   * carries it, so a client can tell the three apart without the API owing them
+   * three codes. Distinct from `RESOURCE_CONFLICT`, which says a write
+   * collided with another row — here nothing collided.
+   */
+  USER_LIFECYCLE_CONFLICT: 'USER_LIFECYCLE_CONFLICT',
+
   // --- Tenancy -------------------------------------------------------------
   TENANCY_CONTEXT_REQUIRED: 'TENANCY_CONTEXT_REQUIRED',
   /** A client-supplied tenant identifier disagreed with the resolved context. */

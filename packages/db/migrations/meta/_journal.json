@@ -57,6 +57,13 @@
       "when": 1789267800000,
       "tag": "0007_phase1b59_idempotency_actor_binding",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789268400000,
+      "tag": "0008_phase1b61_user_administration",
+      "breakpoints": true
     }
   ]
 }

@@ -141,6 +141,9 @@ describe('§6n case 30 — route authorization coverage', () => {
     const keys = routes.map((r) => `${r.method} ${r.path}`);
     expect(keys).toContain('GET /api/v1/roles');
     expect(keys).toContain('POST /api/v1/role-assignments');
+    expect(keys).toContain('GET /api/v1/users');
+    expect(keys).toContain('POST /api/v1/users/:id/disable');
+    expect(keys).toContain('POST /api/v1/users/:id/reactivate');
     expect(keys).toContain('GET /api/v1/auth/me/authorization');
     expect(keys).toContain('GET /health');
   });
@@ -220,7 +223,7 @@ describe('§6n case 30 — route authorization coverage', () => {
     const scoped = routes.filter((r) => r.required !== undefined);
     const exempt = routes.filter((r) => r.exempt !== undefined);
     const open = routes.filter((r) => r.isPublic);
-    expect(scoped.length).toBe(12);
+    expect(scoped.length).toBe(18);
     expect(exempt.length).toBe(5);
     expect(open.length).toBe(6);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);

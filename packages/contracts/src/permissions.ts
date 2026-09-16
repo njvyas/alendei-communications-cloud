@@ -28,6 +28,16 @@ export const PERMISSIONS = {
   USERS_INVITE: 'users.invite',
   USERS_UPDATE: 'users.update',
   USERS_DISABLE: 'users.disable',
+  /**
+   * Restore a disabled user (Phase 1B.6.1).
+   *
+   * Separate from `users.disable` rather than folded into it. Disabling removes
+   * access and reactivating restores it, and only the second one can hand
+   * someone back the authority they held — including an administrator's. A
+   * permission named "disable" that also re-enabled would misdescribe what it
+   * confers, and every holder of it would silently acquire the other half.
+   */
+  USERS_REACTIVATE: 'users.reactivate',
 
   // --- Roles & grants ------------------------------------------------------
   ROLES_READ: 'roles.read',

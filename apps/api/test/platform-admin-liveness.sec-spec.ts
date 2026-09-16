@@ -508,8 +508,23 @@ describe('last-platform-admin invariant', () => {
 
       const [resA, resB] = await Promise.all([revoke(tokenA, idA), revoke(tokenA, idB)]);
 
-      const statuses = [resA.status, resB.status].sort();
-      expect(statuses).toEqual([204, 409]);
+      const statuses = [resA.status, resB.status];
+      expect(statuses.filter((s) => s === 204)).toHaveLength(1);
+      /**
+       * The loser is refused — but by which of two controls depends on which
+       * transaction commits first, and both answers are correct.
+       *
+       * `409` when the liveness check refuses it: the invariant is at its floor.
+       * `403` when the *actor's own* grant was the one already revoked — the
+       * actor here is `first`, so removing `idA` removes its platform authority,
+       * and grants are re-read from the database on every request (ADR-003 D-3).
+       * The second request then arrives with no authority to revoke anything.
+       *
+       * Pinning this to `409` asserted a scheduling accident, which is why it
+       * failed on roughly half of runs. What the case is actually about is
+       * below, and it is unconditional.
+       */
+      expect([403, 409]).toContain(statuses.find((s) => s !== 204));
       // The assertion that matters: the final state, not the status codes.
       expect(await admins()).toBe(1);
     });

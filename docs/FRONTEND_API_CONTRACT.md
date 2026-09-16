@@ -2,7 +2,7 @@
 
 > **STATUS: DRAFT — CONVENTIONS FROZEN, SURFACE INCOMPLETE.**
 >
-> This document is written against the repository at Phase 1B.5.8. It is the
+> This document is written against the repository at Phase 1B.6.1. It is the
 > formal contract between the backend/core track and the future frontend track.
 >
 > **What changed at 1B.5.8, and what it means for you.** Every *convention* a
@@ -19,9 +19,10 @@
 >
 > | Blocker | Closes in |
 > |---|---|
-> > | **No user lifecycle**: no invite, update, disable, or user list. A console cannot manage people | 1B.6 |
+> | ~~**No user lifecycle**~~ — **CLOSED in 1B.6.1** (§30d). List, detail, create, profile update, disable and reactivate are live. What is still missing is narrower and named there: a created user cannot yet *sign in*, because credential delivery is `DECISIONS.md` D16 | 1B.6.1 ✅ / D16 |
 > | **No organization, workspace, team or reseller CRUD** — only workspace *reads* exist (§30) | 1B.8 |
-> | **No API-key management** and **no audit read** endpoint | 1B.6 |
+> | **No API-key management** and **no audit read** endpoint | 1B.6.2 / 1B.6.3 |
+> | **No way for an invited user to obtain a password**, so a user the console creates cannot sign in yet (`DECISIONS.md` D16) | D16 |
 > | **OpenAPI is effectively empty of business schemas** — 5 decorators, all on health. No typed client can be generated (§30) | 1B.9 |
 > | **No general rate limiting**: only the auth endpoints are limited, and no other endpoint returns `X-RateLimit-*` (§23) | 1B.10 |
 > | **No development bootstrap**: no one-command way to obtain a working tenant and credentials | 1B.10 |
@@ -275,6 +276,7 @@ being one. Ask if a screen needs it.
 | `GET /roles` | `isSystemRole`, `key` | `key`, `createdAt` | `key` |
 | `GET /permissions` | `domain` | `key`, `domain` | `key` |
 | `GET /role-assignments` | `userId`, `scopeType`, `scopeId` | `createdAt`, `scopeType` | `-createdAt` |
+| `GET /users` | `status`, `email` (exact, case-insensitive) | `createdAt`, `email`, `status` | `-createdAt` |
 | `GET /tenants/workspaces` | `status` | `name`, `createdAt` | `name` |
 | `GET /auth/sessions` | — | — | — |
 
@@ -290,7 +292,10 @@ endpoint behaves exactly as it always has.
 |---|---|
 | `POST /api/v1/roles` | ✅ |
 | `POST /api/v1/role-assignments` | ✅ |
+| `POST /api/v1/users` | ✅ (Phase 1B.6.1) |
 | Everything else | Not needed — see below |
+
+`PATCH /users/:id` takes no key: sending the same body twice produces the same state. `POST /users/:id/disable` and `/reactivate` take none either — a second call is `409 USER_LIFECYCLE_CONFLICT` naming the current status, which is a definite answer you can act on, and a better one than replaying the first `200` as though the transition were happening now.
 
 **Key format**: 16–255 characters of `A-Za-z0-9`, `-`, `_`, `.`, `:`. Use a
 UUIDv4/v7. A malformed key is `400 IDEMPOTENCY_KEY_INVALID`.
@@ -626,6 +631,124 @@ Four things the frontend must build against:
 
 The endpoint requires authentication and performs no target-scope check, so it
 never returns `403` for scope reasons and writes no denial audit.
+
+## 30d. User administration — IMPLEMENTED (Phase 1B.6.1)
+
+The user resource, as returned by **every** `/users` endpoint. This list is exhaustive — no other field is ever present, and none will be added without §27's rules:
+
+```jsonc
+{
+  "id": "uuid",
+  "email": "person@example.test",
+  "phone": "+919876543210",        // or null
+  "status": "invited",             // invited | active | disabled
+  "lastLoginAt": "ISO-8601|null",
+  "createdAt": "ISO-8601",
+  "updatedAt": "ISO-8601"
+}
+```
+
+**There is deliberately no `passwordHash`, `passwordUpdatedAt`, `mfaSecretRef` or `mfaEnabled`**, and no session, token or API-key material. Do not build a UI that expects an MFA indicator: MFA is not implemented (`RBAC.md` §5), and the flag is withheld rather than returned as `false` so a console cannot render a control that does nothing.
+
+**Role assignments are not embedded.** Use `GET /role-assignments?userId=<id>` — it is the same data with its own read model, and duplicating it here would give you two representations of authorization to keep in step.
+
+| Method | Path | Permission | Success |
+|---|---|---|---|
+| `GET` | `/api/v1/users` | `users.read` | `200 { data: [user], page }` |
+| `GET` | `/api/v1/users/:id` | `users.read` | `200 { data: user }` |
+| `POST` | `/api/v1/users` | `users.invite` | `201 { data: user }`, `status: "invited"` |
+| `PATCH` | `/api/v1/users/:id` | `users.update` | `200 { data: user }` |
+| `POST` | `/api/v1/users/:id/disable` | `users.disable` | `200 { data: user }` |
+| `POST` | `/api/v1/users/:id/reactivate` | `users.reactivate` | `200 { data: user }` |
+
+**There is no `DELETE`, and there will not be one.** `acc_app` holds no delete grant on `users` and audit rows must outlive the identity they describe (ADR-007 D-1). Build "remove from organization" as **disable**, or as revoking the user's grants through `/role-assignments` — those are different actions and a console should offer whichever it means. A `DELETE` request returns `404` because no route exists, not because the user does not.
+
+### Whose users you see
+
+`users` has no organization column: a user's tenancy is entirely the grants they hold. Every endpoint here is scoped to **users holding at least one grant in the organization the request resolved to** — the one selected implicitly or named in `X-Acc-Organization` (§5). Two consequences to design around:
+
+- A user who exists but holds no grant in this organization is `404`, byte-for-byte the same answer as an id that was never issued. **Never present it as "exists but forbidden."**
+- A user who belongs to two organizations appears in both lists, and switching `X-Acc-Organization` changes which list they appear in. They are one identity with one id, not two records.
+
+### Creating a user
+
+```jsonc
+POST /api/v1/users
+{
+  "email": "person@example.test",
+  "phone": "+919876543210",                       // optional, E.164, or omit
+  "initialRole": {                                // REQUIRED
+    "roleId": "uuid",                             // from GET /roles
+    "scopeType": "organization",                  // reseller|organization|workspace|team
+    "scopeId": "uuid"
+  }
+}
+```
+
+Five things to build against:
+
+- **`initialRole` is required**, not a convenience. A user with no grant would be invisible to the organization that created them — including to the very list you just created them in. Your create form must collect a role, and a role picker fed by `GET /roles` (whose `allowedScopeTypes` tells you which scope levels each role admits) is the right shape.
+- **The created user cannot sign in yet.** They are `invited`, which by design holds no credential. **No email is sent** — nothing is sent on any channel. Say so in the UI rather than implying an invitation is on its way; how a person first obtains a password is `DECISIONS.md` D16 and is not built. When it is, this section changes and §27 applies.
+- **No password field is accepted and none is returned.** Sending `password`, `passwordHash` or `status` is a `400`, and the response contains no credential of any kind. There is nothing for a "copy the temporary password" affordance to copy.
+- **`platform` is not an accepted `scopeType`** — sending it is a `400`.
+- **Creation is one atomic operation.** If the grant is refused, no user is created. You never have to clean up a half-created person.
+
+| Failure | Code | Meaning for the UI |
+|---|---|---|
+| `409 RESOURCE_CONFLICT` | conflict | The address is already registered. The API deliberately does not say by whom or where — do not infer that they are in your organization. Offer "search existing users" rather than a retry |
+| `404 RESOURCE_NOT_FOUND` | not found | The role or the scope is out of reach. Do not report the scope as existing |
+| `403 AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION` | forbidden | The chosen role carries a permission *you* do not hold at that scope. `error.details.rejected` names the keys — usable directly as field feedback on the role picker |
+| `403 AUTHZ_PLATFORM_ROLE_REQUIRED` | forbidden | A platform role was chosen. Filter platform roles out of the picker |
+| `422 AUTHZ_SCOPE_TYPE_NOT_ADMITTED` | unprocessable | The role does not exist at that level. `details.allowedScopeTypes` lists the ones it does. **Not** an access error |
+| `400 VALIDATION_FAILED` | bad request | Field-level issues in `details.issues` (§22) |
+
+### Updating a user
+
+```jsonc
+PATCH /api/v1/users/:id
+{ "phone": "+919876543210" }   // or { "phone": null } to clear
+```
+
+**`phone` is the only editable field, and the only one the DTO accepts.** Sending anything else — `status`, `email`, `roleId`, `orgId`, `scopeId` — is a `400`, not a silent ignore. Specifically:
+
+- **Status is not a field.** Use the two lifecycle endpoints below. A console rendering an "active/disabled" toggle should call those, not `PATCH`.
+- **Roles are not a field.** Use `/role-assignments`.
+- **Email cannot be changed** (ADR-007 D-3). It is the login identity, and changing it needs a verified change flow that does not exist. Render it read-only. Do not build an edit affordance that has nowhere to send its value.
+
+An empty `PATCH` is a `200` with the user unchanged and no audit entry, so an over-eager auto-save costs nothing.
+
+### Disable and reactivate
+
+```
+POST /api/v1/users/:id/disable      → 200 { data: user }   // status: "disabled"
+POST /api/v1/users/:id/reactivate   → 200 { data: user }   // status: "active" OR "invited"
+```
+
+- **Disabling signs the person out immediately.** Every live session is revoked in the same transaction, and their access token stops working on their next request — not at token expiry. Any API key created by that person also stops conferring permissions.
+- **Reactivate does not always produce `active`.** A user who was disabled before they ever held a credential comes back as **`invited`**, because the database will not admit an `active` user with no credential. **Read `data.status` from the response** rather than assuming — this is the one place the endpoint's result is not fully predictable from the request.
+- **Reactivation does not restore sessions.** The person must sign in again — and if they came back as `invited`, they cannot until D16 lands.
+- **Repeating either is a `409 USER_LIFECYCLE_CONFLICT`**, with `error.details.status` carrying the current state. Use it to re-sync a stale list rather than showing a hard error: it usually means someone else got there first.
+
+| Failure | Code | Meaning for the UI |
+|---|---|---|
+| `409 USER_LIFECYCLE_CONFLICT` | conflict | Already in that state. `details.status` is authoritative — refresh the row |
+| `409 AUTHZ_LAST_PLATFORM_ADMIN` | conflict | This is the last active platform administrator. **Not an access error** — the caller had the authority. Say "appoint another administrator first"; do not offer a retry |
+| `404 RESOURCE_NOT_FOUND` | not found | Not a member of this organization, or no such user |
+| `403 AUTHZ_SCOPE_DENIED` | forbidden | The caller lacks the permission at this organization |
+
+### Permissions to gate the UI on
+
+Read them from `GET /auth/me/authorization` (§30c) — per grant, not from the flattened union:
+
+| Action | Permission |
+|---|---|
+| See the user list and detail | `users.read` |
+| Create a user | `users.invite` |
+| Edit a phone number | `users.update` |
+| Disable | `users.disable` |
+| Reactivate | `users.reactivate` |
+
+`users.reactivate` is **separate from `users.disable`** — a role may hold one without the other, so gate the two buttons independently. The seeded `org_admin` holds both; `reseller_admin` and `workspace_manager` hold neither.
 
 ## 31. Related
 
