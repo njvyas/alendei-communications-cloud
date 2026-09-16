@@ -9,6 +9,7 @@ import { AuthModule } from './auth/auth.module';
 import { AppConfigModule } from './config/config.module';
 import { DatabaseModule } from './database/database.module';
 import { HealthModule } from './health/health.module';
+import { HttpConventionsModule } from './common/http/http.module';
 import { IamModule } from './iam/iam.module';
 import { HttpMetricsInterceptor } from './observability/http-metrics.interceptor';
 import { LoggingModule } from './observability/logging.module';
@@ -32,6 +33,7 @@ import { SecretsModule } from './secrets/secrets.module';
     LoggingModule,
     ObservabilityModule,
     SecretsModule,
+    HttpConventionsModule,
     DatabaseModule,
     AuditModule,
     IamModule,

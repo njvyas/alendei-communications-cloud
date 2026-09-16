@@ -357,6 +357,15 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 
 **Self-only authorization view (Phase 1B.5.7).** `apps/api/test/me-authorization.sec-spec.ts` (16 cases): shape and self-only — a path variant, a query parameter and a body field each fail to change the subject; two principals see only their own; no credential material. **Case 22b through the response** — an actor holding `teams.create` in one workspace and `role_assignments.grant` across the organization sees `teams.create` under the workspace grant and *not* under the organization one, the response carries no flattened union at all, and the backend agrees by refusing the corresponding grant. API keys — effective authority only, a permission the creator holds only elsewhere never appears, bounded by binding scope, no key material. Tenant isolation — never another organization's grants, never reported as a platform admin, and no `authorization.denied` noise, since the endpoint performs no target-scope check.
 
+**API conventions (Phase 1B.5.8, `API.md` §§7a-8).** `apps/api/test/api-conventions.sec-spec.ts` (31 cases) and `apps/api/src/common/http/list-query.spec.ts` (9 unit cases).
+
+- **The envelope** — a collection answers exactly `{data, page}` and a single resource exactly `{data}`; an error still answers `{error}`; the correlation id is on every response as a header and matches the error body's; and the shape holds for *every* list endpoint rather than one.
+- **Pagination** — default and explicit page sizes; a full walk returns **every row exactly once** and agrees with a single large page; the last page reports `hasMore:false` and a null cursor; limits outside 1–100 are refused; ordering is deterministic across identical requests; **rows sharing a sort value are walked, not skipped** — the case the tie-breaker exists for, and the one that caught a real defect during this phase; a row inserted after page one cannot duplicate a returned row; malformed, tampered and wrong-sort cursors are each `400`; and a cursor carried into another tenant's request reveals nothing.
+- **Sorting** — ascending and descending on an allowed field are exact reverses; an unlisted field is `400 SORT_NOT_ALLOWED`; and six injection shapes are refused with the table still standing afterwards.
+- **Filtering** — an allow-listed filter applies and combines with sort and paging; an unknown filter is refused rather than ignored; a wrongly-typed filter is refused; and a filter naming another organization's row returns nothing.
+- **Validation** — field, machine-readable rule and message on every issue; every failing field reported, not just the first; nested fields addressed by path (`permissions.0`); no SQL, stack or internal token anywhere in the body; and the correlation id matches the header.
+- **Unit** — `ListQuery` clamps above and below the bounds, reads exactly one row beyond the page, always orders by two terms, refuses unlisted sort fields, and carries no keyset predicate on page one. These assert what the HTTP suite structurally cannot: the DTO refuses an out-of-range `limit` before `ListQuery` ever sees it, so the clamp is unreachable from a request and invisible end to end.
+
 **Forged ancestry (ADR-005 D-5).** Asserted as the strong property, not the weak one: it is not enough that bad input is rejected: the *authoritative* chain must decide. Each case runs under a tenant context that can see the target, so visibility is not the variable — a grant naming another organization cannot reach a workspace whose real parent is a different organization; the same for a grant naming another reseller, and for one naming another workspace as a team's parent; and a principal holding grants that between them name a wholly false chain still reaches nothing. Every case carries a positive control on the claimant's own rows, so a denial cannot be mistaken for a broken query.
 
 | # | Case | Expected |
@@ -432,6 +441,14 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 | The grant discriminator destroyed (each grant reports the flattened union) | **executed at 1B.5.7: 1 security test fails** — case 22b through the response |
 | API-key creator intersection taken at the creator's widest scope (through `/auth/me/authorization`) | **executed at 1B.5.7: 1 security test fails** |
 | `ScopeChainResolver` fabricates an organization chain instead of reading it | **executed at 1B.5.7: 4 security tests fail** — in the 1B.5.2 suites, which is where chain provenance is asserted; the 1B.5.7 surfaces resolve no chain of their own and correctly do not detect it |
+| The sort allow-list removed | **executed at 1B.5.8: 1 security test fails** |
+| Cursor signature verification removed | **executed at 1B.5.8: 1 security test fails** |
+| The cursor's sort binding removed | **executed at 1B.5.8: 1 security test fails** |
+| The page-size clamp removed | **executed at 1B.5.8: 2 unit tests fail** — not the HTTP suite, because the DTO refuses an out-of-range `limit` first; the clamp is the guarantee for a non-HTTP caller and is asserted where it is reachable |
+| The tie-breaker dropped from the ordering | **executed at 1B.5.8: 1 unit test fails** — the HTTP walk still terminates because the *keyset predicate* retains the tie-breaker even when `ORDER BY` loses it, so the structural assertion is what detects it |
+| `forbidNonWhitelisted` disabled (filter allow-listing) | **executed at 1B.5.8: 2 security tests fail** |
+| Validation field/rule mapping flattened | **executed at 1B.5.8: 5 security tests fail** |
+| The application tenant predicate removed from `GET /roles` | **executed at 1B.5.8: nothing fails — and that is the layering working.** RLS is the isolation boundary for this table, and the application predicate is redundant with it. Disabling RLS *as well* fails 5 tests, which is the honest demonstration of which layer holds |
 | `scopeCovers` term dropped from `allows` | 4, 6, 8, 9 |
 | Permission term dropped from `allows` | 12 and every denial case |
 | `ScopeChainResolver` returns the request-supplied chain | 2, 4, 6 |

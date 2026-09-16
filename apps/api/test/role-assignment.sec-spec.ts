@@ -227,7 +227,7 @@ describe('role-assignment administration', () => {
       .post(url('/auth/login'))
       .send({ email, password: PASSWORD })
       .expect(200);
-    return (res.body as { accessToken: string }).accessToken;
+    return (res.body as { data: { accessToken: string } }).data.accessToken;
   }
 
   const api = (token: string) => ({
@@ -288,7 +288,7 @@ describe('role-assignment administration', () => {
         })
         .expect(201);
 
-      const body = res.body as AssignmentBody;
+      const body = res.body.data as AssignmentBody;
       expect(body.userId).toBe(userId);
       expect(body.roleId).toBe(narrowRoleId);
       expect(body.scopeType).toBe('organization');
@@ -316,10 +316,10 @@ describe('role-assignment administration', () => {
         .expect(201);
 
       const all = await api(adminToken).list().expect(200);
-      expect((all.body as { assignments: AssignmentBody[] }).assignments.length).toBeGreaterThan(0);
+      expect((all.body as { data: AssignmentBody[] }).data.length).toBeGreaterThan(0);
 
       const mine = await api(adminToken).list(`?userId=${userId}`).expect(200);
-      const rows = (mine.body as { assignments: AssignmentBody[] }).assignments;
+      const rows = (mine.body as { data: AssignmentBody[] }).data;
       // The filter's property is that it returns this user's grants and only
       // this user's — not a fixed count: `makeUser` plants a reachability grant,
       // so the user legitimately holds two.
@@ -333,11 +333,11 @@ describe('role-assignment administration', () => {
       const created = await api(adminToken)
         .grant({ userId, roleId: narrowRoleId, scopeType: 'organization', scopeId: orgA.orgId })
         .expect(201);
-      const id = (created.body as AssignmentBody).id;
+      const id = (created.body.data as AssignmentBody).id;
 
       const res = await api(adminToken).get(id).expect(200);
-      expect((res.body as AssignmentBody).id).toBe(id);
-      expect((res.body as AssignmentBody).roleKey).toBe('narrow_grantable');
+      expect((res.body.data as AssignmentBody).id).toBe(id);
+      expect((res.body.data as AssignmentBody).roleKey).toBe('narrow_grantable');
     });
   });
 
@@ -551,7 +551,7 @@ describe('role-assignment administration', () => {
           .get(url('/auth/me'))
           .set('authorization', `Bearer ${token}`)
           .expect(200);
-        expect(me.body.permissions).toContain(PERMISSIONS.TEAMS_CREATE);
+        expect(me.body.data.permissions).toContain(PERMISSIONS.TEAMS_CREATE);
 
         const target = await makeUser(orgA, 'x22b-target');
 
@@ -603,8 +603,8 @@ describe('role-assignment administration', () => {
         .get(url('/auth/me'))
         .set('authorization', `Bearer ${token}`)
         .expect(200);
-      expect(me.body.permissions).not.toContain(PERMISSIONS.API_KEYS_CREATE);
-      expect((before.body as { assignments: AssignmentBody[] }).assignments).toBeDefined();
+      expect(me.body.data.permissions).not.toContain(PERMISSIONS.API_KEYS_CREATE);
+      expect((before.body as { data: AssignmentBody[] }).data).toBeDefined();
     });
   });
 
@@ -671,7 +671,7 @@ describe('role-assignment administration', () => {
         .expect(201);
 
       await api(adminToken)
-        .get((created.body as AssignmentBody).id)
+        .get((created.body.data as AssignmentBody).id)
         .expect(404);
     });
   });
@@ -768,7 +768,7 @@ describe('role-assignment administration', () => {
       const created = await api(adminToken)
         .grant({ userId, roleId: narrowRoleId, scopeType: 'organization', scopeId: orgA.orgId })
         .expect(201);
-      const id = (created.body as AssignmentBody).id;
+      const id = (created.body.data as AssignmentBody).id;
 
       await api(adminToken).revoke(id).expect(204);
       await api(adminToken).get(id).expect(404);
@@ -779,7 +779,7 @@ describe('role-assignment administration', () => {
       const created = await api(adminToken)
         .grant({ userId, roleId: narrowRoleId, scopeType: 'organization', scopeId: orgA.orgId })
         .expect(201);
-      const id = (created.body as AssignmentBody).id;
+      const id = (created.body.data as AssignmentBody).id;
 
       await api(adminToken).revoke(id).expect(204);
       await api(adminToken).revoke(id).expect(404);
@@ -809,7 +809,7 @@ describe('role-assignment administration', () => {
         // It can see the assignment listed, but its grant does not cover the
         // organization the assignment lives at.
         await api(token)
-          .revoke((created.body as AssignmentBody).id)
+          .revoke((created.body.data as AssignmentBody).id)
           .expect(403);
       } finally {
         await h.admin.execute(sql`DELETE FROM user_roles WHERE role_id = ${wsRoleId}`);
@@ -1080,7 +1080,7 @@ describe('role-assignment administration', () => {
       const created = await api(other)
         .grant({ userId, roleId: bRole, scopeType: 'organization', scopeId: orgB.orgId })
         .expect(201);
-      const id = (created.body as AssignmentBody).id;
+      const id = (created.body.data as AssignmentBody).id;
 
       await db.withTenant({ orgId: orgA.orgId, resellerId: orgA.resellerId }, (tx) =>
         tx.delete(schema.userRoles).where(eq(schema.userRoles.id, id)),
@@ -1114,7 +1114,7 @@ describe('role-assignment administration', () => {
       expect(rows[0]!.scope_type).toBe('workspace');
       expect(rows[0]!.scope_id).toBe(orgA.workspaceId);
       expect(rows[0]!.actor_user_id).toBe(orgA.userId);
-      expect(rows[0]!.resource_id).toBe((created.body as AssignmentBody).id);
+      expect(rows[0]!.resource_id).toBe((created.body.data as AssignmentBody).id);
       expect(rows[0]!.outcome).toBe('success');
     });
 
@@ -1126,7 +1126,7 @@ describe('role-assignment administration', () => {
       await purgeAudit(h.admin, sql`true`);
 
       await api(adminToken)
-        .revoke((created.body as AssignmentBody).id)
+        .revoke((created.body.data as AssignmentBody).id)
         .expect(204);
       const rows = await auditRows('user_role.revoked');
       expect(rows).toHaveLength(1);
@@ -1258,7 +1258,7 @@ describe('role-assignment administration', () => {
       const created = await api(adminToken)
         .grant({ userId, roleId: narrowRoleId, scopeType: 'organization', scopeId: orgA.orgId })
         .expect(201);
-      const id = (created.body as AssignmentBody).id;
+      const id = (created.body.data as AssignmentBody).id;
 
       const [a, b] = await Promise.all([api(adminToken).revoke(id), api(adminToken).revoke(id)]);
       expect([a.status, b.status].sort()).toEqual([204, 404]);

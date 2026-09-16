@@ -132,6 +132,18 @@ Every registered route declares its posture — `@Public()`, `@RequiresPermissio
 
 It discloses nothing the caller could not already derive by attempting each operation, and no credential material. For an API-key principal the grants are the key's *effective* authority — the Phase 1B.5.1 binding-scope intersection — so a permission its creator holds only elsewhere never appears.
 
+### List conventions (Phase 1B.5.8)
+
+Three properties of the pagination and filtering conventions carry security weight rather than being formatting.
+
+**No caller input reaches SQL as an identifier.** Sort fields and filters are allow-listed per endpoint — a client names a key the endpoint publishes, which is bound to a column in code. There is no operator syntax, no column names and no expression language, so order-by and filter injection are not defended against so much as unrepresentable. The suite tries `key; DROP TABLE roles`, `(SELECT 1)` and `key ASC, id DESC` among others; all are `400`.
+
+**Cursors are integrity-protected.** A cursor is a query continuation, and an editable one is a client-supplied predicate wearing the costume of server state. It is signed with an HMAC keyed from the application signing secret and domain-separated from every other use of it. This is defence in depth, not the isolation boundary — the tenant predicate and RLS bound what any cursor could reach — but treating a cursor as opaque only works if it actually is. A cursor minted under one sort is refused for another, because silently resuming a changed ordering skips or repeats rows.
+
+**A filter narrows; it never widens.** Filters apply inside what the tenant predicate and RLS already allow, so a caller naming another organization's key gets an empty page rather than a row. An unknown parameter is **refused** rather than ignored: ignoring it is how a caller comes to believe a filter applied when it did not, which for a security-relevant filter is a silent widening.
+
+One consequence worth recording: applying a query DTO to `GET /tenants/workspaces` means a bracketed parameter such as `orgId[]=` is now a `400` where it was previously ignored. The security property is unchanged and strictly stronger — before, the smuggled value had no effect; now the request carrying it does not execute (`API.md` §9a).
+
 The error **response** carries `403 AUTHZ_SCOPE_DENIED` and echoes no target — the identifier appears in the audit row and in operator logs, never to the caller (`API.md` §3a).
 
 Successful authorization checks are **not** audited. The operation is — `role.created`, `user_role.granted` and the rest. One row per check per request would bury the records that carry forensic value, so this is a deliberate rejection rather than an omission.

@@ -1,12 +1,19 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { AUDIT_ACTIONS, ERROR_CODES, type AuthPrincipal, type ScopeType } from '@acc/contracts';
+import {
+  AUDIT_ACTIONS,
+  ERROR_CODES,
+  type AuthPrincipal,
+  type PageInfo,
+  type ScopeType,
+} from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
-import { and, asc, eq, inArray, isNull, or } from 'drizzle-orm';
+import { and, eq, inArray, isNull, or, type SQL } from 'drizzle-orm';
 
 import { AppException } from '../common/errors/app.exception';
 import { actorFromPrincipal } from '../audit/audit-actor';
 import { AuditWriter } from '../audit/audit-writer.service';
 import { AuthorizationService } from '../auth/authorization.service';
+import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
 
 export interface RoleView {
   readonly id: string;
@@ -27,6 +34,24 @@ export interface CreateRoleInput {
   readonly description?: string | null;
   readonly allowedScopeTypes: readonly ScopeType[];
   readonly permissions: readonly string[];
+}
+
+export interface PermissionView {
+  readonly key: string;
+  readonly domain: string;
+  readonly action: string;
+  readonly description: string | null;
+}
+
+/** Allow-listed filters for `GET /roles` (`API.md` §8b). */
+export interface RoleListQuery extends ListQueryInput {
+  readonly isSystemRole?: boolean;
+  readonly key?: string;
+}
+
+/** Allow-listed filters for `GET /permissions`. */
+export interface PermissionListQuery extends ListQueryInput {
+  readonly domain?: string;
 }
 
 export interface UpdateRoleInput {
@@ -77,7 +102,43 @@ export class RoleAdministrationService {
   constructor(
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
+    private readonly lists: ListQuery,
   ) {}
+
+  /**
+   * The roles list's ordering contract (`API.md` §8b).
+   *
+   * `key` is the default because it is how an administrator reads a role list;
+   * `createdAt` is offered because it is how one finds what changed recently.
+   * Both are tie-broken by `id`, which is a UUIDv7 and therefore both unique and
+   * chronological — so the composite ordering is total and a row can never be
+   * skipped or repeated across pages.
+   */
+  private readonly listSpec: ListQuerySpec = {
+    sortable: {
+      key: { column: schema.roles.key, encode: (row) => String(row.key) },
+      // Chronological ordering runs on `id`, not on `created_at`, and that is a
+      // correctness requirement rather than an optimisation. A cursor is text,
+      // and a `timestamptz` round-tripped through JavaScript loses the
+      // database's sub-millisecond precision — so the boundary lands *before*
+      // the row it was minted from, the keyset predicate re-selects that row,
+      // and the same page repeats forever. `id` is a UUIDv7: chronological by
+      // construction, and a string that round-trips exactly.
+      createdAt: { column: schema.roles.id, encode: (row) => String(row.id) },
+    },
+    defaultSort: 'key',
+    tieBreaker: schema.roles.id,
+  };
+
+  /** The permission catalogue's ordering contract. Keyed, stable, tiny. */
+  private readonly permissionListSpec: ListQuerySpec = {
+    sortable: {
+      key: { column: schema.permissions.key, encode: (row) => String(row.key) },
+      domain: { column: schema.permissions.domain, encode: (row) => String(row.domain) },
+    },
+    defaultSort: 'key',
+    tieBreaker: schema.permissions.id,
+  };
 
   /**
    * Roles visible to the caller: its organization's own, plus the platform
@@ -88,17 +149,47 @@ export class RoleAdministrationService {
    * composition. Normalizing this onto the list conventions is Phase 1B.5.8's,
    * recorded there rather than pre-empted here.
    */
-  async list(tx: Transaction, principal: AuthPrincipal): Promise<readonly RoleView[]> {
+  async list(
+    tx: Transaction,
+    principal: AuthPrincipal,
+    query: RoleListQuery = {},
+  ): Promise<{ items: readonly RoleView[]; page: PageInfo }> {
     const orgId = this.requireOrg(principal);
     await this.assertPermission(tx, principal, 'roles.read', orgId);
+
+    const resolved = this.lists.resolve(query, this.listSpec);
+
+    // The tenant predicate is written first and is never derived from request
+    // input: a caller's filters narrow what it already may see, and can never
+    // widen it. RLS is the backstop beneath this, not a substitute for it.
+    const predicates: SQL[] = [or(eq(schema.roles.orgId, orgId), isNull(schema.roles.orgId))!];
+    if (query.isSystemRole !== undefined) {
+      predicates.push(eq(schema.roles.isSystemRole, query.isSystemRole));
+    }
+    if (query.key !== undefined) predicates.push(eq(schema.roles.key, query.key));
+    if (resolved.after) predicates.push(resolved.after);
 
     const rows = await tx
       .select()
       .from(schema.roles)
-      .where(or(eq(schema.roles.orgId, orgId), isNull(schema.roles.orgId)))
-      .orderBy(asc(schema.roles.key));
+      .where(and(...predicates))
+      .orderBy(...resolved.orderBy)
+      .limit(this.lists.fetchSize(resolved));
 
-    return this.withPermissions(tx, rows);
+    const { items, page } = this.lists.paginate(
+      rows as unknown as Record<string, unknown>[],
+      resolved,
+      this.listSpec,
+      (row) => String(row.id),
+    );
+
+    return {
+      items: await this.withPermissions(
+        tx,
+        items as unknown as (typeof schema.roles.$inferSelect)[],
+      ),
+      page,
+    };
   }
 
   async get(tx: Transaction, principal: AuthPrincipal, roleId: string): Promise<RoleView> {
@@ -243,21 +334,48 @@ export class RoleAdministrationService {
   async listPermissions(
     tx: Transaction,
     principal: AuthPrincipal,
-  ): Promise<
-    readonly { key: string; domain: string; action: string; description: string | null }[]
-  > {
+    query: PermissionListQuery = {},
+  ): Promise<{ items: readonly PermissionView[]; page: PageInfo }> {
     const orgId = this.requireOrg(principal);
     await this.assertPermission(tx, principal, 'permissions.read', orgId);
 
-    return tx
+    const resolved = this.lists.resolve(query, this.permissionListSpec);
+
+    // The catalogue is global and system-defined — not tenant data — so there is
+    // no tenant predicate here and deliberately none to forget.
+    const predicates: SQL[] = [];
+    if (query.domain !== undefined) predicates.push(eq(schema.permissions.domain, query.domain));
+    if (resolved.after) predicates.push(resolved.after);
+
+    const rows = await tx
       .select({
+        id: schema.permissions.id,
         key: schema.permissions.key,
         domain: schema.permissions.domain,
         action: schema.permissions.action,
         description: schema.permissions.description,
       })
       .from(schema.permissions)
-      .orderBy(asc(schema.permissions.key));
+      .where(predicates.length > 0 ? and(...predicates) : undefined)
+      .orderBy(...resolved.orderBy)
+      .limit(this.lists.fetchSize(resolved));
+
+    const { items, page } = this.lists.paginate(
+      rows as unknown as Record<string, unknown>[],
+      resolved,
+      this.permissionListSpec,
+      (row) => String(row.id),
+    );
+
+    return {
+      items: items.map((row) => ({
+        key: String(row.key),
+        domain: String(row.domain),
+        action: String(row.action),
+        description: (row.description as string | null) ?? null,
+      })),
+      page,
+    };
   }
 
   // --- guards ---------------------------------------------------------------

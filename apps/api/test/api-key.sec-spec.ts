@@ -91,7 +91,7 @@ describe('API-key authentication', () => {
     it('A. authorizes when the creator holds the requested permission', async () => {
       const key = await issueKey(orgA, { scopes: ['workspaces.read'] });
       const res = await get('/tenants/workspaces', key.credential).expect(200);
-      expect(res.body.workspaces.map((w: { id: string }) => w.id)).toEqual([orgA.workspaceId]);
+      expect(res.body.data.map((w: { id: string }) => w.id)).toEqual([orgA.workspaceId]);
     });
 
     it('B. denies when the creator does not hold the requested permission', async () => {
@@ -99,8 +99,8 @@ describe('API-key authentication', () => {
       // string on the key must not conjure authority.
       const key = await issueKey(orgA, { scopes: ['roles.delete', 'workspaces.read'] });
       const me = await get('/auth/me', key.credential).expect(200);
-      expect(me.body.permissions).toContain('workspaces.read');
-      expect(me.body.permissions).not.toContain('roles.delete');
+      expect(me.body.data.permissions).toContain('workspaces.read');
+      expect(me.body.data.permissions).not.toContain('roles.delete');
     });
 
     it('B2. a key requesting only unheld permissions is authenticated but authorizes nothing', async () => {
@@ -134,7 +134,7 @@ describe('API-key authentication', () => {
         const after = await get('/tenants/workspaces', key.credential).expect(403);
         expect(after.body.error.code).toBe(ERROR_CODES.AUTHZ_SCOPE_DENIED);
         const me = await get('/auth/me', key.credential).expect(200);
-        expect(me.body.permissions).not.toContain('workspaces.read');
+        expect(me.body.data.permissions).not.toContain('workspaces.read');
       } finally {
         await h.admin.transaction(async (tx) => {
           await tx.execute(sql`select set_config('app.provisioning','on',true)`);
@@ -149,7 +149,7 @@ describe('API-key authentication', () => {
     it('resolves no permissions for a key whose creator is unknown', async () => {
       const key = await issueKey(orgA, { createdBy: null, scopes: ['workspaces.read'] });
       const me = await get('/auth/me', key.credential).expect(200);
-      expect(me.body.permissions).toEqual([]);
+      expect(me.body.data.permissions).toEqual([]);
       await get('/tenants/workspaces', key.credential).expect(403);
     });
   });
@@ -160,25 +160,25 @@ describe('API-key authentication', () => {
       const key = await issueKey(orgA);
       const me = await get('/auth/me', key.credential).expect(200);
 
-      expect(me.body.roles).toHaveLength(1);
-      expect(me.body.roles[0]).toMatchObject({
+      expect(me.body.data.roles).toHaveLength(1);
+      expect(me.body.data.roles[0]).toMatchObject({
         roleKey: 'api_key',
         scopeType: 'organization',
         scopeId: orgA.orgId,
         orgId: orgA.orgId,
       });
-      expect(me.body.roles[0].scopeType).not.toBe('platform');
-      expect(me.body.tenant.isPlatformAdmin).toBe(false);
+      expect(me.body.data.roles[0].scopeType).not.toBe('platform');
+      expect(me.body.data.tenant.isPlatformAdmin).toBe(false);
     });
 
     it('binds a workspace-scoped key to its workspace', async () => {
       const key = await issueKey(orgA, { workspaceId: orgA.workspaceId });
       const me = await get('/auth/me', key.credential).expect(200);
-      expect(me.body.roles[0]).toMatchObject({
+      expect(me.body.data.roles[0]).toMatchObject({
         scopeType: 'workspace',
         scopeId: orgA.workspaceId,
       });
-      expect(me.body.tenant.workspaceId).toBe(orgA.workspaceId);
+      expect(me.body.data.tenant.workspaceId).toBe(orgA.workspaceId);
     });
 
     it('refuses a workspace-bound key an organization-wide operation', async () => {
@@ -195,7 +195,7 @@ describe('API-key authentication', () => {
     it("reaches only its own organization's data", async () => {
       const key = await issueKey(orgA);
       const res = await get('/tenants/workspaces', key.credential).expect(200);
-      const ids = res.body.workspaces.map((w: { id: string }) => w.id);
+      const ids = res.body.data.map((w: { id: string }) => w.id);
       expect(ids).toContain(orgA.workspaceId);
       expect(ids).not.toContain(orgB.workspaceId);
     });

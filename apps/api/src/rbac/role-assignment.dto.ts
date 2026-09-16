@@ -1,5 +1,7 @@
-import { IsIn, IsOptional, IsUUID, ValidateIf } from 'class-validator';
+import { IsIn, IsOptional, IsUUID } from 'class-validator';
 import type { ScopeType } from '@acc/contracts';
+
+import { ListQueryDto } from '../common/http/list-query.dto';
 
 /**
  * Scope levels a tenant grant may name.
@@ -35,7 +37,13 @@ export class CreateAssignmentDto {
   scopeId!: string;
 }
 
-export class ListAssignmentsQueryDto {
+/**
+ * `GET /role-assignments` query (`API.md` §8b).
+ *
+ * Extends the shared paging parameters, so a client learns `cursor`, `limit` and
+ * `sort` once rather than per resource.
+ */
+export class ListAssignmentsQueryDto extends ListQueryDto {
   @IsOptional()
   @IsUUID()
   userId?: string;
@@ -45,7 +53,6 @@ export class ListAssignmentsQueryDto {
   scopeType?: ScopeType;
 
   @IsOptional()
-  @ValidateIf((dto: ListAssignmentsQueryDto) => dto.scopeId !== undefined)
   @IsUUID()
   scopeId?: string;
 }

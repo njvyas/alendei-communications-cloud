@@ -80,7 +80,7 @@ describe('authorization coverage interceptor', () => {
       .post(url('/auth/login'))
       .send({ email, password: PASSWORD })
       .expect(200);
-    return (res.body as { accessToken: string }).accessToken;
+    return (res.body as { data: { accessToken: string } }).data.accessToken;
   }
 
   const get = (path: string, credential: string) =>

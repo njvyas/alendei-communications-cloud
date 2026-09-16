@@ -87,9 +87,11 @@ export class AuthController {
   /** The response body. Deliberately never contains the refresh token. */
   private body(tokens: AuthTokens) {
     return {
-      accessToken: tokens.accessToken,
-      tokenType: 'Bearer' as const,
-      expiresIn: tokens.expiresIn,
+      data: {
+        accessToken: tokens.accessToken,
+        tokenType: 'Bearer' as const,
+        expiresIn: tokens.expiresIn,
+      },
     };
   }
 
@@ -182,21 +184,23 @@ export class AuthController {
   me() {
     const principal = this.principal();
     return {
-      actorType: principal.actorType,
-      authMethod: principal.authMethod,
-      userId: principal.userId,
-      apiKeyId: principal.apiKeyId,
-      sessionId: principal.sessionId,
-      authenticatedAt: principal.authenticatedAt.toISOString(),
-      tenant: principal.tenant,
-      authorizedOrganizationIds: principal.authorizedOrganizationIds,
-      roles: principal.roles.map((r) => ({
-        roleKey: r.roleKey,
-        scopeType: r.scopeType,
-        scopeId: r.scopeId,
-        orgId: r.orgId,
-      })),
-      permissions: principal.permissions,
+      data: {
+        actorType: principal.actorType,
+        authMethod: principal.authMethod,
+        userId: principal.userId,
+        apiKeyId: principal.apiKeyId,
+        sessionId: principal.sessionId,
+        authenticatedAt: principal.authenticatedAt.toISOString(),
+        tenant: principal.tenant,
+        authorizedOrganizationIds: principal.authorizedOrganizationIds,
+        roles: principal.roles.map((r) => ({
+          roleKey: r.roleKey,
+          scopeType: r.scopeType,
+          scopeId: r.scopeId,
+          orgId: r.orgId,
+        })),
+        permissions: principal.permissions,
+      },
     };
   }
 
@@ -233,19 +237,21 @@ export class AuthController {
   authorization() {
     const principal = this.principal();
     return {
-      actorType: principal.actorType,
-      userId: principal.userId,
-      apiKeyId: principal.apiKeyId,
-      grants: principal.roles.map((grant) => ({
-        roleId: grant.roleId,
-        roleKey: grant.roleKey,
-        scopeType: grant.scopeType,
-        scopeId: grant.scopeId,
-        orgId: grant.orgId,
-        permissions: [...grant.permissions].sort(),
-      })),
-      organizationIds: principal.authorizedOrganizationIds,
-      isPlatformAdmin: principal.tenant.isPlatformAdmin,
+      data: {
+        actorType: principal.actorType,
+        userId: principal.userId,
+        apiKeyId: principal.apiKeyId,
+        grants: principal.roles.map((grant) => ({
+          roleId: grant.roleId,
+          roleKey: grant.roleKey,
+          scopeType: grant.scopeType,
+          scopeId: grant.scopeId,
+          orgId: grant.orgId,
+          permissions: [...grant.permissions].sort(),
+        })),
+        organizationIds: principal.authorizedOrganizationIds,
+        isPlatformAdmin: principal.tenant.isPlatformAdmin,
+      },
     };
   }
 
@@ -256,10 +262,10 @@ export class AuthController {
   @Get('sessions')
   async sessions() {
     const principal = this.principal();
-    if (!principal.userId) return { sessions: [] };
+    if (!principal.userId) return { data: [] };
     const sessions = await this.auth.listSessions(principal.userId, principal.sessionId);
     return {
-      sessions: sessions.map((s) => ({
+      data: sessions.map((s) => ({
         id: s.id,
         createdAt: s.createdAt.toISOString(),
         lastUsedAt: s.lastUsedAt?.toISOString() ?? null,

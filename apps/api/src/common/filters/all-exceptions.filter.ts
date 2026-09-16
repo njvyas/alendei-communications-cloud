@@ -127,11 +127,23 @@ export class AllExceptionsFilter implements ExceptionFilter {
     return fallback;
   }
 
+  /**
+   * Structured issues from a `HttpException` Nest built itself.
+   *
+   * `AppException` already carries `details` and never reaches here. This is the
+   * fallback for a framework-raised `BadRequestException`, whose payload is an
+   * array of prose strings — there is no field or rule to recover from it, so
+   * each becomes an issue attributed to the request as a whole rather than
+   * inventing a field name that would mislead a form.
+   */
   private detailsFrom(payload: string | object): Record<string, unknown> | undefined {
     if (payload && typeof payload === 'object' && 'message' in payload) {
       const message = (payload as { message: unknown }).message;
       if (Array.isArray(message)) {
-        return { issues: message.filter((entry): entry is string => typeof entry === 'string') };
+        const issues = message
+          .filter((entry): entry is string => typeof entry === 'string')
+          .map((text) => ({ field: '', rule: 'VALIDATION_FAILED', message: text }));
+        return issues.length > 0 ? { issues } : undefined;
       }
     }
     return undefined;

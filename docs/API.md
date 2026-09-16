@@ -243,13 +243,113 @@ Consistent error envelope across all endpoints:
 - `retryable`: `true` only for errors where an identical retry (same idempotency key, unchanged payload) is safe and may succeed (e.g. `429`, `503`); `false` for validation/authorization errors where retrying without changing the request is pointless. Clients should not blindly retry on any 4xx/5xx without checking this flag.
 - `details`: structured validation failures where applicable (e.g. per-field messages), never a dump of internal exception state.
 
-## 8. API contract strategy (OpenAPI)
+## 7a. Validation errors (Phase 1B.5.8)
+
+A validation failure carries one issue **per failed rule**, not per field: a value can fail its type and its length at once, and collapsing those forces a form to re-derive which rule it was from prose.
+
+```jsonc
+{
+  "error": {
+    "code": "VALIDATION_FAILED",
+    "message": "Request validation failed",
+    "correlationId": "uuid",
+    "retryable": false,
+    "details": {
+      "issues": [
+        { "field": "key",            "rule": "MATCHES",   "message": "key must be lower snake_case…" },
+        { "field": "permissions.0",  "rule": "IS_IN",     "message": "each value must be one of…" }
+      ]
+    }
+  }
+}
+```
+
+- `field` — dotted path from the request root, so a form can address a nested member (`permissions.0`). Empty for an issue about the request as a whole.
+- `rule` — stable screaming-snake code derived mechanically from the validator (`isUuid` → `IS_UUID`). Derived rather than hand-mapped, so a new decorator yields a sensible code without anyone remembering to extend a table.
+- `message` — human-readable, and never load-bearing for a client's logic.
+
+An unknown query or body parameter is **refused**, not ignored (`WHITELIST_VALIDATION`). Ignoring it is how a caller comes to believe a filter applied when it did not, which for a security-relevant filter is a silent widening.
+
+## 8. Response envelope, pagination, filtering and sorting (Phase 1B.5.8)
+
+Until this phase the API answered `{workspaces:[…]}` here, `{roles:[…]}` there, and a bare object for a single resource, with no pagination anywhere. Each shape was defensible alone; together they made a client guess per endpoint.
+
+**The envelope.** One key at the top level, always:
+
+| Response | Shape |
+|---|---|
+| Single resource | `{ "data": { … } }` |
+| Collection | `{ "data": [ … ], "page": { … } }` |
+| Error | `{ "error": { … } }` (§7, unchanged) |
+| `204` | no body |
+
+The symmetry between `data` and `error` is deliberate: a client branches on which key is present without knowing the endpoint. **The correlation id is not repeated in a success body** — it is on `x-correlation-id` for every response and is CORS-exposed, so there is one place for it to be right rather than two.
+
+**Field naming is camelCase throughout**, request and response alike.
+
+### 8a. Cursor pagination
+
+```jsonc
+"page": { "nextCursor": "eyJ…", "hasMore": true, "limit": 25 }
+```
+
+| Property | Rule |
+|---|---|
+| Parameters | `?limit=`, `?cursor=`, `?sort=` |
+| Default page size | 25 |
+| Maximum | 100 — a `limit` outside 1–100 is a `400` |
+| `hasMore` | Derived by reading one row beyond the page. **There is no `COUNT(*)` and no total**: a count is a second scan of the same predicate on every page and no consumer needs one |
+| `nextCursor` | Opaque, `null` on the last page. Passed back verbatim |
+| Ordering | Always `(<sort field>, id)`. `id` is a UUIDv7, so the composite ordering is **total** and a row can neither be skipped nor repeated |
+| Insert/delete mid-walk | Keyset resumes from a *value*, not an offset, so a row inserted or removed elsewhere cannot shift the window. A row inserted *behind* the cursor is not seen on this walk; one inserted ahead is |
+| Invalid cursor | `400 PAGINATION_CURSOR_INVALID` — malformed, wrong signature, or minted under a different `sort`. One code for all three: which part of a forged cursor to fix is not information the API owes |
+
+**Cursors are integrity-protected** (HMAC over the payload, keyed from the application signing secret and domain-separated). A cursor is a query continuation, and an editable one is a client-supplied predicate wearing the costume of server state. It is not the isolation boundary — the tenant predicate and RLS are — but treating a cursor as opaque only works if it actually is. A secret rotation invalidates outstanding cursors, which is correct: the client restarts from page one.
+
+**Chronological sorts order by `id`, not by `created_at`.** This is a correctness requirement, not an optimisation: a cursor is text, and a `timestamptz` round-tripped through JavaScript loses the database's sub-millisecond precision, so the boundary lands *before* the row it was minted from and the same page repeats forever. `id` is a UUIDv7 — chronological by construction, and a string that round-trips exactly.
+
+### 8b. Filters and sorts per endpoint
+
+Filters and sort fields are **allow-listed per endpoint**. There is no generic filter language, no operator syntax, and no way to name a column: a client picks a key the endpoint publishes, and nothing else reaches SQL as an identifier.
+
+`?sort=field` ascending, `?sort=-field` descending — one opaque token a client can round-trip without parsing.
+
+| Endpoint | Filters | Sort fields | Default | Authorization |
+|---|---|---|---|---|
+| `GET /roles` | `isSystemRole`, `key` | `key`, `createdAt` | `key` | `roles.read` @ organization |
+| `GET /permissions` | `domain` | `key`, `domain` | `key` | `permissions.read` @ organization |
+| `GET /role-assignments` | `userId`, `scopeType`, `scopeId` | `createdAt`, `scopeType` | `-createdAt` | `role_assignments.read` @ organization |
+| `GET /tenants/workspaces` | `status` (+ advisory `orgId`) | `name`, `createdAt` | `name` | `workspaces.read` @ organization |
+| `GET /auth/sessions` | — | — | — | self only |
+
+`GET /auth/sessions` is a deliberate exception: it is self-only and bounded by `AUTH_MAX_SESSIONS_PER_USER`, so it returns `{ data: [...] }` with no `page`. It is documented rather than quietly inconsistent.
+
+**A filter narrows; it never widens.** Filters are applied inside what the tenant predicate and RLS already allow, so a caller naming another organization's key gets nothing rather than something.
+
+### 8c. Where `Idempotency-Key` will fit
+
+Nothing in these conventions conflicts with the idempotency mechanism §4 specifies, and none of it is implemented (Phase 1B.5.9). When it lands it is a **request header** on mutating endpoints, replaying the original **status and body verbatim** — which is exactly `{ "data": … }` or `{ "error": … }` as defined above. The envelope is what gets stored and replayed; pagination is unaffected, being safe and unkeyed.
+
+## 9. API contract strategy (OpenAPI)
 
 - Every NestJS controller is annotated (`@nestjs/swagger` decorators) so the OpenAPI 3.1 document is generated from source, never hand-maintained separately — the spec cannot drift from the implementation.
 - The generated spec is published per environment (`/api/v1/openapi.json`, human-readable Swagger UI gated behind auth in non-dev environments) and is the input to generated client SDKs (Phase-dependent, tracked in `ROADMAP.md`).
 - Contract tests run in CI against the generated spec (schema validation of real request/response pairs in integration tests) to catch undocumented or drifted fields before merge.
 
-## 9. WebSockets
+## 9a. Breaking changes introduced by Phase 1B.5.8
+
+This is a pre-production system with no external consumer, so these ship without aliases. They are recorded because "internal" is not the same as "unnoticed" — the console work starts from this contract.
+
+| Change | Before | After |
+|---|---|---|
+| Success envelope | `{roles:[…]}`, `{workspaces:[…]}`, bare object for a detail | `{data}` / `{data, page}` |
+| `POST /auth/login`, `/auth/refresh` | `{accessToken, tokenType, expiresIn}` | `{data:{accessToken, tokenType, expiresIn}}` |
+| `GET /auth/me`, `/auth/me/authorization`, `/auth/sessions` | payload at the top level | under `data` |
+| List endpoints | unbounded | paginated, 25 by default |
+| Validation issues | `{field, constraints:[string]}` | `{field, rule, message}`, one per failed rule |
+| Unknown query parameter on `/tenants/workspaces` | silently ignored | `400 VALIDATION_FAILED`. The security property is unchanged and strictly stronger: the request carrying it no longer executes |
+
+## 10. WebSockets
 
 Real-time channels (inbox live updates, campaign progress, provider health dashboard) are served over WebSocket at `/api/v1/ws`, subscribed to tenant-scoped topics (`org:{org_id}:conversations`, `org:{org_id}:campaigns:{id}`).
 
@@ -261,7 +361,7 @@ Real-time channels (inbox live updates, campaign progress, provider health dashb
 
 The server never pushes data the connection's bound tenant context isn't authorized to see, and a connection can never widen its own scope after establishment.
 
-### 9a. Scope enforcement on a WebSocket connection
+### 10a. Scope enforcement on a WebSocket connection
 
 The socket performs no scope resolution of its own — it inherits a decision already made over an authenticated HTTP call (`TENANCY.md` §4b). Four properties, each independently testable:
 
@@ -274,6 +374,6 @@ The socket performs no scope resolution of its own — it inherits a decision al
 
 A connection is **not** re-resolved against the user's current grants mid-session: it keeps the scope the ticket recorded. Revoking a grant therefore takes effect on the next ticket, and revoking the underlying session invalidates its outstanding tickets.
 
-## 10. Related
+## 11. Related
 
 Event-level contract (async, cross-service): `EVENTS.md`. Auth/session detail: `RBAC.md`. Provider-facing inbound webhook detail: `PROVIDER_ADAPTER.md`.

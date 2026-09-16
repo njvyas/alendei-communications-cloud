@@ -42,7 +42,7 @@ describe('authenticated request chain', () => {
   const tokenFor = async (email: string) => {
     await h.clearRateLimits();
     const res = await login(email).expect(200);
-    return (res.body as { accessToken: string }).accessToken;
+    return (res.body as { data: { accessToken: string } }).data.accessToken;
   };
 
   beforeAll(async () => {
@@ -76,9 +76,9 @@ describe('authenticated request chain', () => {
         .get(url('/auth/me'))
         .set('authorization', `Bearer ${token}`)
         .expect(200);
-      expect(res.body.userId).toBe(orgA.userId);
-      expect(res.body.authMethod).toBe('session');
-      expect(res.body.sessionId).toBe((jwt.decode(token) as { sid: string }).sid);
+      expect(res.body.data.userId).toBe(orgA.userId);
+      expect(res.body.data.authMethod).toBe('session');
+      expect(res.body.data.sessionId).toBe((jwt.decode(token) as { sid: string }).sid);
     });
 
     it('3. ScopeResolver derives grants from the database, not the token', async () => {
@@ -87,9 +87,12 @@ describe('authenticated request chain', () => {
         .get(url('/auth/me'))
         .set('authorization', `Bearer ${token}`)
         .expect(200);
-      expect(res.body.roles).toHaveLength(1);
-      expect(res.body.roles[0]).toMatchObject({ scopeType: 'organization', scopeId: orgA.orgId });
-      expect(res.body.permissions).toContain('workspaces.read');
+      expect(res.body.data.roles).toHaveLength(1);
+      expect(res.body.data.roles[0]).toMatchObject({
+        scopeType: 'organization',
+        scopeId: orgA.orgId,
+      });
+      expect(res.body.data.permissions).toContain('workspaces.read');
 
       // Revoking the grant takes effect on the next request, with the same token.
       await h.admin.execute(sql`DELETE FROM user_roles WHERE user_id = ${orgA.userId}`);
@@ -98,8 +101,8 @@ describe('authenticated request chain', () => {
           .get(url('/auth/me'))
           .set('authorization', `Bearer ${token}`)
           .expect(200);
-        expect(after.body.roles).toHaveLength(0);
-        expect(after.body.permissions).toHaveLength(0);
+        expect(after.body.data.roles).toHaveLength(0);
+        expect(after.body.data.permissions).toHaveLength(0);
       } finally {
         await h.admin.execute(sql`select set_config('app.is_platform_admin','on',true)`);
         await h.admin.execute(
@@ -116,7 +119,7 @@ describe('authenticated request chain', () => {
         .set('authorization', `Bearer ${token}`)
         .set('x-acc-organization', orgA.orgId)
         .expect(200);
-      expect(res.body.workspaces[0].orgId).toBe(orgA.orgId);
+      expect(res.body.data[0].orgId).toBe(orgA.orgId);
     });
 
     it('6-7. withRequestTenant sets the context transaction-locally', async () => {
@@ -150,7 +153,7 @@ describe('authenticated request chain', () => {
         .set('authorization', `Bearer ${token}`)
         .expect(200);
 
-      const ids = res.body.workspaces.map((w: { id: string }) => w.id);
+      const ids = res.body.data.map((w: { id: string }) => w.id);
       expect(ids).toEqual([orgA.workspaceId]);
       expect(ids).not.toContain(orgB.workspaceId);
     });
@@ -170,7 +173,7 @@ describe('authenticated request chain', () => {
     it('commits the session and its audit row together', async () => {
       await h.clearRateLimits();
       const res = await login(orgA.email).expect(200);
-      const sid = (jwt.decode(res.body.accessToken as string) as { sid: string }).sid;
+      const sid = (jwt.decode(res.body.data.accessToken as string) as { sid: string }).sid;
 
       const session = await h.admin.execute(sql`SELECT id FROM sessions WHERE id = ${sid}`);
       const audited = await h.admin.execute(

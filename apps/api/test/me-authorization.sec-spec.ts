@@ -102,7 +102,7 @@ describe('GET /auth/me/authorization', () => {
       .post(url('/auth/login'))
       .send({ email, password: PASSWORD })
       .expect(200);
-    return (res.body as { accessToken: string }).accessToken;
+    return (res.body as { data: { accessToken: string } }).data.accessToken;
   }
 
   const get = (credential: string, path = '/auth/me/authorization') =>
@@ -138,7 +138,7 @@ describe('GET /auth/me/authorization', () => {
     it('returns the caller’s own grants, as grants', async () => {
       const token = await tokenFor(orgA.email);
       const res = await get(token).expect(200);
-      const body = res.body as AuthorizationBody;
+      const body = res.body.data as AuthorizationBody;
 
       expect(body.actorType).toBe('user');
       expect(body.userId).toBe(orgA.userId);
@@ -170,8 +170,8 @@ describe('GET /auth/me/authorization', () => {
       ).expect(200);
 
       // The subject is the principal, and the query changed nothing.
-      expect((forged.body as AuthorizationBody).userId).toBe(orgA.userId);
-      expect((forged.body as AuthorizationBody).userId).not.toBe(workspaceUser.userId);
+      expect((forged.body.data as AuthorizationBody).userId).toBe(orgA.userId);
+      expect((forged.body.data as AuthorizationBody).userId).not.toBe(workspaceUser.userId);
     });
 
     it('ignores a forged identifier in the body', async () => {
@@ -181,15 +181,15 @@ describe('GET /auth/me/authorization', () => {
         .set('authorization', `Bearer ${token}`)
         .send({ userId: workspaceUser.userId })
         .expect(200);
-      expect((res.body as AuthorizationBody).userId).toBe(orgA.userId);
+      expect((res.body.data as AuthorizationBody).userId).toBe(orgA.userId);
     });
 
     it('two principals see only their own grants', async () => {
       const adminToken = await tokenFor(orgA.email);
       const wsToken = await tokenFor(workspaceUser.email);
 
-      const asAdmin = (await get(adminToken).expect(200)).body as AuthorizationBody;
-      const asWorkspace = (await get(wsToken).expect(200)).body as AuthorizationBody;
+      const asAdmin = (await get(adminToken).expect(200)).body.data as AuthorizationBody;
+      const asWorkspace = (await get(wsToken).expect(200)).body.data as AuthorizationBody;
 
       expect(asAdmin.userId).toBe(orgA.userId);
       expect(asWorkspace.userId).toBe(workspaceUser.userId);
@@ -251,7 +251,7 @@ describe('GET /auth/me/authorization', () => {
 
       try {
         const token = await tokenFor(email);
-        const body = (await get(token).expect(200)).body as AuthorizationBody;
+        const body = (await get(token).expect(200)).body.data as AuthorizationBody;
 
         const orgGrant = body.grants.find((g) => g.scopeType === 'organization');
         const wsGrant = body.grants.find((g) => g.scopeType === 'workspace');
@@ -309,7 +309,7 @@ describe('GET /auth/me/authorization', () => {
 
     it('every grant carries the scope its permissions are held at', async () => {
       const token = await tokenFor(workspaceUser.email);
-      const body = (await get(token).expect(200)).body as AuthorizationBody;
+      const body = (await get(token).expect(200)).body.data as AuthorizationBody;
       for (const grant of body.grants) {
         // Scope provenance is the whole value of the representation: a grant
         // without it is a union entry wearing a different shape.
@@ -340,7 +340,7 @@ describe('GET /auth/me/authorization', () => {
       // The creator is an organization admin carrying far more than this.
       const key = await issueKey([PERMISSIONS.WORKSPACES_READ]);
       try {
-        const body = (await get(key.credential).expect(200)).body as AuthorizationBody;
+        const body = (await get(key.credential).expect(200)).body.data as AuthorizationBody;
 
         expect(body.actorType).toBe('api_key');
         expect(body.userId).toBeNull();
@@ -384,7 +384,7 @@ describe('GET /auth/me/authorization', () => {
 
       const key = await issueKey([PERMISSIONS.TEAMS_CREATE, PERMISSIONS.WORKSPACES_READ]);
       try {
-        const body = (await get(key.credential).expect(200)).body as AuthorizationBody;
+        const body = (await get(key.credential).expect(200)).body.data as AuthorizationBody;
         const everything = body.grants.flatMap((g) => g.permissions);
 
         // Requested, and held by the creator — but not at this key's binding.
@@ -404,7 +404,7 @@ describe('GET /auth/me/authorization', () => {
     it('is bounded by the key’s binding scope', async () => {
       const key = await issueKey([PERMISSIONS.WORKSPACES_READ]);
       try {
-        const body = (await get(key.credential).expect(200)).body as AuthorizationBody;
+        const body = (await get(key.credential).expect(200)).body.data as AuthorizationBody;
         // Bound to Organization A and nothing wider.
         expect(body.organizationIds).toEqual([orgA.orgId]);
         expect(body.organizationIds).not.toContain(orgB.orgId);
@@ -433,7 +433,7 @@ describe('GET /auth/me/authorization', () => {
   describe('D. tenant isolation', () => {
     it('never reports another organization’s grants', async () => {
       const token = await tokenFor(orgA.email);
-      const body = (await get(token).expect(200)).body as AuthorizationBody;
+      const body = (await get(token).expect(200)).body.data as AuthorizationBody;
 
       expect(body.organizationIds).not.toContain(orgB.orgId);
       for (const grant of body.grants) {
@@ -444,7 +444,7 @@ describe('GET /auth/me/authorization', () => {
 
     it('a tenant principal is never reported as a platform admin', async () => {
       const token = await tokenFor(orgA.email);
-      const body = (await get(token).expect(200)).body as AuthorizationBody;
+      const body = (await get(token).expect(200)).body.data as AuthorizationBody;
       expect(body.isPlatformAdmin).toBe(false);
       expect(body.grants.every((g) => g.scopeType !== 'platform')).toBe(true);
       expect(body.grants.every((g) => g.roleKey !== PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN)).toBe(

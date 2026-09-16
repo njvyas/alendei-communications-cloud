@@ -47,7 +47,7 @@ describe('Phase 1B.4 advisory tenant identifiers', () => {
 
   const tokenFor = async (email: string): Promise<string> => {
     const res = await login(email).expect(200);
-    return (res.body as { accessToken: string }).accessToken;
+    return (res.body as { data: { accessToken: string } }).data.accessToken;
   };
 
   const get = (path: string, token: string) =>
@@ -257,17 +257,35 @@ describe('Phase 1B.4 advisory tenant identifiers', () => {
     });
 
     it('does not let bracket syntax smuggle a value into a declared parameter', async () => {
-      // Under the `simple` parser `orgId[]=x` is a parameter literally named
-      // `orgId[]`, so the declared identifier is absent and the resolved
-      // context governs untouched. That is safe, but only if the bracketed
-      // value truly has no effect — which is what this asserts, on the real
-      // endpoint where the effect would be visible as rows.
+      // Under the `simple` parser `orgId[]=x` is a parameter literally *named*
+      // `orgId[]`, so the declared identifier is absent and the bracketed value
+      // can never reach the guard's comparison.
+      //
+      // Until Phase 1B.5.8 that parameter was silently ignored and the endpoint
+      // answered `200` with the caller's own rows. Now that the route carries a
+      // query DTO, `forbidNonWhitelisted` refuses the unknown parameter
+      // outright. The security property is the same and strictly stronger:
+      // before, the smuggled value had no effect; now the request carrying it
+      // does not execute at all. Recorded as a deliberate breaking change in
+      // `API.md` §9a.
       const token = await tokenFor(orgA.email);
       const res = await get(
         `/tenants/workspaces?orgId[]=${orgB.orgId}&orgId[id]=${orgB.orgId}`,
         token,
-      ).expect(200);
-      const ids = res.body.workspaces.map((w: { id: string }) => w.id);
+      ).expect(400);
+      expect(res.body.error.code).toBe(ERROR_CODES.VALIDATION_FAILED);
+      // The refusal names the offending parameters and nothing else — no rows,
+      // and no confirmation that Organization B exists.
+      expect(JSON.stringify(res.body)).not.toContain(orgB.orgId);
+      expect(JSON.stringify(res.body)).not.toContain(orgB.workspaceId);
+    });
+
+    it('still returns the caller’s own rows when no advisory identifier is sent', async () => {
+      // The positive control for the case above: the endpoint itself is fine,
+      // and it is the unknown parameter that was refused.
+      const token = await tokenFor(orgA.email);
+      const res = await get('/tenants/workspaces', token).expect(200);
+      const ids = res.body.data.map((w: { id: string }) => w.id);
       expect(ids).toContain(orgA.workspaceId);
       expect(ids).not.toContain(orgB.workspaceId);
     });
@@ -343,7 +361,7 @@ describe('Phase 1B.4 advisory tenant identifiers', () => {
     it('accepts its own organization id and returns the real listing', async () => {
       const token = await tokenFor(orgA.email);
       const res = await get(`/tenants/workspaces?orgId=${orgA.orgId}`, token).expect(200);
-      expect(res.body.workspaces.map((w: { id: string }) => w.id)).toContain(orgA.workspaceId);
+      expect(res.body.data.map((w: { id: string }) => w.id)).toContain(orgA.workspaceId);
     });
 
     it('refuses a duplicated orgId on the real endpoint too', async () => {

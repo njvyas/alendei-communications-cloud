@@ -195,13 +195,24 @@ describe('last-platform-admin invariant', () => {
       .post(url('/auth/login'))
       .send({ email, password: PASSWORD })
       .expect(200);
-    return (res.body as { accessToken: string }).accessToken;
+    return (res.body as { data: { accessToken: string } }).data.accessToken;
   }
 
+  /**
+   * Revokes as a platform administrator, naming the organization explicitly.
+   *
+   * A platform admin can see every organization, so when more than one exists it
+   * has no *unambiguous* resolved organization and `RoleAssignmentService`
+   * refuses with `400 TENANCY_CONTEXT_REQUIRED` — correctly, since that is the
+   * documented multi-organization selection rule (`TENANCY.md` §2a). Without the
+   * header this suite's result depended on how many organizations other suites
+   * had left behind, which is a test defect rather than a behaviour.
+   */
   const revoke = (token: string, id: string) =>
     request(h.app.getHttpServer())
       .delete(url(`/role-assignments/${id}`))
-      .set('authorization', `Bearer ${token}`);
+      .set('authorization', `Bearer ${token}`)
+      .set('x-acc-organization', orgA.orgId);
 
   const expectDbRefusal = async (work: Promise<unknown>, reason: RegExp): Promise<void> => {
     let failure: unknown;

@@ -43,6 +43,13 @@
       "when": 1789266600000,
       "tag": "0005_phase1b56_platform_admin_liveness",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789267200000,
+      "tag": "0006_phase1b58_list_pagination_indexes",
+      "breakpoints": true
     }
   ]
 }

@@ -82,7 +82,7 @@ describe('API-key creator authority at the binding scope', () => {
       .get(url('/auth/me'))
       .set('authorization', `Bearer ${credential}`)
       .expect(200);
-    return me.body.permissions as string[];
+    return me.body.data.permissions as string[];
   };
 
   beforeAll(async () => {
@@ -348,7 +348,7 @@ describe('API-key creator authority at the binding scope', () => {
         .get(url('/tenants/workspaces'))
         .set('authorization', `Bearer ${credential}`)
         .expect(200);
-      const ids = res.body.workspaces.map((w: { id: string }) => w.id);
+      const ids = res.body.data.map((w: { id: string }) => w.id);
       expect(ids).toContain(orgA.workspaceId);
       expect(ids).not.toContain(orgB.workspaceId);
     });
@@ -390,8 +390,8 @@ describe('API-key creator authority at the binding scope', () => {
         .get(url('/auth/me'))
         .set('authorization', `Bearer ${credential}`)
         .expect(200);
-      expect(me.body.roles).toHaveLength(1);
-      expect(me.body.roles[0]).toMatchObject({
+      expect(me.body.data.roles).toHaveLength(1);
+      expect(me.body.data.roles[0]).toMatchObject({
         roleKey: 'api_key',
         scopeType: 'workspace',
         scopeId: orgA.workspaceId,

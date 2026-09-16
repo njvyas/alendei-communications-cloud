@@ -3,16 +3,18 @@ import {
   AUDIT_ACTIONS,
   ERROR_CODES,
   type AuthPrincipal,
+  type PageInfo,
   type ScopeRef,
   type ScopeType,
 } from '@acc/contracts';
 import { PLATFORM_ADMIN_LOCK_KEY, schema, type Transaction } from '@acc/db';
-import { and, asc, eq, sql, type SQL } from 'drizzle-orm';
+import { and, eq, sql, type SQL } from 'drizzle-orm';
 
 import { AppException } from '../common/errors/app.exception';
 import { actorFromPrincipal } from '../audit/audit-actor';
 import { AuditWriter } from '../audit/audit-writer.service';
 import { AuthorizationService } from '../auth/authorization.service';
+import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
 
 export interface AssignmentView {
   readonly id: string;
@@ -33,7 +35,8 @@ export interface GrantInput {
   readonly scopeId: string | null;
 }
 
-export interface ListAssignmentsFilter {
+/** Allow-listed filters for `GET /role-assignments` (`API.md` §8b). */
+export interface ListAssignmentsFilter extends ListQueryInput {
   readonly userId?: string;
   readonly scopeType?: ScopeType;
   readonly scopeId?: string;
@@ -91,7 +94,35 @@ export class RoleAssignmentService {
   constructor(
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
+    private readonly lists: ListQuery,
   ) {}
+
+  /**
+   * The assignments list's ordering contract (`API.md` §8b).
+   *
+   * `createdAt` descending by default: a grant list is read newest-first,
+   * because the question an administrator brings to it is usually "what changed".
+   * Tie-broken by `id`, a UUIDv7 — unique, and chronological in the same
+   * direction as `createdAt`, so the two never disagree.
+   */
+  private readonly listSpec: ListQuerySpec = {
+    sortable: {
+      // Chronological ordering runs on `id`, not on `created_at`, and that is a
+      // correctness requirement rather than an optimisation. A cursor is text,
+      // and a `timestamptz` round-tripped through JavaScript loses the
+      // database's sub-millisecond precision — so the boundary lands *before*
+      // the row it was minted from, the keyset predicate re-selects that row,
+      // and the same page repeats forever. `id` is a UUIDv7: chronological by
+      // construction, and a string that round-trips exactly.
+      createdAt: { column: schema.userRoles.id, encode: (row) => String(row.id) },
+      scopeType: {
+        column: schema.userRoles.scopeType,
+        encode: (row) => String(row.scopeType),
+      },
+    },
+    defaultSort: '-createdAt',
+    tieBreaker: schema.userRoles.id,
+  };
 
   /**
    * Assignments visible to the caller.
@@ -105,7 +136,7 @@ export class RoleAssignmentService {
     tx: Transaction,
     principal: AuthPrincipal,
     filter: ListAssignmentsFilter = {},
-  ): Promise<readonly AssignmentView[]> {
+  ): Promise<{ items: readonly AssignmentView[]; page: PageInfo }> {
     const orgId = this.requireOrg(principal);
     await this.authorization.assert(tx, {
       principal,
@@ -114,10 +145,17 @@ export class RoleAssignmentService {
       resourceType: 'Role assignment',
     });
 
+    const resolved = this.lists.resolve(filter, this.listSpec);
+
+    // Filters narrow; they never widen. The query still carries no tenant
+    // predicate of its own — RLS is what scopes it, so a forgotten filter here
+    // cannot leak another tenant's grants, and a supplied one cannot reach past
+    // what RLS already allows.
     const predicates: SQL[] = [];
     if (filter.userId) predicates.push(eq(schema.userRoles.userId, filter.userId));
     if (filter.scopeType) predicates.push(eq(schema.userRoles.scopeType, filter.scopeType));
     if (filter.scopeId) predicates.push(eq(schema.userRoles.scopeId, filter.scopeId));
+    if (resolved.after) predicates.push(resolved.after);
 
     const rows = await tx
       .select({
@@ -134,9 +172,17 @@ export class RoleAssignmentService {
       .from(schema.userRoles)
       .innerJoin(schema.roles, eq(schema.roles.id, schema.userRoles.roleId))
       .where(predicates.length > 0 ? and(...predicates) : undefined)
-      .orderBy(asc(schema.userRoles.createdAt));
+      .orderBy(...resolved.orderBy)
+      .limit(this.lists.fetchSize(resolved));
 
-    return rows.map((row) => this.view(row));
+    const { items, page } = this.lists.paginate(
+      rows as unknown as Record<string, unknown>[],
+      resolved,
+      this.listSpec,
+      (row) => String(row.id),
+    );
+
+    return { items: items.map((row) => this.view(row as never)), page };
   }
 
   async get(tx: Transaction, principal: AuthPrincipal, id: string): Promise<AssignmentView> {

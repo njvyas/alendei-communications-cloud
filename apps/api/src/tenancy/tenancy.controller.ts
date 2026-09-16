@@ -1,7 +1,7 @@
-import { Controller, Get, HttpStatus, Param, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Get, HttpStatus, Param, ParseUUIDPipe, Query } from '@nestjs/common';
 import { ERROR_CODES, PERMISSIONS } from '@acc/contracts';
 import { schema } from '@acc/db';
-import { eq } from 'drizzle-orm';
+import { and, eq, type SQL } from 'drizzle-orm';
 
 import { AppException } from '../common/errors/app.exception';
 import { RequestContext } from '../common/context/request-context';
@@ -9,7 +9,9 @@ import { TenantDatabase } from '../database/tenant-database.service';
 import { AuthorizationService } from '../auth/authorization.service';
 import { RequiresPermission } from '../auth/requires-permission.decorator';
 import type { ResolvedPrincipal } from '../auth/auth.guard';
+import { ListQuery, type ListQuerySpec } from '../common/http/list-query';
 import { AdvisoryTenantIds } from './advisory-identifier';
+import { ListWorkspacesQueryDto } from './tenancy.dto';
 
 /**
  * The minimum tenant-scoped read surface Phase 1B.3 needs.
@@ -28,7 +30,31 @@ export class TenancyController {
   constructor(
     private readonly db: TenantDatabase,
     private readonly authorization: AuthorizationService,
+    private readonly lists: ListQuery,
   ) {}
+
+  /**
+   * The workspaces list's ordering contract (`API.md` §8b).
+   *
+   * `name` by default because that is how a workspace switcher reads; tie-broken
+   * by `id`, so two workspaces sharing a name still have a total order and
+   * neither is skipped across pages.
+   */
+  private readonly listSpec: ListQuerySpec = {
+    sortable: {
+      name: { column: schema.workspaces.name, encode: (row) => String(row.name) },
+      // Chronological ordering runs on `id`, not on `created_at`, and that is a
+      // correctness requirement rather than an optimisation. A cursor is text,
+      // and a `timestamptz` round-tripped through JavaScript loses the
+      // database's sub-millisecond precision — so the boundary lands *before*
+      // the row it was minted from, the keyset predicate re-selects that row,
+      // and the same page repeats forever. `id` is a UUIDv7: chronological by
+      // construction, and a string that round-trips exactly.
+      createdAt: { column: schema.workspaces.id, encode: (row) => String(row.id) },
+    },
+    defaultSort: 'name',
+    tieBreaker: schema.workspaces.id,
+  };
 
   private principal(): ResolvedPrincipal {
     const principal = RequestContext.get()?.principal as ResolvedPrincipal | null | undefined;
@@ -56,7 +82,7 @@ export class TenancyController {
   @Get('workspaces')
   @RequiresPermission(PERMISSIONS.WORKSPACES_READ)
   @AdvisoryTenantIds({ level: 'organization', source: 'query', key: 'orgId' })
-  async listWorkspaces() {
+  async listWorkspaces(@Query() query: ListWorkspacesQueryDto) {
     const principal = this.principal();
     const orgId = principal.tenant.orgId;
 
@@ -67,6 +93,8 @@ export class TenancyController {
         message: 'No organization context is established for this request',
       });
     }
+
+    const resolved = this.lists.resolve(query, this.listSpec);
 
     // Authorization and the query share one tenant transaction, so the target's
     // ancestry is read under exactly the tenant context the query runs in
@@ -80,9 +108,14 @@ export class TenancyController {
         resourceType: 'Organization',
       });
 
-      // The query carries no tenant predicate of its own on purpose: RLS is
-      // what scopes it, so a missing application-side filter cannot leak
-      // another tenant's rows.
+      // The query still carries no tenant predicate of its own on purpose: RLS
+      // is what scopes it, so a missing application-side filter cannot leak
+      // another tenant's rows — and the filters below narrow that set, never
+      // widen it.
+      const predicates: SQL[] = [];
+      if (query.status) predicates.push(eq(schema.workspaces.status, query.status));
+      if (resolved.after) predicates.push(resolved.after);
+
       return tx
         .select({
           id: schema.workspaces.id,
@@ -90,11 +123,21 @@ export class TenancyController {
           name: schema.workspaces.name,
           slug: schema.workspaces.slug,
           status: schema.workspaces.status,
+          createdAt: schema.workspaces.createdAt,
         })
-        .from(schema.workspaces);
+        .from(schema.workspaces)
+        .where(predicates.length > 0 ? and(...predicates) : undefined)
+        .orderBy(...resolved.orderBy)
+        .limit(this.lists.fetchSize(resolved));
     });
 
-    return { workspaces: rows };
+    const { items, page } = this.lists.paginate(
+      rows as unknown as Record<string, unknown>[],
+      resolved,
+      this.listSpec,
+      (row) => String(row.id),
+    );
+    return { data: items, page };
   }
 
   /**
@@ -149,6 +192,6 @@ export class TenancyController {
         logContext: { requestedWorkspaceId: id },
       });
     }
-    return workspace;
+    return { data: workspace };
   }
 }

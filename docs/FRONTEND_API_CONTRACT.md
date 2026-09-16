@@ -1,21 +1,45 @@
 # Frontend API Contract
 
-> **STATUS: DRAFT — NOT YET A FROZEN CONTRACT.**
+> **STATUS: DRAFT — CONVENTIONS FROZEN, SURFACE INCOMPLETE.**
 >
-> This document is written against the repository at `6e84d7c` (Phase 1B.5.3). It is
-> the formal contract between the backend/core track and the future frontend track,
-> but it is **not binding yet**, because several conventions the frontend depends on
-> most — pagination, filtering, sorting, list-envelope shape — **do not exist in the
-> codebase at all**. They are marked below and are the subject of the
-> frontend-ready-gate roadmap in `ROADMAP.md`.
+> This document is written against the repository at Phase 1B.5.8. It is the
+> formal contract between the backend/core track and the future frontend track.
+>
+> **What changed at 1B.5.8, and what it means for you.** Every *convention* a
+> frontend depends on is now defined, implemented and tested: the response
+> envelope, cursor pagination, filtering, sorting, field-level validation errors,
+> error codes, correlation ids, date and enum handling. Those sections are stable
+> and are the ones you would otherwise have had to guess at. Building a client
+> against them now is safe.
+>
+> **Why it is still DRAFT.** The conventions are complete; the *surface* is not.
+> Freezing now would freeze a contract that is missing most of the endpoints a
+> console needs, and a "frozen" document that keeps growing teaches people to
+> ignore the label. The exact blockers, each tied to the phase that closes it:
+>
+> | Blocker | Closes in |
+> |---|---|
+> | `Idempotency-Key` is documented and has a table, but **no middleware reads it** — no mutating endpoint is replay-safe (§17) | 1B.5.9 |
+> | **No user lifecycle**: no invite, update, disable, or user list. A console cannot manage people | 1B.6 |
+> | **No organization, workspace, team or reseller CRUD** — only workspace *reads* exist (§30) | 1B.8 |
+> | **No API-key management** and **no audit read** endpoint | 1B.6 |
+> | **OpenAPI is effectively empty of business schemas** — 5 decorators, all on health. No typed client can be generated (§30) | 1B.9 |
+> | **No general rate limiting**: only the auth endpoints are limited, and no other endpoint returns `X-RateLimit-*` (§23) | 1B.10 |
+> | **No development bootstrap**: no one-command way to obtain a working tenant and credentials | 1B.10 |
+> | **No WebSocket or webhook surface** — plan for polling (§§24-25) | later |
+>
+> When those are closed this becomes FROZEN, and changes to it then follow §27's
+> breaking-change rules.
 >
 > **Reading rule.** Every section carries one of three markers:
 >
 > | Marker | Meaning |
 > |---|---|
-> | **IMPLEMENTED** | Present in the code at `6e84d7c`, with the file cited. Safe to build against once frozen. |
+> | **IMPLEMENTED** | Present in the code, with the file cited. Safe to build against. |
 > | **PLANNED / NOT IMPLEMENTED** | Described in `API.md` or another design document as an intention. **No code exists.** Do not build against it. |
-> | **NOT YET DEFINED** | No implementation *and* no agreed convention. A decision is owed before the gate. |
+>
+> There is no longer a third marker. Every convention that was "NOT YET DEFINED"
+> in the 1B.5.7 draft was decided and implemented in 1B.5.8.
 >
 > Nothing in this document describes behaviour invented to suit the frontend.
 > Where `API.md` describes a target architecture that is not built, this document
@@ -123,16 +147,27 @@ e.g. `workspaces.read`, `roles.create`, `platform.audit.read`), and
 Requires `permissions.read` at the caller's organization. Read-only and
 system-defined — there is no permission CRUD and none is planned.
 
-## 9. Success response conventions — NOT YET DEFINED
+## 9. Success response conventions — IMPLEMENTED (Phase 1B.5.8)
 
-**This is a known gap and a gate blocker.** The two existing tenant endpoints are already
-inconsistent (`apps/api/src/tenancy/tenancy.controller.ts`):
+One key at the top level, always, and the same on every endpoint:
 
-- `GET /tenants/workspaces` → `{ "workspaces": [...] }` (named-key wrapper)
-- `GET /tenants/workspaces/:id` → the bare object, unwrapped
+```jsonc
+{ "data": { ... } }                          // a single resource
+{ "data": [ ... ], "page": { ... } }         // a collection
+{ "error": { ... } }                         // a failure (§10)
+```
 
-No `data` envelope convention exists. The frontend must not infer one. A single
-convention must be decided and applied before any list endpoint is frozen.
+`204 No Content` carries no body. The symmetry between `data` and `error` is
+deliberate — branch on which key is present, without knowing the endpoint.
+
+**The correlation id is not in a success body.** It is `x-correlation-id` on
+every response, CORS-exposed, and repeated inside `error` only. One place for it
+to be right rather than two.
+
+**camelCase everywhere**, request and response alike.
+
+This resolves the inconsistency earlier drafts of this document recorded:
+`{workspaces:[…]}` here, `{roles:[…]}` there, and a bare object for a detail.
 
 ## 10. Error response conventions — IMPLEMENTED
 
@@ -187,18 +222,65 @@ present "this exists but you lack access" for a `404`.
   into logs, audit rows or event envelopes.
 - The frontend should surface `correlationId` from an error body in support flows.
 
-## 13. Pagination — NOT YET DEFINED
+## 13. Pagination — IMPLEMENTED (Phase 1B.5.8)
 
-**No pagination exists anywhere in the codebase, and no convention is documented in any
-design document.** `GET /tenants/workspaces` returns every visible row unbounded. This is
-a gate blocker: a convention (cursor vs offset, parameter names, envelope shape) must be
-decided, implemented and frozen before the frontend builds a single table.
+Cursor-based. Every collection endpoint except `/auth/sessions` (§16a).
 
-## 14. Filtering — NOT YET DEFINED
-## 15. Sorting — NOT YET DEFINED
-## 16. Search — NOT YET DEFINED
+```jsonc
+"page": { "nextCursor": "eyJzIjoia2V5...", "hasMore": true, "limit": 25 }
+```
 
-None implemented; no conventions documented. Same gate treatment as §13.
+| Parameter | Meaning |
+|---|---|
+| `?limit=` | 1–100, default **25**. Outside that range is a `400` |
+| `?cursor=` | The previous page's `nextCursor`, **passed back verbatim** |
+| `?sort=` | See §15 |
+
+- **`nextCursor` is `null` on the last page**, and `hasMore` is `false`. Loop until `nextCursor` is null; do not compute page counts.
+- **There is no total.** `hasMore` is derived by reading one row beyond the page, not by `COUNT(*)`. If a screen needs "1–25 of 312", say so and it will be added deliberately to the endpoints that need it — do not synthesise it by walking every page.
+- **Cursors are opaque and signed.** Do not parse, construct, cache across sorts, or store one long-term. A cursor minted under `?sort=key` handed to `?sort=-key` is a `400`, and so is an edited one.
+- **Invalid cursor → `400 PAGINATION_CURSOR_INVALID`.** The correct response is to restart from page one, not to retry.
+- **Ordering is total** — the sort field then `id` — so a row is never skipped or repeated across a walk. A row inserted *ahead* of your cursor will appear; one inserted *behind* it will not. That is inherent to keyset pagination, not a defect.
+
+## 14. Filtering — IMPLEMENTED (Phase 1B.5.8)
+
+Allow-listed per endpoint (§16a). There is no operator syntax, no `filter[...]`
+language, and no way to name a column.
+
+**An unknown parameter is a `400`, not an ignored one.** A typo'd filter fails
+loudly rather than silently returning unfiltered data.
+
+Filters narrow within what the caller may already see; they never widen it.
+
+## 15. Sorting — IMPLEMENTED (Phase 1B.5.8)
+
+`?sort=field` ascending, `?sort=-field` descending — one token, round-trippable
+without parsing. Allowed fields are per endpoint (§16a); anything else is
+`400 VALIDATION_FAILED` with `rule: "SORT_NOT_ALLOWED"` and the allowed keys in
+the message.
+
+**`createdAt` orders by the record's UUIDv7 id**, which is chronological by
+construction. Sorting by `createdAt` and by insertion order are the same thing
+here; the ids are also exactly what cursors carry.
+
+## 16. Search — NOT IMPLEMENTED
+
+No free-text search on any endpoint. It needs indexes the control-plane tables do
+not have, and adding a filter nobody has asked for is how an allow-list stops
+being one. Ask if a screen needs it.
+
+## 16a. Per-endpoint filters and sorts
+
+| Endpoint | Filters | Sort fields | Default sort |
+|---|---|---|---|
+| `GET /roles` | `isSystemRole`, `key` | `key`, `createdAt` | `key` |
+| `GET /permissions` | `domain` | `key`, `domain` | `key` |
+| `GET /role-assignments` | `userId`, `scopeType`, `scopeId` | `createdAt`, `scopeType` | `-createdAt` |
+| `GET /tenants/workspaces` | `status` | `name`, `createdAt` | `name` |
+| `GET /auth/sessions` | — | — | — |
+
+`GET /auth/sessions` is deliberately unpaginated: self-only, and bounded by the
+server's max-sessions-per-user. It returns `{ data: [...] }` with **no `page`**.
 
 ## 17. Idempotency — PLANNED / NOT IMPLEMENTED
 
@@ -231,12 +313,30 @@ Absent-but-known values are **explicit `null`**, not omitted keys
 (`apiKeyId: null`, `lastUsedAt: null`). The frontend should treat a missing key as a
 contract violation rather than as `null`.
 
-## 22. Validation semantics — IMPLEMENTED
+## 22. Validation semantics — IMPLEMENTED (Phase 1B.5.8)
 
-A global `ValidationPipe` (`apps/api/src/common/http/validation.pipe.ts`) rejects unknown
-properties. Failures return `400` / `VALIDATION_FAILED` with `details.issues` as an array
-of human-readable strings. **`details.issues` is not yet per-field structured** — a
-field-level shape is owed before form-heavy UI is built.
+A global pipe rejects unknown properties and returns `400 VALIDATION_FAILED`
+with one issue **per failed rule**:
+
+```jsonc
+"details": {
+  "issues": [
+    { "field": "key",           "rule": "MATCHES", "message": "key must be lower snake_case…" },
+    { "field": "permissions.0", "rule": "IS_IN",   "message": "each value must be one of…" }
+  ]
+}
+```
+
+- **`field`** — dotted path from the request root, so a nested member is
+  addressable (`permissions.0`). Empty string for an issue about the request as a
+  whole. Map it straight onto a form field.
+- **`rule`** — stable screaming-snake code (`IS_UUID`, `MAX_LENGTH`,
+  `WHITELIST_VALIDATION`, `SORT_NOT_ALLOWED`). **Branch on this**, never on the
+  message.
+- **`message`** — human-readable, and safe to display, but its wording is not
+  part of the contract.
+
+A field can produce several issues at once; render them all.
 
 ## 23. Rate limiting — PARTIAL
 
@@ -305,6 +405,13 @@ carry no tenant predicate, so a forgotten application-side filter cannot leak an
 tenant's rows. The frontend must never send a tenant identifier expecting it to *select*
 data — advisory identifiers are cross-checked and refused on mismatch (§4).
 
+## 29a. Envelope note for the examples below
+
+The resource shapes in §§30–30c are shown **unwrapped**, as the object itself.
+Every one of them travels inside the §9 envelope on the wire: `{ "data": <the
+object> }` for a single resource, `{ "data": [ <objects> ], "page": {...} }` for a
+collection.
+
 ## 30. Frontend-specific API dependencies — CURRENT REALITY
 
 The **entire** implemented API surface at `6e84d7c`:
@@ -325,6 +432,9 @@ The **entire** implemented API surface at `6e84d7c`:
 | `DELETE` | `/api/v1/roles/:id` | IMPLEMENTED, 1B.5.4 |
 | `GET` | `/api/v1/permissions` | IMPLEMENTED, 1B.5.4 (unpaginated) |
 | `GET` | `/api/v1/auth/me/authorization` | IMPLEMENTED, 1B.5.7 |
+
+All list endpoints above are **paginated from 1B.5.8** (§13) except
+`/auth/sessions` (§16a), and every response uses the §9 envelope.
 | `GET` | `/api/v1/role-assignments` | IMPLEMENTED, 1B.5.5 (unpaginated; 3 filters) |
 | `POST` | `/api/v1/role-assignments` | IMPLEMENTED, 1B.5.5 |
 | `GET` | `/api/v1/role-assignments/:id` | IMPLEMENTED, 1B.5.5 |

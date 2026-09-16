@@ -169,7 +169,7 @@ describe('role administration', () => {
       .post(url('/auth/login'))
       .send({ email, password: PASSWORD })
       .expect(200);
-    return (res.body as { accessToken: string }).accessToken;
+    return (res.body as { data: { accessToken: string } }).data.accessToken;
   }
 
   const api = (token: string) => ({
@@ -193,9 +193,9 @@ describe('role administration', () => {
       request(h.app.getHttpServer())
         .delete(url(`/roles/${id}`))
         .set('authorization', `Bearer ${token}`),
-    permissions: () =>
+    permissions: (query = '') =>
       request(h.app.getHttpServer())
-        .get(url('/permissions'))
+        .get(url(`/permissions${query}`))
         .set('authorization', `Bearer ${token}`),
   });
 
@@ -242,28 +242,28 @@ describe('role administration', () => {
   describe('A. reading roles and permissions', () => {
     it('lists the organization’s own roles and the platform definitions', async () => {
       const res = await api(adminToken).list().expect(200);
-      const body = res.body as { roles: RoleBody[] };
-      const keys = body.roles.map((r) => r.key);
+      const body = res.body as { data: RoleBody[] };
+      const keys = body.data.map((r) => r.key);
 
       expect(keys).toContain('org_admin');
       // Platform roles are readable — RBAC needs them — but carry no org.
-      const platform = body.roles.filter((r) => r.orgId === null);
+      const platform = body.data.filter((r) => r.orgId === null);
       expect(platform.length).toBeGreaterThan(0);
       // And nothing from the other tenant.
-      expect(body.roles.every((r) => r.orgId === null || r.orgId === orgA.orgId)).toBe(true);
+      expect(body.data.every((r) => r.orgId === null || r.orgId === orgA.orgId)).toBe(true);
     });
 
     it('returns the permission catalogue', async () => {
-      const res = await api(adminToken).permissions().expect(200);
-      const body = res.body as { permissions: { key: string }[] };
-      expect(body.permissions.length).toBeGreaterThan(0);
-      expect(body.permissions.map((p) => p.key)).toContain(PERMISSIONS.WORKSPACES_READ);
+      const res = await api(adminToken).permissions('?limit=100').expect(200);
+      const body = res.body as { data: { key: string }[] };
+      expect(body.data.length).toBeGreaterThan(0);
+      expect(body.data.map((p) => p.key)).toContain(PERMISSIONS.WORKSPACES_READ);
     });
 
     it('exposes allowedScopeTypes on every role', async () => {
       const res = await api(adminToken).list().expect(200);
-      const body = res.body as { roles: RoleBody[] };
-      for (const role of body.roles) {
+      const body = res.body as { data: RoleBody[] };
+      for (const role of body.data) {
         expect(Array.isArray(role.allowedScopeTypes)).toBe(true);
         expect(role.allowedScopeTypes.length).toBeGreaterThan(0);
       }
@@ -279,7 +279,7 @@ describe('role administration', () => {
   describe('B. creating a role', () => {
     it('creates one, persisting allowedScopeTypes and its permissions', async () => {
       const res = await api(adminToken).create(customRole('custom_one')).expect(201);
-      const body = res.body as RoleBody;
+      const body = res.body.data as RoleBody;
 
       expect(body.key).toBe('custom_one');
       expect(body.orgId).toBe(orgA.orgId);
@@ -354,7 +354,7 @@ describe('role administration', () => {
     it('refuses the escalation on update as well as on create', async () => {
       const created = await api(adminToken).create(customRole('custom_upd_esc')).expect(201);
       await api(adminToken)
-        .update((created.body as RoleBody).id, { permissions: [PERMISSIONS.API_KEYS_CREATE] })
+        .update((created.body.data as RoleBody).id, { permissions: [PERMISSIONS.API_KEYS_CREATE] })
         .expect(403);
     });
 
@@ -363,7 +363,7 @@ describe('role administration', () => {
         .create({ ...customRole('custom_none'), permissions: [PERMISSIONS.API_KEYS_CREATE] })
         .expect(403);
       const res = await api(adminToken).list().expect(200);
-      expect((res.body as { roles: RoleBody[] }).roles.map((r) => r.key)).not.toContain(
+      expect((res.body as { data: RoleBody[] }).data.map((r) => r.key)).not.toContain(
         'custom_none',
       );
     });
@@ -442,7 +442,7 @@ describe('role administration', () => {
 
     it('a role cannot be promoted into a system role after creation', async () => {
       const created = await api(adminToken).create(customRole('custom_promote')).expect(201);
-      const id = (created.body as RoleBody).id;
+      const id = (created.body.data as RoleBody).id;
       await expectDbRefusal(
         db.withTenant({ orgId: orgA.orgId, resellerId: orgA.resellerId }, (tx) =>
           tx.update(schema.roles).set({ isSystemRole: true }).where(eq(schema.roles.id, id)),
@@ -457,7 +457,7 @@ describe('role administration', () => {
     it('cannot read another organization’s role — 404, not 403', async () => {
       const other = await tokenFor(orgB.email);
       const created = await api(other).create(customRole('custom_b')).expect(201);
-      const id = (created.body as RoleBody).id;
+      const id = (created.body.data as RoleBody).id;
 
       // Organization A asking for it must not learn that it exists.
       const res = await api(adminToken).get(id).expect(404);
@@ -469,7 +469,7 @@ describe('role administration', () => {
       const other = await tokenFor(orgB.email);
       const created = await api(other).create(customRole('custom_b2')).expect(201);
       const foreign = await api(adminToken)
-        .get((created.body as RoleBody).id)
+        .get((created.body.data as RoleBody).id)
         .expect(404);
       const unknown = await api(adminToken).get(uuidv7()).expect(404);
       // Everything but the correlation id, which is per-request by design and
@@ -485,7 +485,7 @@ describe('role administration', () => {
       const other = await tokenFor(orgB.email);
       const created = await api(other).create(customRole('custom_b3')).expect(201);
       await api(adminToken)
-        .update((created.body as RoleBody).id, { name: 'Taken' })
+        .update((created.body.data as RoleBody).id, { name: 'Taken' })
         .expect(404);
     });
 
@@ -493,7 +493,7 @@ describe('role administration', () => {
       const other = await tokenFor(orgB.email);
       const created = await api(other).create(customRole('custom_b4')).expect(201);
       await api(adminToken)
-        .remove((created.body as RoleBody).id)
+        .remove((created.body.data as RoleBody).id)
         .expect(404);
     });
 
@@ -502,7 +502,7 @@ describe('role administration', () => {
       // context querying Organization B's role directly sees nothing.
       const other = await tokenFor(orgB.email);
       const created = await api(other).create(customRole('custom_b5')).expect(201);
-      const id = (created.body as RoleBody).id;
+      const id = (created.body.data as RoleBody).id;
 
       const rows = await db.withTenant({ orgId: orgA.orgId, resellerId: orgA.resellerId }, (tx) =>
         tx.select().from(schema.roles).where(eq(schema.roles.id, id)),
@@ -524,7 +524,7 @@ describe('role administration', () => {
     it('is denied on the next request, not at token expiry', async () => {
       // A user whose only grant is a custom role carrying workspaces.read.
       const created = await api(adminToken).create(customRole('custom_revoke')).expect(201);
-      const roleId = (created.body as RoleBody).id;
+      const roleId = (created.body.data as RoleBody).id;
 
       const email = `revoke-${uuidv7().replace(/-/g, '').slice(-10)}@example.test`;
       const [user] = await h.admin
@@ -567,7 +567,7 @@ describe('role administration', () => {
       const created = await api(adminToken).create(customRole('custom_upd')).expect(201);
       await purgeAudit(h.admin, sql`true`);
       await api(adminToken)
-        .update((created.body as RoleBody).id, { permissions: [] })
+        .update((created.body.data as RoleBody).id, { permissions: [] })
         .expect(200);
 
       const rows = await auditRows('role.updated');
@@ -583,7 +583,7 @@ describe('role administration', () => {
 
     beforeEach(async () => {
       const created = await api(adminToken).create(customRole('custom_granted')).expect(201);
-      roleId = (created.body as RoleBody).id;
+      roleId = (created.body.data as RoleBody).id;
 
       const [user] = await h.admin
         .insert(schema.users)

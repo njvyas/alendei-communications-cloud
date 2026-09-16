@@ -50,7 +50,7 @@ describe('coherent-grant authorization over HTTP', () => {
       .post(url('/auth/login'))
       .send({ email, password: PASSWORD })
       .expect(200);
-    return (res.body as { accessToken: string }).accessToken;
+    return (res.body as { data: { accessToken: string } }).data.accessToken;
   };
 
   const listWorkspaces = (token: string) =>
@@ -134,8 +134,8 @@ describe('coherent-grant authorization over HTTP', () => {
       .get(url('/auth/me'))
       .set('authorization', `Bearer ${token}`)
       .expect(200);
-    expect(me.body.permissions).toContain(PERMISSIONS.WORKSPACES_READ);
-    expect(me.body.roles.map((r: { scopeType: string }) => r.scopeType).sort()).toEqual([
+    expect(me.body.data.permissions).toContain(PERMISSIONS.WORKSPACES_READ);
+    expect(me.body.data.roles.map((r: { scopeType: string }) => r.scopeType).sort()).toEqual([
       'organization',
       'workspace',
     ]);
@@ -151,7 +151,7 @@ describe('coherent-grant authorization over HTTP', () => {
     // authorization decision rather than a broken route.
     const token = await tokenFor(orgA.email);
     const res = await listWorkspaces(token).expect(200);
-    expect(res.body.workspaces.map((w: { id: string }) => w.id)).toContain(orgA.workspaceId);
+    expect(res.body.data.map((w: { id: string }) => w.id)).toContain(orgA.workspaceId);
   });
 
   it('allows the same principal once one grant carries both halves', async () => {
@@ -162,7 +162,7 @@ describe('coherent-grant authorization over HTTP', () => {
     try {
       const token = await tokenFor(crossUser.email);
       const res = await listWorkspaces(token).expect(200);
-      expect(res.body.workspaces.map((w: { id: string }) => w.id)).toContain(orgA.workspaceId);
+      expect(res.body.data.map((w: { id: string }) => w.id)).toContain(orgA.workspaceId);
     } finally {
       await setNarrowRolePermission(false);
     }

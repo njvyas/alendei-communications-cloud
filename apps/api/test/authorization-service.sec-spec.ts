@@ -430,7 +430,7 @@ describe('AuthorizationService', () => {
         .post(url('/auth/login'))
         .send({ email, password: PASSWORD })
         .expect(200);
-      return (res.body as { accessToken: string }).accessToken;
+      return (res.body as { data: { accessToken: string } }).data.accessToken;
     };
 
     beforeEach(() => h.clearRateLimits());
@@ -441,7 +441,7 @@ describe('AuthorizationService', () => {
         .get(url('/tenants/workspaces'))
         .set('authorization', `Bearer ${token}`)
         .expect(200);
-      expect(res.body.workspaces.map((w: { id: string }) => w.id)).toContain(orgA.workspaceId);
+      expect(res.body.data.map((w: { id: string }) => w.id)).toContain(orgA.workspaceId);
     });
 
     it('cannot select another reseller’s organization', async () => {
@@ -462,7 +462,7 @@ describe('AuthorizationService', () => {
         .get(url('/tenants/workspaces'))
         .set('authorization', `Bearer ${token}`)
         .expect(200);
-      expect(res.body.workspaces.map((w: { id: string }) => w.id)).not.toContain(orgB.workspaceId);
+      expect(res.body.data.map((w: { id: string }) => w.id)).not.toContain(orgB.workspaceId);
     });
   });
 });

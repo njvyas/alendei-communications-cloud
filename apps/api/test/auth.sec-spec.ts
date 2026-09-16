@@ -40,7 +40,7 @@ describe('Phase 1B.3 security', () => {
 
   const tokenFor = async (email: string): Promise<string> => {
     const res = await login(email).expect(200);
-    return (res.body as { accessToken: string }).accessToken;
+    return (res.body as { data: { accessToken: string } }).data.accessToken;
   };
 
   beforeAll(async () => {
@@ -154,9 +154,9 @@ describe('Phase 1B.3 security', () => {
         .get(url('/auth/me'))
         .set('authorization', `Bearer ${token}`)
         .expect(200);
-      expect(res.body.tenant.orgId).toBeNull();
-      expect(res.body.authorizedOrganizationIds).toEqual([orgA.orgId]);
-      expect(res.body.authorizedOrganizationIds).not.toContain(orgB.orgId);
+      expect(res.body.data.tenant.orgId).toBeNull();
+      expect(res.body.data.authorizedOrganizationIds).toEqual([orgA.orgId]);
+      expect(res.body.data.authorizedOrganizationIds).not.toContain(orgB.orgId);
     });
 
     it('ignores a forged tenancy claim on a tenant-scoped route', async () => {
@@ -167,9 +167,7 @@ describe('Phase 1B.3 security', () => {
         .get(url('/tenants/workspaces'))
         .set('authorization', `Bearer ${token}`)
         .expect(200);
-      expect(res.body.workspaces.every((w: { orgId: string }) => w.orgId === orgA.orgId)).toBe(
-        true,
-      );
+      expect(res.body.data.every((w: { orgId: string }) => w.orgId === orgA.orgId)).toBe(true);
     });
   });
 
@@ -280,7 +278,7 @@ describe('Phase 1B.3 security', () => {
         .expect(200);
 
       expect(cookieFrom(second)).not.toBe(cookie);
-      expect(second.body.accessToken).not.toBe(first.body.accessToken);
+      expect(second.body.data.accessToken).not.toBe(first.body.data.accessToken);
     });
 
     it('refuses a replayed refresh token and revokes the family', async () => {
@@ -304,7 +302,7 @@ describe('Phase 1B.3 security', () => {
       // Scoped to the family the replayed token belonged to. Counting every
       // session for the user would also sweep up families other tests created,
       // and would pass for the wrong reason.
-      const sid = (jwt.decode(first.body.accessToken as string) as { sid: string }).sid;
+      const sid = (jwt.decode(first.body.data.accessToken as string) as { sid: string }).sid;
       const live = await h.admin.execute<{ count: string }>(
         sql`SELECT count(*)::text AS count FROM sessions
             WHERE revoked_at IS NULL
@@ -414,9 +412,7 @@ describe('Phase 1B.3 security', () => {
         .get(url('/tenants/workspaces'))
         .set('authorization', `Bearer ${token}`)
         .expect(200);
-      expect(res.body.workspaces.every((w: { orgId: string }) => w.orgId === orgA.orgId)).toBe(
-        true,
-      );
+      expect(res.body.data.every((w: { orgId: string }) => w.orgId === orgA.orgId)).toBe(true);
     });
 
     it('requires the selector when several organizations are authorized', async () => {
@@ -435,9 +431,7 @@ describe('Phase 1B.3 security', () => {
         .set('authorization', `Bearer ${token}`)
         .set('x-acc-organization', orgA.orgId)
         .expect(200);
-      expect(res.body.workspaces.every((w: { orgId: string }) => w.orgId === orgA.orgId)).toBe(
-        true,
-      );
+      expect(res.body.data.every((w: { orgId: string }) => w.orgId === orgA.orgId)).toBe(true);
     });
 
     it("refuses a selector outside the principal's scope", async () => {
@@ -470,7 +464,7 @@ describe('Phase 1B.3 security', () => {
         .get(url('/tenants/workspaces'))
         .set('authorization', `Bearer ${token}`)
         .expect(200);
-      const ids = res.body.workspaces.map((w: { id: string }) => w.id);
+      const ids = res.body.data.map((w: { id: string }) => w.id);
       expect(ids).toContain(orgA.workspaceId);
       expect(ids).not.toContain(orgB.workspaceId);
     });
@@ -504,7 +498,7 @@ describe('Phase 1B.3 security', () => {
         .get(url(`/tenants/workspaces/${orgA.workspaceId}`))
         .set('authorization', `Bearer ${token}`)
         .expect(200);
-      expect(res.body.id).toBe(orgA.workspaceId);
+      expect(res.body.data.id).toBe(orgA.workspaceId);
     });
 
     it('refuses an unauthenticated tenant read', async () => {
@@ -523,7 +517,7 @@ describe('Phase 1B.3 security', () => {
         .set('authorization', `Bearer ${tokenA}`)
         .expect(200);
 
-      const ids = res.body.sessions.map((s: { id: string }) => s.id);
+      const ids = res.body.data.map((s: { id: string }) => s.id);
       const foreign = await h.admin.execute<{ id: string }>(
         sql`SELECT id FROM sessions WHERE user_id = ${orgB.userId}`,
       );

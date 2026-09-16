@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { ERROR_CODES, PERMISSIONS } from '@acc/contracts';
 
@@ -16,7 +17,12 @@ import { AppException } from '../common/errors/app.exception';
 import { RequestContext } from '../common/context/request-context';
 import { TenantDatabase } from '../database/tenant-database.service';
 import type { ResolvedPrincipal } from '../auth/auth.guard';
-import { CreateRoleDto, UpdateRoleDto } from './role.dto';
+import {
+  CreateRoleDto,
+  ListPermissionsQueryDto,
+  ListRolesQueryDto,
+  UpdateRoleDto,
+} from './role.dto';
 import { RequiresPermission } from '../auth/requires-permission.decorator';
 import { RoleAdministrationService } from './role-administration.service';
 
@@ -56,17 +62,20 @@ export class RolesController {
 
   @Get()
   @RequiresPermission(PERMISSIONS.ROLES_READ)
-  async list() {
+  async list(@Query() query: ListRolesQueryDto) {
     const principal = this.principal();
-    const roles = await this.db.withRequestTenant((tx) => this.roles.list(tx, principal));
-    return { roles };
+    const { items, page } = await this.db.withRequestTenant((tx) =>
+      this.roles.list(tx, principal, query),
+    );
+    return { data: items, page };
   }
 
   @Get(':id')
   @RequiresPermission(PERMISSIONS.ROLES_READ)
   async get(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
-    return this.db.withRequestTenant((tx) => this.roles.get(tx, principal, id));
+    const data = await this.db.withRequestTenant((tx) => this.roles.get(tx, principal, id));
+    return { data };
   }
 
   @Post()
@@ -74,7 +83,7 @@ export class RolesController {
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() dto: CreateRoleDto) {
     const principal = this.principal();
-    return this.db.withRequestTenant((tx) =>
+    const data = await this.db.withRequestTenant((tx) =>
       this.roles.create(tx, principal, {
         key: dto.key,
         name: dto.name,
@@ -83,13 +92,15 @@ export class RolesController {
         permissions: dto.permissions,
       }),
     );
+    return { data };
   }
 
   @Patch(':id')
   @RequiresPermission(PERMISSIONS.ROLES_UPDATE)
   async update(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: UpdateRoleDto) {
     const principal = this.principal();
-    return this.db.withRequestTenant((tx) => this.roles.update(tx, principal, id, dto));
+    const data = await this.db.withRequestTenant((tx) => this.roles.update(tx, principal, id, dto));
+    return { data };
   }
 
   @Delete(':id')
@@ -117,7 +128,7 @@ export class PermissionsController {
 
   @Get()
   @RequiresPermission(PERMISSIONS.PERMISSIONS_READ)
-  async list() {
+  async list(@Query() query: ListPermissionsQueryDto) {
     const principal = RequestContext.get()?.principal as ResolvedPrincipal | null | undefined;
     if (!principal) {
       throw new AppException({
@@ -126,9 +137,9 @@ export class PermissionsController {
         message: 'Authentication is required',
       });
     }
-    const permissions = await this.db.withRequestTenant((tx) =>
-      this.roles.listPermissions(tx, principal),
+    const { items, page } = await this.db.withRequestTenant((tx) =>
+      this.roles.listPermissions(tx, principal, query),
     );
-    return { permissions };
+    return { data: items, page };
   }
 }

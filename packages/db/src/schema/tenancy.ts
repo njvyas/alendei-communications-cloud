@@ -125,6 +125,9 @@ export const workspaces = pgTable(
     // table, before the foreign key that depends on it.
     unique('workspaces_id_org_id_key').on(table.id, table.orgId),
     index('workspaces_org_id_idx').on(table.orgId),
+    // Keyset pagination for `GET /tenants/workspaces` (migration `0006`).
+    index('workspaces_org_name_id_idx').on(table.orgId, table.name, table.id),
+    index('workspaces_org_created_at_id_idx').on(table.orgId, table.createdAt, table.id),
   ],
 );
 

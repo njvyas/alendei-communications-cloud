@@ -1,8 +1,10 @@
+import { Transform } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
   ArrayUnique,
   IsArray,
+  IsBoolean,
   IsIn,
   IsOptional,
   IsString,
@@ -11,6 +13,8 @@ import {
   MinLength,
 } from 'class-validator';
 import { ALL_PERMISSION_KEYS, type ScopeType } from '@acc/contracts';
+
+import { ListQueryDto } from '../common/http/list-query.dto';
 
 /** The scope levels a *tenant* role may admit. Platform and reseller are not a tenant's to claim. */
 const TENANT_SCOPE_TYPES: readonly ScopeType[] = ['organization', 'workspace', 'team'];
@@ -81,4 +85,34 @@ export class UpdateRoleDto {
   @ArrayUnique()
   @IsIn(ALL_PERMISSION_KEYS, { each: true })
   permissions?: string[];
+}
+
+/**
+ * `GET /roles` query (`API.md` §8b).
+ *
+ * Filters are allow-listed by being *fields on this class*: `whitelist` plus
+ * `forbidNonWhitelisted` mean an unrecognised parameter is refused rather than
+ * ignored, so there is no generic filter language to constrain and no column
+ * name a caller can reach.
+ */
+export class ListRolesQueryDto extends ListQueryDto {
+  /** `true` for the seeded roles, `false` for tenant-composed ones. */
+  @IsOptional()
+  @Transform(({ value }) => (value === 'true' ? true : value === 'false' ? false : value))
+  @IsBoolean()
+  isSystemRole?: boolean;
+
+  /** Exact match on the role key; there is deliberately no prefix or substring search. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  key?: string;
+}
+
+/** `GET /permissions` query. */
+export class ListPermissionsQueryDto extends ListQueryDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  domain?: string;
 }

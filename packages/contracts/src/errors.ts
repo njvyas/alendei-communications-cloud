@@ -70,6 +70,15 @@ export const ERROR_CODES = {
   IDEMPOTENCY_REQUEST_IN_PROGRESS: 'IDEMPOTENCY_REQUEST_IN_PROGRESS',
   IDEMPOTENCY_KEY_PAYLOAD_MISMATCH: 'IDEMPOTENCY_KEY_PAYLOAD_MISMATCH',
 
+  // --- Pagination (`API.md` §8a) -------------------------------------------
+  /**
+   * The cursor was malformed, its signature did not verify, or it was minted
+   * under a different sort than the request asks for. One code for all three:
+   * telling a caller which part of a forged cursor to fix is not information
+   * the API owes it.
+   */
+  PAGINATION_CURSOR_INVALID: 'PAGINATION_CURSOR_INVALID',
+
   // --- Generic -------------------------------------------------------------
   VALIDATION_FAILED: 'VALIDATION_FAILED',
   RESOURCE_NOT_FOUND: 'RESOURCE_NOT_FOUND',

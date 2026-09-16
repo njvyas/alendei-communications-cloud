@@ -55,17 +55,18 @@ export class RoleAssignmentsController {
   @RequiresPermission(PERMISSIONS.ROLE_ASSIGNMENTS_READ)
   async list(@Query() query: ListAssignmentsQueryDto) {
     const principal = this.principal();
-    const assignments = await this.db.withRequestTenant((tx) =>
+    const { items, page } = await this.db.withRequestTenant((tx) =>
       this.assignments.list(tx, principal, query),
     );
-    return { assignments };
+    return { data: items, page };
   }
 
   @Get(':id')
   @RequiresPermission(PERMISSIONS.ROLE_ASSIGNMENTS_READ)
   async get(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
-    return this.db.withRequestTenant((tx) => this.assignments.get(tx, principal, id));
+    const data = await this.db.withRequestTenant((tx) => this.assignments.get(tx, principal, id));
+    return { data };
   }
 
   @Post()
@@ -78,7 +79,7 @@ export class RoleAssignmentsController {
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() dto: CreateAssignmentDto) {
     const principal = this.principal();
-    return this.db.withRequestTenant((tx) =>
+    const data = await this.db.withRequestTenant((tx) =>
       this.assignments.grant(tx, principal, {
         userId: dto.userId,
         roleId: dto.roleId,
@@ -86,6 +87,7 @@ export class RoleAssignmentsController {
         scopeId: dto.scopeId,
       }),
     );
+    return { data };
   }
 
   @Delete(':id')

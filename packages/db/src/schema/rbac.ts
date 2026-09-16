@@ -68,6 +68,11 @@ export const roles = pgTable(
       .on(table.key)
       .where(sql`${table.orgId} IS NULL`),
     index('roles_org_id_idx').on(table.orgId),
+    // Keyset pagination for `GET /roles` (migration `0006`): the tenant
+    // discriminator, the sort column, then the tie-breaker, so the planner walks
+    // the index and stops at LIMIT instead of sorting the whole predicate.
+    index('roles_org_key_id_idx').on(table.orgId, table.key, table.id),
+    index('roles_org_created_at_id_idx').on(table.orgId, table.createdAt, table.id),
     check('roles_key_format', sql`${table.key} ~ '^[a-z][a-z0-9_]{2,63}$'`),
     // A role admitting no scope could never be granted anywhere — silently
     // broken rather than restrictive.
@@ -179,6 +184,9 @@ export const userRoles = pgTable(
     index('user_roles_role_id_idx').on(table.roleId),
     index('user_roles_org_id_idx').on(table.orgId),
     index('user_roles_scope_idx').on(table.scopeType, table.scopeId),
+    // Keyset pagination for `GET /role-assignments` (migration `0006`).
+    index('user_roles_org_created_at_id_idx').on(table.orgId, table.createdAt, table.id),
+    index('user_roles_org_scope_type_id_idx').on(table.orgId, table.scopeType, table.id),
     // Platform scope has no scope_id and no org; every other scope has both.
     check(
       'user_roles_scope_shape',
