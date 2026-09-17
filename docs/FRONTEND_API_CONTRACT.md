@@ -2,7 +2,7 @@
 
 > **STATUS: DRAFT — CONVENTIONS FROZEN, SURFACE INCOMPLETE.**
 >
-> This document is written against the repository at Phase 1B.6.1. It is the
+> This document is written against the repository at Phase 1B.6.2. It is the
 > formal contract between the backend/core track and the future frontend track.
 >
 > **What changed at 1B.5.8, and what it means for you.** Every *convention* a
@@ -21,7 +21,8 @@
 > |---|---|
 > | ~~**No user lifecycle**~~ — **CLOSED in 1B.6.1** (§30d). List, detail, create, profile update, disable and reactivate are live. What is still missing is narrower and named there: a created user cannot yet *sign in*, because credential delivery is `DECISIONS.md` D16 | 1B.6.1 ✅ / D16 |
 > | **No organization, workspace, team or reseller CRUD** — only workspace *reads* exist (§30) | 1B.8 |
-> | **No API-key management** and **no audit read** endpoint | 1B.6.2 / 1B.6.3 |
+> | ~~**No API-key management**~~ — **CLOSED in 1B.6.2** (§30e). List, detail, create and revoke are live. Rotation and secret recovery are deliberately absent and are not coming: see §30e | 1B.6.2 ✅ |
+> | **No audit read** endpoint | 1B.6.3 |
 > | **No way for an invited user to obtain a password**, so a user the console creates cannot sign in yet (`DECISIONS.md` D16) | D16 |
 > | **OpenAPI is effectively empty of business schemas** — 5 decorators, all on health. No typed client can be generated (§30) | 1B.9 |
 > | **No general rate limiting**: only the auth endpoints are limited, and no other endpoint returns `X-RateLimit-*` (§23) | 1B.10 |
@@ -277,6 +278,7 @@ being one. Ask if a screen needs it.
 | `GET /permissions` | `domain` | `key`, `domain` | `key` |
 | `GET /role-assignments` | `userId`, `scopeType`, `scopeId` | `createdAt`, `scopeType` | `-createdAt` |
 | `GET /users` | `status`, `email` (exact, case-insensitive) | `createdAt`, `email`, `status` | `-createdAt` |
+| `GET /api-keys` | `status`, `scopeType`, `scopeId`, `name` (exact) | `createdAt`, `name` | `-createdAt` |
 | `GET /tenants/workspaces` | `status` | `name`, `createdAt` | `name` |
 | `GET /auth/sessions` | — | — | — |
 
@@ -293,6 +295,7 @@ endpoint behaves exactly as it always has.
 | `POST /api/v1/roles` | ✅ |
 | `POST /api/v1/role-assignments` | ✅ |
 | `POST /api/v1/users` | ✅ (Phase 1B.6.1) |
+| `POST /api/v1/api-keys` | ✅ (Phase 1B.6.2) — **but a replay does not return the secret.** See §30e |
 | Everything else | Not needed — see below |
 
 `PATCH /users/:id` takes no key: sending the same body twice produces the same state. `POST /users/:id/disable` and `/reactivate` take none either — a second call is `409 USER_LIFECYCLE_CONFLICT` naming the current status, which is a definite answer you can act on, and a better one than replaying the first `200` as though the transition were happening now.
@@ -759,6 +762,110 @@ Read them from `GET /auth/me/authorization` (§30c) — per grant, not from the 
 | Reactivate | `users.reactivate` |
 
 `users.reactivate` is **separate from `users.disable`** — a role may hold one without the other, so gate the two buttons independently. The seeded `org_admin` holds both; `reseller_admin` and `workspace_manager` hold neither.
+
+## 30e. API-key administration — IMPLEMENTED (Phase 1B.6.2)
+
+> **Read this section before building the create flow.** The secret is shown once and is then gone forever. A UI that assumes it can fetch it later, or that a retry will return it, will silently hand users unusable credentials.
+
+The resource, as returned by **every** `/api-keys` endpoint. This list is exhaustive:
+
+```jsonc
+{
+  "id": "uuid",
+  "name": "CI deploy",
+  "prefix": "ak_live_A1b2C3d4E5f6G7h8",   // public half — safe to display and log
+  "status": "active",                      // active | expired | revoked  (derived)
+  "scopeType": "organization",             // organization | workspace  — only these two
+  "scopeId": "uuid",
+  "orgId": "uuid",
+  "scopes": ["workspaces.read"],           // requested, not effective — see below
+  "expiresAt": "ISO-8601|null",
+  "lastUsedAt": "ISO-8601|null",
+  "revokedAt": "ISO-8601|null",
+  "revokedReason": "string|null",
+  "createdBy": "uuid|null",
+  "createdAt": "ISO-8601",
+  "updatedAt": "ISO-8601"
+}
+```
+
+**There is no `secret` field on this resource.** It appears only on a fresh creation response, as an extra field, and nowhere else. There is also no `keyHash` and never will be.
+
+| Method | Path | Permission | Success |
+|---|---|---|---|
+| `GET` | `/api/v1/api-keys` | `api_keys.read` | `200 { data: [apiKey], page }` |
+| `GET` | `/api/v1/api-keys/:id` | `api_keys.read` | `200 { data: apiKey }` |
+| `POST` | `/api/v1/api-keys` | `api_keys.create` | `201 { data: { …apiKey, secret } }` |
+| `POST` | `/api/v1/api-keys/:id/revoke` | `api_keys.revoke` | `200 { data: apiKey }` |
+
+**No `DELETE`, no un-revoke, no rotation.** Revocation is terminal. Build "delete key" as revoke, and "rotate" as revoke-then-create — there is no atomic rotation and no endpoint that replaces a secret in place.
+
+### The secret — the one thing to get right
+
+```jsonc
+POST /api/v1/api-keys
+{
+  "name": "CI deploy",
+  "scopeType": "organization",           // or "workspace"
+  "scopeId": "uuid",
+  "scopes": ["workspaces.read"],
+  "expiresAt": "2027-01-01T00:00:00Z"    // optional; null/omitted = never expires
+}
+```
+
+A **fresh** success returns the resource plus the plaintext:
+
+```jsonc
+{ "data": { …apiKey, "secret": "aB3xY…" } }
+```
+
+**Rules for the UI, in order of how much damage getting them wrong does:**
+
+1. **Show the copy/save step only when `data.secret` is a non-null string.** Never render it unconditionally — on a replay the field is present and `null`, and a UI that renders it blindly will show an empty box where a credential should be.
+2. **There is no way to retrieve it later.** Not from `GET /api-keys/:id`, not from a retry, not from support. Do not build a "reveal secret" affordance; there is no endpoint behind it.
+3. **An idempotent replay returns `secret: null`.** If you send `Idempotency-Key` and retry after a timeout, the retry confirms the key was created and returns its metadata — but **not** the secret, because the server never stored one (ADR-008). Treat this as the expected outcome of a lost response, not an error.
+4. **If the user loses the secret, the only path is revoke and create a new key.** Say so in the UI at creation time, before they dismiss the dialog. A confirmation step ("I have saved this key") is appropriate here in a way it rarely is.
+5. The full credential the user needs is `"<prefix>.<secret>"` — present it joined, ready to paste. `prefix` alone is public and safe to show in the list afterwards so a user can tell their keys apart.
+
+### Scopes are a request, not a grant
+
+`scopes` is what the key *asks for*. Its effective authority is that set intersected with what **the creating user** holds at the key's binding scope, recomputed on every request. Two consequences:
+
+- A key never outlives its creator's authority. If the creator loses a permission — or is **disabled** — the key loses it too, immediately, with no change to the key itself. A key whose creator is disabled still authenticates but can do nothing; it is **not** auto-revoked, and it stays visible and revocable in the list.
+- Requesting more than you hold at that scope is refused up front: `403 AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION` with `error.details.rejected` naming the keys. Use it as field-level feedback on the scope picker. Populate that picker from `GET /auth/me/authorization` (§30c) filtered to grants covering the chosen binding scope — that way the refusal is unreachable.
+
+### Binding scope
+
+Only `organization` and `workspace`. Sending `platform`, `reseller` or `team` is a `400`. The binding is **immutable** — there is no rebinding endpoint — so make the scope picker part of the create form and show it read-only thereafter.
+
+### Status is derived
+
+`status` is computed from `revokedAt`, `expiresAt` and the current time; it is not a stored field you can filter on by writing to it. `revoked` wins over `expired`. Filter with `?status=active|expired|revoked`. Note that a key can move from `active` to `expired` with no request having occurred, so re-read rather than caching a status indefinitely.
+
+### Errors
+
+| Failure | Code | Meaning for the UI |
+|---|---|---|
+| `403 AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION` | forbidden | The requested `scopes` exceed your authority at that binding. `details.rejected` names them |
+| `403 AUTHZ_SCOPE_DENIED` | forbidden | You lack the permission at that scope — including revoking a key bound to a workspace you do not cover |
+| `403 AUTHZ_PERMISSION_DENIED` | forbidden | An API-key principal tried to create a key. Only signed-in users can |
+| `404 RESOURCE_NOT_FOUND` | not found | Unknown key, or one in another tenant. **Never present it as "exists but forbidden"** |
+| `409 API_KEY_LIFECYCLE_CONFLICT` | conflict | Already revoked. `details.status` is authoritative — refresh the row rather than showing a hard error |
+| `400 VALIDATION_FAILED` | bad request | Field issues in `details.issues`, including a non-future `expiresAt` and an unknown permission in `scopes` |
+
+### Permissions to gate the UI on
+
+| Action | Permission |
+|---|---|
+| See the key list and detail | `api_keys.read` |
+| Create a key | `api_keys.create` |
+| Revoke a key | `api_keys.revoke` |
+
+Held by `org_admin`; `alendei_support` holds `api_keys.read` only. `reseller_admin` and `workspace_manager` hold none — do not render the section for them.
+
+### Deferred, so do not design around them
+
+Rotation, secret recovery, secret delivery by email or any other channel, IP allowlists, network restrictions, usage analytics, quotas and per-key billing. None exists and none is planned in Phase 1B.
 
 ## 31. Related
 

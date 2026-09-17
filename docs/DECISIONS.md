@@ -624,6 +624,66 @@ The relaxation is an in-process option with no field on any DTO, so no request c
 - `trg_users_platform_admin_liveness` (migration `0005`) gets its first HTTP caller. The service adds the clean `409` and the ADR-005 D-7 lock ordering; the trigger remains the authority, and a lost race's `restrict_violation` is translated to the same `409`.
 - **Accepted residual risk**: a global unique index on `email` makes `409` on creation a platform-wide existence signal for an address. Recorded in `SECURITY.md` §8 rather than mitigated; the alternatives are per-tenant identities or answering `201` for something not created.
 
+## 1h. ADR-008 — A response field may be non-persistable; the API-key secret is the first
+
+**Status**: Accepted (Phase 1B.6.2). **Amends ADR-006 (§1f)** on one point and leaves the rest of it authoritative. Implements `API.md` §3e.
+
+### Context
+
+`POST /api/v1/api-keys` must return the plaintext API-key secret exactly once, and must be protected by the existing `Idempotency-Key` mechanism — a credential-creating mutation is precisely the kind a client retries after a network timeout. Those two requirements collide.
+
+`IdempotencyService.finalize` stores the handler's response body verbatim:
+
+```ts
+responseSnapshot: body as never,   // → idempotency_keys.response_snapshot
+```
+
+`response_snapshot` is plain `jsonb`. There is **no redaction anywhere on the idempotency path** — `redact()` belongs to `AuditWriter` and nothing else calls it. So the naive implementation writes every API-key secret into a plaintext column.
+
+Two facts make that worse than a 24-hour exposure:
+
+1. **Retention is indefinite.** §3 accepts that expired idempotency records are never physically deleted, on the stated grounds that *"what is deferred is only reclaiming space"*. That reasoning holds only while snapshots carry nothing sensitive. A secret-bearing snapshot silently converts a disk-space deferral into an indefinite plaintext credential store, invalidating the basis on which the risk was accepted.
+2. **The row is broadly readable in principle.** `idempotency_keys_tenant` is `USING (app_org_in_scope(org_id))` and `acc_app` holds `SELECT`. No endpoint reads the table today, so the confinement rests on "nothing queries it" — a weaker guarantee than "the secret is not there". Backups, replicas and the eventual retention sweeper all encounter whatever is stored.
+
+This was raised as a stop condition before implementation rather than resolved silently.
+
+### D-1 — The secret is never persisted; the snapshot stores a placeholder
+
+The governing invariant, which takes precedence over ADR-006's generic wording:
+
+> **An API-key plaintext secret must never be persisted in `idempotency_keys.response_snapshot`.**
+
+| Option | Verdict |
+|---|---|
+| Store the secret, shorten the TTL, purge after first replay | **Rejected.** Still plaintext at rest, still contradicts the credential-storage invariant, and adds a sweeper this phase is told not to build |
+| Encrypt the snapshot | **Rejected.** Reversible encryption of a credential, and `SecretsPort` is an environment-reference resolver, not an encryption service. New architecture for one field |
+| Drop `Idempotency-Key` on this endpoint | **Rejected.** Leaves the one credential-creating mutation unprotected against duplicate creation on retry — the exact case the mechanism exists for |
+| **Keep the secret out of the stored envelope** | **Chosen.** Nothing sensitive is written, and the mechanism is untouched |
+
+### D-2 — Response snapshots are replay-safe representations, not byte-copies
+
+ADR-006 stated that "what is stored is byte-identical to what was sent". That is amended:
+
+> Response snapshots are **replay-safe representations**, not necessarily byte-identical copies of every response field. A response field may be explicitly classified as **non-persistable**. Such a field is stored as a safe placeholder — `null` — and is therefore absent from any replay.
+
+**ADR-006 remains authoritative** for everything that makes idempotency work: at-most-once execution, request fingerprinting, the single transaction, mutation serialization by the unique index, replay without re-execution, and current authentication *and* authorization on replay. None of it changes, and `IdempotencyService` is not modified — the field is kept out **at the call site**, so role and role-assignment creation behave exactly as before.
+
+**`secret` on `POST /api-keys` is the first and currently only non-persistable field.** This is deliberately not a general response-transformation facility: there is no declarative list, no framework hook, and no way for a new field to acquire the behaviour by accident. Any future non-persistable field must be documented here and security-reviewed on its own terms.
+
+### D-3 — "Exactly once" includes not re-presenting on replay
+
+A replay returns the stored envelope, so `secret` is `null`. That is the correct reading of "presented exactly once" rather than a degradation of it: the fresh creation response is the single presentation, and a replay is a different request.
+
+The consequence is stated plainly rather than hidden: **if the creation response is lost, the secret is unrecoverable.** There is no retrieval endpoint and no recovery path. The documented remedy is to revoke the key and create another — which is cheap, audited, and strictly safer than any mechanism that could hand a credential back.
+
+### Consequences
+
+- `API.md` §3e documents the endpoint, the one-time presentation and the replay shape; `FRONTEND_API_CONTRACT.md` §30e warns a console never to expect a secret from a replay.
+- The fresh response and the persisted snapshot differ in **exactly one field**, asserted by test.
+- `ApiKeyAdministrationService.create` returns `{ view, secret }` as two fields rather than folding the secret into the resource, so a caller must decide deliberately where the plaintext goes. `ApiKeyView` alone is always safe to persist, log or replay.
+- A static test asserts the dataflow structurally: `minted.secret` occurs exactly twice in the service — the Argon2id hash and the return — and `IdempotencyService` is asserted to contain no knowledge of secrets at all.
+- `DECISIONS.md` §3's accepted risk on idempotency retention keeps its original basis, because snapshots still carry nothing sensitive.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 - **Expired idempotency records are not physically deleted.** Expiry is enforced at lookup — an expired record is reclaimed as a fresh request — so correctness never depends on a sweeper running. What is deferred is only reclaiming *space*: the table grows with one row per idempotent request until a retention job exists. Accepted because the volume at Phase 1B (two endpoints, control-plane traffic) is negligible, the index on `expires_at` is already in place for the eventual sweep, and a scheduler is out of scope for this phase (ADR-006).

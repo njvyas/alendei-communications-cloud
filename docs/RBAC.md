@@ -403,6 +403,24 @@ The alternative is per-membership status, which means a membership table and a s
 
 **Deletion does not exist, at any layer.** `acc_app` holds no `DELETE` grant on `users` (migration `0000`), so it is unavailable rather than merely unimplemented, and the API offers no `DELETE` route to imply otherwise. Users are referenced by sessions, API keys, grants, idempotency records and audit rows; the trail must outlive the identity it describes (ADR-007 D-1).
 
+### 8d. API keys (Phase 1B.6.2)
+
+A key is a **credential, not a user**. It has its own identity, a creator, and a binding scope, and the three do different jobs (§5c).
+
+| Operation | Rule | Audit |
+|---|---|---|
+| Create | `api_keys.create` at **the binding scope requested**. The key's `scopes` must lie within the creator's own authority at that scope — the same `unheldPermissions` question role composition asks, through the same boundary. Only a signed-in user may create one | `api_key.created`, at the binding scope |
+| Read | `api_keys.read` — at the organization for the list, at **the key's own stored binding scope** for the detail | — |
+| Revoke | `api_keys.revoke` at **the key's stored binding scope**, read from the row and never from the request. Terminal; the write is conditional (`WHERE revoked_at IS NULL`) so two concurrent revocations yield one `200` and one `409` | `api_key.revoked` |
+
+**Who holds these permissions, and why only they.** `org_admin` holds all three, and `alendei_super_admin` holds them through the whole catalogue. `alendei_support` holds `api_keys.read` only — support can see that a key exists without being able to mint or destroy one. `reseller_admin`, `workspace_manager`, `campaign_editor`, `agent` and `read_only` hold **none**: minting a credential that can act unattended is organization-administrator authority, and a reseller administrator already reaches its organizations through its own grants without needing to create keys inside them. No permission was added and no role composition was changed in 1B.6.2 — the catalogue already expressed the right answer.
+
+**Binding is organization or workspace, and immutable.** Those are the two levels the credential path can express, and there is no rebinding. A key never reaches above its binding: a workspace-bound key cannot perform an organization-wide operation, because `scopeCovers` refuses it in the ordinary evaluator with no key-specific branch.
+
+**Deletion does not exist.** Revocation is terminal and the row stays: `audit_logs.actor_api_key_id` references it, so deleting a key would remove the attribution for everything it ever did.
+
+**Disabling a creator does not revoke their keys** — it stops the keys conferring anything, which is checked at authentication (§5c, Phase 1B.6.1). The distinction is deliberate: the keys remain visible and individually revocable by an administrator, and the audit trail keeps naming them, while the authority they carried is gone from the next request onward.
+
 ## 9. Related
 
 Full table definitions: `DATABASE.md` §"IAM & RBAC domain". Security controls (encryption, session hardening, audit): `SECURITY.md`.

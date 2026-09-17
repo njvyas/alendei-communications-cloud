@@ -390,6 +390,13 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 
 **Two isolation cases exist because the controls would otherwise mask each other.** Disabling a user both changes `status` *and* revokes their sessions, so every test driven through the endpoint passes even with `AuthGuard`'s user-state check removed — the session check catches it instead. Two cases therefore change `status` **directly in the database**, leaving the session rows live, so the per-request re-read of the user is the only thing that can refuse the request. Without them the mutation "skip the current user-status check during authentication" survives, which is how it was found.
 
+**API-key administration (Phase 1B.6.2, `API.md` §3e, ADR-008).** Two HTTP suites (57 cases) and two unit suites (24 cases). The governing invariant is ADR-008's: *a plaintext API-key secret is never persisted in `idempotency_keys.response_snapshot`* — nor in `api_keys`, an audit row, an error, or anywhere else.
+
+- `apps/api/test/api-key-administration.sec-spec.ts` (50 cases) — **the secret**: a fresh creation returns one that actually authenticates; `api_keys` holds an Argon2id digest and not the plaintext; it is absent from list, detail, audit and from a refused creation's error; the read model has no `secret` field at all and the detail projection is asserted to be exactly the fifteen published fields; and there is no route that could return it. **ADR-008**: the persisted snapshot carries `secret: null`, the plaintext appears nowhere in the row at any depth, and the fresh response and the snapshot are asserted to differ in **exactly one field** — computed by diffing the two objects rather than by naming it, so a second divergence would fail. **Replay**: returns `secret: null`, creates no second key, mints no new secret, writes one audit row, and is byte-identical to what was stored; a different principal and a mismatched request are refused; a replay after authorization loss is refused and discloses nothing. **Credential lifecycle**: a revoked key and an expired key both stop authenticating, and a disabled creator's key still authenticates as an identity while conferring exactly nothing — the 1B.6.1 semantic, asserted here to be *not* auto-revocation. **Authorization**: each permission independently; cross-organization list, detail and revoke; a real foreign id byte-identical to an unknown one; a forged organization header; binding to another tenant's workspace; `platform`/`reseller`/`team` bindings unrepresentable; revoke refused for an actor in a sibling workspace, which is the stored-binding-scope case; and a creator unable to confer a permission held only at an unrelated scope, with a positive control proving the organization grant *does* cover its own workspace. **RLS with the service bypassed**, and a transactional-audit failure rolling the creation back.
+- `apps/api/test/api-key-concurrency.sec-spec.ts` (7 cases, A–G) — final database state in every one. Two creations with different names both succeed and produce two distinct prefixes; one idempotency key with identical requests yields exactly one key where **exactly one of the two responses carries the secret and the other carries null**; a mismatched request creates nothing; concurrent revocations produce exactly one `200` and one `409 API_KEY_LIFECYCLE_CONFLICT` — deterministic here, unlike the user lifecycle, because the conditional `WHERE revoked_at IS NULL` lets the row lock decide; no authentication succeeds after a revocation commits; revocation racing expiry cannot resurrect the key; and a creation racing its creator's disable leaves no usable credential either way.
+- `apps/api/src/api-keys/api-key-boundary.spec.ts` (19 structural cases) — the dataflow proof. `minted.secret` occurs **exactly twice** in the service (the hash and the return); the creation audit block is checked for any mention of a secret or digest; the controller's `work()` returns `secret: null` and the plaintext is merged only when `outcome.replayed` is false; `IdempotencyService` and the fingerprint are asserted to contain no knowledge of secrets, so ADR-008 cannot have leaked into the generic mechanism; `mintApiKey` has exactly one caller; the projection omits `key_hash`; both authorization targets come from `bindingScopeOf(row)` and that function is asserted to read only the row; `platform`/`reseller`/`team` are absent from the scope list; nothing writes `user_roles`; and no permission outside the existing three is named.
+- `apps/api/src/api-keys/api-key-secret.spec.ts` (5 unit cases) — the format both `api_keys_prefix_shape` and `AuthGuard`'s parser require, ~256 bits of entropy, no repeats across 2,000 mints, and **no modulo bias**: a naive `byte % 62` skews the first four characters of the alphabet by ~1.6%, far too little to fail a format test, so the frequency is measured directly.
+
 **Forged ancestry (ADR-005 D-5).** Asserted as the strong property, not the weak one: it is not enough that bad input is rejected: the *authoritative* chain must decide. Each case runs under a tenant context that can see the target, so visibility is not the variable — a grant naming another organization cannot reach a workspace whose real parent is a different organization; the same for a grant naming another reseller, and for one naming another workspace as a team's parent; and a principal holding grants that between them name a wholly false chain still reaches nothing. Every case carries a positive control on the claimant's own rows, so a denial cannot be mistaken for a broken query.
 
 | # | Case | Expected |
@@ -423,6 +430,14 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 | 36 | An API key whose creator has since been disabled | no effective permissions at all |
 | 37 | `PATCH /users/:id` naming `status`, `email`, `roleId` or a scope | `400`; nothing moves |
 | 38 | Credential material in a user response or a user audit row | never present |
+| 39 | An API-key plaintext secret in `idempotency_keys.response_snapshot` | never present; the snapshot stores `secret: null` |
+| 40 | Fresh creation response vs. persisted snapshot | differ in exactly one field, the documented non-persistable `secret` |
+| 41 | Idempotent replay of an API-key creation | `secret: null`, one key, one audit row, no new secret |
+| 42 | API-key secret after creation — list, detail, replay, any route | unrecoverable |
+| 43 | Revoke or read authorized against the key's **stored** binding scope | a sibling-workspace actor is refused |
+| 44 | Revoked or expired key at authentication | refused regardless of creator status |
+| 45 | Disabled creator's key | authenticates as an identity, confers nothing, is **not** auto-revoked |
+| 46 | Concurrent revocations of one key | exactly one `200`, one `409`; the conditional write decides |
 
 **Mutation sensitivity.** Each mutation is applied, the suite is run, the named tests must fail, and the implementation is restored:
 
@@ -517,6 +532,20 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 | `users_email_key` dropped | **executed at 1B.6.1: 2 security tests fail** |
 | `acc_app` granted `DELETE` on `users` | **executed at 1B.6.1: 3 security tests fail** — the grant's absence is the guarantee, so granting it is the mutation |
 | The duplicate-address refusal carries the existing user's status in `details` | **executed at 1B.6.1 follow-up: 1 security test fails** — the indistinguishability case, and only it. Every other duplicate-address assertion still passes, because they check the code and the absence of identifiers rather than comparing the local and foreign refusals against each other |
+| **1B.6.2** — the real secret persisted into `response_snapshot` | **executed: 6 security tests fail** — the ADR-008 invariant, caught by the snapshot, diff and concurrency cases |
+| The stored secret returned on replay | **executed: 6 fail** |
+| A fresh secret generated on replay | **executed: 5 fail** |
+| The creator-status check removed from the API-key path | **executed: 2 fail** |
+| The creator intersection taken over the creator's flattened union | **executed: 5 fail** — including the 1B.5.1 coherent-grant suite, which is the layer that owns it |
+| RLS disabled on `api_keys` | **executed: 4 fail** |
+| Revocation enforcement dropped from the authentication lookup | **executed: 4 fail** |
+| Expiration enforcement dropped from the authentication lookup | **executed: 2 fail** |
+| The creation audit write moved outside the transaction | **executed: 43 fail** — `AuditWriter` refuses a security-sensitive action with no transaction, so the endpoint fails closed everywhere at once |
+| Revoke authorized against the caller's organization instead of the key's stored binding scope | **executed: 1 fails** — the sibling-workspace case, and only it, which is precisely why it exists: every other revoke case uses an actor who covers both scopes, where the two targets agree |
+| `key_hash` added to the read projection | **executed: 4 fail** |
+| The creator-authority guard on requested `scopes` removed | **executed: 5 fail** |
+| The conditional `WHERE revoked_at IS NULL` dropped from revoke | **executed: 2 fail** — the concurrency case and the repeat-revocation case |
+| `api_keys_prefix_shape` CHECK dropped | **executed: nothing fails — an honest survivor.** The generator always produces a conforming prefix, so no application path can violate the constraint; it defends against a *different* writer (a migration, an admin tool, a future import), which this suite does not exercise. Recorded rather than papered over with a test that inserts a malformed row solely to detect it |
 | `scopeCovers` term dropped from `allows` | 4, 6, 8, 9 |
 | Permission term dropped from `allows` | 12 and every denial case |
 | `ScopeChainResolver` returns the request-supplied chain | 2, 4, 6 |

@@ -144,6 +144,9 @@ describe('§6n case 30 — route authorization coverage', () => {
     expect(keys).toContain('GET /api/v1/users');
     expect(keys).toContain('POST /api/v1/users/:id/disable');
     expect(keys).toContain('POST /api/v1/users/:id/reactivate');
+    expect(keys).toContain('GET /api/v1/api-keys');
+    expect(keys).toContain('POST /api/v1/api-keys');
+    expect(keys).toContain('POST /api/v1/api-keys/:id/revoke');
     expect(keys).toContain('GET /api/v1/auth/me/authorization');
     expect(keys).toContain('GET /health');
   });
@@ -223,14 +226,17 @@ describe('§6n case 30 — route authorization coverage', () => {
     const scoped = routes.filter((r) => r.required !== undefined);
     const exempt = routes.filter((r) => r.exempt !== undefined);
     const open = routes.filter((r) => r.isPublic);
-    expect(scoped.length).toBe(18);
+    expect(scoped.length).toBe(22);
     expect(exempt.length).toBe(5);
     expect(open.length).toBe(6);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
 
     // Of the scoped routes, exactly the two grant/revoke handlers defer their
     // target; every other one is statically an organization.
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(2);
+    // The two grant/revoke handlers, plus the three API-key routes whose target
+    // is the key's own stored binding scope (Phase 1B.6.2) and the creation
+    // route whose target is the binding scope named in the body.
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(5);
   });
 });
 

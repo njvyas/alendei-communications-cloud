@@ -11,6 +11,7 @@ All public and console APIs are served under `/api/v1`. Breaking changes ship as
 | `/auth` | `iam` | Login, refresh, logout, session management, `/auth/me`. **Built in Phase 1B.3.** No MFA challenge — MFA is not implemented (ADR-003 D-6) |
 | `/ws/ticket` | `iam` | Mints a single-use, short-lived WebSocket connection ticket (§9). Issuance ships in Phase 1B; ticket *consumption* and the socket gateway are deferred (`DECISIONS.md` D15) |
 | `/tenants` | `tenancy` | Organization/workspace/team CRUD (scoped by caller's role) |
+| `/api-keys` | `api-keys` | API-key administration: list, detail, create, revoke. **Built in Phase 1B.6.2** (§3e). Authentication of API keys is `auth`'s and is unchanged (§3) |
 | `/users` | `users` | User lifecycle administration: list, detail, create, profile update, disable, reactivate. **Built in Phase 1B.6.1** (§3d). Its own module rather than `tenancy`: `AuthModule` imports `IamModule` for the credential and session primitives, so a user controller placed there and needing `RoleAssignmentService` would close a cycle through `RbacModule` |
 | `/roles` | `rbac` | Role CRUD (custom roles), plus read of the platform role definitions. **Built in Phase 1B.5.4** (§3c) |
 | `/role-assignments` | `rbac` | Scope-bound role grant and revocation. **Built in Phase 1B.5.5** (§3c) |
@@ -264,6 +265,79 @@ The permission needed is `users.disable` in **one** organization the target is a
 | `mfaEnabled` on the resource | MFA is not implemented; publishing the flag would imply otherwise |
 | API-key management, audit read | Phase 1B.6.2 and later |
 
+
+### 3e. API-key administration (Phase 1B.6.2)
+
+**Implementation status.** **IMPLEMENTED, Phase 1B.6.2.** Four endpoints. Rotation, secret recovery, secret delivery, IP allowlists, quotas and usage analytics are all out of scope and deferred.
+
+**This surface administers keys; it does not authenticate them.** Authentication, the creator intersection at the binding scope and the creator-status check all live in `AuthGuard` and are unchanged since Phases 1B.3, 1B.5.1 and 1B.6.1 respectively (§3, `RBAC.md` §5c).
+
+**Lifecycle**, with expiry derived rather than stored:
+
+```
+create ──▶ active ──revoke()──▶ revoked        (terminal)
+              │
+              └──expires_at passes──▶ expired  (derived, no transition)
+```
+
+| Method | Path | Permission | Target scope | Request | Response | Errors | Audit | Idempotency |
+|---|---|---|---|---|---|---|---|---|
+| `GET` | `/api-keys` | `api_keys.read` | the request's organization | `status?`, `scopeType?`, `scopeId?`, `name?`, plus `limit`/`cursor`/`sort` | `{data:[apiKey], page}` | `400` bad cursor, sort or unknown parameter | — | safe |
+| `GET` | `/api-keys/:id` | `api_keys.read` | **the key's stored binding scope** | — | `{data:apiKey}` | `404` unknown or out of reach, no echo | — | safe |
+| `POST` | `/api-keys` | `api_keys.create` | **the binding scope named in the body** | `{name, scopeType, scopeId, scopes[], expiresAt?}` | `201 {data:{…apiKey, secret}}` | `403` requested scopes exceed the creator's authority there, or the caller is an API key; `404` scope out of reach; `400` validation, unknown permission, non-future `expiresAt` | `api_key.created` | **`Idempotency-Key` supported** — see below |
+| `POST` | `/api-keys/:id/revoke` | `api_keys.revoke` | **the key's stored binding scope** | — | `200 {data:apiKey}` | `404`; `409 API_KEY_LIFECYCLE_CONFLICT` already revoked | `api_key.revoked` | not keyed |
+
+**There is no `DELETE`, no un-revoke and no rotation.** Revocation is terminal. `audit_logs.actor_api_key_id` references this table, so a deleted key would take the attribution for everything it ever did with it.
+
+The resource, in full:
+
+```jsonc
+{ "id": "uuid", "name": "CI deploy", "prefix": "ak_live_A1b2C3d4E5f6G7h8",
+  "status": "active|expired|revoked",
+  "scopeType": "organization|workspace", "scopeId": "uuid", "orgId": "uuid",
+  "scopes": ["workspaces.read"],
+  "expiresAt": "ISO-8601|null", "lastUsedAt": "ISO-8601|null",
+  "revokedAt": "ISO-8601|null", "revokedReason": "string|null",
+  "createdBy": "uuid|null", "createdAt": "ISO-8601", "updatedAt": "ISO-8601" }
+```
+
+**`key_hash` is never returned and never selected.** Every read goes through one projection that does not contain it — a bare `select()` on `api_keys` would return the Argon2id digest, and the only reliable defence is never to write such a query.
+
+#### The secret is presented exactly once (ADR-008)
+
+`POST /api-keys` is the only response that ever contains `secret`, and only on a **fresh** execution:
+
+```jsonc
+{ "data": { …resource, "secret": "aB3…" } }     // fresh creation, once
+{ "data": { …resource, "secret": null } }        // idempotent replay, always
+```
+
+**There is no endpoint that can recover it.** Not `GET /api-keys/:id`, not a replay, not anything. The plaintext exists in memory for the duration of one request; only its Argon2id hash reaches the database.
+
+**An idempotent replay returns `secret: null`**, because the stored snapshot never contained one. Storing it would write a live credential into `idempotency_keys.response_snapshot` — a plaintext column whose rows are never physically deleted (§7.1) — which ADR-008 refuses. Everything else about §4 is unchanged: at-most-once creation, the request fingerprint, current authorization on replay.
+
+**If the creation response is lost, the credential is unrecoverable by design.** The remedy is to revoke the key and create another.
+
+#### Binding scope
+
+A key binds to an **organization** or a **workspace**, and to nothing else. That is the existing model rather than a new restriction: `api_keys.org_id` is `NOT NULL` with a nullable `workspace_id`, and `AuthGuard` derives the key's grant scope as "its workspace when it has one, otherwise its organization". `platform`, `reseller` and `team` are unrepresentable in the request.
+
+The binding is **immutable**: there is no rebinding and no scope migration. A key bound to Organization A can never act against Organization B.
+
+**A key's effective authority is its `scopes` ∩ what its creator holds at the binding scope**, recomputed on every request (`RBAC.md` §5c, ADR-005 D-4). `scopes` is therefore a *request*, not a grant. Creation additionally refuses a key asking for more than the creator holds there — `403 AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION`, naming the keys in `details.rejected` — so a caller gets a named refusal instead of a key that silently does less than it asked for.
+
+**Only a signed-in user may create a key.** `api_keys.created_by` references `users`, and a key with no creator resolves to no permissions at all — so a key minted by another key would authenticate and be able to do nothing. Refused with `403` rather than producing a dead credential.
+
+#### Expiration is derived, not stored
+
+There is no status column and no sweeper. `status` is computed from `revoked_at`, `expires_at` and the current time at read, and **independently** at authentication, where `findApiKeyByPrefix` filters on the same two conditions. A key therefore stops working the moment it expires, whether or not anything has looked at it. Revocation wins over expiry in the rendered status, because "someone took it away" is the fact an operator needs; both are terminal for authentication either way.
+
+`expiresAt` must be in the future, judged against the **database** clock so client skew cannot widen it. `null` means no expiry.
+
+#### Query cost
+
+`GET /api-keys` is 1 query over `api_keys`, supported by `api_keys_org_id_id_idx` / `api_keys_org_name_id_idx` (migration `0009`), with no `COUNT(*)` and no N+1. Detail is 2 (load, then the chain resolve inside the authorization check), revoke is 4, create is 7 — constant in the number of permissions requested, because the chain is resolved once and the evaluator then decides in memory. Plus the six `SET LOCAL` statements every tenant transaction issues.
+
 ## 4. Idempotency
 
 This section is the API-facing view of the tier-1 mechanism defined canonically in `DATABASE.md` §7.1 — see that section before implementing; do not re-derive the semantics independently here. **Implemented in Phase 1B.5.9** (ADR-006).
@@ -308,14 +382,14 @@ Deliberately **excluded**, because a retry is by definition a different transpor
 
 **Why the principal is in the hash.** The key scope is organization-wide, so without it one principal could present another's key and receive that principal's stored response. Binding identity into the fingerprint means a different actor computes a different fingerprint and is refused. The principal's *identity* is hashed; its credential never is.
 
-**Where the key is accepted.** `POST /roles`, `POST /role-assignments` (Phase 1B.5.9) and `POST /users` (Phase 1B.6.1). It is **not** accepted on `PATCH /users/:id`, whose repeat is already the same state, nor on the lifecycle operations `POST /users/:id/disable` and `/reactivate`, whose second call is a `409 USER_LIFECYCLE_CONFLICT` naming the current status — a definite answer a retrying client can act on, and a better one than replaying a `200` that reports a transition as happening now when it happened earlier.
+**Where the key is accepted.** `POST /roles`, `POST /role-assignments` (Phase 1B.5.9), `POST /users` (Phase 1B.6.1) and `POST /api-keys` (Phase 1B.6.2 — whose response carries a **non-persistable** field, see §3e and ADR-008). It is **not** accepted on `PATCH /users/:id`, whose repeat is already the same state, nor on the lifecycle operations `POST /users/:id/disable` and `/reactivate`, whose second call is a `409 USER_LIFECYCLE_CONFLICT` naming the current status — a definite answer a retrying client can act on, and a better one than replaying a `200` that reports a transition as happening now when it happened earlier.
 
 ### 4c. Outcomes
 
 | Situation | Result |
 |---|---|
 | First request | Executes, stores status + body, returns them |
-| Identical repeat | **Replays the original status and body verbatim.** No re-execution, no marker added to the envelope |
+| Identical repeat | **Replays the original status and body verbatim.** No re-execution, no marker added to the envelope. One exception, declared per field rather than per endpoint: a **non-persistable** field is stored as `null` and therefore replays as `null` — today only `secret` on `POST /api-keys` (ADR-008) |
 | Same key, different effective request — including a different principal | `422 IDEMPOTENCY_KEY_PAYLOAD_MISMATCH`. Nothing about the stored request is disclosed |
 | Concurrent duplicate | Blocks on the original, then replays it. On exceeding the wait, `409 IDEMPOTENCY_REQUEST_IN_PROGRESS` (retryable) |
 | Any failure — validation, authorization, business `4xx`, `5xx`, crash | **Nothing is stored.** The key is free for a genuine retry |
@@ -446,6 +520,7 @@ Filters and sort fields are **allow-listed per endpoint**. There is no generic f
 | `GET /permissions` | `domain` | `key`, `domain` | `key` | `permissions.read` @ organization |
 | `GET /role-assignments` | `userId`, `scopeType`, `scopeId` | `createdAt`, `scopeType` | `-createdAt` | `role_assignments.read` @ organization |
 | `GET /users` | `status`, `email` (exact, case-insensitive) | `createdAt`, `email`, `status` | `-createdAt` | `users.read` @ organization |
+| `GET /api-keys` | `status`, `scopeType`, `scopeId`, `name` (exact) | `createdAt`, `name` | `-createdAt` | `api_keys.read` @ organization |
 | `GET /tenants/workspaces` | `status` (+ advisory `orgId`) | `name`, `createdAt` | `name` | `workspaces.read` @ organization |
 | `GET /auth/sessions` | — | — | — | self only |
 

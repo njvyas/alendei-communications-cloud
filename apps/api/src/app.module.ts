@@ -4,6 +4,7 @@ import { APP_FILTER, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { CorrelationMiddleware } from './common/context/correlation.middleware';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { validationPipe } from './common/http/validation.pipe';
+import { ApiKeysModule } from './api-keys/api-keys.module';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { AppConfigModule } from './config/config.module';
@@ -46,6 +47,7 @@ import { SecretsModule } from './secrets/secrets.module';
     TenancyModule,
     RbacModule,
     UsersModule,
+    ApiKeysModule,
   ],
   providers: [
     { provide: APP_PIPE, useValue: validationPipe() },

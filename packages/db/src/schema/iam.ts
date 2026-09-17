@@ -157,6 +157,11 @@ export const apiKeys = pgTable(
   (table) => [
     uniqueIndex('api_keys_key_prefix_key').on(table.keyPrefix),
     index('api_keys_org_id_idx').on(table.orgId),
+    // Keyset pagination for `GET /api-keys` (migration `0009`): the tenant
+    // discriminator, the sort column, then the tie-breaker. `-createdAt`
+    // orders by `id`, which is a UUIDv7 and therefore chronological.
+    index('api_keys_org_id_id_idx').on(table.orgId, table.id),
+    index('api_keys_org_name_id_idx').on(table.orgId, table.name, table.id),
     // Referenced by `audit_logs_actor_api_key_org_fk` so an API-key actor can
     // never be recorded against an organization the key does not belong to
     // (`TENANCY.md` §1a.3, ADR-002).

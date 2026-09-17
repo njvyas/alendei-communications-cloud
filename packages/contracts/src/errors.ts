@@ -70,6 +70,23 @@ export const ERROR_CODES = {
    */
   USER_LIFECYCLE_CONFLICT: 'USER_LIFECYCLE_CONFLICT',
 
+  // --- API-key lifecycle (Phase 1B.6.2) ------------------------------------
+  /**
+   * The key is not in a state the requested lifecycle transition applies to —
+   * today that means revoking a key that is already revoked.
+   *
+   * `409`, and modelled on `USER_LIFECYCLE_CONFLICT` rather than folded into it:
+   * the actor was authorized and the request well-formed, what is wrong is the
+   * *current state*, and `details.status` carries it. A separate code per
+   * resource because a client branching on "which thing was in the wrong state"
+   * should not have to parse a message to find out.
+   *
+   * Expiry is deliberately **not** a transition and never produces this: it is
+   * derived from `expires_at` at read and at authentication, so there is no
+   * moment at which something transitions a key into it.
+   */
+  API_KEY_LIFECYCLE_CONFLICT: 'API_KEY_LIFECYCLE_CONFLICT',
+
   // --- Tenancy -------------------------------------------------------------
   TENANCY_CONTEXT_REQUIRED: 'TENANCY_CONTEXT_REQUIRED',
   /** A client-supplied tenant identifier disagreed with the resolved context. */
