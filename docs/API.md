@@ -11,6 +11,7 @@ All public and console APIs are served under `/api/v1`. Breaking changes ship as
 | `/auth` | `iam` | Login, refresh, logout, session management, `/auth/me`. **Built in Phase 1B.3.** No MFA challenge — MFA is not implemented (ADR-003 D-6) |
 | `/ws/ticket` | `iam` | Mints a single-use, short-lived WebSocket connection ticket (§9). Issuance ships in Phase 1B; ticket *consumption* and the socket gateway are deferred (`DECISIONS.md` D15) |
 | `/tenants` | `tenancy` | Organization/workspace/team CRUD (scoped by caller's role) |
+| `/audit-logs` | `audit-read` | Audit trail read: list and detail. **Built in Phase 1B.6.3** (§3f). Read-only — the write path is `AuditWriter` and is unchanged |
 | `/api-keys` | `api-keys` | API-key administration: list, detail, create, revoke. **Built in Phase 1B.6.2** (§3e). Authentication of API keys is `auth`'s and is unchanged (§3) |
 | `/users` | `users` | User lifecycle administration: list, detail, create, profile update, disable, reactivate. **Built in Phase 1B.6.1** (§3d). Its own module rather than `tenancy`: `AuthModule` imports `IamModule` for the credential and session primitives, so a user controller placed there and needing `RoleAssignmentService` would close a cycle through `RbacModule` |
 | `/roles` | `rbac` | Role CRUD (custom roles), plus read of the platform role definitions. **Built in Phase 1B.5.4** (§3c) |
@@ -338,6 +339,62 @@ There is no status column and no sweeper. `status` is computed from `revoked_at`
 
 `GET /api-keys` is 1 query over `api_keys`, supported by `api_keys_org_id_id_idx` / `api_keys_org_name_id_idx` (migration `0009`), with no `COUNT(*)` and no N+1. Detail is 2 (load, then the chain resolve inside the authorization check), revoke is 4, create is 7 — constant in the number of permissions requested, because the chain is resolved once and the evaluator then decides in memory. Plus the six `SET LOCAL` statements every tenant transaction issues.
 
+
+### 3f. Audit read (Phase 1B.6.3)
+
+**Implementation status.** **IMPLEMENTED, Phase 1B.6.3.** Two endpoints, both read-only. Export, streaming and retention management are out of scope.
+
+| Method | Path | Permission | Target scope | Response |
+|---|---|---|---|---|
+| `GET` | `/audit-logs` | `audit.read` | the request's organization | `{data:[auditLog], page}` |
+| `GET` | `/audit-logs/:id` | `audit.read` | **the scope the record was written at** | `{data:auditLog}` |
+
+There is no `POST`, `PATCH` or `DELETE`, and the absence is structural rather than a choice of surface: `acc_app` holds `SELECT, INSERT` on `audit_logs` and no `UPDATE`, `DELETE` or `TRUNCATE` (migration `0001`), so the append-only guarantee does not depend on this controller.
+
+The record:
+
+```jsonc
+{ "id": "uuid", "occurredAt": "ISO-8601",
+  "action": "user_role.granted", "outcome": "success",      // success | failure | denied
+  "actorType": "user",                                       // user | api_key | oauth_client | system
+  "actorUserId": "uuid|null", "actorApiKeyId": "uuid|null", "actorLabel": "string|null",
+  "resourceType": "RoleAssignment", "resourceId": "uuid|null",
+  "scopeType": "workspace", "scopeId": "uuid|null",          // where it happened
+  "resellerId": "uuid|null", "orgId": "uuid|null",           // derived ancestry
+  "workspaceId": "uuid|null", "teamId": "uuid|null",
+  "before": {…}|null, "after": {…}|null, "metadata": {…},
+  "correlationId": "uuid", "causationId": "uuid|null",
+  "ip": "string|null", "userAgent": "string|null" }
+```
+
+**Payloads are returned as stored.** `before`, `after` and `metadata` passed through the central redactor at **write** time (`SECURITY.md` §4), which is the single redaction boundary. Re-redacting on read would be a second redactor, and two redactors drift. There is no credential column on `audit_logs` to withhold.
+
+**`ip` and `userAgent` are included deliberately.** They are personal data, and an audit trail that cannot say where a privilege change originated answers half the question an investigation asks. Access is gated by `audit.read`, an administrative permission.
+
+#### Who sees what
+
+Visibility is decided by `audit_logs_select` (migration `0001`) under the request's tenant context, with one narrowing applied above it:
+
+| Caller | Sees |
+|---|---|
+| Platform administrator | Every row, including `platform`-scoped |
+| Reseller-scope grant holder | Their organizations' rows **and** their reseller's own rows |
+| Organization administrator | Their organization's rows, and workspace/team rows beneath it |
+| Workspace-pinned principal | Refused the list entirely — a workspace grant cannot cover the organization target |
+| API key | Its organization's rows, within its binding; never reseller rows |
+
+**Reseller-scoped rows require a genuine grant at `reseller` scope.** `TenantContext.resellerId` is derived from the selected organization's reseller for *every* principal, so it identifies reseller **context** and is not evidence of reseller **authority** (`SECURITY.md` §4, `TENANCY.md` §4). The list applies this narrowing so that it agrees with the detail route, which authorizes at the record's own scope.
+
+**The invariant:** *a row appears in the list if and only if the detail route serves it.* Asserted across all five scope levels.
+
+#### Filters, sorting, cost
+
+Filters — all allow-listed, all narrowing **inside** what the policy already permits, none an isolation mechanism: `action`, `actorType`, `actorUserId`, `outcome`, `resourceType`, `resourceId`, `scopeType`, `scopeId`, `correlationId`, `occurredFrom`, `occurredTo`. The occurrence window is half-open `[from, to)` so consecutive windows tile without double-counting. A filter naming another tenant's organization matches nothing rather than reaching it.
+
+Sorting is `occurredAt` only, default `-occurredAt`. An audit trail is read chronologically and every other dimension here is a filter; offering more sorts would add cursor surface and index requirements for orderings nobody investigates by. Chronological ordering runs on `id` — a UUIDv7 assigned by the same INSERT that defaults `occurred_at`, so the two are co-monotonic and `id` is the one that round-trips exactly through a text cursor.
+
+**Query cost**: list is 2 queries (the authorization chain resolve, then one page), detail is 1–2 (the row, then a chain resolve that is free for `platform` scope). No `COUNT(*)`, no N+1. `EXPLAIN` confirms the default ordering is served by `Index Scan Backward using audit_logs_pkey`, so **no index was added** — none would be used by the current predicate shape, since the RLS disjunction is not sargable. At scale the cost characteristic is filter selectivity rather than a missing index; the fix would be a sargable tenant predicate, which is deferred because it conflicts with the reseller view.
+
 ## 4. Idempotency
 
 This section is the API-facing view of the tier-1 mechanism defined canonically in `DATABASE.md` §7.1 — see that section before implementing; do not re-derive the semantics independently here. **Implemented in Phase 1B.5.9** (ADR-006).
@@ -521,6 +578,7 @@ Filters and sort fields are **allow-listed per endpoint**. There is no generic f
 | `GET /role-assignments` | `userId`, `scopeType`, `scopeId` | `createdAt`, `scopeType` | `-createdAt` | `role_assignments.read` @ organization |
 | `GET /users` | `status`, `email` (exact, case-insensitive) | `createdAt`, `email`, `status` | `-createdAt` | `users.read` @ organization |
 | `GET /api-keys` | `status`, `scopeType`, `scopeId`, `name` (exact) | `createdAt`, `name` | `-createdAt` | `api_keys.read` @ organization |
+| `GET /audit-logs` | `action`, `actorType`, `actorUserId`, `outcome`, `resourceType`, `resourceId`, `scopeType`, `scopeId`, `correlationId`, `occurredFrom`, `occurredTo` | `occurredAt` | `-occurredAt` | `audit.read` @ organization |
 | `GET /tenants/workspaces` | `status` (+ advisory `orgId`) | `name`, `createdAt` | `name` | `workspaces.read` @ organization |
 | `GET /auth/sessions` | — | — | — | self only |
 

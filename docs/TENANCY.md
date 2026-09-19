@@ -253,7 +253,20 @@ Because that layer is the *whole* of the enforcement below organization level, i
 
 ## 4. Reseller & white-label scoping
 
-A reseller admin's auth context resolves to `{reseller_id}` with implicit access to all `organizations` beneath it; this is enforced the same way org-level access is enforced (RLS + API guard), not via a separate code path. White-label configuration (branding, domain, allowed sender identities) lives on `workspaces`/`organizations` and is resolved at request time by host/domain or by the authenticated reseller context — see `ARCHITECTURE.md` §16.
+A reseller admin's auth context resolves to `{reseller_id}` with implicit access to all `organizations` beneath it; this is enforced the same way org-level access is enforced (RLS + API guard), not via a separate code path.
+
+**Where white-label configuration actually lives**, corrected against the schema — an earlier version of this section named the wrong tables:
+
+| Configuration | Column | Table |
+|---|---|---|
+| Reseller branding | `brand_config` (jsonb) | **`resellers`** |
+| Reseller custom domain | `domain` (unique where not null) | **`resellers`** |
+| Workspace branding | `brand_config` (jsonb) | **`workspaces`** |
+| Reseller pricing/markup | `default_markup_pct` | **`resellers`** |
+
+`organizations` carries **neither** branding nor a domain. Allowed sender identities are not modelled yet and arrive with the channel phases. See `ARCHITECTURE.md` §16 and `DEPLOYMENT.md` §0b.
+
+**`TenantContext.resellerId` is context, not authority.** It is derived from the *selected organization's* reseller for every principal, so an ordinary organization administrator has one. It answers "which reseller does this request's organization belong to" and must never be read as evidence of reseller-scope authorization — that comes from holding a grant **at** `reseller` scope. The distinction is normative and its first enforcement is the audit read surface (`SECURITY.md` §4, Phase 1B.6.3).
 
 ### 4a. How the API enforces the hierarchy
 
@@ -342,6 +355,19 @@ Every mechanism that stops a principal reaching outside its scope, in one place,
 | Widening a WebSocket connection's scope after connect | Scope is fixed by the ticket; subscriptions outside it are refused (§4b) |
 | Replaying a WebSocket ticket | Single-use, short-lived, hash-stored (§4b) |
 
+## 7a. Hostname is branding input, never tenancy input (normative)
+
+**A request's hostname may select branding. It may never select tenancy or authorization.**
+
+Custom domains are coming — `resellers.domain` already exists and is uniquely indexed — and the rule has to be frozen before any resolver is built, because the wrong version of it is the obvious one:
+
+- **Permitted**: resolving `portal.reseller.example` to a reseller's `brand_config` for the purpose of rendering a login page, logo, palette or product name. Presentation only.
+- **Forbidden**: treating the host as evidence of *which tenant the caller belongs to*, or of *what the caller may do*. Arriving at `customer.example.com` grants nothing.
+
+The authenticated principal and §2a's resolution chain remain the only source of tenant context, exactly as §2b already says of every other client-supplied identifier. A hostname is a client-supplied identifier with better marketing: it is trivially forgeable by anything that is not a browser, it is chosen by whoever controls DNS rather than by ACC, and a deployment behind a proxy sees whatever `Host` the proxy forwards. Anything that made it authoritative would be an authorization input the credential chain never validated.
+
+The practical consequence for the eventual implementation: the branding resolver runs **before** authentication and returns presentation data only; the tenancy chain runs after, ignores the host entirely, and a mismatch between the two is not an error — a user of Organization A signing in through Reseller B's branded domain is simply an unusual-looking session, not an escalation. If branding ever needs to be restricted by tenant, that restriction is an authorization decision made after the principal resolves, not a routing decision made before it.
+
 ## 7. Open decisions
 
-Tracked in `DECISIONS.md`: physical per-tenant log isolation for regulated/enterprise customers; dedicated Kafka topics/partitions for high-volume tenants; whether `workspace_id` should be mandatory (vs. optional) on every tenant-scoped table — which, if resolved in favour of mandatory, would also let RLS enforce the workspace boundary that §3a currently places in the authorization layer.
+Tracked in `DECISIONS.md`: a fuller correction of `app_current_reseller_id()` so the session variable reflects reseller-scope authority rather than derived context (deferred from Phase 1B.6.3 — see `SECURITY.md` §4); physical per-tenant log isolation for regulated/enterprise customers; dedicated Kafka topics/partitions for high-volume tenants; whether `workspace_id` should be mandatory (vs. optional) on every tenant-scoped table — which, if resolved in favour of mandatory, would also let RLS enforce the workspace boundary that §3a currently places in the authorization layer.

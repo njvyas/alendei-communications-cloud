@@ -36,6 +36,23 @@ All backups are encrypted at rest and access-restricted; backup restoration is p
 | Logical corruption (bad migration, bad data write) | Point-in-time recovery to just before the corrupting transaction | Hours, depends on detection latency |
 | Accidental deletion (application bug, not malicious) | Same as logical corruption | Same as logical corruption |
 
+## 3a. Shared versus dedicated deployment boundaries (ADR-009)
+
+Backup and restore are **deployment-scoped**, so the two models differ in a way that matters operationally and commercially.
+
+| Concern | Shared SaaS (Model A) | Dedicated / private (Models B, C) |
+|---|---|---|
+| Backup boundary | One cluster covering many tenants | One cluster covering one customer |
+| Restore boundary | The whole deployment/database | That customer |
+| Blast radius of a restore | Every tenant on the deployment | One customer |
+| RPO/RTO | One platform-wide class | Potentially per-customer |
+
+**The consequence worth stating before an incident rather than during one: in the shared model, point-in-time recovery for a single tenant is not available from PostgreSQL backup/restore alone.** PITR rewinds the cluster, and rewinding the cluster rewinds every other tenant with it. Recovering one tenant's logical corruption therefore means a logical export/repair path, not a restore — and no such tooling exists yet. In a dedicated deployment the restore boundary and the customer boundary coincide, so PITR is straightforwardly available.
+
+Nothing here changes §2's backup strategy, which applies to any deployment.
+
+**RPO/RTO becomes a deployment-class decision.** The placeholders in §3 are a single platform-wide set. Once dedicated deployments exist, recovery objectives are properly an attribute of a deployment class — shared SaaS as one class, each dedicated customer potentially its own, possibly contractual. Those values are a business input and are deliberately not invented here (`DECISIONS.md` §4, ADR-009).
+
 ## 4. Multi-region / multi-cloud posture
 
 Phase 0 does not commit to active-active multi-region — it commits to *not architecturally precluding* it: no component assumes single-region affinity beyond what the chosen managed database/broker requires, and the cloud-portability principle (`ARCHITECTURE.md` §19) means a full redeploy to a secondary cloud/region is a Helm values change plus a data restore, not a rewrite. Whether to invest in active-active is a cost/business decision deferred to `DECISIONS.md`.

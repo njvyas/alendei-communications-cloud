@@ -2,7 +2,7 @@
 
 > **STATUS: DRAFT — CONVENTIONS FROZEN, SURFACE INCOMPLETE.**
 >
-> This document is written against the repository at Phase 1B.6.2. It is the
+> This document is written against the repository at Phase 1B.6.3. It is the
 > formal contract between the backend/core track and the future frontend track.
 >
 > **What changed at 1B.5.8, and what it means for you.** Every *convention* a
@@ -22,7 +22,7 @@
 > | ~~**No user lifecycle**~~ — **CLOSED in 1B.6.1** (§30d). List, detail, create, profile update, disable and reactivate are live. What is still missing is narrower and named there: a created user cannot yet *sign in*, because credential delivery is `DECISIONS.md` D16 | 1B.6.1 ✅ / D16 |
 > | **No organization, workspace, team or reseller CRUD** — only workspace *reads* exist (§30) | 1B.8 |
 > | ~~**No API-key management**~~ — **CLOSED in 1B.6.2** (§30e). List, detail, create and revoke are live. Rotation and secret recovery are deliberately absent and are not coming: see §30e | 1B.6.2 ✅ |
-> | **No audit read** endpoint | 1B.6.3 |
+> | ~~**No audit read** endpoint~~ — **CLOSED in 1B.6.3** (§30f) | 1B.6.3 ✅ |
 > | **No way for an invited user to obtain a password**, so a user the console creates cannot sign in yet (`DECISIONS.md` D16) | D16 |
 > | **OpenAPI is effectively empty of business schemas** — 5 decorators, all on health. No typed client can be generated (§30) | 1B.9 |
 > | **No general rate limiting**: only the auth endpoints are limited, and no other endpoint returns `X-RateLimit-*` (§23) | 1B.10 |
@@ -279,6 +279,7 @@ being one. Ask if a screen needs it.
 | `GET /role-assignments` | `userId`, `scopeType`, `scopeId` | `createdAt`, `scopeType` | `-createdAt` |
 | `GET /users` | `status`, `email` (exact, case-insensitive) | `createdAt`, `email`, `status` | `-createdAt` |
 | `GET /api-keys` | `status`, `scopeType`, `scopeId`, `name` (exact) | `createdAt`, `name` | `-createdAt` |
+| `GET /audit-logs` | `action`, `actorType`, `actorUserId`, `outcome`, `resourceType`, `resourceId`, `scopeType`, `scopeId`, `correlationId`, `occurredFrom`, `occurredTo` | `occurredAt` | `-occurredAt` |
 | `GET /tenants/workspaces` | `status` | `name`, `createdAt` | `name` |
 | `GET /auth/sessions` | — | — | — |
 
@@ -866,6 +867,101 @@ Held by `org_admin`; `alendei_support` holds `api_keys.read` only. `reseller_adm
 ### Deferred, so do not design around them
 
 Rotation, secret recovery, secret delivery by email or any other channel, IP allowlists, network restrictions, usage analytics, quotas and per-key billing. None exists and none is planned in Phase 1B.
+
+## 30f. Audit read — IMPLEMENTED (Phase 1B.6.3)
+
+Read-only. There is no way to write, edit or delete an audit record through the API, and there never will be — the table is append-only at the database level.
+
+```jsonc
+{
+  "id": "uuid",
+  "occurredAt": "ISO-8601",
+  "action": "user_role.granted",
+  "outcome": "success",                  // success | failure | denied
+  "actorType": "user",                   // user | api_key | oauth_client | system
+  "actorUserId": "uuid|null",
+  "actorApiKeyId": "uuid|null",
+  "actorLabel": "string|null",           // set for oauth_client and anonymous login attempts
+  "resourceType": "RoleAssignment",
+  "resourceId": "uuid|null",
+  "scopeType": "workspace",              // platform | reseller | organization | workspace | team
+  "scopeId": "uuid|null",                // null only for platform
+  "resellerId": "uuid|null",             // derived ancestry — server-computed, never sent
+  "orgId": "uuid|null",
+  "workspaceId": "uuid|null",
+  "teamId": "uuid|null",
+  "before": {…}|null,
+  "after": {…}|null,
+  "metadata": {…},
+  "correlationId": "uuid",
+  "causationId": "uuid|null",
+  "ip": "string|null",
+  "userAgent": "string|null"
+}
+```
+
+| Method | Path | Permission | Success |
+|---|---|---|---|
+| `GET` | `/api/v1/audit-logs` | `audit.read` | `200 { data: [auditLog], page }` |
+| `GET` | `/api/v1/audit-logs/:id` | `audit.read` | `200 { data: auditLog }` |
+
+### What the caller can see
+
+Not every audit record in the caller's tenant is visible to them, and the rule is not "same organization":
+
+- An **organization administrator** sees their organization's rows and the workspace/team rows beneath them. They do **not** see their reseller's own rows, even though their organization belongs to that reseller.
+- A **reseller-scope** principal additionally sees their reseller's own rows.
+- A **platform administrator** sees everything, including `platform`-scoped rows.
+- A **workspace-pinned** principal is refused the list entirely with `403` — a workspace grant does not cover the organization the list is authorized at. Do not render the audit section for them.
+- An **API key** sees its organization's rows and never reseller rows.
+
+**The guarantee you can build on: a row appears in the list if and only if `GET /audit-logs/:id` will serve it.** You never need to handle a row that lists but 403s on open.
+
+### Filters and sorting
+
+All filters are exact-match except the time window, and all of them narrow **within** what you can already see — a filter naming another tenant returns nothing rather than reaching it.
+
+`action` · `actorType` · `actorUserId` · `outcome` · `resourceType` · `resourceId` · `scopeType` · `scopeId` · `correlationId` · `occurredFrom` · `occurredTo`
+
+The window is half-open `[occurredFrom, occurredTo)`, so consecutive windows tile without showing a row twice.
+
+**`correlationId` is the most useful filter here** and the one an investigation UI should build around: every record produced by one originating request shares it, so filtering by it reconstructs the whole causal fan-out. `causationId` gives the immediate parent within that chain, which is what lets you order it rather than merely group it.
+
+**Sorting is `occurredAt` only** (`-occurredAt` default, newest first). Requesting any other sort is a `400`. This is deliberate — an audit trail is read chronologically, and everything else is a filter.
+
+### Errors
+
+| Failure | Code | Meaning for the UI |
+|---|---|---|
+| `403 AUTHZ_SCOPE_DENIED` | forbidden | No `audit.read` at this organization, or the record sits at a scope you do not cover (e.g. a reseller record) |
+| `404 RESOURCE_NOT_FOUND` | not found | Unknown record, or one in another tenant. **Never present it as "exists but forbidden"** |
+| `400 VALIDATION_FAILED` | bad request | Unknown filter, disallowed sort, malformed value. Unknown query parameters are refused, not ignored |
+| `400 PAGINATION_CURSOR_INVALID` | bad request | Cursor malformed, tampered with, or reused under a different sort. Restart from page one |
+
+### Displaying payloads safely
+
+`before`, `after` and `metadata` are free-form JSON assembled by the backend and already passed through the server's redactor, which replaces credential-bearing values with `"[redacted]"`. Two things follow:
+
+- **Render them as data, never as markup.** They contain values that originated from user input elsewhere in the system.
+- **Do not build logic that depends on their shape.** They vary by `action` and are not a stable contract. Display them; do not parse them into UI state.
+
+`ip` and `userAgent` are personal data. Show them where an investigation needs them, and treat them with the same care as any other personal field.
+
+### Deferred, so do not design around them
+
+Audit export or download, streaming/live tail, retention management, full-text search over payloads, and any aggregate or statistics endpoint. None exists.
+
+## 30g. Branding and custom domains — NOT IMPLEMENTED
+
+There is **no branding API and no custom-domain API**, and none is specified. Do not build against an assumed shape.
+
+What is decided (ADR-009), so the eventual contract will not contradict it:
+
+- **Branding is tenant data, not deployment configuration.** `resellers.brand_config`, `resellers.domain` and `workspaces.brand_config` already exist in the schema; no endpoint reads them yet.
+- **Branding will be host-resolved and unauthenticated.** A login page must be branded before anyone has signed in, so the eventual resolver runs before authentication and returns presentation data only.
+- **A hostname will never determine tenancy or authorization.** Arriving at `customer.example.com` or `portal.reseller.example` grants nothing. The authenticated principal remains the only source of tenant context, exactly as it is today (§4). Do not design a flow that assumes the host implies the tenant, and do not send a host-derived tenant identifier expecting the backend to honour it — it will not.
+
+Until the contract exists, treat branding as static application configuration on the frontend side.
 
 ## 31. Related
 

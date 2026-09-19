@@ -684,7 +684,64 @@ The consequence is stated plainly rather than hidden: **if the creation response
 - A static test asserts the dataflow structurally: `minted.secret` occurs exactly twice in the service — the Argon2id hash and the return — and `IdempotencyService` is asserted to contain no knowledge of secrets at all.
 - `DECISIONS.md` §3's accepted risk on idempotency retention keeps its original basis, because snapshots still carry nothing sensitive.
 
+## 1i. ADR-009 — Deployment topology: one codebase, many topologies; deployment identity is operational
+
+**Status**: Accepted (Phase 1B.6.3, documentation closure). Follows the deployment topology review performed against `782b8d7`. Implements no code. Constrains `DEPLOYMENT.md` §0, `TENANCY.md` §§4/7a, `SECURITY.md` §3, `ARCHITECTURE.md` §16.
+
+### Context
+
+ACC needs to serve three commercial models — shared multi-tenant SaaS, dedicated per-customer deployments, and private/on-prem — without maintaining three applications. A review of the repository found that the capability was already there but undocumented, and that three documents described it inaccurately. Four decisions are frozen here so later phases cannot quietly diverge from them.
+
+### D-1 — White-label is not a deployment boundary
+
+A white-label reseller is a **tenant**, and shared deployment is the default model for it. The schema already carries what white-label needs: `resellers.brand_config`, `resellers.domain` (uniquely indexed), `workspaces.brand_config`, `resellers.default_markup_pct`.
+
+Forcing every white-label customer into its own deployment was rejected: it multiplies operational cost per customer, makes the common case the expensive one, and buys isolation the RLS boundary already provides. Dedicated deployment remains available as a commercial or regulatory choice, and promotion is tractable because a reseller's data is a closed subtree — an export, not a schema change.
+
+### D-2 — Deployment identity is operational, not a database tenant concept
+
+**No `deployment_id` on any tenant or business table, and none in any RLS policy.**
+
+| Option | Verdict |
+|---|---|
+| `deployment_id` column + RLS predicate | **Rejected.** A deployment holds whole tenants, so the hierarchy already provides the reachability. It would add a second isolation axis every policy, index and query must carry, where a forgotten predicate becomes a new leak class. And cross-deployment queries cannot exist — separate deployments have separate databases — so the column could never be what prevents one. A column that can only ever hold one distinct value per database is not a control; it is a comment |
+| Deployment identity in configuration and telemetry | **Chosen.** The place it is genuinely needed |
+
+The real gap the review found is operational: traces carry `service.name` and `deployment.environment.name` (`APP_ENV`, i.e. `production`), and logs carry `service`/`environment` — so two production deployments shipping telemetry to one place are **indistinguishable**. That is a configuration value surfaced as an OTel resource attribute and a log base field, deferred to the deployment-hardening phase (`OBSERVABILITY.md`).
+
+### D-3 — Hostname may select branding; it never selects tenancy or authorization
+
+Frozen normatively in `TENANCY.md` §7a. A hostname is a client-supplied identifier: forgeable by anything that is not a browser, chosen by whoever controls DNS, and mediated by whatever `Host` a proxy forwards. `TENANCY.md` §2b already refuses to trust such identifiers for tenancy; a custom domain is not an exception to that rule, it is an instance of it.
+
+The branding resolver will therefore run before authentication and return presentation data only; the tenancy chain runs after and ignores the host entirely.
+
+### D-4 — Tenant-scoped secrets are references, never values
+
+Frozen in `SECURITY.md` §3. Deployment-level infrastructure secrets (database, Redis, broker, JWT, cookie, object storage, encryption keys) stay deployment-level and resolve through `SecretsPort`. Tenant-scoped secrets — provider credentials, webhook signing secrets, tenant encryption material — are stored as a **reference** into that backend on a tenant-scoped row.
+
+The precedent is already in the schema: `users.mfa_secret_ref` is documented as a pointer and never the seed. `provider_credentials` is **not implemented**; its contract is frozen in `DEPLOYMENT.md` §0f so the channel phases cannot store a credential inline for convenience.
+
+### Consequences
+
+- `DEPLOYMENT.md` gains §0 (topology, normative) and a CURRENT/PLANNED marker on every artifact claim. It previously described Helm charts, images and infrastructure services that do not exist.
+- `TENANCY.md` §4 corrected — branding and domain live on `resellers`, not on `workspaces`/`organizations`; `organizations` has neither. §7a added for the hostname rule.
+- `ARCHITECTURE.md` §16 corrected — `api_keys` binds to organization or workspace only, and `provider_credentials` does not exist.
+- `DR.md` distinguishes shared from dedicated backup/restore boundaries; RPO/RTO becomes a deployment-class decision.
+- `ROADMAP.md` gains the deployment-artifacts track, sequenced after the approved core phases.
+- **No schema change, no migration, no code.** This ADR is a set of constraints on future work.
+
+### Deliberately not decided here
+
+The supported version-skew window for dedicated deployments, contractual RPO/RTO values, data-residency commitments, whether API keys should ever be reseller-scoped, and whether `EVENT_TOPIC_PREFIX` is wired or removed (`DEPLOYMENT.md` §0h, `EVENTS.md`). Each needs product input rather than an architectural guess.
+
 ## 3. Risks explicitly accepted by design (not oversights)
+
+**Three items deferred from Phase 1B.6.3, recorded rather than silently carried.** Each was found during the audit-read phase and each is genuinely future work; none is a live defect today.
+
+- **`app_current_reseller_id()` is broader than the `audit_logs_select` reseller arm intends.** The session variable is derived from the selected organization's reseller for every principal, so it reports reseller *context* rather than reseller *authority*. Phase 1B.6.3 corrected the one surface that exposed it (`SECURITY.md` §4) and deliberately left the variable alone: changing it — or the policy arm — alters behaviour for every reader of every table that consults it and needs a migration. **Any future consumer of that policy arm must apply the same narrowing, or the gap reappears.** Belongs to a tenancy phase.
+- **The audit redactor's key list is narrower than the logger's.** `audit-redactor.ts` covers `password`, `password_hash`, `key_hash`, `refresh_token_hash`, `mfa_secret_ref`, `ticket_hash` and `/secret|token/i`; the pino configuration additionally covers `apiKey`, `api_key` and `credential`. No caller writes a secret under the keys only the logger covers — Phase 1B.6.2's structural test asserts the API-key audit payload carries only the public prefix — so this is a latent inconsistency rather than a leak. Its impact rose when audit payloads became readable in 1B.6.3, which is why it is recorded here. Aligning the two lists is a change to the audit **write** path and belongs to a phase that owns it.
+- **The audit list's tenant predicate is not sargable.** Visibility comes entirely from RLS, whose disjunction over `current_setting()` and `app_org_reseller(org_id)` no index can serve; `EXPLAIN` confirms the ordering is served by `audit_logs_pkey` walked backwards, so no index was added. At volume the cost is filter selectivity, and the fix is a sargable tenant predicate — which conflicts with the reseller view that same policy arm provides, so it needs the first item resolved before it can be done well. Scalability work, not correctness work.
+
 
 - **Expired idempotency records are not physically deleted.** Expiry is enforced at lookup — an expired record is reclaimed as a fresh request — so correctness never depends on a sweeper running. What is deferred is only reclaiming *space*: the table grows with one row per idempotent request until a retention job exists. Accepted because the volume at Phase 1B (two endpoints, control-plane traffic) is negligible, the index on `expires_at` is already in place for the eventual sweep, and a scheduler is out of scope for this phase (ADR-006).
 - **A fallback chain can theoretically result in a recipient receiving more than one physical message** if a deprioritized channel's delivery lands after escalation already occurred (no provider offers reliable recall). Accepted because preventing it entirely is not possible against external providers; mitigated by keeping wait windows sane and by billing/audit correctly reflecting only one authoritative delivery (`FALLBACK_ENGINE.md` §5).

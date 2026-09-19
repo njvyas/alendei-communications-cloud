@@ -46,6 +46,21 @@ Abstracted behind a `SecretsPort` so the backend is swappable across environment
 
 The same `SecretsPort` backs `webhook_endpoints.signing_secret_ref` (`DATABASE.md` §12) — an outbound webhook signing secret is shown to the customer exactly once at creation/rotation time and is never again retrievable in plaintext via the API; ACC's own outbound dispatcher resolves it server-side at delivery time, identically to how a provider credential is resolved at send time.
 
+
+### 3a. Tenant-scoped secrets are references, never values (normative)
+
+Frozen by ADR-009 D-4. Two planes, and the boundary between them is not negotiable for convenience:
+
+| Secret | Plane | Where it lives |
+|---|---|---|
+| Database, Redis, broker, object-storage credentials | **Deployment** | Secrets backend, referenced from configuration |
+| JWT signing secret, cookie/CSRF secrets, encryption keys | **Deployment** | Secrets backend (`AUTH_JWT_SECRET_REF`) |
+| Provider credentials, webhook signing secrets, tenant encryption material | **Tenant row holding a reference** | `<backend>:<locator>` on the tenant-scoped row; the value never enters PostgreSQL |
+
+The precedent is already in the schema and should be followed rather than re-argued: `users.mfa_secret_ref` is documented as *"Pointer into the secrets backend — never the TOTP seed"*, and `api_keys.key_hash` stores an Argon2id digest rather than a key. Configuration holds references of the form `<backend>:<locator>` and never values, which is what lets a dedicated or on-prem deployment substitute a different backend with no application change.
+
+**`provider_credentials` is not implemented.** Its contract is frozen in `DEPLOYMENT.md` §0f: tenant-scoped, a scope within the existing hierarchy, `org_id` for RLS, and a `credential_ref` — never the credential. A shared deployment must be able to hold Alendei-owned, reseller-owned and organization-owned credentials side by side under the same RLS enforcement every other tenant table gets.
+
 ## 4. Audit architecture
 
 `audit_logs` (see `DATABASE.md` §12) is append-only and captures actor, actor scope, action, resource, outcome, before/after state, correlation id, causation id, and timestamp for every privileged mutation across every module — not just security-relevant actions. A refused action is recorded as deliberately as a successful one: `outcome='denied'` exists precisely so that a rejected privilege escalation leaves a record (`RBAC.md` §7).
@@ -212,6 +227,22 @@ The surface that mints credentials. Six properties carry it, and the first is th
 **Lifecycle is derived where it can be and terminal where it matters.** There is no status column and no sweeper: `expired` is computed from `expires_at` at read and, independently, by the authentication query's own filter — so a key stops working when it expires whether or not anything has looked at it. Revocation is a conditional write (`WHERE revoked_at IS NULL`), so two concurrent revocations produce exactly one winner rather than two successes, and it is terminal — no un-revoke, no rotation, no deletion.
 
 **Revocation and detail authorize against the key's stored binding scope, never the caller's.** Read from the row, so an actor that can see a key listed at the organization still cannot revoke one bound to a workspace it does not cover. Authorizing against a caller-supplied scope is the single mutation this surface most needed to be proof against, and it is asserted both behaviourally and structurally.
+
+### Audit read, and the reseller-context distinction (Phase 1B.6.3)
+
+The audit trail is the record of who did what, so a read surface over it is worth more to an attacker than much of the data it describes: it names administrators, enumerates privilege changes, and through `correlation_id` expands one observation into the whole causal fan-out of a request. Two boundaries hold it, and they are independent — `audit_logs_select` decides which rows exist for the transaction, and `AuthorizationService.assert` decides whether the caller may read an audit trail at all, and for a single record, at the scope that record was written at.
+
+**`TenantContext.resellerId` identifies reseller *context*; it does not establish reseller-scope *authorization*.** This distinction is load-bearing and was not previously written down. `ScopeResolver.tenantContextFor` populates `resellerId` for **every** principal by deriving it from the selected organization's reseller — so an ordinary organization administrator has a non-null `resellerId`, and `app_current_reseller_id()` returns it. That value answers "which reseller does this request's organization belong to", which is the right question for the tenancy context and the wrong one for authorization.
+
+`audit_logs_select`'s third arm admits a reseller row when `reseller_id = app_current_reseller_id()`. Its intent, stated in migration `0001`, is that reseller rows belong to the reseller context — but because the session variable is broader than reseller-scope authority, RLS alone showed an organization administrator its own reseller's audit trail. The detail route was never affected: it authorizes at the row's recorded `{reseller, scope_id}`, and an organization-scope grant cannot cover it, because nothing in the model reaches upward. The list had no per-row equivalent, so the two surfaces disagreed about the same row and **the list was the permissive one**.
+
+**The rule, now enforced:** reseller-level audit visibility requires a genuine grant **at** `reseller` scope. `AuditReadService` derives the admissible reseller set from `principal.roles` — the grants themselves — and never from `TenantContext.resellerId`. A platform administrator is exempt, because their policy arm already admits every row and narrowing would remove the platform operations view. An API-key principal holds exactly one synthesized grant at its binding scope, which is organization or workspace and never reseller (§5c), so a key resolves to an empty set and sees no reseller rows — the correct answer for a credential that cannot be bound above an organization.
+
+This is a **visibility** narrowing layered above RLS, not a second authorization model: it decides which rows a page may contain, while `AuthorizationService.assert` remains the authoritative decision for the endpoint and for every record fetched individually. The flattened `principal.permissions` is not consulted, and no caller-supplied identifier reaches it. The invariant it establishes is asserted directly over all five scope levels: **a row appears in the list if and only if the detail route serves it.**
+
+**RLS was deliberately left unchanged.** The narrower fix would be to make `app_current_reseller_id()` — or the policy arm — reflect reseller-scope authority rather than derived context. That is the more complete correction and it is recommended for a tenancy phase, because it changes behaviour for every reader of every table that consults the variable and requires a migration. Correcting it inside the one surface that exposed it keeps the blast radius proportionate and leaves RLS as the backstop it is meant to be. Recorded as a follow-up rather than silently deferred.
+
+**Personal data in the response.** `ip` and `user_agent` are returned. They are personal data, and they are included deliberately: an audit trail that cannot say where a privilege change originated answers half the question an investigation asks. Access is gated by `audit.read`, an administrative permission, and the payload fields (`before`, `after`, `metadata`) carry whatever the **write-time** redactor left — re-redacting on read would be a second redactor, and two redactors drift.
 
 ### 4a. Append-only enforcement, and its threat model
 

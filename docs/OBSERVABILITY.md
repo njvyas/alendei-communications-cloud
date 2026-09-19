@@ -55,3 +55,35 @@ OpenTelemetry instrumentation across HTTP, DB, cache, and event-bus calls; spans
 ## 6. Related
 
 Event envelope fields: `EVENTS.md` §2. Audit (a distinct, permanent, permissioned record — not a substitute for operational observability): `SECURITY.md` §4.
+
+## Operational views and deployment identity (ADR-009)
+
+Four views are intended, and they are served by different signals on purpose.
+
+| View | Signal today | Status |
+|---|---|---|
+| Platform operations | Metrics, logs, traces, audit | **CURRENT** |
+| Deployment operations | — | **GAP** — see below |
+| Reseller operations | Audit only (`audit_logs.reseller_id`) | **PARTIAL** |
+| Organization operations | Logs (`orgId`) and audit (`org_id`) | **CURRENT** |
+
+**Metrics carry no tenant dimension, deliberately.** `metrics.service.ts` forbids `tenant_id`, `org_id`, `contact_id`, `message_id` and similar labels at runtime, and a unit test enforces it. One time series per tenant is a cardinality bomb, and per-tenant operational detail belongs in logs and audit instead. This is not a gap to close; a reseller- or organization-level *metrics* view is not on the roadmap.
+
+**Audit is the richest tenancy-aware signal.** `audit_logs` carries `reseller_id`, `org_id`, `workspace_id`, `team_id` and `scope_type`/`scope_id`, all derived by the database rather than supplied by the writer. It is the substrate for reseller- and organization-level operational views, and from Phase 1B.6.3 it is readable through `GET /api/v1/audit-logs` under `audit.read` — with reseller-scoped rows visible only to a genuine reseller-scope grant (`SECURITY.md` §4).
+
+**Logs carry `orgId` but not `resellerId`.** So reseller-level triage from logs alone is not currently possible; it comes from audit. Adding the field is small and is listed below.
+
+### The deployment-identity gap — PLANNED
+
+Traces carry `service.name` and `deployment.environment.name` (from `APP_ENV`, i.e. `development`/`staging`/`production`); logs carry `service` and `environment`. **There is no deployment-instance identifier**, so two production deployments shipping telemetry to one place are indistinguishable — "which customer is down" is not answerable from the signals alone.
+
+Per ADR-009 D-2 this is **operational identity, never a database column**. The fix is a deployment-scoped configuration value surfaced as an OTel resource attribute and a pino base field, distinguishing at least:
+
+```
+production shared          production customer-A
+production customer-B      on-prem customer-Y
+```
+
+Deferred to the deployment-hardening phase, alongside the artifacts in `DEPLOYMENT.md` §0h, because a deployment identifier is only useful once more than one deployment exists.
+
+Also deferred: `resellerId` on log lines, and a `resellerId` term on the event envelope (`EventEnvelope` carries `tenantId` and `workspaceId` but no reseller, while `audit_logs` carries all three).

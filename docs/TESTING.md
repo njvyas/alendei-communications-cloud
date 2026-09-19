@@ -397,6 +397,17 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 - `apps/api/src/api-keys/api-key-boundary.spec.ts` (19 structural cases) — the dataflow proof. `minted.secret` occurs **exactly twice** in the service (the hash and the return); the creation audit block is checked for any mention of a secret or digest; the controller's `work()` returns `secret: null` and the plaintext is merged only when `outcome.replayed` is false; `IdempotencyService` and the fingerprint are asserted to contain no knowledge of secrets, so ADR-008 cannot have leaked into the generic mechanism; `mintApiKey` has exactly one caller; the projection omits `key_hash`; both authorization targets come from `bindingScopeOf(row)` and that function is asserted to read only the row; `platform`/`reseller`/`team` are absent from the scope list; nothing writes `user_roles`; and no permission outside the existing three is named.
 - `apps/api/src/api-keys/api-key-secret.spec.ts` (5 unit cases) — the format both `api_keys_prefix_shape` and `AuthGuard`'s parser require, ~256 bits of entropy, no repeats across 2,000 mints, and **no modulo bias**: a naive `byte % 62` skews the first four characters of the alphabet by ~1.6%, far too little to fail a format test, so the frequency is measured directly.
 
+**Audit read (Phase 1B.6.3, `API.md` §3f).** `apps/api/test/audit-read.sec-spec.ts` (33 cases), over real HTTP against real rows.
+
+The phase's defining case is the one that found a defect. `audit_logs_select` admits a reseller row when `reseller_id = app_current_reseller_id()`, and that session variable is derived from the *selected organization's* reseller for **every** principal — so RLS alone showed an organization administrator its own reseller's trail. The detail route always refused it, because it authorizes at the record's recorded `{reseller, …}` scope and nothing reaches upward; the list had no per-row equivalent. **The list was broader than the detail route it links to.**
+
+- **The discriminator** — an organization caller sees neither its own reseller's rows nor another reseller's, in the list *and* on detail (`403` for its own reseller, `404` for another's), while its organization/workspace/team rows are unaffected. A genuine reseller-scope holder keeps its reseller trail and still cannot see another reseller's. A workspace-pinned caller is refused the list outright — stronger than "sees no reseller rows", because a workspace grant cannot cover the organization target. Mixed org+reseller grants do not broaden beyond the held reseller. An API-key principal, bound at organization or workspace and never above, sees no reseller rows at all.
+- **The invariant, asserted directly** — *a row appears in the list if and only if the detail route serves it*, walked over all five scope levels with the reciprocal `listed === (detail === 200)` assertion, so a future scope type cannot reintroduce a gap in either direction.
+- **Isolation** — cross-organization rows absent from the list and `404` on detail, with a real foreign id byte-identical to an unknown one; the mirror case proving B sees its own trail and none of A's; platform rows invisible to a tenant and visible to a platform administrator; a forged `X-Acc-Organization` refused; `orgId`/`resellerId`/`workspaceId` as query parameters refused rather than ignored.
+- **Redaction, end to end** — a payload written through the real `AuditWriter` with `password`, nested `password_hash`, `refresh_token` and `key_hash` comes back `[redacted]`. Nothing in the read path redacts, so a leak would mean the write-time boundary had failed.
+- **Append-only and RLS premise** — `acc_app` `UPDATE` and `DELETE` on `audit_logs` both refused with `42501`; `audit_logs.relrowsecurity`, `acc_app.rolsuper` and `acc_app.rolbypassrls` asserted directly, so the isolation cases cannot pass for the wrong reason.
+- **List conventions** — invalid filters, sorts and cursors refused; a cursor refused when replayed under a different sort; every row walked exactly once newest-first; filters narrowing to the caller's own trail; a half-open `[from, to)` occurrence window.
+
 **Forged ancestry (ADR-005 D-5).** Asserted as the strong property, not the weak one: it is not enough that bad input is rejected: the *authoritative* chain must decide. Each case runs under a tenant context that can see the target, so visibility is not the variable — a grant naming another organization cannot reach a workspace whose real parent is a different organization; the same for a grant naming another reseller, and for one naming another workspace as a team's parent; and a principal holding grants that between them name a wholly false chain still reaches nothing. Every case carries a positive control on the claimant's own rows, so a denial cannot be mistaken for a broken query.
 
 | # | Case | Expected |
@@ -438,6 +449,10 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 | 44 | Revoked or expired key at authentication | refused regardless of creator status |
 | 45 | Disabled creator's key | authenticates as an identity, confers nothing, is **not** auto-revoked |
 | 46 | Concurrent revocations of one key | exactly one `200`, one `409`; the conditional write decides |
+| 47 | Organization caller vs. a reseller-scoped audit row | absent from the list **and** `403` on detail |
+| 48 | Audit list membership vs. detail access, all five scope levels | they agree — listed ⟺ readable |
+| 49 | Genuine reseller-scope caller vs. its own reseller's audit rows | visible and readable; another reseller's is not |
+| 50 | API-key principal vs. reseller-scoped audit rows | never visible — a key is never bound above an organization |
 
 **Mutation sensitivity.** Each mutation is applied, the suite is run, the named tests must fail, and the implementation is restored:
 
@@ -546,6 +561,11 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 | The creator-authority guard on requested `scopes` removed | **executed: 5 fail** |
 | The conditional `WHERE revoked_at IS NULL` dropped from revoke | **executed: 2 fail** — the concurrency case and the repeat-revocation case |
 | `api_keys_prefix_shape` CHECK dropped | **executed: nothing fails — an honest survivor.** The generator always produces a conforming prefix, so no application path can violate the constraint; it defends against a *different* writer (a migration, an admin tool, a future import), which this suite does not exercise. Recorded rather than papered over with a test that inserts a malformed row solely to detect it |
+| **1B.6.3** — audit detail authorized at the caller's organization instead of the record's recorded scope | **executed: survived the first suite, then 1 security test fails.** The survival is the finding: the original case used a workspace-pinned actor, which is denied under both the correct and mutated targets and therefore never discriminated. The case that kills it — an organization caller against a reseller-scoped row — is what exposed the list/detail inconsistency this phase fixed |
+| The reseller-row list narrowing removed | **executed: 1 security test fails** — the regression guard for the fix |
+| Reseller visibility derived from `TenantContext.resellerId` instead of held grants | **executed: 1 security test fails** — the precise defect, reintroduced deliberately: the session variable is derived from the selected organization's reseller and is not evidence of reseller-scope authority |
+| Authorization removed from the audit list | **executed: 16 security tests fail** |
+| The coherent-grant rule replaced by the flattened union, against the audit surface | **executed: 1 security test fails** |
 | `scopeCovers` term dropped from `allows` | 4, 6, 8, 9 |
 | Permission term dropped from `allows` | 12 and every denial case |
 | `ScopeChainResolver` returns the request-supplied chain | 2, 4, 6 |

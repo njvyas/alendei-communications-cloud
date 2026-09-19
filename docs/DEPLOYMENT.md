@@ -1,5 +1,101 @@
 # Deployment Architecture
 
+> **Reading rule.** Every artifact in this document is marked **CURRENT** (it exists in the repository today) or **PLANNED** (it is a design commitment with no artifact yet). An earlier version of this document described Helm charts, Kubernetes manifests, container images and several infrastructure services in the present tense when none of them existed. Where this document and the repository disagree, the repository is right.
+
+## 0. Deployment topology (normative)
+
+### 0a. What a deployment is
+
+**A deployment is one application process set plus the backing services it is configured to use** — its PostgreSQL, Redis, event broker, object storage, search and secrets backend. Nothing else defines it. There is no deployment record in the database and no deployment column on any table (§0c).
+
+A deployment contains **whole tenants**, never fragments of one. The unit of separation is a subtree of the canonical hierarchy (`TENANCY.md` §1a), rooted at one or more resellers.
+
+### 0b. The three supported models
+
+**MODEL A — SHARED MULTI-TENANT SaaS** (the default commercial model)
+
+```
+ACC Shared Production
+  ├── Alendei Direct            (the seeded platform-default reseller)
+  │     ├── Organization A
+  │     └── Organization B
+  ├── Reseller A
+  │     ├── Customer A1
+  │     └── Customer A2
+  └── Reseller B
+        └── Customer B1
+```
+
+One deployment, many resellers, many organizations. Isolation is PostgreSQL RLS beneath the authorization boundary — the same enforcement described in `TENANCY.md` §3, unchanged by the presence of multiple resellers.
+
+**MODEL B — DEDICATED DEPLOYMENT**
+
+```
+ACC Deployment: customer-x
+  └── Enterprise X
+        ├── Organization X1
+        └── Organization X2
+```
+
+An independent deployment for one customer or reseller, running the **same images and the same schema**. What differs is configuration: database, Redis, broker, secrets backend, hostnames.
+
+**MODEL C — PRIVATE / ON-PREM**
+
+The same codebase inside customer or private infrastructure. Every backing service is self-hostable (PostgreSQL, Redis, a Kafka-wire broker, S3-compatible storage, OpenSearch), and `SecretsPort` already abstracts the secrets backend, which is usually what blocks on-prem. **PLANNED**: no offline bundle exists.
+
+### 0c. What is common and what is deployment-specific
+
+| Layer | Status |
+|---|---|
+| Hierarchy, RBAC model, permission catalogue, API contract, migration history, images | **Shared logically** — this is the codebase, identical in every model |
+| PostgreSQL, Redis, broker, storage, search | **Deployment-local.** In Model A they are shared *physically* by many tenants under RLS |
+| Every secret, endpoint and environment value | **Deployment-local** |
+| Resellers, organizations, workspaces, teams, users, roles, grants, API keys, audit, idempotency | **Tenant-scoped rows** inside a deployment |
+
+**One codebase, one core architecture, multiple deployment topologies.** There is no shared-only, white-label-only, enterprise-only or on-prem-only application code, and introducing any would be a regression against this section.
+
+### 0d. White-label is not a deployment boundary (normative)
+
+**A white-label reseller is a tenant, not a deployment.** Shared deployment is the default and supported model for white-label, and the schema already carries what it needs: `resellers.brand_config`, `resellers.domain` (uniquely indexed), `workspaces.brand_config`, `resellers.default_markup_pct`.
+
+White-label is branding, domain, pricing, reseller identity, customer management, feature and provider configuration, and customer-facing presentation — all *inside* the existing hierarchy, all subject to the same isolation. A dedicated deployment is a separate infrastructure decision, taken for commercial or regulatory reasons, and never a prerequisite for white-labelling.
+
+Promotion from shared to dedicated is possible because a reseller's data is a closed subtree: everything under Reseller A is reachable from `resellers.id` through `organizations.reseller_id` and downward. Promotion is therefore an export/import of that subtree, not a schema change. **PLANNED**: no export tooling exists.
+
+### 0e. Deployment identity is operational, not a database concept (normative)
+
+**`deployment_id` must not be added to any tenant or business table, and must not appear in any RLS policy.** The reasoning is recorded in ADR-009, and in short:
+
+- A deployment contains whole tenants, so the hierarchy already provides every reachability such a column would.
+- It would create a second isolation axis that every policy, index and future query must carry — and a forgotten predicate would become a new leak class.
+- Cross-deployment queries cannot exist: separate deployments have separate databases, so the column could never be the thing that prevents one.
+
+Deployment identity **is** needed operationally, for telemetry from several deployments arriving in one place. It belongs in deployment configuration and flows to logs, traces and operational diagnostics. **PLANNED** — see §0h and `OBSERVABILITY.md`.
+
+### 0f. Secrets, and the provider-credential direction (normative)
+
+**Tenant-scoped secrets are stored as references into the deployment's secrets backend, never as secret values.** The precedent exists: `users.mfa_secret_ref` is a pointer, never the TOTP seed, and `api_keys.key_hash` is an Argon2id digest rather than a key. Configuration likewise holds `<backend>:<locator>` references resolved through `SecretsPort`, never values.
+
+| Secret | Plane |
+|---|---|
+| Database, Redis, broker, object-storage credentials | Deployment |
+| JWT signing secret, cookie/CSRF secrets, encryption keys | Deployment |
+| Provider credentials, webhook signing secrets, tenant encryption material | **Tenant row holding a reference** |
+
+**`provider_credentials` — future contract, frozen now, NOT IMPLEMENTED.** When the channel phases build it, it will be a tenant-scoped table carrying a scope within the existing five-level hierarchy, `org_id` for RLS, and a `credential_ref` resolved through `SecretsPort`. The credential value must never be stored in PostgreSQL. This must support Alendei-owned, Reseller-A-owned, Reseller-B-owned and organization-owned credentials coexisting in **one shared deployment**; a dedicated deployment uses a different backend or namespace without any application change.
+
+### 0g. Hostname never determines tenancy
+
+Frozen normatively in `TENANCY.md` §7a: a hostname may select branding and must never select tenancy or authorization.
+
+### 0h. Deployment artifacts — all PLANNED
+
+None of the following exists in the repository today. They are the deployment-artifacts track (`ROADMAP.md`), deliberately out of scope for Phase 1B.6.3:
+
+1. Dockerfile(s) for API and workers · 2. image publication · 3. digest pinning · 4. migration job (pre-upgrade hook) · 5. Helm chart / Kubernetes manifests · 6. per-deployment values files · 7. secret references wired to a real backend · 8. health/readiness wiring (the endpoints exist; the probes do not) · 9. backup/restore automation · 10. rollback automation · 11. shared-deployment promotion pipeline · 12. dedicated-deployment provisioning · 13. private/on-prem bundle.
+
+**Nothing can currently be deployed anywhere**, shared included, until at least items 1–5 exist.
+
 ## 1. Environment strategy
 
 | Environment | Purpose | Infra |
@@ -9,13 +105,17 @@
 | Staging | Pre-production validation, mirrors prod topology | Kubernetes (Helm), production-like data volume (synthetic, never real customer/provider data in Phase 0–2) |
 | Production | Live tenants | Kubernetes (Helm), multi-AZ where the target cloud supports it |
 
-Cloud target is portable by design (`ARCHITECTURE.md` §19): the same Helm charts and container images deploy to AWS, Azure, GCP, private cloud, or on-prem Linux Kubernetes, differing only in environment-specific values files (storage class, ingress class, secrets backend endpoint).
+Cloud target is portable by design (`ARCHITECTURE.md` §19) — **PLANNED**: the intent is that one set of Helm charts and container images deploys to AWS, Azure, GCP, private cloud or on-prem Linux Kubernetes, differing only in environment-specific values (storage class, ingress class, secrets backend endpoint). The *application's* portability is real and exercised today: it is configured entirely through `env.schema.ts`, has no cloud-specific dependency, and reaches infrastructure through ports. The charts and images themselves do not exist yet (§0h).
 
 ## 2. Docker / Compose (development)
 
-`docker-compose.yml` (created in Phase 1, not Phase 0) will bring up: Postgres, Redis, a Kafka-wire-compatible broker (Redpanda recommended for lightweight local dev), OpenSearch, MinIO (S3-compatible), an OTel collector, Prometheus, Grafana, and the application services (API, workers) plus the Provider Simulator — no real provider connectivity is ever part of this stack.
+**CURRENT.** `docker-compose.yml` brings up exactly: Postgres 17, Redis 7, Redpanda (Kafka-wire broker) with its console, an OTel collector, Prometheus and Grafana.
 
-## 3. Kubernetes / Helm (staging, production)
+**PLANNED, and deliberately absent today**: OpenSearch, MinIO (S3-compatible), the application services (API, workers) and the Provider Simulator. The first two have no consumer yet — object storage and search are unimplemented — and the application currently runs on the host against these services rather than inside the compose network. No real provider connectivity is ever part of this stack.
+
+## 3. Kubernetes / Helm (staging, production) — PLANNED
+
+No chart, manifest or image exists yet (§0h). The design below is the commitment, not the current state.
 
 One Helm chart per deployable service (aligned to the module boundaries in `ARCHITECTURE.md` §4, several of which may initially be co-deployed as a single "modular monolith" release and split into independent deployments later without an API change). Helm values are environment-scoped (`values-dev.yaml`, `values-staging.yaml`, `values-prod.yaml`); secrets are never inlined in values files — every secret reference resolves through the `SecretsPort` (`SECURITY.md` §3) via a Kubernetes external-secrets-style integration appropriate to the target cloud.
 
@@ -23,7 +123,9 @@ Horizontal Pod Autoscaling is applied to stateless services (API, workers) keyed
 
 ## 4. CI/CD
 
-GitHub Actions (or an equivalent CI system) pipeline stages, matching the development lifecycle (`ROADMAP.md` §2):
+**CURRENT**: `.github/workflows/ci.yml` runs lint/typecheck/build, integration + database + security tests, a dependency audit and a secret scan. It builds **no** deployable artifact and deploys nowhere.
+
+**PLANNED** pipeline stages, matching the development lifecycle (`ROADMAP.md` §2):
 
 ```
 lint/typecheck → unit tests → integration tests (ephemeral infra) → contract tests
@@ -55,4 +157,4 @@ Releases are cut from `main` after a `release/*` branch (or direct `develop`→`
 
 ## 8. Related
 
-Disaster recovery (data-loss/outage scenarios, distinct from routine rollback): `DR.md`. Operational procedures: `RUNBOOK.md`.
+Deployment topology decisions: ADR-009 (`DECISIONS.md` §1i). Tenancy and the hostname rule: `TENANCY.md` §§4, 7a. Secret boundary: `SECURITY.md` §3. Disaster recovery (data-loss/outage scenarios, distinct from routine rollback): `DR.md`. Operational procedures: `RUNBOOK.md`.
