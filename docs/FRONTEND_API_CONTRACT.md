@@ -2,7 +2,7 @@
 
 > **STATUS: DRAFT — CONVENTIONS FROZEN, SURFACE INCOMPLETE.**
 >
-> This document is written against the repository at Phase 1B.6.3. It is the
+> This document is written against the repository at Phase 1B.6.4. It is the
 > formal contract between the backend/core track and the future frontend track.
 >
 > **What changed at 1B.5.8, and what it means for you.** Every *convention* a
@@ -25,7 +25,7 @@
 > | ~~**No audit read** endpoint~~ — **CLOSED in 1B.6.3** (§30f) | 1B.6.3 ✅ |
 > | **No way for an invited user to obtain a password**, so a user the console creates cannot sign in yet (`DECISIONS.md` D16) | D16 |
 > | **OpenAPI is effectively empty of business schemas** — 5 decorators, all on health. No typed client can be generated (§30) | 1B.9 |
-> | **No general rate limiting**: only the auth endpoints are limited, and no other endpoint returns `X-RateLimit-*` (§23) | 1B.10 |
+> | ~~**No general rate limiting**~~ — **CLOSED in 1B.6.4** (§23). Every authenticated endpoint is limited and returns `X-RateLimit-*` | 1B.6.4 ✅ |
 > | **No development bootstrap**: no one-command way to obtain a working tenant and credentials | 1B.10 |
 > | **No WebSocket or webhook surface** — plan for polling (§§24-25) | later |
 >
@@ -382,16 +382,55 @@ with one issue **per failed rule**:
 
 A field can produce several issues at once; render them all.
 
-## 23. Rate limiting — PARTIAL
+## 23. Rate limiting — IMPLEMENTED (Phase 1B.6.4)
 
-- **Implemented:** authentication endpoints only. Two independent buckets (source IP and
-  target account, the latter keyed by a hash), Redis-backed
-  (`apps/api/src/auth/auth-rate-limit.service.ts`). `POST /auth/login` returns
-  `X-RateLimit-Limit` and `X-RateLimit-Remaining`, plus `Retry-After` on `429`.
-- **Fails open** when Redis is unavailable — a deliberate, tested decision (`API.md` §5).
-- **NOT IMPLEMENTED:** the general per-`(org, principal, endpoint_class)` limiter
-  described in `API.md` §5. No non-auth endpoint is rate limited and no non-auth endpoint
-  returns rate-limit headers.
+Two independent limiters. **Ownership note:** general rate limiting was previously listed against 1B.10 in this document; it is owned by **1B.6.4** and is now implemented (`DECISIONS.md` ADR-010).
+
+### General limiter — every authenticated endpoint
+
+Buckets by `(organization, principal, endpoint class)`. All three are server-derived; **nothing you send can change which bucket you are in** — not `X-Tenant-ID`, `X-Organization-ID`, `X-Principal-ID`, an `X-RateLimit-*` request header, a query parameter or a body field. Sending them is harmless and has no effect.
+
+| Header (on every limited response) | Meaning |
+|---|---|
+| `X-RateLimit-Limit` | The ceiling for your bucket |
+| `X-RateLimit-Remaining` | Tokens left this window, floored at `0` |
+| `X-RateLimit-Reset` | **Seconds until reset** — a duration, not a Unix timestamp |
+
+On exhaustion:
+
+```jsonc
+HTTP 429
+Retry-After: 37
+{ "error": {
+    "code": "RATE_LIMIT_EXCEEDED",
+    "message": "Rate limit exceeded; retry after the interval in Retry-After",
+    "correlationId": "uuid",
+    "retryable": true,
+    "details": { "retryAfterSeconds": 37 } } }
+```
+
+**Two endpoint classes, `read` and `write`**, split by HTTP method — `GET` reads, `POST`/`PATCH`/`DELETE` writes. They are **separate buckets sharing the same ceiling**, so a burst of writes cannot exhaust the budget your reads need. Both are per-organization *and* per-principal, so one user cannot spend a colleague's allowance and one tenant cannot spend another's.
+
+**What this means for the UI, concretely:**
+
+- **Back off on `429` using `Retry-After`**, and do not retry sooner. `retryable: true` means a later identical retry may succeed — not that it may be retried immediately.
+- **`X-RateLimit-Reset` is seconds, not a timestamp.** Adding it to `Date.now()` is the intended use; parsing it as an epoch is not.
+- **Polling loops are the main risk.** Anything that polls a list endpoint is spending the shared `read` budget for that user in that organization. Prefer a longer interval, and stop polling on a hidden tab.
+- A **background refresh and a user action compete for the same bucket** when they run as the same user in the same organization and the same class. Budget accordingly.
+- Endpoints that are *not* limited: `POST /auth/login` and `POST /auth/refresh` (they have their own stricter limits, below), and `/health*` and `/metrics`.
+
+### Authentication limiter — login
+
+- Two independent buckets, source IP and target account, Redis-backed (`apps/api/src/auth/auth-rate-limit.service.ts`). `POST /auth/login` returns `X-RateLimit-Limit` and `X-RateLimit-Remaining`, plus `Retry-After` on `429`.
+- Stricter than the general limiter, and **entirely separate** — a login is never charged to the general limiter, and general traffic never consumes login allowance.
+
+### Both fail open
+
+**When Redis is unavailable, neither limiter refuses traffic.** A cache outage must not become an API outage (`API.md` §5c). You will see requests succeed with `X-RateLimit-Remaining` equal to the full limit. This is deliberate and tested; do not treat it as a signal.
+
+### Not implemented
+
+**Tenant-configurable limits.** Every deployment uses one ceiling for every tenant (`RATE_LIMIT_DEFAULT_*`). There is no per-plan, per-organization or per-endpoint override, no quota accounting and no billing integration. Do not build UI that implies a customer-visible quota. Per-class and per-tenant limits are future work (ADR-010).
 
 **CSRF.** `POST /auth/refresh` and `POST /auth/logout` require the non-simple header
 `X-Acc-Refresh` (any value). It forces a CORS preflight that a cross-site form post

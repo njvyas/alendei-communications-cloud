@@ -244,6 +244,26 @@ This is a **visibility** narrowing layered above RLS, not a second authorization
 
 **Personal data in the response.** `ip` and `user_agent` are returned. They are personal data, and they are included deliberately: an audit trail that cannot say where a privilege change originated answers half the question an investigation asks. Access is gated by `audit.read`, an administrative permission, and the payload fields (`before`, `after`, `metadata`) carry whatever the **write-time** redactor left — re-redacting on read would be a second redactor, and two redactors drift.
 
+### General rate limiting (Phase 1B.6.4)
+
+A throttle is only as good as its bucket identity: if a caller can choose which bucket it lands in, it can always find an empty one. So the property that matters is not the counter but where the three key terms come from.
+
+**Every term is server-derived, and the type system says so.** `org_id` and `principal` come from the authenticated `RequestContext` that `AuthGuard` populated from a verified credential — the same resolved context authorization uses, never a header. `endpoint_class` comes from the matched route's metadata: the HTTP method Nest routed on, or an explicit `@RateLimit()` whose parameter is a two-value literal union. `RateLimitSubject` has no field a caller could populate, and the guard reads nothing from the request but its method.
+
+Asserted adversarially rather than assumed: `X-Tenant-ID`, `X-Organization-ID`, `X-Principal-ID`, `X-RateLimit-*` request headers, `X-Endpoint-Class`, a bypass header, and query identifiers are each sent in turn and the counter is observed continuing to descend in the *same* bucket. Forging the class onto a write route is tested separately.
+
+**Isolation across all three dimensions**, each proven with real authenticated identities rather than by inspecting keys: one organization exhausting its bucket does not throttle another; two principals in one organization hold independent budgets; and `read` and `write` are separate buckets, so a write flood cannot exhaust the reads a console depends on. The mutation that removes any one term from the key fails the suite.
+
+**An API key is bucketed by its own key id**, not its creator's, so a key cannot spend its creator's allowance — the same separation the binding scope gives it for authorization (`RBAC.md` §5c).
+
+**The general limiter does not key on IP.** `X-Forwarded-For` therefore cannot influence it at all, which is asserted directly. `TRUSTED_PROXY_HOPS` continues to govern the authentication limiter, which does key on IP and where the trusted-hop count is the control that stops a client choosing its own bucket.
+
+**No request is charged twice.** The general limiter applies only where a principal exists, so public routes — `POST /auth/login`, `POST /auth/refresh`, `/health*`, `/metrics` — pass through it untouched and keep their own arrangements. That is structural rather than an exemption list: with no principal there is no key to build. Probes and scrapers are never throttled.
+
+**Fail open, and tested.** A Redis outage allows the request, logs at `warn` and flags the verdict. Refusing all authenticated traffic because a cache is unreachable converts a degraded dependency into a total outage, and the limiter is a throttle rather than the authentication or authorization control — both of which still run. The mutation that flips this to fail-closed fails the suite.
+
+**Limits are deployment-wide.** One ceiling for every tenant, from `RATE_LIMIT_DEFAULT_*`. There is no per-tenant override, so a noisy tenant is bounded but not individually tunable, and a tenant cannot be granted a larger allowance without changing it for everyone. Recorded as a limitation rather than implied away (ADR-010).
+
 ### 4a. Append-only enforcement, and its threat model
 
 Append-only is enforced in three layers, each covering something the others cannot:

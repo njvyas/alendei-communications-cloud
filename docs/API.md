@@ -459,14 +459,50 @@ Deliberately **excluded**, because a retry is by definition a different transpor
 
 **Retention.** Records expire 24 hours after creation. Expiry is enforced at lookup — an expired record is reclaimed rather than replayed — so correctness does not depend on a sweeper. Physical deletion of expired rows is **not yet implemented**; see `DATABASE.md` §7.1.
 
-## 5. Rate limiting## 5. Rate limiting
+## 5. Rate limiting
 
-- Keyed by `(org_id, api_key_or_user, endpoint_class)`, using a Redis token bucket. **In Phase 1B this runs in-process in the API** — there is no API gateway in the Phase 1 deployment topology (`DEPLOYMENT.md`). Moving it to a gateway later is a deployment change, not a redesign; the key shape and limits are unchanged by where it runs.
+**Implementation status.** The **authentication** buckets ship in Phase 1B.3; the **general** limiter ships in Phase 1B.6.4. Both are **CURRENT**. Tenant-configurable limits are **PLANNED** — see below.
+
+### 5a. The general limiter (CURRENT, Phase 1B.6.4)
+
+- Keyed by `(org_id, principal, endpoint_class)`, using a Redis **fixed-window counter** (`INCR` + `EXPIRE NX` + `TTL`). **In Phase 1B this runs in-process in the API** — there is no API gateway in the Phase 1 deployment topology (`DEPLOYMENT.md`). Moving it to a gateway later is a deployment change, not a redesign; the key shape and limits are unchanged by where it runs.
+- **Every term is server-derived.** `org_id` and `principal` come from the authenticated `RequestContext` that `AuthGuard` populated from a verified credential; `endpoint_class` from the matched route's own metadata. No header, query parameter, body field or path segment can influence any of them, so a caller cannot select or reset its own bucket.
+- **Two endpoint classes**, and deliberately no more: `read` for `GET`/`HEAD`, `write` for `POST`/`PATCH`/`DELETE`. A route may override with `@RateLimit('read'|'write')`, a server-side literal union. Both classes draw on the **same** configured limit — the split provides *isolation*, so a write flood cannot exhaust the read budget, not differentiated budgets.
+- **Limits are deployment-wide**: `RATE_LIMIT_DEFAULT_MAX` requests per `RATE_LIMIT_DEFAULT_WINDOW_SECONDS`, per bucket. Per-class and per-tenant limits are **PLANNED** (ADR-010).
+- **Applies only where a principal exists.** A request with no authenticated principal has no key and is passed through — which is what keeps `POST /auth/login`, `POST /auth/refresh`, `/health*` and `/metrics` out of it without an exemption list anyone has to maintain.
+- **A request is never charged to both limiters.** Auth endpoints are public, resolve no principal, and carry their own stricter buckets (§5b).
+- **The window's edge is the known cost**: a caller may spend its budget at the end of one window and again at the start of the next, so the short-term peak can reach twice the limit. Acceptable for a throttle that bounds sustained load, and the same property the auth buckets have always had.
+
+**Key shapes**, both built through `RedisKeyBuilder` so the deployment prefix and tenant namespace apply:
+
+```
+organization-scoped   {prefix}:t:{orgId}:ratelimit:{class}:principal:{principalId}
+no organization       {prefix}:platform:ratelimit:{class}:principal:{principalId}
+```
+
+The second covers authenticated routes that are about the caller rather than a tenant — `/auth/me`, `/auth/me/authorization`, `/auth/sessions`, `/auth/logout`, all marked `@NoTenantContext()` — where a principal exists but no organization was selected. They are limited, and separately from any tenant's budget.
+
+**An API key is bucketed by its own key id**, not its creator's user id, so a key has its own budget — the same separation its binding scope already gives it for authorization (`RBAC.md` §5c).
+
+**Response headers**, on every generally-limited response:
+
+| Header | Meaning |
+|---|---|
+| `X-RateLimit-Limit` | The configured ceiling for this bucket |
+| `X-RateLimit-Remaining` | Tokens left in the current window, floored at `0` |
+| `X-RateLimit-Reset` | **Seconds until the window resets** — a duration, not a timestamp, in the same unit as `Retry-After` |
+
+On exhaustion: **`429`** with `Retry-After` (seconds) and the standard error envelope (§7), `code: RATE_LIMIT_EXCEEDED`, `retryable: true`, and `details.retryAfterSeconds`.
+
+### 5b. The authentication buckets (CURRENT, Phase 1B.3)
+
 - Authentication endpoints carry their own stricter bucket (`RATE_LIMIT_AUTH_*`), and apply **two independent buckets** — one keyed by source IP and one by the target account — so that neither address rotation nor a spray across many accounts defeats the control on its own. A refusal from *either* refuses the attempt.
 - The account bucket is keyed by a hash of the identifier, not the identifier itself, so a dump of Redis keys is not a list of the addresses people have tried to sign in with.
-- The IP key depends on `req.ip`, which depends in turn on how many proxy hops are trusted (`TRUSTED_PROXY_HOPS`). Trusting more hops than the deployment actually has lets a client forge `X-Forwarded-For` and choose its own bucket, so the value is configuration rather than a constant and `0` disables the trust entirely.
-- **When Redis is unavailable the limiter fails open**, logs at `warn` on every degraded call, and flags the verdict. Redis is an accelerator and never a system of record (`DATABASE.md` §1): refusing every sign-in because a cache is down converts a degraded dependency into a total outage, and the limiter is a throttle rather than the authentication control itself — credentials are still verified and every failure is still audited. This is a tested decision, not the client's default error behaviour.
-- Limits are tenant-configurable (plan-based defaults, override per organization); responses include standard `X-RateLimit-Limit/Remaining/Reset` headers and `429` with `Retry-After` on breach.
+- The IP key depends on `req.ip`, which depends in turn on how many proxy hops are trusted (`TRUSTED_PROXY_HOPS`). Trusting more hops than the deployment actually has lets a client forge `X-Forwarded-For` and choose its own bucket, so the value is configuration rather than a constant and `0` disables the trust entirely. **The general limiter does not key on IP at all**, so a forwarded-for value cannot influence it.
+
+### 5c. Both limiters fail open
+
+**When Redis is unavailable the limiter fails open**, logs at `warn` on every degraded call, and flags the verdict. Redis is an accelerator and never a system of record (`DATABASE.md` §1): refusing every request because a cache is down converts a degraded dependency into a total outage, and a limiter is a throttle rather than the authentication or authorization control — credentials are still verified, authorization still runs, and every failure is still audited. This is a tested decision, not the client's default error behaviour.
 
 ## 6. Webhooks — inbound vs. outbound (do not conflate; full model `DATABASE.md` §12, `EVENTS.md` §§4c, 5a–5d)
 

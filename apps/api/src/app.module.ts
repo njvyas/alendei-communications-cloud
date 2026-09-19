@@ -18,6 +18,7 @@ import { HttpMetricsInterceptor } from './observability/http-metrics.interceptor
 import { LoggingModule } from './observability/logging.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { RbacModule } from './rbac/rbac.module';
+import { RateLimitModule } from './common/rate-limit/rate-limit.module';
 import { RedisModule } from './redis/redis.module';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { UsersModule } from './users/users.module';
@@ -44,6 +45,7 @@ import { SecretsModule } from './secrets/secrets.module';
     IdempotencyModule,
     AuthModule,
     RedisModule,
+    RateLimitModule,
     HealthModule,
     TenancyModule,
     RbacModule,

@@ -408,6 +408,20 @@ The phase's defining case is the one that found a defect. `audit_logs_select` ad
 - **Append-only and RLS premise** — `acc_app` `UPDATE` and `DELETE` on `audit_logs` both refused with `42501`; `audit_logs.relrowsecurity`, `acc_app.rolsuper` and `acc_app.rolbypassrls` asserted directly, so the isolation cases cannot pass for the wrong reason.
 - **List conventions** — invalid filters, sorts and cursors refused; a cursor refused when replayed under a different sort; every row walked exactly once newest-first; filters narrowing to the caller's own trail; a half-open `[from, to)` occurrence window.
 
+**General rate limiting (Phase 1B.6.4, `API.md` §5a).** `apps/api/test/rate-limit.sec-spec.ts` (19 cases).
+
+The first case is the one the rest depend on: **the limiter actually engages**. A guard registered before `AuthGuard` would see no principal and silently limit nothing, and every isolation case would then pass for the wrong reason — so the suite opens by asserting that two real requests decrement a real counter.
+
+- **Isolation on all three key dimensions**, driven with real authenticated identities rather than by computing keys: organization A exhausting its bucket leaves B untouched; two principals in one organization hold independent budgets; `read` and `write` are separate buckets for the same principal.
+- **Bucket identity cannot be chosen by the caller** — `X-Tenant-ID`, `X-Organization-ID`, `X-Principal-ID`, `X-RateLimit-*` request headers, `X-Endpoint-Class`, a bypass header and query identifiers are each sent in turn while the counter is watched descending in the *same* bucket, and the server's own header values come back rather than the ones supplied. Forging a class onto a write route is tested separately.
+- **`X-Forwarded-For` cannot move the bucket**, because the general limiter does not key on IP — the assertion is the absence of a dimension.
+- **Headers and exhaustion** — the three headers on every response, `X-RateLimit-Reset` as seconds rather than a timestamp, and on exhaustion a `429` carrying `Retry-After`, the frozen error envelope, `retryable: true` and `details.retryAfterSeconds`, with `Retry-After` and `X-RateLimit-Reset` asserted equal. Exhausting one bucket leaves the other organization and the other class serving.
+- **API keys** are bucketed by key id, proven by spending the creator's budget and observing the key's untouched.
+- **The authentication limiter is untouched and independent** — a public login creates no general bucket, `AuthRateLimitService` still refuses after its own threshold, and one login followed by one authenticated request creates exactly one general bucket with a count of one. No request is charged twice.
+- **Fail open** — with the Redis pipeline made to reject, the API keeps serving and reports the full limit; it recovers unaided.
+- **Metrics carry no tenant identity** — `/metrics` is scraped after traffic from two organizations and asserted to contain neither organization id, neither user id, nor an `org_id=`/`tenant_id=`/`principal_id=` label.
+- **Key shape, discovered from Redis rather than reconstructed**, so the assertion cannot silently stop matching: the organization-scoped key carries tenant, principal and class under the deployment prefix, and a `@NoTenantContext()` route's key is platform-scoped, names no organization, and is a *different* bucket from the same principal's tenant traffic.
+
 **Forged ancestry (ADR-005 D-5).** Asserted as the strong property, not the weak one: it is not enough that bad input is rejected: the *authoritative* chain must decide. Each case runs under a tenant context that can see the target, so visibility is not the variable — a grant naming another organization cannot reach a workspace whose real parent is a different organization; the same for a grant naming another reseller, and for one naming another workspace as a team's parent; and a principal holding grants that between them name a wholly false chain still reaches nothing. Every case carries a positive control on the claimant's own rows, so a denial cannot be mistaken for a broken query.
 
 | # | Case | Expected |
@@ -453,6 +467,11 @@ The phase's defining case is the one that found a defect. `audit_logs_select` ad
 | 48 | Audit list membership vs. detail access, all five scope levels | they agree — listed ⟺ readable |
 | 49 | Genuine reseller-scope caller vs. its own reseller's audit rows | visible and readable; another reseller's is not |
 | 50 | API-key principal vs. reseller-scoped audit rows | never visible — a key is never bound above an organization |
+| 51 | Rate-limit bucket identity vs. caller-supplied headers, query and body | unchanged — the counter keeps descending in the same bucket |
+| 52 | Rate-limit isolation across organization, principal and endpoint class | three independent buckets |
+| 53 | Rate-limit exhaustion | `429`, `Retry-After`, frozen envelope; other buckets unaffected |
+| 54 | Redis outage vs. the limiter | fails open; the API keeps serving |
+| 55 | Authentication limiter vs. the general limiter | independent; no request charged to both |
 
 **Mutation sensitivity.** Each mutation is applied, the suite is run, the named tests must fail, and the implementation is restored:
 
@@ -566,6 +585,14 @@ The phase's defining case is the one that found a defect. `audit_logs_select` ad
 | Reseller visibility derived from `TenantContext.resellerId` instead of held grants | **executed: 1 security test fails** — the precise defect, reintroduced deliberately: the session variable is derived from the selected organization's reseller and is not evidence of reseller-scope authority |
 | Authorization removed from the audit list | **executed: 16 security tests fail** |
 | The coherent-grant rule replaced by the flattened union, against the audit surface | **executed: 1 security test fails** |
+| **1B.6.4** — `org_id` removed from the rate-limit bucket key | **executed: 4 security tests fail** |
+| Principal removed from the bucket key | **executed: 5 security tests fail** |
+| Endpoint class removed from the bucket key | **executed: 4 security tests fail** |
+| The general limiter removed entirely | **executed: 19 security tests fail** |
+| Redis failure changed from fail-open to fail-closed | **executed: 1 security test fails** — the fail-open case, which is the only one that can see it |
+| A caller-supplied `X-Endpoint-Class` honoured as the bucket class | **executed: 1 security test fails** |
+| A caller-supplied `X-Organization-ID` honoured as the bucket organization | **executed: 1 security test fails** |
+| *(G)* A spoofed `X-Forwarded-For` trusted contrary to `TRUSTED_PROXY_HOPS` | **NOT APPLICABLE.** The general limiter does not derive bucket identity from IP, so there is no IP-derived value to corrupt; fabricating one would have meant adding an IP dimension purely to mutate it. A security test asserts directly that forwarded-for spoofing cannot change the bucket, and `TRUSTED_PROXY_HOPS` remains exercised by the authentication limiter, which does key on IP |
 | `scopeCovers` term dropped from `allows` | 4, 6, 8, 9 |
 | Permission term dropped from `allows` | 12 and every denial case |
 | `ScopeChainResolver` returns the request-supplied chain | 2, 4, 6 |

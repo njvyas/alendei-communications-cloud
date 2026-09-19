@@ -734,7 +734,55 @@ The precedent is already in the schema: `users.mfa_secret_ref` is documented as 
 
 The supported version-skew window for dedicated deployments, contractual RPO/RTO values, data-residency commitments, whether API keys should ever be reseller-scoped, and whether `EVENT_TOPIC_PREFIX` is wired or removed (`DEPLOYMENT.md` §0h, `EVENTS.md`). Each needs product input rather than an architectural guess.
 
+## 1j. ADR-010 — General rate limiting: two classes, one ceiling, deployment-wide
+
+**Status**: Accepted (Phase 1B.6.4). Implements `API.md` §5, which has specified this limiter since Phase 0 without it being built. Does not modify `AuthRateLimitService`.
+
+### Context
+
+Three things had to be settled before the limiter `API.md` §5 specifies could be built, and none of them was answered in the repository.
+
+### D-1 — Ownership: 1B.6.4, not 1B.10
+
+`API.md` §5 specified the limiter; `FRONTEND_API_CONTRACT.md` §23 assigned it to Phase 1B.10. Both could not be right, and the tiebreaker is that **1B.6's own exit criterion demanded it**: *"live, audited, rate-limited and IDOR-safe"*. That wording was narrowed by accident in `f3ef8fa` when the phase was restructured into increments (recorded in `ROADMAP.md`). Restoring the criterion makes 1B.6 incomplete without the limiter, so it belongs to 1B.6 — as 1B.6.4 — and the FAC row is corrected.
+
+### D-2 — Two endpoint classes, sharing one ceiling
+
+`API.md` §5 names `endpoint_class` as the third key term and **defines no taxonomy**. The configuration carries exactly one general limit pair, so no per-class *budget* is derivable from anything in the repository.
+
+| Option | Verdict |
+|---|---|
+| One class | **Rejected.** Makes `endpoint_class` degenerate and cannot deliver the isolation that is the point: a write flood would exhaust the read budget |
+| **`read` / `write`, split by HTTP method** | **Chosen.** Derived from the API's own shape rather than a product opinion, and the smallest split that isolates |
+| `read` / `write` / `admin` | **Rejected as invention.** Nothing defines which routes are "admin" or what ceiling they would get. Adding config for it was out of scope |
+
+Both classes draw on `RATE_LIMIT_DEFAULT_*`. **The split is isolation, not differentiation** — the same ceiling applied to two independent buckets. A route may override its class with `@RateLimit()`, a two-value literal union; no route needs it today, and the escape hatch exists so the first route whose cost does not match its verb can say so without changing the taxonomy.
+
+### D-3 — A fixed-window counter, and the documentation corrected to match
+
+`API.md` §5 called the mechanism a "token bucket". `AuthRateLimitService` has always implemented `INCR` + `EXPIRE NX` + `TTL`, which is a **fixed-window counter**. Rather than build a second algorithm to match prose, the prose is corrected and the existing mechanism reused.
+
+The known cost is stated rather than hidden: a caller can spend its budget at the end of one window and again at the start of the next, so the short-term peak can reach twice the limit. Acceptable for a throttle bounding sustained load, and identical to the property the authentication buckets already have. A true token bucket would need Lua or a non-atomic read-modify-write for a smoothness this control does not require.
+
+### D-4 — Limits are deployment-wide; tenant-configurable limits are future work
+
+`API.md` §5 says limits are "tenant-configurable (plan-based defaults, override per organization)". **They are not, and this phase does not make them so.** Every tenant on a deployment shares one ceiling from `RATE_LIMIT_DEFAULT_*`.
+
+Doing otherwise would have required a plan table, a per-organization override column or an entitlement model — all explicitly out of scope, and all decisions that belong with billing rather than with a throttle. The consequence is recorded plainly: a noisy tenant is bounded but not individually tunable, and no tenant can be granted a larger allowance without changing it for everyone. Per-class and per-tenant limits are future work.
+
+### Consequences
+
+- A global `RateLimitGuard` registered **after** `AuthGuard`, so the principal it keys on is already resolved. Import order in `AppModule` is load-bearing; the suite asserts the limiter actually engages, which is what would catch a regression there.
+- Bucket identity is entirely server-derived: `RateLimitSubject` exposes no field a caller could populate, and the guard reads only the request's method.
+- Requests with no principal pass through, which is what keeps `/auth/login`, `/auth/refresh`, `/health*` and `/metrics` out of the limiter without an exemption list.
+- An API key is bucketed by its own key id, not its creator's.
+- **Mutation G from the phase brief is structurally non-applicable**: the general limiter does not key on IP, so there is no forwarded-for-derived value to corrupt. A test asserts the absence directly instead.
+- `API.md` §5 rewritten, `FRONTEND_API_CONTRACT.md` §23 reassigned and rewritten, `SECURITY.md`, `TESTING.md` and `ROADMAP.md` updated.
+
 ## 3. Risks explicitly accepted by design (not oversights)
+
+**Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.
+
 
 **Three items deferred from Phase 1B.6.3, recorded rather than silently carried.** Each was found during the audit-read phase and each is genuinely future work; none is a live defect today.
 
