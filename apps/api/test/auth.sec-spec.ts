@@ -7,6 +7,7 @@
  * application over HTTP, because that is the surface an attacker reaches.
  */
 import { ERROR_CODES } from '@acc/contracts';
+import { schema } from '@acc/db';
 import { sql } from 'drizzle-orm';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
@@ -564,6 +565,110 @@ describe('Phase 1B.3 security', () => {
       // The rate limiter must not become an enumeration oracle either.
       const a = await login(`unknown-${uuidv7()}@example.test`, 'x');
       expect([401, 429]).toContain(a.status);
+    });
+  });
+
+  /**
+   * Gate B's "token-in-query rejection" (`ROADMAP.md` §4b, negative security).
+   *
+   * A credential in a query string leaks into proxy logs, access logs, browser
+   * history and `Referer` headers — which is the reason `API.md` §10 gives for
+   * the WebSocket ticket existing at all, and the reason `RBAC.md` §5a says a
+   * token is never in a URL.
+   *
+   * Today `AuthGuard` reads `request.headers.authorization` and nothing else, so
+   * a query token is not rejected so much as never looked at. That is the
+   * stronger position, and it is exactly why it needs a test: the property is
+   * invisible in the code — it is the *absence* of a fallback — so nothing would
+   * fail if someone later added `?? request.query.token` as a convenience for a
+   * client that could not set headers.
+   */
+  describe('credentials are never accepted from a URL', () => {
+    const QUERY_FORMS = [
+      'token',
+      'access_token',
+      'accessToken',
+      'authorization',
+      'auth',
+      'jwt',
+      'api_key',
+      'apiKey',
+      'bearer',
+    ];
+
+    it('refuses a valid token presented in any obvious query parameter', async () => {
+      // A genuinely valid token — the point is that the *channel* is refused,
+      // not that the credential is bad.
+      const valid = await tokenFor(orgA.email);
+
+      // Positive control: the same token in the header is accepted, so a
+      // refusal below cannot be a broken fixture.
+      await request(h.app.getHttpServer())
+        .get(url('/auth/me'))
+        .set('authorization', `Bearer ${valid}`)
+        .expect(200);
+
+      for (const param of QUERY_FORMS) {
+        for (const value of [valid, `Bearer ${valid}`]) {
+          const res = await request(h.app.getHttpServer()).get(
+            url(`/auth/me?${param}=${encodeURIComponent(value)}`),
+          );
+          expect(res.status).toBe(401);
+          expect(res.body.error.code).toBe(ERROR_CODES.AUTH_CREDENTIAL_REQUIRED);
+        }
+      }
+    });
+
+    it('refuses a query credential on every authenticated entry point', async () => {
+      // Swept across the surfaces where a query-token fallback could plausibly
+      // be introduced for convenience — a list, a detail, a mutation and the
+      // ticket endpoint whose whole existence is about keeping tokens out of
+      // URLs.
+      const valid = await tokenFor(orgA.email);
+      const paths = ['/users', '/roles', '/api-keys', '/audit-logs', '/tenants/workspaces'];
+
+      for (const path of paths) {
+        const res = await request(h.app.getHttpServer()).get(
+          url(`${path}?access_token=${encodeURIComponent(valid)}`),
+        );
+        expect(res.status).toBe(401);
+      }
+
+      const post = await request(h.app.getHttpServer()).post(
+        url(`/ws/ticket?access_token=${encodeURIComponent(valid)}`),
+      );
+      expect(post.status).toBe(401);
+    });
+
+    it('refuses an API key presented in a query parameter', async () => {
+      const hasher = h.app.get(CredentialService);
+      const secret = `secret-${uuidv7()}`;
+      const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+      await h.admin.insert(schema.apiKeys).values({
+        orgId: orgA.orgId,
+        name: `qtok-${prefix}`,
+        keyPrefix: prefix,
+        keyHash: await hasher.hash(secret),
+        createdBy: orgA.userId,
+        scopes: ['workspaces.read'],
+      });
+      const credential = `${prefix}.${secret}`;
+
+      // Header: accepted. Query: not a credential channel at all.
+      await request(h.app.getHttpServer())
+        .get(url('/auth/me'))
+        .set('authorization', `Bearer ${credential}`)
+        .expect(200);
+
+      for (const param of ['api_key', 'apiKey', 'access_token', 'token']) {
+        const res = await request(h.app.getHttpServer()).get(
+          url(`/auth/me?${param}=${encodeURIComponent(credential)}`),
+        );
+        expect(res.status).toBe(401);
+      }
+
+      await purgeAudit(h.admin, sql`true`);
+      await h.admin.execute(sql`DELETE FROM api_keys WHERE key_prefix = ${prefix}`);
     });
   });
 });

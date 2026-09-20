@@ -408,6 +408,18 @@ The phase's defining case is the one that found a defect. `audit_logs_select` ad
 - **Append-only and RLS premise** — `acc_app` `UPDATE` and `DELETE` on `audit_logs` both refused with `42501`; `audit_logs.relrowsecurity`, `acc_app.rolsuper` and `acc_app.rolbypassrls` asserted directly, so the isolation cases cannot pass for the wrong reason.
 - **List conventions** — invalid filters, sorts and cursors refused; a cursor refused when replayed under a different sort; every row walked exactly once newest-first; filters narrowing to the caller's own trail; a half-open `[from, to)` occurrence window.
 
+**Credentials are never accepted from a URL (Phase 1B.7 prep, `SECURITY.md` §1).** Three cases in `apps/api/test/auth.sec-spec.ts`.
+
+This property is invisible in the source: it is the *absence* of a fallback. Nothing in the suite would have failed if someone had later written `?? request.query.token` into `AuthGuard`, and a query-string credential is copied into proxy logs, access logs, browser history and `Referer` headers — so it is asserted directly. A **genuinely valid** token is minted and replayed through nine query spellings (`token`, `access_token`, `accessToken`, `authorization`, `auth`, `jwt`, `api_key`, `apiKey`, `bearer`) in both raw and `Bearer `-prefixed form, against `/users`, `/roles`, `/api-keys`, `/audit-logs`, `/tenants/workspaces` and `POST /ws/ticket`; a real API key gets the same treatment. Each must be `401`, with a header positive control in the same test proving the credential itself was good — otherwise every case would pass for the wrong reason. Mutation-verified: adding an `access_token` query fallback to `AuthGuard` fails three tests.
+
+**WebSocket ticket issuance (Phase 1B.7 prep, `API.md` §10b).** `apps/api/test/ws-ticket.sec-spec.ts` (14 cases). Issuance only — there is no gateway and no consumption path to test.
+
+- **The credential** — the plaintext is returned exactly once, the row stores only its SHA-256 (asserted by recomputing the digest and matching `/^[0-9a-f]{64}$/`), and the response projection is asserted to be exactly six keys, so a hash field could not be added unnoticed.
+- **Scope is computed, never requested** — the endpoint takes no body, and scope-escalation attempts through body, query and header each yield the caller's own scope, with zero rows visible for the other organization. A workspace-pinned context yields the workspace topic and is asserted **not** to contain the organization topic.
+- **Binding** — user, session and tenancy come from the resolved principal; a forged organization header is `403 TENANCY_CONTEXT_MISMATCH`; deleting the session cascades the ticket away; an API-key principal is refused `403`, because the row has no user to bind to.
+- **Single use and lifetime** — `consumed_at` starts null, two issues mint distinct tickets, a duplicate hash insert is rejected by the unique index, and the TTL is ≤ 300s with `expiresAt > issuedAt`.
+- **Audit and isolation** — `ws_ticket.issued` is written and carries neither the ticket nor its hash; cross-tenant rows are invisible under RLS; unauthenticated issuance is `401` and writes no row.
+
 **General rate limiting (Phase 1B.6.4, `API.md` §5a).** `apps/api/test/rate-limit.sec-spec.ts` (19 cases).
 
 The first case is the one the rest depend on: **the limiter actually engages**. A guard registered before `AuthGuard` would see no principal and silently limit nothing, and every isolation case would then pass for the wrong reason — so the suite opens by asserting that two real requests decrement a real counter.
@@ -468,6 +480,11 @@ The first case is the one the rest depend on: **the limiter actually engages**. 
 | 49 | Genuine reseller-scope caller vs. its own reseller's audit rows | visible and readable; another reseller's is not |
 | 50 | API-key principal vs. reseller-scoped audit rows | never visible — a key is never bound above an organization |
 | 51 | Rate-limit bucket identity vs. caller-supplied headers, query and body | unchanged — the counter keeps descending in the same bucket |
+| 56 | A valid access token supplied as `?token=` / `?access_token=` / seven other query spellings | `401` — no query parameter is ever consulted for credentials |
+| 57 | A valid API key supplied as a query parameter | `401`, on every route tested including `POST /ws/ticket` |
+| 58 | A WebSocket ticket in the issuing response vs. the stored row | the row holds only SHA-256; the plaintext is returned once and is nowhere else |
+| 59 | A caller naming a topic, organization or workspace when requesting a ticket | ignored — the endpoint takes no body; the scope is the caller's own |
+| 60 | A workspace-pinned user's ticket scope | the workspace topic **only**; it does not carry the organization topic |
 | 52 | Rate-limit isolation across organization, principal and endpoint class | three independent buckets |
 | 53 | Rate-limit exhaustion | `429`, `Retry-After`, frozen envelope; other buckets unaffected |
 | 54 | Redis outage vs. the limiter | fails open; the API keeps serving |
@@ -585,6 +602,7 @@ The first case is the one the rest depend on: **the limiter actually engages**. 
 | Reseller visibility derived from `TenantContext.resellerId` instead of held grants | **executed: 1 security test fails** — the precise defect, reintroduced deliberately: the session variable is derived from the selected organization's reseller and is not evidence of reseller-scope authority |
 | Authorization removed from the audit list | **executed: 16 security tests fail** |
 | The coherent-grant rule replaced by the flattened union, against the audit surface | **executed: 1 security test fails** |
+| **1B.7 prep** — an `?access_token=` query fallback added to `AuthGuard` | **executed: 3 security tests fail** — the property is the absence of the fallback, so this is the only way to prove the cases are not vacuous |
 | **1B.6.4** — `org_id` removed from the rate-limit bucket key | **executed: 4 security tests fail** |
 | Principal removed from the bucket key | **executed: 5 security tests fail** |
 | Endpoint class removed from the bucket key | **executed: 4 security tests fail** |

@@ -657,6 +657,38 @@ Real-time channels (inbox live updates, campaign progress, provider health dashb
 
 The server never pushes data the connection's bound tenant context isn't authorized to see, and a connection can never widen its own scope after establishment.
 
+### 10b. `POST /ws/ticket` — the implemented contract (Phase 1B.7 prep)
+
+Issuance only. Steps 2 and 3 above do not exist yet: there is no socket gateway and no consumption path, so a ticket minted today expires unused. It ships ahead of the gateway so that nothing later has to negotiate its credential model under deadline.
+
+```jsonc
+POST /api/v1/ws/ticket        // no request body of any kind
+201 Created
+{ "data": {
+    "id": "uuid",
+    "ticket": "<opaque base64url, 32 random bytes>",
+    "expiresAt": "ISO-8601",
+    "scope": ["org:<uuid>"],
+    "orgId": "uuid",
+    "workspaceId": "uuid|null" } }
+```
+
+| Property | How it is obtained |
+|---|---|
+| Bound to the caller | `user_id` and `session_id` come from the authenticated principal; a session `DELETE` cascades the ticket away |
+| Bound to authoritative tenancy | `org_id`/`workspace_id` come from the resolved `TenantContext` (§5), never from the request |
+| Scope is computed, never requested | The endpoint **accepts no body**, so there is no field through which a caller could name a topic, an organization or a workspace. A workspace-pinned context yields `org:{org}:workspace:{ws}` **and not** `org:{org}` — the narrower prefix exclusively, so a ticket cannot admit what its holder cannot reach over HTTP |
+| Hashed at rest | Only SHA-256 of the ticket is stored (`ws_tickets.ticket_hash`, unique). The plaintext appears in the 201 body and nowhere else — not in the audit row, not in logs |
+| Short-lived | `expiresAt = issuedAt + auth.wsTicketTtlSeconds` (≤ 300s; ~30s by default), enforced further by the `ws_tickets_ttl_positive` check |
+| Single-use | Guaranteed structurally by the unique hash and `consumed_at`; the consuming half is what is deferred |
+| Audited | `ws_ticket.issued`, written inside the issuing transaction, recording the scope and the session id — never the ticket or its hash |
+
+Errors: `400 TENANCY_CONTEXT_REQUIRED` when the principal has no organization context (send `X-Acc-Organization`); `403 AUTHZ_PERMISSION_DENIED` for an **API-key** principal, because `ws_tickets.user_id` is `NOT NULL` and a key has no user to bind to — a schema consequence, not a policy choice; `403 TENANCY_CONTEXT_MISMATCH` for an organization header the caller has no grant in.
+
+No `Idempotency-Key`: the route is not in the §4 list, and a replayed snapshot of a one-time credential is precisely the hazard ADR-008 exists to prevent. Two calls simply mint two tickets, which is correct and cheap. Rate-limited as an ordinary authenticated `write` (§23).
+
+Authorization posture: `@AuthorizationExempt` — the subject of the route is the authenticated principal itself, so there is no target resource to check (`§6n` case 30 allow-lists `WsTicketController` alongside `AuthController` for exactly this reason).
+
 ### 10a. Scope enforcement on a WebSocket connection
 
 The socket performs no scope resolution of its own — it inherits a decision already made over an authenticated HTTP call (`TENANCY.md` §4b). Four properties, each independently testable:

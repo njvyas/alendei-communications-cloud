@@ -149,6 +149,7 @@ describe('§6n case 30 — route authorization coverage', () => {
     expect(keys).toContain('POST /api/v1/api-keys/:id/revoke');
     expect(keys).toContain('GET /api/v1/audit-logs');
     expect(keys).toContain('GET /api/v1/audit-logs/:id');
+    expect(keys).toContain('POST /api/v1/ws/ticket');
     expect(keys).toContain('GET /api/v1/auth/me/authorization');
     expect(keys).toContain('GET /health');
   });
@@ -179,11 +180,25 @@ describe('§6n case 30 — route authorization coverage', () => {
   });
 
   it('every exemption records a reason', () => {
+    /**
+     * **Self-referential routes only**, and the allow-list is named rather than
+     * open so that adding a controller to it is a visible decision.
+     *
+     * The test is not "is this route about identity" — that is a judgement a
+     * future author could talk themselves into. It is "is the *subject* of this
+     * route the authenticated principal itself, such that there is no target
+     * resource to check". `AuthController` qualifies because `/auth/me*` and
+     * `/auth/sessions*` are about the caller. `WsTicketController` qualifies for
+     * the same reason and no other: the ticket it mints carries the caller's own
+     * resolved scope and confers nothing beyond it, and the authority a
+     * connection exercises is enforced at subscription time against that
+     * recorded scope. An exemption anywhere else is a scoped route that has
+     * quietly opted out.
+     */
+    const selfScopedControllers = new Set(['AuthController', 'WsTicketController']);
     for (const route of routes.filter((r) => r.exempt !== undefined)) {
       expect(route.exempt!.length).toBeGreaterThan(20);
-      // Identity endpoints only — an exemption anywhere else is a scoped route
-      // that has quietly opted out.
-      expect(route.controller).toBe('AuthController');
+      expect(selfScopedControllers.has(route.controller)).toBe(true);
     }
   });
 
@@ -229,7 +244,7 @@ describe('§6n case 30 — route authorization coverage', () => {
     const exempt = routes.filter((r) => r.exempt !== undefined);
     const open = routes.filter((r) => r.isPublic);
     expect(scoped.length).toBe(24);
-    expect(exempt.length).toBe(5);
+    expect(exempt.length).toBe(6);
     expect(open.length).toBe(6);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
 

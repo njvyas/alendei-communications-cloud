@@ -497,40 +497,41 @@ collection.
 
 ## 30. Frontend-specific API dependencies — CURRENT REALITY
 
-The **entire** implemented API surface at `6e84d7c`:
+The **entire** implemented API surface at `fa1142b`. This section is the inventory; §§30a–30g are the per-resource contracts.
 
-| Method | Path | Status |
+| Method | Path | Since |
 |---|---|---|
-| `POST` | `/api/v1/auth/login` | IMPLEMENTED |
-| `POST` | `/api/v1/auth/refresh` | IMPLEMENTED |
-| `POST` | `/api/v1/auth/logout` | IMPLEMENTED |
-| `GET` | `/api/v1/auth/me` | IMPLEMENTED |
-| `GET` | `/api/v1/auth/sessions` | IMPLEMENTED |
-| `DELETE` | `/api/v1/auth/sessions/:id` | IMPLEMENTED |
-| `GET` | `/api/v1/tenants/workspaces` | IMPLEMENTED (unpaginated) |
-| `GET` | `/api/v1/roles` | IMPLEMENTED, 1B.5.4 (unpaginated) |
-| `POST` | `/api/v1/roles` | IMPLEMENTED, 1B.5.4 |
-| `GET` | `/api/v1/roles/:id` | IMPLEMENTED, 1B.5.4 |
-| `PATCH` | `/api/v1/roles/:id` | IMPLEMENTED, 1B.5.4 |
-| `DELETE` | `/api/v1/roles/:id` | IMPLEMENTED, 1B.5.4 |
-| `GET` | `/api/v1/permissions` | IMPLEMENTED, 1B.5.4 (unpaginated) |
-| `GET` | `/api/v1/auth/me/authorization` | IMPLEMENTED, 1B.5.7 |
+| `POST` | `/api/v1/auth/login` | 1B.3 |
+| `POST` | `/api/v1/auth/refresh` | 1B.3 |
+| `POST` | `/api/v1/auth/logout` | 1B.3 |
+| `GET` | `/api/v1/auth/me` | 1B.3 |
+| `GET` | `/api/v1/auth/me/authorization` | 1B.5.7 (§30c) |
+| `GET` | `/api/v1/auth/sessions` | 1B.3 |
+| `DELETE` | `/api/v1/auth/sessions/:id` | 1B.3 |
+| `POST` | `/api/v1/ws/ticket` | 1B.7-prep (§30h) — **issuance only; no socket gateway exists** |
+| `GET` | `/api/v1/tenants/workspaces` | 1B.3 |
+| `GET` | `/api/v1/tenants/workspaces/:id` | 1B.3 |
+| `GET` `POST` | `/api/v1/users` | **1B.6.1 (§30d)** |
+| `GET` `PATCH` | `/api/v1/users/:id` | **1B.6.1 (§30d)** |
+| `POST` | `/api/v1/users/:id/disable` · `/reactivate` | **1B.6.1 (§30d)** |
+| `GET` `POST` | `/api/v1/roles` | 1B.5.4 |
+| `GET` `PATCH` `DELETE` | `/api/v1/roles/:id` | 1B.5.4 |
+| `GET` | `/api/v1/permissions` | 1B.5.4 |
+| `GET` `POST` | `/api/v1/role-assignments` | 1B.5.5 (§30b) |
+| `GET` `DELETE` | `/api/v1/role-assignments/:id` | 1B.5.5 (§30b) |
+| `GET` `POST` | `/api/v1/api-keys` | **1B.6.2 (§30e)** |
+| `GET` | `/api/v1/api-keys/:id` | **1B.6.2 (§30e)** |
+| `POST` | `/api/v1/api-keys/:id/revoke` | **1B.6.2 (§30e)** |
+| `GET` | `/api/v1/audit-logs` | **1B.6.3 (§30f)** |
+| `GET` | `/api/v1/audit-logs/:id` | **1B.6.3 (§30f)** |
+| `GET` | `/health`, `/health/live`, `/health/ready` | 1B.0 |
+| `GET` | `/metrics` | 1B.0 (Prometheus, not for UI) |
 
-All list endpoints above are **paginated from 1B.5.8** (§13) except
-`/auth/sessions` (§16a), and every response uses the §9 envelope.
-| `GET` | `/api/v1/role-assignments` | IMPLEMENTED, 1B.5.5 (unpaginated; 3 filters) |
-| `POST` | `/api/v1/role-assignments` | IMPLEMENTED, 1B.5.5 |
-| `GET` | `/api/v1/role-assignments/:id` | IMPLEMENTED, 1B.5.5 |
-| `DELETE` | `/api/v1/role-assignments/:id` | IMPLEMENTED, 1B.5.5 |
-| `GET` | `/api/v1/tenants/workspaces/:id` | IMPLEMENTED |
-| `GET` | `/health`, `/health/live`, `/health/ready` | IMPLEMENTED |
-| `GET` | `/metrics` | IMPLEMENTED (Prometheus, not for UI) |
+Every list endpoint above is paginated (§13) except `/auth/sessions` and `/permissions` (§16a), every response uses the §9 envelope, and every authenticated response carries `X-RateLimit-*` (§23).
 
-**Everything else listed in `API.md` §2 — `/users`,
-`/organizations`, `/resellers`, `/teams`, `/api-keys`, `/audit`,
-`/messages`, `/providers`, `/channels`, `/routing`, `/campaigns`, `/contacts`,
-`/templates`, `/billing`, `/wallets`, `/reports`, `/webhook-endpoints` — is
-PLANNED / NOT IMPLEMENTED.** `API.md` §2 is a target map, not an inventory.
+**Correction.** An earlier version of this section was pinned to commit `6e84d7c` and listed `/users`, `/api-keys` and `/audit` as "PLANNED / NOT IMPLEMENTED" — contradicting §§30d–30f, which document all three as implemented. All three shipped in 1B.6.1, 1B.6.2 and 1B.6.3 respectively. The audit route is `/audit-logs`, not `/audit`.
+
+**Still PLANNED / NOT IMPLEMENTED**, and listed in `API.md` §2 as a target map rather than an inventory: `/organizations`, `/resellers`, `/teams` (1B.8), `/messages`, `/providers`, `/channels`, `/routing`, `/campaigns`, `/contacts`, `/templates`, `/billing`, `/wallets`, `/reports`, `/webhook-endpoints`, and the WebSocket gateway itself.
 
 ### OpenAPI
 
@@ -1001,6 +1002,29 @@ What is decided (ADR-009), so the eventual contract will not contradict it:
 - **A hostname will never determine tenancy or authorization.** Arriving at `customer.example.com` or `portal.reseller.example` grants nothing. The authenticated principal remains the only source of tenant context, exactly as it is today (§4). Do not design a flow that assumes the host implies the tenant, and do not send a host-derived tenant identifier expecting the backend to honour it — it will not.
 
 Until the contract exists, treat branding as static application configuration on the frontend side.
+
+## 30h. WebSocket connection ticket — IMPLEMENTED, ISSUANCE ONLY (Phase 1B.7 prep)
+
+> **There is no WebSocket gateway.** A ticket can be minted and cannot yet be used: ticket consumption and the socket server are deferred (`DECISIONS.md` D15). Do not build a real-time feature against this yet. It exists now so the credential model is settled before anything depends on it.
+
+```jsonc
+POST /api/v1/ws/ticket        // no request body
+201
+{ "data": {
+    "id": "uuid",
+    "ticket": "<opaque, shown exactly once>",
+    "expiresAt": "ISO-8601",          // ~30 seconds out
+    "scope": ["org:<uuid>"],          // or ["org:<uuid>:workspace:<uuid>"]
+    "orgId": "uuid",
+    "workspaceId": "uuid|null" } }
+```
+
+- **The ticket is presented once and is unrecoverable.** Only its SHA-256 is stored; there is no read endpoint and no way to fetch it again. Mint a new one — they are cheap and expire in seconds.
+- **Never put it in a URL.** When the gateway arrives, the ticket goes in the connection's first frame or `Sec-WebSocket-Protocol`, never a query string — avoiding exactly that is why the ticket exists (`API.md` §10).
+- **You cannot request a scope.** The endpoint takes no body; the scope is computed from your resolved context. A workspace-pinned user receives the workspace topic and *not* the organization one.
+- **Sessions only.** An API key cannot obtain a ticket (`403`) — the row requires a user.
+- **Requires an organization context.** Without one, `400 TENANCY_CONTEXT_REQUIRED`; send `X-Acc-Organization` if you belong to several (§5).
+- Subject to the general rate limiter as an ordinary `write` (§23).
 
 ## 31. Related
 
