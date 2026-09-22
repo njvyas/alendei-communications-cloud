@@ -4,16 +4,29 @@ import { useSession } from '@/lib/session-store';
 import { StatusDot } from '@/components/ui/status-dot';
 
 /**
- * Shows whether the shell currently believes it has a session. It reflects
- * client state only — the server decides access on every request regardless of
- * what this displays.
+ * Visual indicator of client-side authentication status.
+ *
+ * This is presentation state only — the server makes authoritative authorization
+ * decisions on every single request.
  */
 export function SessionBadge() {
   const status = useSession((state) => state.status);
-  const principal = useSession((state) => state.principal);
+  const user = useSession((state) => state.user);
 
-  if (status === 'authenticated' && principal) {
-    return <StatusDot tone="ok" label={principal.actorType} />;
+  if (status === 'ready' && user) {
+    return <StatusDot tone="ok" label={user.actorType ?? 'authenticated'} />;
+  }
+
+  if (status === 'selecting_organization') {
+    return <StatusDot tone="warn" label="Select Org" />;
+  }
+
+  if (status === 'zero_organizations') {
+    return <StatusDot tone="bad" label="No Orgs" />;
+  }
+
+  if (status === 'authenticating') {
+    return <StatusDot tone="unknown" label="Authenticating…" />;
   }
 
   return <StatusDot tone="unknown" label="Not signed in" />;

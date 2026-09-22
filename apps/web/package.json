@@ -8,8 +8,9 @@
     "dev": "next dev --port 3000",
     "start": "next start --port 3000",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "clean": "rm -rf .next *.tsbuildinfo",
-    "test:unit": "echo \"@acc/web has no unit tests in Phase 1\" && exit 0"
+    "test": "tsx --test 'src/**/*.test.ts'",
+    "test:unit": "tsx --test 'src/**/*.test.ts'",
+    "test:security": "tsx --test 'src/**/*.sec.test.ts'"
   },
   "dependencies": {
     "@acc/contracts": "*",

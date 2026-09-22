@@ -2,27 +2,226 @@
 
 import { create } from 'zustand';
 
-import type { AuthPrincipal } from '@acc/contracts';
+import {
+  authApi,
+  invalidateSessionEpoch,
+  onAuthFailure,
+  registerOrgValidator,
+  setAccessToken,
+  setSelectedOrganization,
+  type EffectiveAuthorization,
+  type EffectiveGrant,
+  type UserIdentity,
+} from './api-client';
 
 /**
- * Client-side view of the authenticated session.
+ * Authentication and organization-context state.
  *
- * This is presentation state only — it decides what the shell renders, never
- * what the caller is allowed to do. Every authorization decision is made
- * server-side against the resolved principal (`RBAC.md` §2); anything here is
- * trivially editable by the user and is treated accordingly.
+ * Security Invariants:
+ * 1. IN-MEMORY ONLY: No persistence (no localStorage, sessionStorage, or cookies).
+ *    Access tokens and application-managed credentials are never persisted by JavaScript.
+ *    The refresh token remains exclusively in the backend-issued httpOnly cookie.
+ * 2. TENANT INTEGRITY: Active organization must always belong to `authorizedOrganizationIds`.
+ * 3. NO LEAKS: Tokens, passwords, and credentials are never stored in browser persistence or logged.
  */
-interface SessionState {
-  status: 'unknown' | 'authenticated' | 'anonymous';
-  principal: AuthPrincipal | null;
-  setPrincipal(principal: AuthPrincipal | null): void;
-  clear(): void;
+export type AuthStatus =
+  | 'idle'
+  | 'authenticating'
+  | 'unauthenticated'
+  | 'ready'
+  | 'selecting_organization'
+  | 'zero_organizations'
+  | 'error';
+
+export interface SessionState {
+  status: AuthStatus;
+  accessToken: string | null;
+  user: UserIdentity | null;
+  authorization: EffectiveAuthorization | null;
+  authorizedOrganizationIds: readonly string[];
+  selectedOrganizationId: string | null;
+  errorMessage: string | null;
+
+  setSession(params: {
+    accessToken: string;
+    user: UserIdentity;
+    authorization: EffectiveAuthorization;
+    selectedOrgId?: string | null;
+  }): void;
+
+  selectOrganization(orgId: string): void;
+  clearOrganization(): void;
+  clearSession(): void;
+  setStatus(status: AuthStatus, errorMessage?: string | null): void;
 }
 
-export const useSession = create<SessionState>((set) => ({
-  status: 'unknown',
-  principal: null,
-  setPrincipal: (principal) =>
-    set({ principal, status: principal ? 'authenticated' : 'anonymous' }),
-  clear: () => set({ principal: null, status: 'anonymous' }),
+export const useSession = create<SessionState>((set, get) => ({
+  status: 'idle',
+  accessToken: null,
+  user: null,
+  authorization: null,
+  authorizedOrganizationIds: [],
+  selectedOrganizationId: null,
+  errorMessage: null,
+
+  setSession: ({ accessToken, user, authorization, selectedOrgId = null }) => {
+    setAccessToken(accessToken);
+
+    const authorizedOrgs = user.authorizedOrganizationIds ?? [];
+    let nextStatus: AuthStatus;
+    let nextSelectedOrgId: string | null = null;
+
+    if (authorizedOrgs.length === 0) {
+      nextStatus = 'zero_organizations';
+      nextSelectedOrgId = null;
+    } else if (authorizedOrgs.length === 1) {
+      nextStatus = 'ready';
+      nextSelectedOrgId = authorizedOrgs[0]!;
+    } else {
+      // Multiple authorized organizations: require explicit selection unless a valid one is supplied
+      if (selectedOrgId && authorizedOrgs.includes(selectedOrgId)) {
+        nextStatus = 'ready';
+        nextSelectedOrgId = selectedOrgId;
+      } else {
+        nextStatus = 'selecting_organization';
+        nextSelectedOrgId = null;
+      }
+    }
+
+    // Update store state FIRST so orgValidator can see authorizedOrgs
+    set({
+      status: nextStatus,
+      accessToken,
+      user,
+      authorization,
+      authorizedOrganizationIds: authorizedOrgs,
+      selectedOrganizationId: nextSelectedOrgId,
+      errorMessage: null,
+    });
+
+    // Then update in-memory API client
+    setSelectedOrganization(nextSelectedOrgId);
+  },
+
+  selectOrganization: (orgId: string) => {
+    const { authorizedOrganizationIds } = get();
+
+    if (!authorizedOrganizationIds.includes(orgId)) {
+      setSelectedOrganization(null);
+      set({
+        selectedOrganizationId: null,
+        status: authorizedOrganizationIds.length > 0 ? 'selecting_organization' : 'zero_organizations',
+        errorMessage: `Cannot select unauthorized organization: ${orgId}`,
+      });
+      throw new Error(`Cannot select unauthorized organization: ${orgId}`);
+    }
+
+    setSelectedOrganization(orgId);
+    set({
+      selectedOrganizationId: orgId,
+      status: 'ready',
+      errorMessage: null,
+    });
+
+    // Re-verify authorization in background so UI reflects latest grants for the newly selected context
+    void authApi
+      .authorization()
+      .then((res) => {
+        if (get().selectedOrganizationId === orgId) {
+          set({ authorization: res.data });
+        }
+      })
+      .catch(() => {
+        // Keep current authorization if probe fails
+      });
+  },
+
+  clearOrganization: () => {
+    const { authorizedOrganizationIds } = get();
+    setSelectedOrganization(null);
+    set({
+      selectedOrganizationId: null,
+      status: authorizedOrganizationIds.length > 0 ? 'selecting_organization' : 'zero_organizations',
+    });
+  },
+
+  clearSession: () => {
+    invalidateSessionEpoch();
+    setAccessToken(null);
+    setSelectedOrganization(null);
+    set({
+      status: 'unauthenticated',
+      accessToken: null,
+      user: null,
+      authorization: null,
+      authorizedOrganizationIds: [],
+      selectedOrganizationId: null,
+      errorMessage: null,
+    });
+  },
+
+  setStatus: (status: AuthStatus, errorMessage: string | null = null) => {
+    set({ status, errorMessage });
+  },
 }));
+
+// Register validator with api-client so raw API calls cannot bypass authorizedOrganizationIds
+registerOrgValidator((orgId: string) => {
+  const { authorizedOrganizationIds } = useSession.getState();
+  return authorizedOrganizationIds.includes(orgId);
+});
+
+/**
+ * Resolves authoritative grants effective for the currently selected organization.
+ * Filters out grants belonging to other organizations while preserving platform grants.
+ */
+export function getActiveOrganizationGrants(): readonly EffectiveGrant[] {
+  const { authorization, selectedOrganizationId } = useSession.getState();
+  if (!authorization) return [];
+  if (!selectedOrganizationId) {
+    return authorization.grants.filter((g) => g.scopeType === 'platform');
+  }
+  return authorization.grants.filter(
+    (g) => g.scopeType === 'platform' || g.orgId === selectedOrganizationId,
+  );
+}
+
+/**
+ * Initializes the session on application startup via silent refresh.
+ * Transitions to 'unauthenticated' if no active session exists.
+ */
+export async function bootstrapSession(): Promise<AuthStatus> {
+  const store = useSession.getState();
+  if (store.status === 'authenticating' || store.status === 'ready') {
+    return store.status;
+  }
+
+  store.setStatus('authenticating');
+
+  try {
+    const refreshRes = await authApi.refresh();
+    const token = refreshRes.data?.accessToken;
+    if (!token) {
+      store.clearSession();
+      return 'unauthenticated';
+    }
+
+    const [meRes, authRes] = await Promise.all([authApi.me(), authApi.authorization()]);
+
+    store.setSession({
+      accessToken: token,
+      user: meRes.data,
+      authorization: authRes.data,
+    });
+
+    return useSession.getState().status;
+  } catch {
+    store.clearSession();
+    return 'unauthenticated';
+  }
+}
+
+// Automatically clear the session when the API client determines authentication has terminated
+onAuthFailure(() => {
+  useSession.getState().clearSession();
+});
