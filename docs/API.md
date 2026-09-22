@@ -31,7 +31,6 @@ All public and console APIs are served under `/api/v1`. Breaking changes ship as
 | `/wallets` | `billing` | Wallet balance, recharge, auto-recharge config |
 | `/resellers` | `resellers` | Reseller CRUD, markup config, branding |
 | `/reports` | cross-module read models | Delivery/cost/quality reporting |
-| `/audit` | `audit` | Audit log query (permissioned — `audit.read` within a tenant, `platform.audit.read` for platform-level records). Results are scope-filtered: a caller sees records at or below the scopes it holds, and platform-scoped records only with `platform.audit.read` (`DATABASE.md` §12) |
 | `/webhooks/{provider}` | `webhooks` | Inbound provider webhook receivers, per-provider sub-path (`ARCHITECTURE.md` §10a) |
 | `/webhook-endpoints` | `webhooks` | Customer-facing outbound webhook subscription CRUD (`ARCHITECTURE.md` §10b) |
 | `/webhook-deliveries` | `webhooks` | Outbound delivery status query + replay (`EVENTS.md` §5d) |
@@ -126,23 +125,23 @@ The mechanism is the *absence* of a token rather than the presence of one: nothi
 
 ### 3c. Role and grant administration (Phase 1B.5)
 
-**Implementation status.** **Roles** and **Permissions** ship in Phase 1B.5.4; **role assignments** ship in Phase 1B.5.5. All three are live. **Authorization introspection** is **Phase 1B.5.7 and NOT IMPLEMENTED** — specified here and marked, not built.
+**Implementation status.** **Roles** and **Permissions** ship in Phase 1B.5.4; **role assignments** ship in Phase 1B.5.5; **authorization introspection** (`GET /auth/me/authorization`) ships in Phase 1B.5.7. All four are live.
 
-Nine endpoints, deliberately small. Every mutation writes its audit row **in the same transaction** as the change (ADR-003 D-2); every target scope is checked through the shared evaluator against a coherent grant (§3a); every out-of-scope target is `404` without echo rather than `403`.
+All list endpoints in this section return the normalized envelope of §8 — `{data, page}` for a collection, `{data}` for a single resource — and obey §8b's per-endpoint filters and sorts. The unpaginated, named-key shapes described in earlier drafts of this section were superseded by Phase 1B.5.8.
+
+Eleven endpoints, deliberately small: five on `/roles`, one on `/permissions`, four on `/role-assignments`, and the self-only introspection route. Every mutation writes its audit row **in the same transaction** as the change (ADR-003 D-2); every target scope is checked through the shared evaluator against a coherent grant (§3a); every out-of-scope target is `404` without echo rather than `403`.
 
 **Roles** (module `rbac`) — **IMPLEMENTED, Phase 1B.5.4**
 
 | Method | Path | Permission | Target scope | Request | Response | Errors | Audit | Idempotency | Transaction |
 |---|---|---|---|---|---|---|---|---|---|
-| `GET` | `/roles` | `roles.read` | organization | — | `{roles:[{id,key,name,description,orgId,isSystemRole,allowedScopeTypes[],permissions[],createdAt,updatedAt}]}` — the organization's own roles plus the readable platform definitions | — | — | safe | one read-only tenant transaction |
+| `GET` | `/roles` | `roles.read` | organization | filters `isSystemRole?`, `key?`, plus `limit`/`cursor`/`sort` (§8) | `{data:[{id,key,name,description,orgId,isSystemRole,allowedScopeTypes[],permissions[],createdAt,updatedAt}], page}` — the organization's own roles plus the readable platform definitions | `400` bad cursor, sort or unknown parameter | — | safe | one read-only tenant transaction |
 | `GET` | `/roles/:id` | `roles.read` | organization | — | `200` role | `404` unknown or out-of-scope, with no echo of the id | — | safe | one read-only tenant transaction |
-| `POST` | `/roles` | `roles.create` | organization | `{key,name,description?,allowedScopeTypes[],permissions[]}` | `201` role | `409` duplicate key; `403` a permission outside the actor's effective grant authority, a `platform.*` permission, or an `allowedScopeTypes` outside organization/workspace/team; `400` malformed key or unknown permission | `role.created` | not idempotent; duplicate key is `409`, never a silent success | one transaction: role + `role_permissions` + audit |
+| `POST` | `/roles` | `roles.create` | organization | `{key,name,description?,allowedScopeTypes[],permissions[]}` | `201` role | `409` duplicate key; `403` a permission outside the actor's effective grant authority, or a `platform.*` permission; `400` malformed key, unknown permission, empty `allowedScopeTypes`, or an `allowedScopeTypes` outside organization/workspace/team | `role.created` | **`Idempotency-Key` supported** (§4); without one, a duplicate key is `409`, never a silent success | one transaction: role + `role_permissions` + audit |
 | `PATCH` | `/roles/:id` | `roles.update` | the role's organization | `{name?,description?,allowedScopeTypes?,permissions?}` | `200` role | `404` unknown/out-of-scope; `403` as above, **and `403` for any system or platform role** | `role.updated` with full `before`/`after` | naturally idempotent | one transaction |
 | `DELETE` | `/roles/:id` | `roles.delete` | the role's organization | — | `204` | `404` unknown/out-of-scope; **`409` while any grant references it** (and `ON DELETE RESTRICT` beneath it); `403` system or platform role | `role.deleted` with `before` | `404` if already gone | one transaction |
 
-`allowedScopeTypes` is persisted from Phase 1B.5.4 and returned on every role. It is **not enforced at grant time until Phase 1B.5.5** (`RBAC.md` §7) — a client must not infer that a grant outside it is currently refused.
-
-These endpoints are **unpaginated, unfiltered and unsorted**, matching the conventions that exist today. Normalizing them onto a shared list convention is Phase 1B.5.8's; a local convention invented here is exactly the churn that phase exists to prevent.
+`allowedScopeTypes` is persisted from Phase 1B.5.4, returned on every role, and **enforced at grant time from Phase 1B.5.5** (`RBAC.md` §7): a grant naming a scope level the role does not admit is refused `422 AUTHZ_SCOPE_TYPE_NOT_ADMITTED`, with `details` carrying `roleKey`, `allowedScopeTypes` and `requested`. A client may present it as an active constraint.
 
 `permissions` is a **complete replacement set**, not a delta. That is what lets the audit row describe the whole role rather than one edit, and it removes the add/remove endpoint pair that would otherwise need to stay consistent with each other.
 
@@ -150,13 +149,13 @@ These endpoints are **unpaginated, unfiltered and unsorted**, matching the conve
 
 | Method | Path | Permission | Target scope | Response | Notes |
 |---|---|---|---|---|---|
-| `GET` | `/permissions` | `permissions.read` | organization | `{permissions:[{key,domain,action,description}]}` | The catalogue is system-defined and read-only. There is no permission CRUD |
+| `GET` | `/permissions` | `permissions.read` | organization | `{data:[{key,domain,action,description}], page}` | The catalogue is system-defined and read-only. There is no permission CRUD. Filter `domain?`; sorts `key`, `domain`, default `key` (§8b) |
 
 **Role assignments** (module `rbac`) — **IMPLEMENTED, Phase 1B.5.5**
 
 | Method | Path | Permission | Target scope | Request | Response | Errors | Audit | Idempotency | Transaction |
 |---|---|---|---|---|---|---|---|---|---|
-| `GET` | `/role-assignments` | `role_assignments.read` | organization | query `userId?`, `scopeType?`, `scopeId?` | `{assignments:[{id,userId,roleId,roleKey,orgId,scopeType,scopeId,grantedBy,createdAt}]}` | — | — | safe | one read-only tenant transaction |
+| `GET` | `/role-assignments` | `role_assignments.read` | organization | filters `userId?`, `scopeType?`, `scopeId?`, plus `limit`/`cursor`/`sort` (§8) | `{data:[{id,userId,roleId,roleKey,orgId,scopeType,scopeId,grantedBy,createdAt}], page}` | `400` bad cursor, sort or unknown parameter | — | safe | one read-only tenant transaction |
 | `GET` | `/role-assignments/:id` | `role_assignments.read` | organization | — | `200` assignment | `404` unknown or out-of-scope, with no echo of the id | — | safe | one read-only tenant transaction |
 | `POST` | `/role-assignments` | `role_assignments.grant` | **the scope being granted at** | `{userId,roleId,scopeType,scopeId}` | `201` assignment | `404` scope or role out of reach (never confirmed to exist), or target user unreachable; `403 AUTHZ_SCOPE_DENIED` scope outside the actor's own scope set; `403 AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION` a permission outside its effective grant authority at that scope, naming the offending keys; `403 AUTHZ_PLATFORM_ROLE_REQUIRED` a platform role; `422 AUTHZ_SCOPE_TYPE_NOT_ADMITTED` scope type not admitted by the role; `409` duplicate, or a disabled target user | `user_role.granted` at the grant's scope | duplicate is `409`, decided by the unique index rather than by a check-then-insert | one transaction: guards → insert → audit |
 | `DELETE` | `/role-assignments/:id` | `role_assignments.revoke` | the grant's scope, read from the stored row | — | `204` | `404` unknown, out-of-scope or already gone; `403` if the actor does not cover the grant's own scope; **`409 AUTHZ_LAST_PLATFORM_ADMIN` if it would remove the last active platform administrator** (Phase 1B.5.6) | `user_role.revoked` | `404` if already gone; two concurrent revocations yield one `204` and one `404` | one transaction: authorize → conditional delete → audit |
@@ -169,7 +168,7 @@ These endpoints are **unpaginated, unfiltered and unsorted**, matching the conve
 
 **Query cost is constant per request**, independent of how many permissions the role carries: the scope chain is resolved once per check and the evaluator then decides in memory. `GET` list and `GET` detail are 2 queries, `DELETE` is 4, `POST` is 7 — plus the six `SET LOCAL` statements every tenant transaction issues. There is no N+1.
 
-These endpoints are **unpaginated** and carry only the three filters named above; the list conventions are Phase 1B.5.8's.
+These endpoints carry the three filters named above and the shared `limit`/`cursor`/`sort` parameters; sorts are `createdAt` and `scopeType`, default `-createdAt` (§8b).
 
 **Authorization introspection** — **IMPLEMENTED, Phase 1B.5.7**
 

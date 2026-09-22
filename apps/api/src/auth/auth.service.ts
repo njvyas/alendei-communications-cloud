@@ -315,9 +315,15 @@ export class AuthService {
    * Revokes the presenting session only.
    *
    * Phase 1B.3 deliberately implements *this session* logout, not "sign out
-   * everywhere" — that is `DELETE /auth/sessions`, a separate, explicit action.
-   * Conflating them would mean a user closing one browser tab silently killing
-   * their other devices.
+   * everywhere". Conflating them would mean a user closing one browser tab
+   * silently killing their other devices.
+   *
+   * There is no bulk "sign out everywhere" route. What exists is
+   * `DELETE /auth/sessions/:id`, which revokes **one** of the caller's own
+   * sessions after checking ownership against the authenticated user id — so a
+   * console offering "sign out my other devices" drives it from
+   * `GET /auth/sessions` one session at a time, and each revocation gets its own
+   * audit row.
    */
   async logout(principal: AuthPrincipal, meta: RequestMeta): Promise<void> {
     if (!principal.sessionId || !principal.userId) return;

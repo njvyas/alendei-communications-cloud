@@ -101,12 +101,30 @@ health, metrics) are open.
 
 ## 5. Organization selection — IMPLEMENTED
 
-- `/auth/me` returns `authorizedOrganizationIds`.
-- One organization → selected automatically.
+- `/auth/me` returns `authorizedOrganizationIds`. **This is the authoritative list of
+  organizations the frontend may offer**, and the only one — see §7.
+- One organization → selected automatically by the backend; the header is optional.
 - More than one → the request **must** carry `X-Acc-Organization: <orgId>`; without it the
   request is refused with `TENANCY_CONTEXT_REQUIRED`
   (`apps/api/src/auth/scope-resolver.service.ts:193`).
 - A header naming an organization the principal does not hold is refused, not ignored.
+- **Zero organizations in scope** → no organization is resolved, and every tenant-scoped
+  operation answers `400 TENANCY_CONTEXT_REQUIRED`. This is reachable for a real user —
+  one created and then stripped of their only grant — so a console should render an
+  explicit "no organization" state rather than an error toast on every screen.
+- **The header is ignored, not rejected, on identity routes.** `/auth/me`,
+  `/auth/me/authorization`, `/auth/logout` and `/auth/sessions*` are `@NoTenantContext()`:
+  they resolve no organization at all, so sending `X-Acc-Organization` to them changes
+  nothing and produces no error. Sending it is harmless; expecting it to have an effect
+  there is a bug.
+
+**The frontend owns the selected-organization state.** The backend has no notion of a
+"current" organization that persists between requests — selection is per-request, carried
+by the header. So the console keeps its own selected organization (in memory, or in
+`localStorage` keyed by user id), validates it against `authorizedOrganizationIds` on every
+`/auth/me`, and attaches it as `X-Acc-Organization` to every tenant-scoped request. If the
+stored value is no longer in `authorizedOrganizationIds` — a grant was revoked between
+sessions — discard it and re-prompt rather than sending it and taking a `403`.
 
 ## 6. Workspace selection — NOT IMPLEMENTED
 
@@ -124,7 +142,7 @@ has no backend mechanism today. Deciding whether one is needed is a gate item.
   "authMethod": "session",
   "userId": "uuid", "apiKeyId": null, "sessionId": "uuid",
   "authenticatedAt": "ISO-8601",
-  "tenant": { "orgId": "uuid|null", "workspaceId": "uuid|null",
+  "tenant": { "orgId": null, "workspaceId": null,
               "resellerId": "uuid|null", "isPlatformAdmin": false },
   "authorizedOrganizationIds": ["uuid"],
   "roles": [{ "roleKey": "...", "scopeType": "...", "scopeId": "...|null", "orgId": "...|null" }],
@@ -134,6 +152,24 @@ has no backend mechanism today. Deciding whether one is needed is a gate item.
 
 No credential material of any kind appears here — no hashes, no tokens, no secret refs.
 
+**`tenant.orgId` is always `null` here, and `tenant.workspaceId` with it.** This is the
+single most misreadable field on the endpoint, so it is stated plainly: `/auth/me` is a
+`@NoTenantContext()` identity route (`apps/api/src/auth/auth.controller.ts`). It answers
+*who the caller is*, not *where this request acts*, so `AuthGuard` deliberately skips
+organization selection for it and `ScopeResolver` is never asked to resolve one. The field
+is `null` even for a user with exactly one organization, where a tenant-scoped request
+would have selected that organization implicitly.
+
+**Do not derive the active organization from `tenant.orgId`.** Use
+`authorizedOrganizationIds` (§5) — it is the list of organizations the principal may act
+in, derived from grants on every request, and it is what an organization picker binds to.
+`tenant.resellerId` and `tenant.isPlatformAdmin` *are* populated here, because neither
+depends on a selected organization.
+
+A tenant-scoped endpoint's own response is where a resolved organization appears — for
+example `orgId` on a role assignment or an audit record. There is no endpoint that echoes
+back "the organization this request resolved to" as such.
+
 ## 8. Permissions — IMPLEMENTED
 
 The catalogue is `packages/contracts/src/permissions.ts` (dotted `resource.action` keys,
@@ -141,9 +177,15 @@ e.g. `workspaces.read`, `roles.create`, `platform.audit.read`), and
 `GET /api/v1/permissions` returns it from Phase 1B.5.4:
 
 ```jsonc
-{ "permissions": [{ "key": "workspaces.read", "domain": "workspaces",
-                    "action": "read", "description": null }] }
+{ "data": [{ "key": "workspaces.read", "domain": "workspaces",
+             "action": "read", "description": null }],
+  "page": { "nextCursor": "eyJ…|null", "hasMore": false, "limit": 25 } }
 ```
+
+It is an ordinary normalized collection (§9) and obeys the ordinary list conventions:
+paginated by cursor (§13), filterable by `domain`, sortable by `key` or `domain` with a
+default of `key` (§16a). The catalogue is small, but it is **not** exempt from paging —
+read it with the same loop as any other list and do not assume one page holds it.
 
 Requires `permissions.read` at the caller's organization. Read-only and
 system-defined — there is no permission CRUD and none is planned.
@@ -194,10 +236,9 @@ Every thrown value is normalised by `AllExceptionsFilter`
   never disclosed; an unexpected failure is always `INTERNAL_ERROR` /
   `"An unexpected error occurred"`.
 
-> **Known documentation defect:** `API.md` §7 renders this field as `correlation_id`
-> (snake_case). The implementation and the `ApiErrorResponse` type both use
-> **`correlationId`** (camelCase). The implementation is correct; `API.md` is to be
-> corrected. The frontend must use `correlationId`.
+The field is **`correlationId`** (camelCase), as everywhere else in this API. `API.md` §7
+and the `ApiErrorResponse` type agree; an earlier snake_case rendering in `API.md` has
+been corrected and no longer needs working around.
 
 ## 11. HTTP status conventions — IMPLEMENTED
 
@@ -260,9 +301,14 @@ without parsing. Allowed fields are per endpoint (§16a); anything else is
 `400 VALIDATION_FAILED` with `rule: "SORT_NOT_ALLOWED"` and the allowed keys in
 the message.
 
-**`createdAt` orders by the record's UUIDv7 id**, which is chronological by
-construction. Sorting by `createdAt` and by insertion order are the same thing
-here; the ids are also exactly what cursors carry.
+**`createdAt` orders by the record's UUIDv7 id**, not by the `created_at` column,
+and that is a correctness requirement rather than an optimisation: a cursor is
+text, and a `timestamptz` round-tripped through JavaScript loses the database's
+sub-millisecond precision, so the boundary would land *before* the row it was
+minted from and repeat the same page forever. A UUIDv7 is chronological by
+construction and round-trips exactly. Sorting by `createdAt` and by insertion
+order are therefore the same thing here; the ids are also exactly what cursors
+carry.
 
 ## 16. Search — NOT IMPLEMENTED
 
@@ -558,10 +604,19 @@ A role, as returned by every `/roles` endpoint:
 }
 ```
 
-`GET /roles` wraps it as `{ "roles": [...] }`; the single-resource endpoints
-return it bare — the existing inconsistency noted in §9, not a new one.
+`GET /roles` returns the normalized collection envelope (§9); `GET /roles/:id`,
+`POST /roles` and `PATCH /roles/:id` return `{ "data": { …role } }`:
 
-Four behaviours the frontend must build against:
+```jsonc
+{ "data": [ { …role } ],
+  "page": { "nextCursor": "eyJ…|null", "hasMore": true, "limit": 25 } }
+```
+
+It is paginated, filterable and sortable like every other collection: filters
+`isSystemRole` and `key`, sorts `key` and `createdAt`, default sort `key`
+(§16a). `DELETE /roles/:id` returns `204` with no body.
+
+Five behaviours the frontend must build against:
 
 - **`permissions` is a complete replacement set on `PATCH`, never a delta.** Send
   the whole intended set; omitting the field leaves it untouched.
@@ -571,14 +626,17 @@ Four behaviours the frontend must build against:
   caller does not itself hold at the organization is refused with `403`
   `AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION`, and `error.details.rejected` lists
   exactly which keys — usable directly as per-field form feedback.
-- **`allowedScopeTypes` is not yet enforced at grant time.** It is persisted and
-  returned from 1B.5.4, but nothing refuses a grant outside it until Phase
-  1B.5.5. Do not present it as an active constraint yet.
+- **`allowedScopeTypes` IS enforced at grant time**, since Phase 1B.5.5. A
+  `POST /role-assignments` naming a `scopeType` the role does not admit is
+  refused with `422 AUTHZ_SCOPE_TYPE_NOT_ADMITTED` (§30b). Present it as an
+  active constraint: a scope picker that reads `allowedScopeTypes` from `/roles`
+  and offers only those levels prevents the refusal entirely.
+- **`allowedScopeTypes` is bounded to `organization`, `workspace` and `team`** on
+  create and update. `platform` and `reseller` are not a tenant's to claim, and
+  naming either is a `400`.
 
 Deletion returns `409` `RESOURCE_CONFLICT` while any user still holds the role —
-revoke the grants first. There is no grant API yet (§30).
-
-**Still unpaginated**, like every list today; §13 applies.
+revoke the grants first, through `DELETE /role-assignments/:id` (§30b).
 
 ## 30b. Role assignments — IMPLEMENTED (Phase 1B.5.5)
 
@@ -594,9 +652,19 @@ An assignment, as returned by every `/role-assignments` endpoint:
 }
 ```
 
-`GET /role-assignments` wraps it as `{ "assignments": [...] }` and accepts
-`userId`, `scopeType` and `scopeId` as query filters; the single-resource
-endpoints return it bare.
+`GET /role-assignments` returns the normalized collection envelope (§9);
+`GET /role-assignments/:id` and `POST /role-assignments` return
+`{ "data": { …assignment } }`:
+
+```jsonc
+{ "data": [ { …assignment } ],
+  "page": { "nextCursor": "eyJ…|null", "hasMore": true, "limit": 25 } }
+```
+
+It is paginated, filterable and sortable: filters `userId`, `scopeType` and
+`scopeId`, sorts `createdAt` and `scopeType`, default sort `-createdAt` (§16a).
+`GET /role-assignments?userId=<id>` is the canonical way to read one user's
+grants — they are deliberately **not** embedded in the user resource (§30d).
 
 `POST` takes `{ userId, roleId, scopeType, scopeId }`. Five things the frontend
 must build against:
@@ -604,9 +672,9 @@ must build against:
 - **`platform` is not an accepted `scopeType`** — sending it is a `400`.
   Platform grants are made out of band (`RBAC.md` §5b).
 - **`422 AUTHZ_SCOPE_TYPE_NOT_ADMITTED` is not an authorization failure.** It
-  means the role is not designed to exist at that level;
-  `error.details.allowedScopeTypes` lists the levels it does admit, and
-  `details.requested` echoes what was sent. Render it against the scope picker,
+  means the role is not designed to exist at that level. `error.details` carries
+  `roleKey`, `allowedScopeTypes` (the levels it does admit) and `requested` (what
+  was sent). Render it against the scope picker,
   not as "you lack permission". A role's `allowedScopeTypes` is readable from
   `/roles`, so a correct picker can prevent this case entirely.
 - **`403 AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION` names the offending keys** in
@@ -630,8 +698,6 @@ another administrator first, not to acquire more permission. A console should
 say so rather than rendering it as an access error, and should keep at least one
 administrator un-revocable in its own UI as a courtesy — though the backend is
 what enforces it, including for callers that never touch this API.
-
-**Still unpaginated**, like every list today; §13 applies.
 
 ## 30c. Authorization view — IMPLEMENTED (Phase 1B.5.7)
 

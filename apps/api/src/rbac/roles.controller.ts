@@ -39,11 +39,12 @@ import { RoleAdministrationService } from './role-administration.service';
  * record share a fate, and no handler carries an authorization decision of its
  * own (ADR-005 D-1).
  *
- * Response shapes follow the conventions that exist today rather than
- * anticipating Phase 1B.5.8's normalization: a list is a named-key wrapper, a
- * single resource is the bare object. Pagination, filtering and sorting are
- * deliberately absent — they are cross-cutting conventions 1B.5.8 owns, and
- * inventing a local one here is exactly the churn that phase exists to prevent.
+ * Response shapes are Phase 1B.5.8's normalized envelope (`API.md` §8): a
+ * collection is `{data, page}`, a single resource is `{data}`. Pagination,
+ * filtering and sorting come from the shared `ListQuery` against each service's
+ * own `ListQuerySpec`, so the conventions cannot drift per resource — which is
+ * precisely how the pre-1B.5.8 API ended up with a different collection shape
+ * per endpoint.
  */
 @Controller('roles')
 export class RolesController {

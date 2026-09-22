@@ -164,9 +164,13 @@ export class ListQuery {
 
   private clamp(limit: number | undefined): number {
     if (limit === undefined) return PAGE_LIMITS.DEFAULT;
-    // Clamped rather than refused: a caller asking for 500 wants "as many as
-    // possible", and a `400` there is pedantry. A caller asking for 0 or a
-    // negative is a bug, and the DTO has already refused it.
+    // `ListQueryDto` has already refused anything outside `MIN..MAX` with a
+    // `400` (`API.md` §8a), so for an HTTP request this only ever sees a value
+    // already in range and the bounds below do not fire. It is kept as a total
+    // function because the type permits any number: a non-HTTP caller
+    // constructing a `ListQueryInput` directly gets a bounded page rather than
+    // an unbounded query, and the DTO stays the single place the refusal is
+    // defined.
     return Math.min(Math.max(limit, PAGE_LIMITS.MIN), PAGE_LIMITS.MAX);
   }
 }

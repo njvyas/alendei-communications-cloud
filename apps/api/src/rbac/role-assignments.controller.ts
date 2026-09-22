@@ -32,9 +32,11 @@ import { RoleAssignmentService } from './role-assignment.service';
  * row all live in the service, inside that transaction, so a grant and its
  * record share a fate and no handler carries a decision of its own.
  *
- * Response shapes follow the conventions in use today; pagination, filtering
- * beyond the three parameters `API.md` §3c names, and envelope normalization
- * are Phase 1B.5.8's.
+ * Response shapes are Phase 1B.5.8's normalized envelope (`API.md` §8): the list
+ * is `{data, page}`, a single assignment is `{data}`, and `DELETE` is `204` with
+ * no body. The list carries the three filters `API.md` §3c names — `userId`,
+ * `scopeType`, `scopeId` — plus the shared `limit`/`cursor`/`sort` parameters,
+ * sorting on `createdAt` or `scopeType` with `-createdAt` as the default.
  */
 @Controller('role-assignments')
 export class RoleAssignmentsController {
