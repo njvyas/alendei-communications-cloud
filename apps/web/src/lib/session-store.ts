@@ -187,6 +187,33 @@ export function getActiveOrganizationGrants(): readonly EffectiveGrant[] {
 }
 
 /**
+ * Evaluates whether the current session holds a specific permission in the active organization.
+ * Checks for a single grant containing the permission within the active scope, or platform admin.
+ */
+export function hasPermission(permission: string): boolean {
+  const { authorization } = useSession.getState();
+  if (!authorization) return false;
+  if (authorization.isPlatformAdmin) return true;
+  return getActiveOrganizationGrants().some((grant) => grant.permissions.includes(permission));
+}
+
+/**
+ * React hook to evaluate permission holding reactively within active organization context.
+ */
+export function useHasPermission(permission: string): boolean {
+  return useSession((state) => {
+    if (!state.authorization) return false;
+    if (state.authorization.isPlatformAdmin) return true;
+    const grants = state.selectedOrganizationId
+      ? state.authorization.grants.filter(
+          (g) => g.scopeType === 'platform' || g.orgId === state.selectedOrganizationId,
+        )
+      : state.authorization.grants.filter((g) => g.scopeType === 'platform');
+    return grants.some((g) => g.permissions.includes(permission));
+  });
+}
+
+/**
  * Initializes the session on application startup via silent refresh.
  * Transitions to 'unauthenticated' if no active session exists.
  */

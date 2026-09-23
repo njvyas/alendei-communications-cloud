@@ -1,4 +1,4 @@
-import type { ApiDataResponse, ApiErrorResponse } from '@acc/contracts';
+import type { ApiDataResponse, ApiErrorResponse, ApiPagedResponse } from '@acc/contracts';
 
 /**
  * Browser-side API client for Alendei Communications Cloud.
@@ -453,5 +453,174 @@ export const authApi = {
       method: 'DELETE',
       skipTenant: true,
     });
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Typed Users, Roles, Workspaces, and Role Assignments Models
+// -----------------------------------------------------------------------------
+export type UserStatus = 'invited' | 'active' | 'disabled';
+
+export interface UserView {
+  readonly id: string;
+  readonly email: string;
+  readonly phone: string | null;
+  readonly status: UserStatus;
+  readonly lastLoginAt: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface ListUsersParams {
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: string;
+  readonly status?: UserStatus;
+  readonly email?: string;
+}
+
+export interface CreateUserInput {
+  readonly email: string;
+  readonly phone?: string | null;
+  readonly initialRole: {
+    readonly roleId: string;
+    readonly scopeType: 'organization' | 'workspace' | 'team';
+    readonly scopeId: string;
+  };
+}
+
+export interface UpdateUserInput {
+  readonly phone?: string | null;
+}
+
+export interface RoleItem {
+  readonly id: string;
+  readonly key: string;
+  readonly name: string;
+  readonly description: string | null;
+  readonly orgId: string | null;
+  readonly isSystemRole: boolean;
+  readonly allowedScopeTypes: readonly ('organization' | 'workspace' | 'team')[];
+  readonly permissions: readonly string[];
+}
+
+export interface WorkspaceItem {
+  readonly id: string;
+  readonly orgId: string;
+  readonly name: string;
+  readonly slug: string;
+  readonly status: string;
+  readonly createdAt: string;
+}
+
+export interface RoleAssignmentItem {
+  readonly id: string;
+  readonly userId: string;
+  readonly roleId: string;
+  readonly roleKey: string;
+  readonly orgId: string | null;
+  readonly scopeType: string;
+  readonly scopeId: string;
+  readonly grantedBy: string | null;
+  readonly createdAt: string;
+}
+
+// -----------------------------------------------------------------------------
+// Users Administration API
+// -----------------------------------------------------------------------------
+export const usersApi = {
+  async list(params: ListUsersParams = {}, signal?: AbortSignal): Promise<ApiPagedResponse<UserView>> {
+    const query = new URLSearchParams();
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.sort) query.set('sort', params.sort);
+    if (params.status) query.set('status', params.status);
+    if (params.email) query.set('email', params.email);
+
+    const queryString = query.toString();
+    const endpoint = queryString ? `/users?${queryString}` : '/users';
+
+    return apiFetch<ApiPagedResponse<UserView>>(endpoint, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  async get(id: string, signal?: AbortSignal): Promise<ApiDataResponse<UserView>> {
+    return apiFetch<ApiDataResponse<UserView>>(`/users/${encodeURIComponent(id)}`, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  async create(input: CreateUserInput, idempotencyKey?: string): Promise<ApiDataResponse<UserView>> {
+    const headers: Record<string, string> = {};
+    if (idempotencyKey) {
+      headers['Idempotency-Key'] = idempotencyKey;
+    }
+
+    return apiFetch<ApiDataResponse<UserView>>('/users', {
+      method: 'POST',
+      body: input,
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
+    });
+  },
+
+  async update(id: string, input: UpdateUserInput): Promise<ApiDataResponse<UserView>> {
+    return apiFetch<ApiDataResponse<UserView>>(`/users/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: input,
+    });
+  },
+
+  async disable(id: string): Promise<ApiDataResponse<UserView>> {
+    return apiFetch<ApiDataResponse<UserView>>(`/users/${encodeURIComponent(id)}/disable`, {
+      method: 'POST',
+    });
+  },
+
+  async reactivate(id: string): Promise<ApiDataResponse<UserView>> {
+    return apiFetch<ApiDataResponse<UserView>>(`/users/${encodeURIComponent(id)}/reactivate`, {
+      method: 'POST',
+    });
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Roles API (For Role Selection during User Creation)
+// -----------------------------------------------------------------------------
+export const rolesApi = {
+  async list(signal?: AbortSignal): Promise<ApiPagedResponse<RoleItem>> {
+    return apiFetch<ApiPagedResponse<RoleItem>>('/roles', {
+      method: 'GET',
+      signal,
+    });
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Workspaces API (For Workspace Selection during User Creation)
+// -----------------------------------------------------------------------------
+export const workspacesApi = {
+  async list(signal?: AbortSignal): Promise<ApiPagedResponse<WorkspaceItem>> {
+    return apiFetch<ApiPagedResponse<WorkspaceItem>>('/tenants/workspaces', {
+      method: 'GET',
+      signal,
+    });
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Role Assignments API (For User Detail Role Visibility)
+// -----------------------------------------------------------------------------
+export const roleAssignmentsApi = {
+  async listForUser(userId: string, signal?: AbortSignal): Promise<ApiPagedResponse<RoleAssignmentItem>> {
+    return apiFetch<ApiPagedResponse<RoleAssignmentItem>>(
+      `/role-assignments?userId=${encodeURIComponent(userId)}`,
+      {
+        method: 'GET',
+        signal,
+      },
+    );
   },
 };

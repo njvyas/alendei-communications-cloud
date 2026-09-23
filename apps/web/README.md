@@ -35,6 +35,24 @@ Next.js App Router web console for Alendei Communications Cloud (ACC).
 6. **Zero Secrets Logging**:
    - Credentials, passwords, bearer tokens, and Authorization headers are never emitted to logs or telemetry.
 
+## Users Administration (Gate B — Track 2)
+
+The Users module (`/users`, `/users/[id]`) implements the complete user management surface for Gate B:
+
+- **List & Discovery**: Lists users holding grants in the active organization (`GET /users`). Supports opaque cursor pagination (`cursor`, `limit`), exact identity lookup (`email`), status filtering (`invited`, `active`, `disabled`), and sort order (`createdAt`, `email`, `status`).
+- **Creation / Invite**: `POST /users` requires an `initialRole` scoped to the current organization or an accessible workspace (`GET /tenants/workspaces`). Protects creations with a persistent `Idempotency-Key` preserved across retries of the same submission. Newly invited accounts enter the `invited` state without credentials or email delivery.
+- **User Detail**: Accessible via `/users/[id]`. Displays the exhaustive 7 published user fields, user role assignments (`GET /role-assignments?userId=<id>`), and inline phone update (`PATCH /users/:id`).
+- **Lifecycle Management**:
+  - `POST /users/:id/disable`: Globals account deactivation that immediately revokes all sessions across all organizations. Displays an explicit global warning prior to confirmation.
+  - `POST /users/:id/reactivate`: Restores accounts globally (returning credentialed users to `active` and uncredentialed users to `invited`). Prior sessions are not restored.
+- **Authorization Gating**: Actions and views are strictly gated using active organization grants from `GET /auth/me/authorization`:
+  - `users.read`: view user list and details
+  - `users.invite`: invite new users
+  - `users.update`: edit phone number
+  - `users.disable`: disable account
+  - `users.reactivate`: reactivate account
+  - `role_assignments.read`: view role assignments table
+
 ## Testing & Verification
 
 ```bash

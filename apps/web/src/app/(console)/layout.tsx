@@ -1,10 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, type ReactNode } from 'react';
 
 import { authApi } from '@/lib/api-client';
+import { cn } from '@/lib/cn';
 import { bootstrapSession, useSession } from '@/lib/session-store';
 import { OrgSelectionView } from '@/components/org-selection-view';
 import { OrgSwitcher } from '@/components/org-switcher';
@@ -21,10 +22,14 @@ import ConsoleLoading from './loading';
  * - Authenticated users with multiple organizations must select an organization before accessing console views.
  * - Active organization is exposed in the shell header with switching capability.
  */
-const SECTIONS = [{ href: '/', label: 'Overview' }] as const;
+const SECTIONS = [
+  { href: '/', label: 'Overview' },
+  { href: '/users', label: 'Users' },
+] as const;
 
 export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
   const status = useSession((state) => state.status);
   const user = useSession((state) => state.user);
   const clearSession = useSession((state) => state.clearSession);
@@ -135,16 +140,28 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
       <div className="flex flex-1 flex-col gap-6 pt-6 md:flex-row">
         <nav aria-label="Sections" className="md:w-44 md:shrink-0">
           <ul className="flex flex-wrap gap-1 md:flex-col">
-            {SECTIONS.map((section) => (
-              <li key={section.href}>
-                <Link
-                  href={section.href}
-                  className="block rounded-md px-3 py-1.5 text-sm text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-raised)] hover:text-[var(--color-ink)]"
-                >
-                  {section.label}
-                </Link>
-              </li>
-            ))}
+            {SECTIONS.map((section) => {
+              const isActive =
+                section.href === '/'
+                  ? pathname === '/'
+                  : pathname === section.href || pathname.startsWith(`${section.href}/`);
+              return (
+                <li key={section.href}>
+                  <Link
+                    href={section.href}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={cn(
+                      'block rounded-md px-3 py-1.5 text-sm transition-colors',
+                      isActive
+                        ? 'border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] font-medium text-[var(--color-ink)] shadow-xs'
+                        : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-raised)] hover:text-[var(--color-ink)]',
+                    )}
+                  >
+                    {section.label}
+                  </Link>
+                </li>
+              );
+            })}
           </ul>
         </nav>
 
