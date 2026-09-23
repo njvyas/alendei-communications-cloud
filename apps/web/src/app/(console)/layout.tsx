@@ -25,6 +25,7 @@ import ConsoleLoading from './loading';
 const SECTIONS = [
   { href: '/', label: 'Overview' },
   { href: '/users', label: 'Users' },
+  { href: '/roles', label: 'Roles' },
 ] as const;
 
 export default function ConsoleLayout({ children }: { children: ReactNode }) {

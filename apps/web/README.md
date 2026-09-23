@@ -53,6 +53,18 @@ The Users module (`/users`, `/users/[id]`) implements the complete user manageme
   - `users.reactivate`: reactivate account
   - `role_assignments.read`: view role assignments table
 
+## Roles & Permissions Administration (Gate B — Track 3B)
+
+The Roles module (`/roles`, `/roles/[id]`) implements role management and permission composition:
+
+- **List & Discovery**: Lists roles visible in the current organization (`GET /roles`), including organization-owned custom roles and platform definitions. Supports cursor pagination (`cursor`, `limit`), system/custom filtering (`isSystemRole`), exact key lookup (`key`), and sort orders (`key`, `-key`, `createdAt`, `-createdAt`).
+- **Role Detail**: Accessible via `/roles/[id]`. Displays role identity, description, ownership, allowed scope types, and all bundled permissions grouped by domain.
+- **Custom Role Creation**: `POST /roles` supports snake_case key validation (`^[a-z][a-z0-9_]{2,63}$`), name, description, allowed grant scope types (`organization`, `workspace`, `team`), and permission selection from the system catalogue (`GET /permissions`). Platform-only permissions are filtered out. Idempotency is preserved across retries via persistent `Idempotency-Key`.
+- **Custom Role Editing**: `PATCH /roles/:id` updates mutable custom roles. Permissions are submitted as a **complete replacement set**, never a delta. System and platform roles are protected as immutable.
+- **Custom Role Deletion**: `DELETE /roles/:id` requires explicit confirmation. In case of active grant references, surfaces `409 RESOURCE_CONFLICT` with actionable guidance to revoke assignments first.
+- **Downward-Only Inheritance**: Role composition is bounded by the creator's authority covering organization scope (`RBAC.md` §7). Workspace- and team-level grants do not confer authority to compose permissions into an organization-scoped role.
+- **Scope Model & Team Administration**: Adheres to the canonical 5-scope hierarchy (`PLATFORM → RESELLER → ORGANIZATION → WORKSPACE → TEAM`). `team` is selectable as an allowed scope type for custom roles per backend contract; tenant administration (including teams) is planned for Phase 1B.8 / later phases.
+
 ## Testing & Verification
 
 ```bash

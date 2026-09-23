@@ -493,15 +493,59 @@ export interface UpdateUserInput {
   readonly phone?: string | null;
 }
 
-export interface RoleItem {
+export type ScopeLevel = 'platform' | 'reseller' | 'organization' | 'workspace' | 'team';
+export type TenantCreatableScopeType = 'organization' | 'workspace' | 'team';
+
+export interface RoleView {
   readonly id: string;
   readonly key: string;
   readonly name: string;
   readonly description: string | null;
   readonly orgId: string | null;
   readonly isSystemRole: boolean;
-  readonly allowedScopeTypes: readonly ('organization' | 'workspace' | 'team')[];
+  readonly allowedScopeTypes: readonly ScopeLevel[];
   readonly permissions: readonly string[];
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export type RoleItem = RoleView;
+
+export interface ListRolesParams {
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: string;
+  readonly isSystemRole?: boolean;
+  readonly key?: string;
+}
+
+export interface CreateRoleInput {
+  readonly key: string;
+  readonly name: string;
+  readonly description?: string | null;
+  readonly allowedScopeTypes: readonly TenantCreatableScopeType[];
+  readonly permissions: readonly string[];
+}
+
+export interface UpdateRoleInput {
+  readonly name?: string;
+  readonly description?: string | null;
+  readonly allowedScopeTypes?: readonly TenantCreatableScopeType[];
+  readonly permissions?: readonly string[];
+}
+
+export interface PermissionView {
+  readonly key: string;
+  readonly domain: string;
+  readonly action: string;
+  readonly description: string | null;
+}
+
+export interface ListPermissionsParams {
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: string;
+  readonly domain?: string;
 }
 
 export interface WorkspaceItem {
@@ -587,11 +631,90 @@ export const usersApi = {
 };
 
 // -----------------------------------------------------------------------------
-// Roles API (For Role Selection during User Creation)
+// Roles API (Administration & Selection)
 // -----------------------------------------------------------------------------
 export const rolesApi = {
-  async list(signal?: AbortSignal): Promise<ApiPagedResponse<RoleItem>> {
-    return apiFetch<ApiPagedResponse<RoleItem>>('/roles', {
+  async list(
+    paramsOrSignal?: ListRolesParams | AbortSignal,
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<RoleView>> {
+    let params: ListRolesParams = {};
+    let abortSignal = signal;
+
+    if (paramsOrSignal instanceof AbortSignal) {
+      abortSignal = paramsOrSignal;
+    } else if (paramsOrSignal) {
+      params = paramsOrSignal;
+    }
+
+    const query = new URLSearchParams();
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.sort) query.set('sort', params.sort);
+    if (params.isSystemRole !== undefined) query.set('isSystemRole', String(params.isSystemRole));
+    if (params.key) query.set('key', params.key);
+
+    const queryString = query.toString();
+    const endpoint = queryString ? `/roles?${queryString}` : '/roles';
+
+    return apiFetch<ApiPagedResponse<RoleView>>(endpoint, {
+      method: 'GET',
+      signal: abortSignal,
+    });
+  },
+
+  async get(id: string, signal?: AbortSignal): Promise<ApiDataResponse<RoleView>> {
+    return apiFetch<ApiDataResponse<RoleView>>(`/roles/${encodeURIComponent(id)}`, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  async create(input: CreateRoleInput, idempotencyKey?: string): Promise<ApiDataResponse<RoleView>> {
+    const headers: Record<string, string> = {};
+    if (idempotencyKey) {
+      headers['Idempotency-Key'] = idempotencyKey;
+    }
+
+    return apiFetch<ApiDataResponse<RoleView>>('/roles', {
+      method: 'POST',
+      body: input,
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
+    });
+  },
+
+  async update(id: string, input: UpdateRoleInput): Promise<ApiDataResponse<RoleView>> {
+    return apiFetch<ApiDataResponse<RoleView>>(`/roles/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: input,
+    });
+  },
+
+  async delete(id: string): Promise<void> {
+    return apiFetch<void>(`/roles/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Permissions API (System-defined Catalogue)
+// -----------------------------------------------------------------------------
+export const permissionsApi = {
+  async list(
+    params: ListPermissionsParams = {},
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<PermissionView>> {
+    const query = new URLSearchParams();
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.sort) query.set('sort', params.sort);
+    if (params.domain) query.set('domain', params.domain);
+
+    const queryString = query.toString();
+    const endpoint = queryString ? `/permissions?${queryString}` : '/permissions';
+
+    return apiFetch<ApiPagedResponse<PermissionView>>(endpoint, {
       method: 'GET',
       signal,
     });

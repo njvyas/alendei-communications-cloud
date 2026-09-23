@@ -214,6 +214,57 @@ export function useHasPermission(permission: string): boolean {
 }
 
 /**
+ * Resolves permissions the current actor holds that cover the active organization scope.
+ * Implements downward-only inheritance (TENANCY.md §1a.4, RBAC.md §7):
+ * - Platform grant covers all scopes.
+ * - Organization grant covers this organization.
+ * - Workspace and team grants DO NOT cover organization scope.
+ */
+export function getHeldOrganizationPermissions(): Set<string> {
+  const { authorization, selectedOrganizationId } = useSession.getState();
+  if (!authorization) return new Set();
+  const held = new Set<string>();
+
+  for (const grant of authorization.grants) {
+    if (grant.scopeType === 'platform') {
+      for (const p of grant.permissions) held.add(p);
+    } else if (
+      grant.scopeType === 'organization' &&
+      selectedOrganizationId &&
+      (grant.scopeId === selectedOrganizationId || grant.orgId === selectedOrganizationId)
+    ) {
+      for (const p of grant.permissions) held.add(p);
+    }
+  }
+
+  return held;
+}
+
+/**
+ * React hook returning permissions held by the actor that cover the active organization scope.
+ */
+export function useHeldOrganizationPermissions(): Set<string> {
+  return useSession((state) => {
+    if (!state.authorization) return new Set<string>();
+    const held = new Set<string>();
+
+    for (const grant of state.authorization.grants) {
+      if (grant.scopeType === 'platform') {
+        for (const p of grant.permissions) held.add(p);
+      } else if (
+        grant.scopeType === 'organization' &&
+        state.selectedOrganizationId &&
+        (grant.scopeId === state.selectedOrganizationId || grant.orgId === state.selectedOrganizationId)
+      ) {
+        for (const p of grant.permissions) held.add(p);
+      }
+    }
+
+    return held;
+  });
+}
+
+/**
  * Initializes the session on application startup via silent refresh.
  * Transitions to 'unauthenticated' if no active session exists.
  */
