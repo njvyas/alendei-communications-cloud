@@ -81,6 +81,31 @@ Role assignment administration is integrated directly into the User Detail view 
   - Successfully invalidated queries immediately refresh the assignment list and tenant cache.
 - **Strict Tenant & Scope Isolation**: All requests pin `X-Acc-Organization` to the validated session store. React Query keys are partitioned by `selectedOrgId` and `userId`.
 
+## API Key Administration (Gate B — Track 4)
+
+The API Keys module (`/api-keys`) implements machine-to-machine credential administration for Gate B:
+
+- **List & Discovery**: Lists API keys scoped to the active organization (`GET /api/v1/api-keys`). Supports opaque keyset cursor pagination (`cursor`, `limit`), status filtering (`active`, `expired`, `revoked`), scope filtering (`organization`, `workspace`), exact name lookup (`name`), and sort orders (`createdAt`, `-createdAt`, `name`, `-name`).
+- **Key Detail Modal**: Displays comprehensive backend metadata: key ID, name, identifier prefix, lifecycle status, binding scope, granted scopes catalogue, creation timestamp, last used timestamp, expiration timestamp, createdBy attribution, and revocation audit details. Key hash and secrets are strictly absent.
+- **Key Creation Flow**:
+  - `POST /api/v1/api-keys` creates programmatic credentials with a name (1–120 characters), binding scope (`organization` or `workspace`), target scope ID, requested permission scopes, and optional future `expiresAt`.
+  - **Scope Picker & Downward Inheritance**: The permission scopes picker filters available permissions to only those held by the creator at the target binding scope (`GET /auth/me/authorization`), preventing unheld permission rejections up-front.
+  - **Idempotency**: Protects creation requests with a persistent `Idempotency-Key` preserved across retries of the same submission.
+  - **One-Time Secret Display**: Fresh creation returns the plaintext secret once. The UI renders the joined credential (`<prefix>.<secret>`) with a copy-to-clipboard button and prominent warning. Users must acknowledge saving the key before the modal can be dismissed.
+  - **Ephemeral Secret Invariant**: The plaintext secret is held strictly in ephemeral component memory. It is **never** written to `localStorage`, `sessionStorage`, client-accessible cookies, IndexedDB, Zustand persistence, React Query cache, or URL parameters. It is wiped immediately on modal close, component unmount, organization switch, or logout.
+  - **Idempotent Replay Handling**: In accordance with ADR-008, idempotent replays return `secret: null` because plaintext secrets are never stored in idempotency response snapshots. The UI detects null secrets and displays an explanatory replay notice rather than an empty box or an error.
+- **Revocation Flow**:
+  - `POST /api/v1/api-keys/:id/revoke`: Revocation is a terminal lifecycle state transition (there is no `DELETE`, no un-revoke, and no rotation).
+  - Explicit confirmation modal warns operators that revocation takes effect immediately and causes all workloads using the key to receive `401 Unauthorized`.
+  - Handles concurrent or prior revocation conflicts (`409 API_KEY_LIFECYCLE_CONFLICT`) gracefully by treating the server's status as authoritative and refreshing the table without retry loops.
+- **Authorization Gating**:
+  - `api_keys.read`: view key list and details
+  - `api_keys.create`: mint new API keys
+  - `api_keys.revoke`: revoke active API keys
+  - Gated to `org_admin` (and `alendei_support` for read-only); `reseller_admin` and `workspace_manager` hold no API key permissions.
+- **Known Limitations & Deferred Scope**:
+  - In-place key rotation, secret recovery/reveal, usage analytics, quotas, per-key rate limits, and IP allowlists are deferred and not implemented in Phase 1B.
+
 ## Testing & Verification
 
 ```bash

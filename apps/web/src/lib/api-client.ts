@@ -818,3 +818,112 @@ export const roleAssignmentsApi = {
     });
   },
 };
+
+// -----------------------------------------------------------------------------
+// API Keys Administration Models & API (Phase 1B.6.2)
+// -----------------------------------------------------------------------------
+export type ApiKeyStatus = 'active' | 'expired' | 'revoked';
+export type ApiKeyScopeType = 'organization' | 'workspace';
+
+export interface ApiKeyView {
+  readonly id: string;
+  readonly name: string;
+  /** Public half of the credential. Identifies the key; verifies nothing. */
+  readonly prefix: string;
+  /** Derived lifecycle state: active, expired, or revoked. */
+  readonly status: ApiKeyStatus;
+  readonly scopeType: ApiKeyScopeType;
+  readonly scopeId: string;
+  readonly orgId: string;
+  /** Requested permission subset. */
+  readonly scopes: readonly string[];
+  readonly expiresAt: string | null;
+  readonly lastUsedAt: string | null;
+  readonly revokedAt: string | null;
+  readonly revokedReason: string | null;
+  readonly createdBy: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface CreatedApiKeyView extends ApiKeyView {
+  /**
+   * Plaintext secret.
+   * Returned ONLY on initial successful creation response (`POST /api/v1/api-keys`).
+   * On an idempotent replay, this field is present but `null` (ADR-008).
+   * It is never retrievable again and must never be persisted in browser storage.
+   */
+  readonly secret: string | null;
+}
+
+export interface ListApiKeysParams {
+  readonly status?: ApiKeyStatus;
+  readonly scopeType?: ApiKeyScopeType;
+  readonly scopeId?: string;
+  readonly name?: string;
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: string;
+}
+
+export interface CreateApiKeyInput {
+  readonly name: string;
+  readonly scopeType: ApiKeyScopeType;
+  readonly scopeId: string;
+  readonly scopes: readonly string[];
+  readonly expiresAt?: string | null;
+}
+
+export const apiKeysApi = {
+  async list(
+    params: ListApiKeysParams = {},
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<ApiKeyView>> {
+    const query = new URLSearchParams();
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.sort) query.set('sort', params.sort);
+    if (params.status) query.set('status', params.status);
+    if (params.scopeType) query.set('scopeType', params.scopeType);
+    if (params.scopeId) query.set('scopeId', params.scopeId);
+    if (params.name) query.set('name', params.name);
+
+    const queryString = query.toString();
+    const endpoint = queryString ? `/api-keys?${queryString}` : '/api-keys';
+
+    return apiFetch<ApiPagedResponse<ApiKeyView>>(endpoint, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  async get(id: string, signal?: AbortSignal): Promise<ApiDataResponse<ApiKeyView>> {
+    return apiFetch<ApiDataResponse<ApiKeyView>>(`/api-keys/${encodeURIComponent(id)}`, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  async create(
+    input: CreateApiKeyInput,
+    idempotencyKey?: string,
+  ): Promise<ApiDataResponse<CreatedApiKeyView>> {
+    const headers: Record<string, string> = {};
+    if (idempotencyKey) {
+      headers['Idempotency-Key'] = idempotencyKey;
+    }
+
+    return apiFetch<ApiDataResponse<CreatedApiKeyView>>('/api-keys', {
+      method: 'POST',
+      body: input,
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
+    });
+  },
+
+  async revoke(id: string): Promise<ApiDataResponse<ApiKeyView>> {
+    return apiFetch<ApiDataResponse<ApiKeyView>>(`/api-keys/${encodeURIComponent(id)}/revoke`, {
+      method: 'POST',
+    });
+  },
+};
+

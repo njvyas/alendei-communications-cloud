@@ -26,6 +26,7 @@ const SECTIONS = [
   { href: '/', label: 'Overview' },
   { href: '/users', label: 'Users' },
   { href: '/roles', label: 'Roles' },
+  { href: '/api-keys', label: 'API Keys' },
 ] as const;
 
 export default function ConsoleLayout({ children }: { children: ReactNode }) {
