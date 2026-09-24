@@ -6,10 +6,14 @@ import {
   ApiError,
   roleAssignmentsApi,
   usersApi,
+  workspacesApi,
+  type RoleAssignmentView,
   type UserView,
 } from '@/lib/api-client';
 import { useHasPermission, useSession } from '@/lib/session-store';
 import { StatusDot, type StatusTone } from '@/components/ui/status-dot';
+import { AssignRoleDialog } from '@/components/role-assignments/assign-role-dialog';
+import { RevokeAssignmentDialog } from '@/components/role-assignments/revoke-assignment-dialog';
 
 interface UserDetailViewProps {
   readonly userId: string;
@@ -26,6 +30,12 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
   const canDisable = useHasPermission('users.disable');
   const canReactivate = useHasPermission('users.reactivate');
   const canReadAssignments = useHasPermission('role_assignments.read');
+  const canGrantAssignment = useHasPermission('role_assignments.grant');
+  const canRevokeAssignment = useHasPermission('role_assignments.revoke');
+
+  // Role Assignment Dialog States
+  const [isAssignDialogOpen, setIsAssignDialogOpen] = useState(false);
+  const [revokingAssignment, setRevokingAssignment] = useState<RoleAssignmentView | null>(null);
 
   // Phone editing state
   const [isEditingPhone, setIsEditingPhone] = useState(false);
@@ -55,11 +65,24 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
     data: assignmentsData,
     isLoading: assignmentsLoading,
     error: assignmentsError,
+    refetch: refetchAssignments,
   } = useQuery({
     queryKey: ['role-assignments', selectedOrgId, userId],
     queryFn: ({ signal }) => roleAssignmentsApi.listForUser(userId, signal),
     enabled: !!selectedOrgId && !!userId && canReadAssignments,
   });
+
+  // Fetch workspaces for resolving human-readable names
+  const { data: workspacesData } = useQuery({
+    queryKey: ['workspaces', 'list', selectedOrgId],
+    queryFn: ({ signal }) => workspacesApi.list(signal),
+    enabled: !!selectedOrgId && canReadAssignments,
+  });
+
+  const workspaceMap = new Map<string, string>();
+  for (const ws of workspacesData?.data ?? []) {
+    workspaceMap.set(ws.id, ws.name);
+  }
 
   const user: UserView | undefined = userData?.data;
 
@@ -354,12 +377,31 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
 
       {/* Role Assignments Section */}
       <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-6 shadow-xs">
-        <div className="border-b border-[var(--color-border-subtle)] pb-3">
-          <h3 className="text-sm font-semibold text-[var(--color-ink)]">Role Assignments</h3>
-          <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
-            Grants held by this user within the current organization hierarchy.
-          </p>
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--color-border-subtle)] pb-4">
+          <div>
+            <h3 className="text-sm font-semibold text-[var(--color-ink)]">Role Assignments</h3>
+            <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
+              Grants held by this user within the current organization hierarchy.
+            </p>
+          </div>
+          {canGrantAssignment && (
+            <button
+              type="button"
+              onClick={() => setIsAssignDialogOpen(true)}
+              disabled={user.status === 'disabled'}
+              title={user.status === 'disabled' ? 'Cannot assign roles to a disabled user' : undefined}
+              className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              + Assign Role
+            </button>
+          )}
         </div>
+
+        {user.status === 'disabled' && (
+          <div className="mt-3 rounded-md border border-[var(--color-bad)]/20 bg-[var(--color-bad)]/5 p-2.5 text-xs text-[var(--color-bad)]">
+            This account is disabled. Role assignment mutations are blocked for disabled users.
+          </div>
+        )}
 
         {!canReadAssignments ? (
           <p className="mt-4 text-xs text-[var(--color-ink-muted)]">
@@ -377,22 +419,51 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
               <thead>
                 <tr className="border-b border-[var(--color-border-subtle)] text-[var(--color-ink-muted)]">
                   <th className="pb-2 font-medium">Role Key</th>
-                  <th className="pb-2 font-medium">Scope Type</th>
-                  <th className="pb-2 font-medium">Scope ID</th>
+                  <th className="pb-2 font-medium">Scope Level</th>
+                  <th className="pb-2 font-medium">Target Scope</th>
                   <th className="pb-2 font-medium">Granted At</th>
+                  {canRevokeAssignment && <th className="pb-2 font-medium text-right">Actions</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border-subtle)]">
-                {assignmentsData.data.map((grant) => (
-                  <tr key={grant.id}>
-                    <td className="py-2 font-mono font-medium text-[var(--color-ink)]">{grant.roleKey}</td>
-                    <td className="py-2 text-[var(--color-ink-muted)]">{grant.scopeType}</td>
-                    <td className="py-2 font-mono text-[var(--color-ink-muted)]">{grant.scopeId}</td>
-                    <td className="py-2 text-[var(--color-ink-muted)]">
-                      {new Date(grant.createdAt).toLocaleDateString()}
-                    </td>
-                  </tr>
-                ))}
+                {assignmentsData.data.map((grant) => {
+                  let targetDisplay = grant.scopeId ?? 'Global';
+                  if (grant.scopeType === 'organization') {
+                    targetDisplay =
+                      grant.scopeId === selectedOrgId
+                        ? `Current Org (${grant.scopeId})`
+                        : (grant.scopeId ?? 'Organization');
+                  } else if (grant.scopeType === 'workspace' && grant.scopeId) {
+                    const wsName = workspaceMap.get(grant.scopeId);
+                    targetDisplay = wsName ? `${wsName} (${grant.scopeId})` : grant.scopeId;
+                  }
+
+                  return (
+                    <tr key={grant.id}>
+                      <td className="py-2.5 font-mono font-medium text-[var(--color-ink)]">{grant.roleKey}</td>
+                      <td className="py-2.5">
+                        <span className="inline-flex items-center rounded bg-[var(--color-surface)] px-2 py-0.5 text-[10px] font-mono font-medium text-[var(--color-ink)] border border-[var(--color-border-subtle)]">
+                          {grant.scopeType}
+                        </span>
+                      </td>
+                      <td className="py-2.5 text-[var(--color-ink-muted)] font-mono text-[11px]">{targetDisplay}</td>
+                      <td className="py-2.5 text-[var(--color-ink-muted)]">
+                        {new Date(grant.createdAt).toLocaleDateString()}
+                      </td>
+                      {canRevokeAssignment && (
+                        <td className="py-2.5 text-right">
+                          <button
+                            type="button"
+                            onClick={() => setRevokingAssignment(grant)}
+                            className="text-xs font-medium text-[var(--color-bad)] hover:underline"
+                          >
+                            Revoke
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -402,6 +473,39 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
           </p>
         )}
       </div>
+
+      {/* Assign Role Dialog */}
+      <AssignRoleDialog
+        isOpen={isAssignDialogOpen}
+        userId={userId}
+        userEmail={user.email}
+        onClose={() => setIsAssignDialogOpen(false)}
+        onSuccess={() => {
+          void refetchAssignments();
+          void queryClient.invalidateQueries({ queryKey: ['role-assignments', selectedOrgId, userId] });
+          onUserMutated?.();
+        }}
+      />
+
+      {/* Revoke Assignment Dialog */}
+      <RevokeAssignmentDialog
+        isOpen={!!revokingAssignment}
+        assignment={revokingAssignment}
+        userEmail={user.email}
+        targetLabel={
+          revokingAssignment
+            ? revokingAssignment.scopeType === 'organization'
+              ? 'Current Organization'
+              : (workspaceMap.get(revokingAssignment.scopeId ?? '') ?? undefined)
+            : undefined
+        }
+        onClose={() => setRevokingAssignment(null)}
+        onSuccess={() => {
+          void refetchAssignments();
+          void queryClient.invalidateQueries({ queryKey: ['role-assignments', selectedOrgId, userId] });
+          onUserMutated?.();
+        }}
+      />
 
       {/* Confirmation Modal for Lifecycle Actions */}
       {confirmAction && (

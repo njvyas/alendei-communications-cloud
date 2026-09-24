@@ -557,16 +557,36 @@ export interface WorkspaceItem {
   readonly createdAt: string;
 }
 
-export interface RoleAssignmentItem {
+export type GrantableScopeType = 'reseller' | 'organization' | 'workspace' | 'team';
+
+export interface RoleAssignmentView {
   readonly id: string;
   readonly userId: string;
   readonly roleId: string;
   readonly roleKey: string;
   readonly orgId: string | null;
-  readonly scopeType: string;
-  readonly scopeId: string;
+  readonly scopeType: ScopeLevel;
+  readonly scopeId: string | null;
   readonly grantedBy: string | null;
   readonly createdAt: string;
+}
+
+export type RoleAssignmentItem = RoleAssignmentView;
+
+export interface ListRoleAssignmentsParams {
+  readonly userId?: string;
+  readonly scopeType?: ScopeLevel;
+  readonly scopeId?: string;
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: string;
+}
+
+export interface CreateRoleAssignmentInput {
+  readonly userId: string;
+  readonly roleId: string;
+  readonly scopeType: ScopeLevel;
+  readonly scopeId: string;
 }
 
 // -----------------------------------------------------------------------------
@@ -734,16 +754,67 @@ export const workspacesApi = {
 };
 
 // -----------------------------------------------------------------------------
-// Role Assignments API (For User Detail Role Visibility)
+// Role Assignments API (Administration & Inspection)
 // -----------------------------------------------------------------------------
 export const roleAssignmentsApi = {
-  async listForUser(userId: string, signal?: AbortSignal): Promise<ApiPagedResponse<RoleAssignmentItem>> {
-    return apiFetch<ApiPagedResponse<RoleAssignmentItem>>(
-      `/role-assignments?userId=${encodeURIComponent(userId)}`,
-      {
-        method: 'GET',
-        signal,
-      },
-    );
+  async list(
+    paramsOrUserId?: ListRoleAssignmentsParams | string,
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<RoleAssignmentView>> {
+    let params: ListRoleAssignmentsParams = {};
+    if (typeof paramsOrUserId === 'string') {
+      params = { userId: paramsOrUserId };
+    } else if (paramsOrUserId) {
+      params = paramsOrUserId;
+    }
+
+    const query = new URLSearchParams();
+    if (params.userId) query.set('userId', params.userId);
+    if (params.scopeType) query.set('scopeType', params.scopeType);
+    if (params.scopeId) query.set('scopeId', params.scopeId);
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.sort) query.set('sort', params.sort);
+
+    const queryString = query.toString();
+    const endpoint = queryString ? `/role-assignments?${queryString}` : '/role-assignments';
+
+    return apiFetch<ApiPagedResponse<RoleAssignmentView>>(endpoint, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  async listForUser(userId: string, signal?: AbortSignal): Promise<ApiPagedResponse<RoleAssignmentView>> {
+    return this.list({ userId }, signal);
+  },
+
+  async get(id: string, signal?: AbortSignal): Promise<ApiDataResponse<RoleAssignmentView>> {
+    return apiFetch<ApiDataResponse<RoleAssignmentView>>(`/role-assignments/${encodeURIComponent(id)}`, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  async create(
+    input: CreateRoleAssignmentInput,
+    idempotencyKey?: string,
+  ): Promise<ApiDataResponse<RoleAssignmentView>> {
+    const headers: Record<string, string> = {};
+    if (idempotencyKey) {
+      headers['Idempotency-Key'] = idempotencyKey;
+    }
+
+    return apiFetch<ApiDataResponse<RoleAssignmentView>>('/role-assignments', {
+      method: 'POST',
+      body: input,
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
+    });
+  },
+
+  async delete(id: string): Promise<void> {
+    return apiFetch<void>(`/role-assignments/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
   },
 };

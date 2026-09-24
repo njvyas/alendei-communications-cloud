@@ -65,6 +65,22 @@ The Roles module (`/roles`, `/roles/[id]`) implements role management and permis
 - **Downward-Only Inheritance**: Role composition is bounded by the creator's authority covering organization scope (`RBAC.md` §7). Workspace- and team-level grants do not confer authority to compose permissions into an organization-scoped role.
 - **Scope Model & Team Administration**: Adheres to the canonical 5-scope hierarchy (`PLATFORM → RESELLER → ORGANIZATION → WORKSPACE → TEAM`). `team` is selectable as an allowed scope type for custom roles per backend contract; tenant administration (including teams) is planned for Phase 1B.8 / later phases.
 
+## Role Assignment Administration (Gate B — Track 3C)
+
+Role assignment administration is integrated directly into the User Detail view (`/users/[id]`):
+
+- **Grant Inspection**: Lists all role assignments granted to a user (`GET /role-assignments?userId=...`) within the active organization context. Renders role keys, scope types (`organization`, `workspace`, `team`, `platform`), target scope identifiers with human-readable workspace/organization labels, and grant timestamps.
+- **Assign Role Flow**: Authorised users (`role_assignments.grant`) can grant custom tenant roles to users via the `AssignRoleDialog`.
+  - Roles are selected from tenant custom roles (`rolesApi.list`); platform and system roles are protected from tenant assignment.
+  - Admitted scope levels are derived from `role.allowedScopeTypes`.
+  - Scope targets are pinned to authoritative metadata: `organization` targets the active organization ID, and `workspace` targets workspaces loaded via `GET /tenants/workspaces`. Team scope fails closed with an explanatory message noting roadmap scheduling (Phase 1B.8+).
+  - Mutating operations attach a persistent `Idempotency-Key` across retries.
+  - Structured backend error handling surfaces unheld permission rejections (`AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION`), inadmissible scope types (`AUTHZ_SCOPE_TYPE_NOT_ADMITTED`), and disabled user conflicts.
+- **Revoke Role Flow**: Authorised operators (`role_assignments.revoke`) can revoke grants via `RevokeAssignmentDialog` with explicit confirmation (`DELETE /role-assignments/:id`).
+  - Specially handles `AUTHZ_LAST_PLATFORM_ADMIN` (409 Conflict) without entering retry loops.
+  - Successfully invalidated queries immediately refresh the assignment list and tenant cache.
+- **Strict Tenant & Scope Isolation**: All requests pin `X-Acc-Organization` to the validated session store. React Query keys are partitioned by `selectedOrgId` and `userId`.
+
 ## Testing & Verification
 
 ```bash
