@@ -2,7 +2,7 @@
   "name": "@acc/web",
   "version": "0.1.0",
   "private": true,
-  "description": "ACC admin console shell \u2014 Next.js App Router",
+  "description": "ACC admin console shell — Next.js App Router",
   "scripts": {
     "build": "next build",
     "dev": "next dev --port 3000",
@@ -10,7 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test 'src/**/*.test.ts'",
     "test:unit": "tsx --test 'src/**/*.test.ts'",
-    "test:security": "tsx --test 'src/**/*.sec.test.ts'"
+    "test:security": "tsx --test 'src/**/*.sec.test.ts'",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@acc/contracts": "*",
@@ -24,6 +25,7 @@
     "zustand": "^5.0.9"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^24.10.0",
     "@types/react": "^19.3.0",
