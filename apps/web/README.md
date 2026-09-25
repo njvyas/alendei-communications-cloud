@@ -106,6 +106,31 @@ The API Keys module (`/api-keys`) implements machine-to-machine credential admin
 - **Known Limitations & Deferred Scope**:
   - In-place key rotation, secret recovery/reveal, usage analytics, quotas, per-key rate limits, and IP allowlists are deferred and not implemented in Phase 1B.
 
+## Audit Log Administration (Gate B — Track 5)
+
+The Audit Logs module (`/audit-logs`) implements forensic observation and causality trace discovery:
+
+- **List & Discovery**: Lists immutable audit log events scoped to the active organization (`GET /api/v1/audit-logs`). Supports keyset cursor pagination (`cursor`, `limit`), sort ordering (`-occurredAt` [default] and `occurredAt`), outcome filtering (`success`, `failure`, `denied`), actor type filtering (`user`, `api_key`, `oauth_client`, `system`), action lookup, resource type lookup, correlation ID lookup, and ISO-8601 date range filtering (`occurredFrom`, `occurredTo`).
+- **Keyset Cursor Pagination**: Built around monotonic UUIDv7 keysets that preserve millisecond precision without offset drift. The UI tracks cursor history stacks for forward and backward navigation, resetting the cursor stack when query filters or sort directions change.
+- **Log Detail Dialog**: Accessible by inspecting any log row. Renders comprehensive event attributes:
+  - Event ID, occurred timestamp, action code, and outcome status dot (`ok` for success, `bad` for failure, `warn` for denied).
+  - Actor identity: actor type (`user`, `api_key`, `oauth_client`, `system`), user ID, API key ID, and human-readable actor label.
+  - Resource: target resource type and optional target resource ID.
+  - Scope and Ancestry: binding scope level (`organization`, `workspace`, `team`, `platform`) and full ancestry hierarchy (`orgId`, `workspaceId`, `teamId`, `resellerId`).
+  - Network Origin: client origin IP and user-agent string.
+  - Causal Tracing: correlation ID (with one-click clipboard copy and quick-filter action) and optional direct parent causation ID.
+- **Safe Payload Rendering (XSS Prevention)**:
+  - Mutation state snapshots (`before`, `after`) and event `metadata` represent untrusted arbitrary strings captured during past operations.
+  - All audit payloads are rendered strictly as inert text nodes within preformatted `<pre>` blocks using `JSON.stringify(data, null, 2)`.
+  - Zero `dangerouslySetInnerHTML`, zero HTML/script parsing, zero client-side evaluation, completely neutralizing stored XSS attacks.
+- **Authorization Gating**:
+  - Gated strictly by `audit.read` (`PERMISSIONS.AUDIT_READ`).
+  - Held by `org_admin`, `reseller_admin`, `alendei_support`, and `platform_super_admin`.
+  - Accounts lacking `audit.read` (such as `workspace_manager`) or unauthenticated visitors fail closed with an explicit unauthorized boundary banner; query execution is completely blocked (`enabled: false`).
+- **Strict Tenant Isolation**:
+  - All requests pin `X-Acc-Organization` to the validated active session store.
+  - React Query keys are partitioned by `selectedOrgId`, ensuring immediate eviction and zero cross-tenant cache contamination on organization switch.
+
 ## Testing & Verification
 
 ```bash

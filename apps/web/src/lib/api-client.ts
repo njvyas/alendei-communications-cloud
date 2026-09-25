@@ -927,3 +927,96 @@ export const apiKeysApi = {
   },
 };
 
+// -----------------------------------------------------------------------------
+// Audit Logs Models & API (Phase 1B.6.3, API.md §3f)
+// -----------------------------------------------------------------------------
+export type AuditActorType = 'user' | 'api_key' | 'oauth_client' | 'system';
+export type AuditOutcome = 'success' | 'failure' | 'denied';
+
+export interface AuditLogView {
+  readonly id: string;
+  readonly occurredAt: string;
+  readonly action: string;
+  readonly outcome: AuditOutcome;
+
+  readonly actorType: AuditActorType;
+  readonly actorUserId: string | null;
+  readonly actorApiKeyId: string | null;
+  readonly actorLabel: string | null;
+
+  readonly resourceType: string;
+  readonly resourceId: string | null;
+
+  /** Where the action happened, and the derived ancestry of that scope. */
+  readonly scopeType: ScopeLevel;
+  readonly scopeId: string | null;
+  readonly resellerId: string | null;
+  readonly orgId: string | null;
+  readonly workspaceId: string | null;
+  readonly teamId: string | null;
+
+  readonly before: Record<string, unknown> | null;
+  readonly after: Record<string, unknown> | null;
+  readonly metadata: Record<string, unknown>;
+
+  readonly correlationId: string;
+  readonly causationId: string | null;
+
+  readonly ip: string | null;
+  readonly userAgent: string | null;
+}
+
+export interface ListAuditLogsParams {
+  readonly action?: string;
+  readonly actorType?: AuditActorType;
+  readonly actorUserId?: string;
+  readonly outcome?: AuditOutcome;
+  readonly resourceType?: string;
+  readonly resourceId?: string;
+  readonly scopeType?: ScopeLevel;
+  readonly scopeId?: string;
+  readonly correlationId?: string;
+  readonly occurredFrom?: string;
+  readonly occurredTo?: string;
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: string;
+}
+
+export const auditLogsApi = {
+  async list(
+    params: ListAuditLogsParams = {},
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<AuditLogView>> {
+    const query = new URLSearchParams();
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.sort) query.set('sort', params.sort);
+    if (params.action) query.set('action', params.action);
+    if (params.actorType) query.set('actorType', params.actorType);
+    if (params.actorUserId) query.set('actorUserId', params.actorUserId);
+    if (params.outcome) query.set('outcome', params.outcome);
+    if (params.resourceType) query.set('resourceType', params.resourceType);
+    if (params.resourceId) query.set('resourceId', params.resourceId);
+    if (params.scopeType) query.set('scopeType', params.scopeType);
+    if (params.scopeId) query.set('scopeId', params.scopeId);
+    if (params.correlationId) query.set('correlationId', params.correlationId);
+    if (params.occurredFrom) query.set('occurredFrom', params.occurredFrom);
+    if (params.occurredTo) query.set('occurredTo', params.occurredTo);
+
+    const queryString = query.toString();
+    const endpoint = queryString ? `/audit-logs?${queryString}` : '/audit-logs';
+
+    return apiFetch<ApiPagedResponse<AuditLogView>>(endpoint, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  async get(id: string, signal?: AbortSignal): Promise<ApiDataResponse<AuditLogView>> {
+    return apiFetch<ApiDataResponse<AuditLogView>>(`/audit-logs/${encodeURIComponent(id)}`, {
+      method: 'GET',
+      signal,
+    });
+  },
+};
