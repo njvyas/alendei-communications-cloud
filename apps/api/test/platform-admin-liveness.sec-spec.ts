@@ -28,6 +28,7 @@
 import { ERROR_CODES, PERMISSIONS, PLATFORM_ROLE_KEYS } from '@acc/contracts';
 import { PLATFORM_ADMIN_LOCK_KEY, schema } from '@acc/db';
 import { eq, inArray, sql } from 'drizzle-orm';
+import { Pool } from 'pg';
 import request from 'supertest';
 import { uuidv7 } from 'uuidv7';
 
@@ -52,6 +53,7 @@ describe('last-platform-admin invariant', () => {
   let db: TenantDatabase;
   let orgA: TenantFixture;
   let superAdminRoleId: string;
+  let supportRoleId: string;
   /** Platform administrators this suite created, for teardown. */
   const planted: string[] = [];
 
@@ -66,6 +68,11 @@ describe('last-platform-admin invariant', () => {
       .from(schema.roles)
       .where(eq(schema.roles.key, PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN));
     superAdminRoleId = role!.id;
+    const [support] = await h.admin
+      .select({ id: schema.roles.id })
+      .from(schema.roles)
+      .where(eq(schema.roles.key, PLATFORM_ROLE_KEYS.ALENDEI_SUPPORT));
+    supportRoleId = support!.id;
 
     // This suite owns the platform-admin population outright, so its counts are
     // absolute rather than relative to whatever a previous suite left behind.
@@ -172,12 +179,49 @@ describe('last-platform-admin invariant', () => {
     });
   }
 
+  /**
+   * The invariant's own count, as migration `0010` defines it: active holders of
+   * `alendei_super_admin` at platform scope. A support grant is platform-scoped
+   * and deliberately not counted.
+   */
   async function admins(): Promise<number> {
     const { rows } = await h.admin.execute<{ count: string }>(sql`
       SELECT count(*) AS count FROM user_roles ur
       JOIN users u ON u.id = ur.user_id
+      JOIN roles r ON r.id = ur.role_id
       WHERE ur.scope_type = 'platform' AND u.status = 'active'
+        AND r.org_id IS NULL AND r.key = 'alendei_super_admin'
     `);
+    return Number(rows[0]!.count);
+  }
+
+  /** Plants an active user holding only `alendei_support` at platform scope. */
+  async function plantSupport(label: string): Promise<{ userId: string; assignmentId: string }> {
+    const email = `${label}-${uuidv7().replace(/-/g, '').slice(-10)}@example.test`;
+    const result = await h.admin.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('app.is_platform_admin','on',true)`);
+      const [user] = await tx
+        .insert(schema.users)
+        .values({
+          email,
+          status: 'active',
+          passwordHash: await credentials.hash(PASSWORD),
+          passwordUpdatedAt: new Date(),
+        })
+        .returning({ id: schema.users.id });
+      const [grant] = await tx
+        .insert(schema.userRoles)
+        .values({ userId: user!.id, roleId: supportRoleId, scopeType: 'platform' })
+        .returning({ id: schema.userRoles.id });
+      return { userId: user!.id, assignmentId: grant!.id };
+    });
+    planted.push(result.userId);
+    return result;
+  }
+
+  async function supportGrantsPresent(): Promise<number> {
+    const { rows } = await h.admin.execute<{ count: string }>(sql`
+      SELECT count(*) AS count FROM user_roles WHERE role_id = ${supportRoleId} AND scope_type = 'platform'`);
     return Number(rows[0]!.count);
   }
 
@@ -715,5 +759,174 @@ describe('last-platform-admin invariant', () => {
       await revoke(token, await assignmentIdFor(spare.userId)).expect(204);
       expect(await admins()).toBe(1);
     }, 20_000);
+  });
+
+  // ===========================================================================
+  describe('G. a support grant is not a platform administrator (migration 0010)', () => {
+    /**
+     * Before `0010` the invariant counted *any* active platform-scope grant, so
+     * with a support user present the last real administrator could be revoked
+     * or disabled and the platform left administered by a read-only role.
+     */
+    it('revoking the last super admin through the API is refused although a support user exists', async () => {
+      const only = await plantAdmin('g-api');
+      await plantSupport('g-api-support');
+      expect(await admins()).toBe(1);
+      expect(await supportGrantsPresent()).toBe(1);
+
+      const token = await tokenFor(only.email);
+      const res = await revoke(token, await assignmentIdFor(only.userId)).expect(409);
+      expect(res.body.error.code).toBe(ERROR_CODES.AUTHZ_LAST_PLATFORM_ADMIN);
+      expect(await admins()).toBe(1);
+    });
+
+    it('the database refuses deleting the last super-admin grant although a support grant remains', async () => {
+      const only = await plantAdmin('g-delete');
+      await plantSupport('g-delete-support');
+      await expectDbRefusal(
+        h.admin.delete(schema.userRoles).where(eq(schema.userRoles.userId, only.userId)),
+        /no active administrator/,
+      );
+      expect(await admins()).toBe(1);
+    });
+
+    it('the database refuses disabling the last super admin although a support user remains', async () => {
+      const only = await plantAdmin('g-disable');
+      await plantSupport('g-disable-support');
+      await expectDbRefusal(
+        h.admin
+          .update(schema.users)
+          .set({ status: 'disabled' })
+          .where(eq(schema.users.id, only.userId)),
+        /no active administrator/,
+      );
+      expect(await admins()).toBe(1);
+    });
+
+    it('UPDATE path: turning the last super-admin grant into a support grant is refused', async () => {
+      const only = await plantAdmin('g-update-role');
+      await plantSupport('g-update-role-support');
+      const id = await assignmentIdFor(only.userId);
+      await expectDbRefusal(
+        h.admin.transaction(async (tx) => {
+          await tx.execute(sql`select set_config('app.is_platform_admin','on',true)`);
+          await tx
+            .update(schema.userRoles)
+            .set({ roleId: supportRoleId })
+            .where(eq(schema.userRoles.id, id));
+        }),
+        /no active administrator/,
+      );
+      expect(await admins()).toBe(1);
+    });
+
+    it('UPDATE path: moving the last super-admin grant to reseller scope is refused', async () => {
+      const only = await plantAdmin('g-update-scope');
+      await plantSupport('g-update-scope-support');
+      const id = await assignmentIdFor(only.userId);
+      await expectDbRefusal(
+        h.admin.transaction(async (tx) => {
+          await tx.execute(sql`select set_config('app.is_platform_admin','on',true)`);
+          await tx
+            .update(schema.userRoles)
+            .set({ scopeType: 'reseller', scopeId: orgA.resellerId })
+            .where(eq(schema.userRoles.id, id));
+        }),
+        /no active administrator/,
+      );
+      expect(await admins()).toBe(1);
+    });
+
+    it('UPDATE path: reassigning the last super-admin grant to a disabled user is refused', async () => {
+      const only = await plantAdmin('g-update-user');
+      await plantSupport('g-update-user-support');
+      const [disabled] = await h.admin
+        .insert(schema.users)
+        .values({
+          email: `g-disabled-${uuidv7().replace(/-/g, '').slice(-10)}@example.test`,
+          status: 'disabled',
+        })
+        .returning({ id: schema.users.id });
+      planted.push(disabled!.id);
+      const id = await assignmentIdFor(only.userId);
+      await expectDbRefusal(
+        h.admin.transaction(async (tx) => {
+          await tx.execute(sql`select set_config('app.is_platform_admin','on',true)`);
+          await tx
+            .update(schema.userRoles)
+            .set({ userId: disabled!.id })
+            .where(eq(schema.userRoles.id, id));
+        }),
+        /no active administrator/,
+      );
+      expect(await admins()).toBe(1);
+    });
+
+    it('UPDATE path is not over-broad: reassigning the grant to another active user keeps one admin and is allowed', async () => {
+      const only = await plantAdmin('g-update-ok');
+      const support = await plantSupport('g-update-ok-support');
+      const id = await assignmentIdFor(only.userId);
+      await h.admin.transaction(async (tx) => {
+        await tx.execute(sql`select set_config('app.is_platform_admin','on',true)`);
+        await tx
+          .update(schema.userRoles)
+          .set({ userId: support.userId })
+          .where(eq(schema.userRoles.id, id));
+      });
+      expect(await admins()).toBe(1);
+    });
+
+    it('concurrency: two API revocations of the last two super admins leave one, with support present', async () => {
+      const first = await plantAdmin('g-race-1');
+      const second = await plantAdmin('g-race-2');
+      await plantSupport('g-race-support');
+      expect(await admins()).toBe(2);
+
+      const token = await tokenFor(first.email);
+      const [resA, resB] = await Promise.all([
+        revoke(token, await assignmentIdFor(first.userId)),
+        revoke(token, await assignmentIdFor(second.userId)),
+      ]);
+      expect([resA.status, resB.status].filter((s) => s === 204)).toHaveLength(1);
+      expect(await admins()).toBe(1);
+      expect(await supportGrantsPresent()).toBe(1);
+    });
+
+    it('concurrency: two independent connections each UPDATE a different admin away — exactly one commits', async () => {
+      const first = await plantAdmin('g-uprace-1');
+      const second = await plantAdmin('g-uprace-2');
+      await plantSupport('g-uprace-support');
+      const ids = [await assignmentIdFor(first.userId), await assignmentIdFor(second.userId)];
+      const pools = [0, 1].map(
+        () => new Pool({ connectionString: process.env.DATABASE_ADMIN_URL!, max: 1 }),
+      );
+      try {
+        const outcomes = await Promise.allSettled(
+          ids.map(async (id, i) => {
+            const client = await pools[i]!.connect();
+            try {
+              await client.query('BEGIN');
+              await client.query(`SELECT set_config('app.is_platform_admin','on',true)`);
+              await client.query('UPDATE user_roles SET role_id = $1 WHERE id = $2', [
+                supportRoleId,
+                id,
+              ]);
+              await client.query('COMMIT');
+            } catch (error) {
+              await client.query('ROLLBACK');
+              throw error;
+            } finally {
+              client.release();
+            }
+          }),
+        );
+        expect(outcomes.filter((o) => o.status === 'fulfilled')).toHaveLength(1);
+        const refused = outcomes.find((o) => o.status === 'rejected') as PromiseRejectedResult;
+        expect(String(refused.reason)).toMatch(/no active administrator/);
+        expect(await admins()).toBe(1);
+      } finally {
+        await Promise.all(pools.map((p) => p.end()));
+      }
+    });
   });
 });

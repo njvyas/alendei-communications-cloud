@@ -811,6 +811,16 @@ Examined, not assumed. Extending RLS below the organization was rejected for Pha
 
 **What proves the workspace/team boundary instead:** every scoped route performs exactly one target-scope check, asserted against the live route table (§6n case 30); the chain every decision rests on is read from the database inside the request's transaction (ADR-005 D-5); and workspace/team denial is proven *with RLS satisfied* — `authorization-service.sec-spec.ts`, `api-key-binding-scope.sec-spec.ts`, `audit-read.sec-spec.ts`, `role-assignment.sec-spec.ts`, and the workspace- and team-scoped principals in `shared-reseller-isolation.sec-spec.ts`. This remains the highest residual risk and is revisited if `DECISIONS.md` D3 (mandatory `workspace_id`) is resolved in favour of mandatory.
 
+**Verified, not only stated** (`workspace-team-boundary.sec-spec.ts`, 15 cases): over HTTP a workspace manager cannot grant at or revoke from a sibling workspace or its teams, a team lead (a custom team-scoped role holding grant/revoke) cannot act on a sibling team, workspace- and team-scoped readers cannot read sibling audit records, and none of them can grant at or read organization-level surfaces; directly as `acc_app`, under the context the resolver computes for those principals, RLS **does** admit sibling workspaces and teams of the same organization and admits nothing of another organization.
+
+| Boundary | API authorization | DB / RLS | Intended boundary |
+|---|---|---|---|
+| Organization | Enforced (`AuthorizationService`, selection from grants) | **Enforced** (`app_org_in_scope`, validated claims) | PostgreSQL isolation boundary |
+| Workspace | Enforced (DB-resolved chain, coherent grant) | Not enforced — rows of sibling workspaces in the same organization are visible | Application authorization boundary |
+| Team | Enforced (DB-resolved chain, coherent grant) | Not enforced — rows of sibling teams in the same organization are visible | Application authorization boundary |
+
+**Organization is the PostgreSQL isolation boundary; workspace and team are application authorization boundaries.** What the database guarantees for a workspace- or team-scoped principal: it can never read or write another organization's rows, even if the application's check is missing. What it does not guarantee: a missing or wrong application check inside one organization would expose sibling workspaces' and teams' rows, and nothing in the database would stop it.
+
 ### D-5 — Unauthenticated paths are throttled, and success no longer resets the address
 
 Login success clears only the account bucket; `/auth/refresh` is throttled per address (`RATE_LIMIT_REFRESH_MAX`, default 30); failed API-key presentations are throttled per address **before** Argon2 verification (`RATE_LIMIT_API_KEY_FAILURE_MAX`, default 20). The existing `AuthRateLimitService` is extended; no new mechanism.
@@ -822,6 +832,25 @@ Login success clears only the account bucket; `/auth/refresh` is throttled per a
 ### D-7 — Start-up refuses a principal RLS would not bind; FORCE RLS is not used
 
 `DatabaseModule` asserts at start-up that both request-serving pools log in as a principal that is not superuser, not `BYPASSRLS`, owns no table (nor is a member of an owner) and is a member of no role. `FORCE ROW LEVEL SECURITY` is deliberately not enabled: it only affects a non-superuser *owner*, and the owner must remain exempt for retention, teardown and seeding; the risk FORCE would mitigate (an application principal owning a table) is instead made undeployable by this check and asserted in `principals.int-spec.ts`.
+
+### D-8 — Gate-B residual classification (final verification)
+
+| Item | Classification | Why |
+|---|---|---|
+| Suspended/closed organization access | Deferred (Phase 1C) | No organization lifecycle exists yet — nothing can suspend or close an organization through the product, so the state is unreachable. |
+| `AUTH_MAX_SESSIONS_PER_USER` not enforced | Deferred (Phase 1C) | A resource-hygiene limit, not an isolation or authorization control; every session is still individually revocable and bounded by its TTL. |
+| Logout after access-token expiry | Accepted Gate-B residual risk | The session stays revocable (`DELETE /auth/sessions/:id`, user disable) and expires with its refresh TTL; fixing it requires a coordinated backend/console change. |
+| WebSocket tickets surviving session revocation | Deferred (with the gateway, D15) | Nothing consumes a ticket, so a surviving ticket confers nothing until the gateway exists, which must check the session at consumption. |
+| WebSocket ticket issuance without a permission check | Deferred (with the gateway, D15) | The topic scope only matters when a gateway admits subscriptions; the ticket is still bound to the caller's own organization and session. |
+| No composite `(workspace_id, org_id)` FK on `api_keys`/`ws_tickets` | Accepted Gate-B residual risk | Both writers derive the binding from the database, and RLS keeps a row inside its organization; a mismatched row needs an owner-level writer. |
+| READ COMMITTED dependency for the last-admin race | Accepted Gate-B residual risk | No code path changes the isolation level, and the concurrency tests prove the invariant under the level actually used. |
+| `allowed_scope_types` application-only | Accepted Gate-B residual risk | Enforced on the only grant path (`RoleAssignmentService`, case 28); a bypassing writer is still confined to one organization by the trigger. |
+| `acc_app` context trust | Accepted Gate-B residual risk | A threat-model assumption (`SECURITY.md` §4b): the process holding `acc_app` also holds `acc_auth` and the JWT key, so its compromise is platform compromise. |
+| Outbox/SIEM absence | Deferred (Phase 2+) | No event producer exists in Phase 1B; audit tamper-evidence currently rests on infrastructure controls, which is documented. |
+| OpenAPI contract drift | Deferred (Phase 1C) | A documentation and contract-tooling gap with no authorization effect; the UI is off by default and refused in production. |
+| Browser E2E fixture gaps | Deferred (Phase 1C) | Backend security properties are proven by API and database suites; the browser suite needs a seed and Gemini's corrections (`TESTING.md` §6p). |
+
+None of the twelve is a Gate-B blocker.
 
 ### Consequences
 

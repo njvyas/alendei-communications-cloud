@@ -321,9 +321,31 @@ The controls that do survive an owner-level adversary live outside this database
 
 Anyone strengthening this should target that outer layer (export lag, SIEM alerting on gaps, hash-chaining rows so a deletion is detectable) rather than adding further in-database guards, which would add the appearance of protection without the substance.
 
-### 4b. Residual trust in the application database role
+### 4b. Residual trust in the application database role — a threat-model assumption
 
-Tenant context reaches PostgreSQL as transaction-local session variables (`app.current_org_id`, `app.current_user_id`, `app.current_reseller_id`, `app.is_platform_admin`, `app.provisioning`). PostgreSQL cannot stop a principal from setting a custom variable, so **a principal able to execute arbitrary SQL as `acc_app` can choose its own tenant context** — for example by setting `app.current_user_id` to a real administrator's id together with the platform flag. Migration `0010` validates the reseller and platform claims against grants, which removes *application logic* errors as a way to widen RLS; it does not and cannot remove this. `app.current_org_id` and `app.provisioning` are not validated at all. RLS is therefore a backstop against faulty application code, not against a compromised application process; SQL-injection resistance (parameterized queries only, §6) remains the control for the latter.
+**Assumption, stated precisely: the process holding `acc_app` credentials is trusted infrastructure.** RLS is a backstop against *faulty application code*, not against *a compromised application process*. This is deliberate, and it is measured rather than assumed (`packages/db/src/test/tenant-context-trust.int-spec.ts`, 14 cases, run as the real non-owner, non-`BYPASSRLS` `acc_app`).
+
+**What `acc_app` can do with arbitrary SQL (i.e. if the API process is compromised):**
+
+| Question | Result |
+|---|---|
+| A. `SET LOCAL app.current_org_id = '<victim>'` | **Yes** — PostgreSQL lets any principal set a custom variable |
+| B. …then read the victim's rows | **Yes** — the organization claim is not validated in the database |
+| C. Reseller claim | Only by *also* setting `app.current_user_id` to a user who genuinely holds that reseller grant (migration `0010`); an unbacked claim reads as NULL |
+| C. Platform claim | Only by also naming a real active `alendei_super_admin`'s user id; unbacked it reads as false |
+| C. Workspace claim | Settable and **inert** — no policy or function reads `app.current_workspace_id` |
+| C. Team claim | No team variable exists; setting one is accepted by PostgreSQL and read by nothing |
+| D. SECURITY DEFINER functions | None sets a variable, runs dynamic SQL, grants or alters anything (asserted by scanning their code, with a positive control); every trigger function refuses a direct call; the callable helpers return false/NULL for an unbacked claim. One bounded disclosure: `app_org_reseller(org)` returns any organization's reseller id to a caller that already knows the organization id |
+| E. `SET ROLE` / `SET SESSION AUTHORIZATION` / `set_config('role', …)` to the owner, `acc_auth` or `acc_relay` | **No** — permission denied (`acc_app` is a member of no role) |
+| F. A variable surviving the transaction | A session-level `SET` persists on *that connection* — but every sanctioned transaction writes all six variables first, so it is overwritten (asserted on a single pooled connection); persisting a variable as a role or database default (`ALTER ROLE/DATABASE … SET`) is **denied** |
+
+**Why this is accepted rather than engineered away.** The API process that could be made to issue such SQL also holds, by design: the `acc_auth` credentials (which read every user, session and grant across all tenants), the JWT signing key (which mints a session for any user), and the Redis and configuration secrets. A compromise of that process is a compromise of the platform regardless of what RLS does, so hardening `acc_app` against its own process would buy no containment. The defences for that threat are the ones that keep the process uncompromised: parameterized queries only (§6), no dynamic SQL, least-privilege principals, secrets outside the environment in production (§3), and infrastructure controls.
+
+**Three capability classes, kept distinct:**
+
+1. **The authenticated application, operating normally.** Touches `acc_app` only through `withTenantTransaction`, which writes all six variables from the authenticated principal on every transaction (two construction sites: `withRequestTenant` and the denial-audit writer, both from `RequestContext.principal`). The bare pool is used only for the `SELECT 1` health probe. The reseller and platform claims it writes are additionally validated by the database.
+2. **Arbitrary SQL as `acc_app` (compromised process).** The table above: organization context is choosable; reseller/platform context is choosable only with a real holder's user id; no role switch, no persistent default. Accepted, per the assumption.
+3. **A normal API caller attempting scope substitution.** Cannot set any variable. The organization is chosen only from the principal's grant-derived list (`X-Acc-Organization` outside it → `403 TENANCY_CONTEXT_MISMATCH`); JWT tenancy claims are never read; advisory identifiers are cross-checked; credentials in query strings are refused; API keys cannot select another organization. Proven in `auth.sec-spec.ts`, `advisory-identifier.sec-spec.ts`, `me-authorization.sec-spec.ts` and `shared-reseller-isolation.sec-spec.ts`.
 
 ## 5. Webhook & API hardening
 
