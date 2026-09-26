@@ -45,7 +45,7 @@ Both checks run server-side, after tenant context resolution, never based on cli
 
 **Where each check runs, and why it is split (ADR-003 D-5).** The endpoint-level *permission* check can be declarative, on a guard. The *target-scope coverage* check frequently cannot: a target's scope is often knowable only after the resource is loaded. A guard alone is therefore **not** sufficient authorization, and treating it as sufficient is the specific failure mode that turns workspace and team isolation into accidental filtering. Every scoped service operation performs an explicit target-scope check through the centralized `PermissionEvaluator`, using **one reusable mechanism** rather than ad-hoc checks repeated per call site. This is a mandatory application invariant, not a code-review convention — and below organization level it is the *only* enforcement that exists, because RLS carries no workspace or team term (`TENANCY.md` §3a).
 
-`scopeCovers` and `PermissionEvaluator` both shipped in **Phase 1B.3**, not 1B.5 as `ROADMAP.md` originally scheduled them: the 1B.3 read surface had to authorize its own query, and the only alternative was the ad-hoc check this paragraph forbids (ADR-004 D-1). Phase 1B.5 builds role administration on them unchanged and closes the one over-approximation ADR-003 left in them — a principal holding a permission through any grant is currently treated as holding it through each, pending per-grant permission sets.
+`scopeCovers` and `PermissionEvaluator` both shipped in **Phase 1B.3**, not 1B.5 as `ROADMAP.md` originally scheduled them: the 1B.3 read surface had to authorize its own query, and the only alternative was the ad-hoc check this paragraph forbids (ADR-004 D-1). Phase 1B.5 built role administration on them and closed the one over-approximation ADR-003 left in them — permission and scope are now read off a single coherent grant (ADR-005 D-1, Phase 1B.5.1).
 
 **This is a different question from the advisory-identifier cross-check** (`TENANCY.md` §2b, ADR-004 D-3), and the two are deliberately not merged. That one asks whether an identifier the *caller supplied* contradicts the context the server derived, and answers it before the handler runs, without touching the database. This one asks whether the principal may act on a *loaded* target, and needs that target's ancestry to answer. Collapsing them would mean either resolving tenancy from client input or authorizing without the resource in hand.
 
@@ -91,7 +91,7 @@ CorrelationMiddleware      correlation id, request context
 
 Authorization happens inside the handler's transaction and **before** the mutation it guards; nothing in this phase moved a check after one.
 
-**Deferred targets.** Two routes cannot name their target statically, and both say so on the route with a reason: granting a role targets the scope named in the body, and revoking one targets the scope on the stored row. Neither is knowable from route metadata, and guessing either would be the forged-target defect ADR-005 D-5 exists to prevent. Every other scoped route targets the request's resolved organization.
+**Deferred targets.** Six routes cannot name their target statically, and each says so on the route with a reason — granting a role (the scope named in the body), revoking one (the scope on the stored row), and the API-key detail, create and revoke routes and the audit-log detail route (each authorized at the scope read from the body or the stored row). Neither is knowable from route metadata, and guessing either would be the forged-target defect ADR-005 D-5 exists to prevent. Every other scoped route targets the request's resolved organization.
 
 ## 3. Platform-level roles (fixed, not tenant-configurable)
 
@@ -103,9 +103,9 @@ These roles have `roles.org_id IS NULL`, which is what marks a role as platform-
 | `alendei_support` | `platform` | Cross-tenant read plus limited write (audit view, impersonation-with-audit for support) |
 | `reseller_admin` | `reseller` | Manage the organizations beneath one reseller, and that reseller's billing/markup |
 
-**What platform-level access means**: a `platform` grant sets `app.is_platform_admin` and therefore satisfies `app_org_in_scope()` for every organization (`TENANCY.md` §3a). It is the only grant that does so. It is not a bypass of authorization — a platform role still only carries the permissions its `role_permissions` actually list, so `alendei_support` sees every tenant but can still only do what its read-oriented permission set allows.
+**What platform-level access means** (ADR-011 D-2): only an `alendei_super_admin` grant at platform scope sets `app.is_platform_admin`, and so satisfies `app_org_in_scope()` for every organization (`TENANCY.md` §3a); the database re-checks that grant before honouring the flag. `alendei_support`, though platform-scoped, does **not** set it: support may *select* any organization (`X-Acc-Organization`), and inside that organization RLS scopes it exactly like a member, while its read-only permission set bounds what it can do. Before migration `0010` any platform-scope grant set the flag, which gave the read-only support role unrestricted database read and write reach.
 
-**What reseller-level access means**: a `reseller` grant sets `app.current_reseller_id` and reaches exactly the organizations whose `reseller_id` matches — and, through them, their workspaces and teams. It reaches no other reseller's organizations, and it is not platform access: a reseller admin cannot see the control plane, cannot grant platform roles, and cannot reach an organization that has been moved to another reseller.
+**What reseller-level access means**: a `reseller` grant — and only a `reseller` grant — sets `app.current_reseller_id` (ADR-011 D-1; the database validates the claim against the grant) and reaches exactly the organizations whose `reseller_id` matches — and, through them, their workspaces and teams. An organization, workspace or team grant never sets it, whatever reseller the organization belongs to. It reaches no other reseller's organizations, and it is not platform access: a reseller admin cannot see the control plane, cannot grant platform roles, and cannot reach an organization that has been moved to another reseller.
 
 ## 4. Tenant-configurable roles (seeded defaults, editable)
 
@@ -133,7 +133,7 @@ Organizations may define additional custom roles by composing existing `permissi
 
 ### 4a. Which roles may be assigned at which scopes
 
-The complete assignability matrix. A blank cell is not merely unusual — it is refused, by `fn_validate_user_role_scope` as well as by the service layer (§6).
+The complete assignability matrix. A blank cell is refused. **Which layer refuses it differs:** the platform/tenant split (rules 1–2 below) is enforced by `fn_validate_user_role_scope` as well as by the service; the per-role column (`roles.allowed_scope_types`, e.g. `org_admin` only at `organization`) is enforced by `RoleAssignmentService` only (§6n case 28). Database enforcement of `allowed_scope_types` is **DEFERRED** — the column exists and is constrained to its level (migration `0004`), but the trigger does not consult it at grant time.
 
 | Role | `platform` | `reseller` | `organization` | `workspace` | `team` |
 |---|:---:|:---:|:---:|:---:|:---:|
@@ -147,7 +147,7 @@ The complete assignability matrix. A blank cell is not merely unusual — it is 
 | `read_only` | | | ✓ | ✓ | ✓ |
 | custom tenant role | | | ✓ | ✓ | ✓ |
 
-Two structural rules generate this table, and the database enforces both independently of any list:
+Two structural rules generate the level split of this table, and the database enforces both independently of the service:
 
 1. **A platform-level role (`roles.org_id IS NULL`) may only be granted at `platform` or `reseller` scope**, never at a tenant scope. Granting `alendei_super_admin` at `organization` scope is refused.
 2. **A tenant role (`roles.org_id IS NOT NULL`) may only be granted at `organization`, `workspace` or `team` scope, and only where the target scope's ownership chain resolves to that same organization.** Granting Organization A's `org_admin` at a scope owned by Organization B is refused (§6).
@@ -158,7 +158,7 @@ Administering a scope means creating, updating or deleting the resources at that
 
 | Actor holds | May administer | May **not** administer |
 |---|---|---|
-| `platform` grant | every reseller, organization, workspace and team; platform and reseller role grants | — (bounded only by the permissions the role actually carries) |
+| `platform` grant | every reseller, organization, workspace and team (bounded by the permissions the role carries). Platform and reseller role grants are administered by the owner-run bootstrap/seed path only — **no API grants a platform-level role** (`RoleAssignmentService` refuses them) | — |
 | `reseller` grant | organizations under that reseller, and their workspaces, teams and tenant role grants | any other reseller; its own reseller's *existence*; platform roles; the control plane |
 | `organization` grant | that organization's workspaces, teams, tenant roles and role grants | the organization's own reseller; sibling organizations; platform or reseller role grants |
 | `workspace` grant | that workspace's teams and grants within it | sibling workspaces; the parent organization; anything above |
@@ -182,9 +182,9 @@ The recurring pattern: **an actor may administer downward, never its own level's
 
 The **access token** is a short-lived JWT carrying identity and session claims only — `sub`, `sid`, `actor_type`, `jti`, `iss`, `aud`, `iat`, `exp`. It carries **no** `org_id`, `reseller_id`, `workspace_id`, `team_id`, roles or permissions (ADR-003 D-3). Tenant context and authorization are re-derived server-side from the verified credential on every request, which is precisely why a forged tenancy claim cannot influence a decision: no code path reads one.
 
-The **refresh token** is an opaque random value stored only as a hash in `sessions.refresh_token_hash`. For the browser console it is carried in an `httpOnly; Secure; SameSite=Lax` cookie scoped to the refresh path — never readable by JavaScript, never in `localStorage`, never in a URL (ADR-003 D-7; transport, CORS and CSRF consequences in `API.md` §3b). Non-browser clients authenticate with API keys and never use the refresh-cookie flow.
+The **refresh token** is an opaque random value stored only as a hash in `sessions.refresh_token_hash`. For the browser console it is carried in an `httpOnly; Secure; SameSite=Lax` cookie with `Path=/api/v1/auth` (so it is sent to the `/auth/*` routes, not to the rest of the API; `Secure` is omitted only in development and test) — never readable by JavaScript, never in `localStorage`, never in a URL (ADR-003 D-7; transport, CORS and CSRF consequences in `API.md` §3b). Non-browser clients authenticate with API keys and never use the refresh-cookie flow.
 
-Session/device management: `sessions` records device/IP/user-agent metadata and supports explicit revocation (single session or "all sessions for user"); revoking a session invalidates its refresh token immediately — `revoked_at` and `expires_at` are checked on **every** refresh, not merely at token expiry.
+Session/device management: `sessions` records device/IP/user-agent metadata and supports explicit revocation of a single session (`DELETE /auth/sessions/:id`, `POST /auth/logout`); revoking all of a user's sessions happens when the user is disabled, and a self-service "sign out everywhere" endpoint is DEFERRED; revoking a session invalidates its refresh token immediately — `revoked_at` and `expires_at` are checked on **every** refresh, not merely at token expiry.
 
 **Rotation and reuse detection** (Phase 1B.2). Every refresh rotates the token and records lineage on `sessions` (`DATABASE.md` §2): the spent session is marked `rotated_at` and points at its successor, which inherits the chain's `family_id`. Presenting an already-rotated token is treated as theft rather than as a retryable error — the entire family is revoked and `reuse_detected_at` is set. Concurrency is settled by the database, through a conditional `UPDATE ... WHERE rotated_at IS NULL` plus a unique constraint on the successor, so two simultaneous refreshes of one token cannot both succeed.
 
@@ -250,7 +250,7 @@ A key is permanently bound to its organization (`api_keys.org_id`), and that bin
 
 ## 6. Scope integrity — `user_roles.scope_id` cannot point cross-tenant
 
-`user_roles.scope_type`/`scope_id` is a polymorphic reference (organization, workspace, or team), which means it cannot be a single physical foreign key. Two independent guards apply, neither sufficient alone:
+`user_roles.scope_type`/`scope_id` is a polymorphic reference across the five-scope model (`platform` with no id, `reseller`, `organization`, `workspace` or `team`), which means it cannot be a single physical foreign key. Two independent guards apply, neither sufficient alone:
 
 1. **Database constraint (defense-in-depth, always on)**: a `BEFORE INSERT/UPDATE` trigger on `user_roles` (`fn_validate_user_role_scope`, `DATABASE.md` §2) resolves the target row named by `(scope_type, scope_id)`, verifies its ownership chain, and **derives `user_roles.org_id` from that chain rather than trusting the value the writer supplied** — so a forged `org_id` on the insert is overwritten, not merely rejected. Per scope type:
 
@@ -299,19 +299,20 @@ Each guard names the layer that enforces it, because a guard that exists only in
 
 Two consequences worth stating, because both are easy to assume the other way:
 
-- **`alendei_support` counts.** It is a platform role granted at platform scope, so it sets `isPlatformAdmin` and carries platform reach. The invariant preserves *platform reach*, which is what the authorization model means by the term — not specifically super-admin capability.
+- **`alendei_support` does not count** (changed by ADR-011 D-2, migration `0010`). The invariant now preserves an active `alendei_super_admin` at platform scope — the same definition `isPlatformAdmin` and `app_is_platform_admin()` use. Previously any platform-scope grant counted, so the last real administrator could be removed while a read-only support grant kept the invariant nominally satisfied.
 - **`reseller_admin` does not.** It is a platform role, but it is granted at `reseller` scope, and scope is what decides.
 
 **"Active" is load-bearing.** A disabled user cannot authenticate, so a grant it holds confers nothing and must not satisfy the invariant.
 
-**Four paths can violate it, and all four are closed:**
+**Five paths can violate it, and all five are closed:**
 
 | # | Path | Closed by |
 |---|---|---|
 | 1 | Revoking the grant | `DELETE /role-assignments/:id` → `409 AUTHZ_LAST_PLATFORM_ADMIN`; trigger beneath it |
-| 2 | Disabling the holder | Trigger on `users` (UPDATE OF `status`). **No HTTP surface exists yet** — user lifecycle is Phase 1B.6 — and the database closes it regardless |
+| 2 | Disabling the holder | `POST /users/:id/disable` → `409`; trigger on `users` (UPDATE OF `status`) beneath it |
 | 3 | Deleting the holder | Cascade from `users` to `user_roles` fires the `user_roles` trigger. Not one of ADR-005 D-7's three; found in 1B.5.6 |
 | 4 | Deleting the role | Already closed twice: system roles are immutable (1B.5.4) and `ON DELETE RESTRICT` refuses the delete while grants exist |
+| 5 | Changing the grant (`UPDATE` of `scope_type`, `user_id` or `role_id`) | `trg_user_roles_platform_admin_liveness_update` (migration `0010`); no application path updates `user_roles` |
 
 **Why the database and not only the service.** The same reason §6 gives for cross-tenant grants: a guard that exists only in the service is a different quality of assurance, and a migration script or admin tool bypasses it. The service check exists to turn a `restrict_violation` into a `409` a caller can act on; the trigger is the guarantee.
 

@@ -14,7 +14,7 @@ Alendei (platform operator — not a tenant row; represented by a "system" scope
 - Every `organizations` row has a nullable `reseller_id`. Organizations with no reseller belong to the implicit **Alendei Direct** reseller (a real `resellers` row seeded at bootstrap, not a null-check special case) — this avoids "reseller_id IS NULL" branching throughout the codebase.
 - `workspaces` belong to exactly one `organizations` row. Workspaces exist to support multi-brand customers (e.g., a customer running two distinct consumer brands under one legal entity/contract) and are the unit of white-label branding below the reseller level.
 - `teams` belong to exactly one `workspaces` row and exist purely for permission scoping (e.g., "Support Team" vs. "Marketing Team" within the same workspace) — they carry no billing or branding meaning.
-- `users` authenticate at the platform level (one user identity) but are granted access via `user_roles` scoped to one or more `(organization | workspace | team)` — see `RBAC.md`.
+- `users` authenticate at the platform level (one user identity) but are granted access via `user_roles` scoped at any level of the five-scope hierarchy (`platform | reseller | organization | workspace | team`, §1a) — see `RBAC.md`.
 
 ## 1a. Canonical scope model (normative)
 
@@ -140,10 +140,10 @@ The tenant triple is derived from the scope set as follows, and from nothing els
 
 | Field | Derived from |
 |---|---|
-| `is_platform_admin` | true if and only if the scope set contains a `platform` grant |
-| `reseller_id` | a `reseller` grant's `scope_id`; otherwise the `reseller_id` of the resolved organization |
+| `is_platform_admin` | true if and only if the scope set contains an `alendei_super_admin` grant at `platform` scope — **not** any platform-scope grant: `alendei_support` is platform-scoped and read-only (ADR-011 D-2) |
+| `reseller_id` | the `scope_id` of a `reseller` grant **on the reseller that owns the selected organization**; with no organization selected, the single reseller grant if exactly one exists; otherwise `NULL`. **Never** the selected organization's reseller merely because it has one — that derivation made sibling organizations mutually visible to RLS and was removed (ADR-011 D-1) |
 | `org_id` | an `organization` grant's `scope_id`; or the owning organization of a `workspace`/`team` grant; or, for an API key, `api_keys.org_id` |
-| `workspace_id` | a `workspace` grant's `scope_id`, or the owning workspace of a `team` grant; `NULL` when the principal's grants are organization-level or above |
+| `workspace_id` | the first (by grant id) `workspace` grant in the selected organization, else the owning workspace of the first `team` grant there; otherwise `NULL`. Note: this is set even when the principal *also* holds an organization-level grant. No RLS policy reads it; it feeds the WebSocket ticket topic and the denial-audit actor scope |
 
 #### Principals holding grants in more than one organization (ADR-003 D-4)
 
@@ -195,12 +195,12 @@ What it is, precisely:
 | Layer | Mechanism | Notes |
 |---|---|---|
 | API | Middleware resolves and attaches `TenantContext` before any handler runs; NestJS guards reject missing/mismatched context | Applies uniformly; no handler opts out |
-| Database | PostgreSQL Row-Level Security (RLS) policies on every tenant-scoped table, keyed on `current_setting('app.current_org_id')` (and workspace/reseller where applicable), set via `SET LOCAL` inside the request's transaction — see §3a | RLS is defense-in-depth *under* application-layer filtering, not instead of it |
-| Cache | Redis keys always namespaced `t:{org_id}:{...}`; a shared key builder utility is the only sanctioned way to construct a Redis key | Prevents ad-hoc unnamespaced key bugs |
-| Queues | Kafka message keys/headers include `tenant_id`; consumers assert expected tenant scope for the topic they own (some topics are intentionally cross-tenant, e.g. provider health, and are documented as such) | Large tenants may later get dedicated topics/partitions (capacity-driven decision, see `DECISIONS.md`) |
-| Object storage | Keys prefixed `{org_id}/{workspace_id}/{domain}/...`; bucket policy/IAM conditions enforce prefix match where the storage backend supports it | MinIO in dev enforces this at the application layer only |
-| Search | Every OpenSearch document includes `tenant_id`; query builder injects a mandatory `term` filter — there is no code path that issues a tenant-unfiltered query against tenant data indices | Index-per-tenant vs. shared-index-with-filter is a scale-driven decision, see `DECISIONS.md` |
-| Analytics/logs | Every structured log line and analytics fact row carries `tenant_id`, `correlation_id` | Physical separation is not assumed by default |
+| Database | PostgreSQL Row-Level Security (RLS) policies on every tenant-scoped table, keyed on `app.current_org_id` plus the validated reseller/platform claims, set via `SET LOCAL` inside the request's transaction — see §3a. No policy has a workspace or team term | RLS is defense-in-depth *under* application-layer filtering, not instead of it |
+| Cache | **Implemented.** Redis keys built only through `RedisKeyBuilder` — tenant keys `{prefix}:t:{org_id}:{...}`, platform keys `{prefix}:platform:{...}`; `:` refused inside a segment. Current users: the rate limiters | Prevents ad-hoc unnamespaced key bugs |
+| Queues | **DEFERRED — nothing implemented.** No Kafka producer or consumer exists. Design: message keys/headers include the organization id; consumers assert expected tenant scope for the topic they own (some topics intentionally cross-tenant, e.g. provider health) | Large tenants may later get dedicated topics/partitions (`DECISIONS.md`) |
+| Object storage | **DEFERRED — nothing implemented.** Design: keys prefixed `{org_id}/{workspace_id}/{domain}/...`; bucket policy/IAM conditions enforce prefix match where supported | MinIO in dev would enforce this at the application layer only |
+| Search | **DEFERRED — nothing implemented.** Design: every OpenSearch document includes the organization id; the query builder injects a mandatory `term` filter | Index-per-tenant vs. shared-index is a scale-driven decision (`DECISIONS.md`) |
+| Analytics/logs | Structured log lines carry `orgId` and `correlationId` where a request context exists; analytics facts do not exist yet (DEFERRED) | Physical separation is not assumed by default |
 
 ### 3a. How scope maps onto PostgreSQL RLS
 
@@ -212,9 +212,11 @@ RLS enforces the **tenancy** dimension of the scope model. It is the boundary th
 |---|---|---|
 | `app.current_org_id` | resolved `TenantContext.org_id` | no organization in context — org-scoped rows are invisible |
 | `app.current_workspace_id` | resolved `TenantContext.workspace_id` | no workspace narrowing applied |
-| `app.current_reseller_id` | resolved `TenantContext.reseller_id` | not acting in a reseller capacity |
+| `app.current_reseller_id` | resolved `TenantContext.reseller_id` — a genuine reseller-scope grant only (§2a) | not acting in a reseller capacity |
 | `app.current_user_id` | the verified principal's `user_id` | not a human-user request |
-| `app.is_platform_admin` | `'on'` only when the scope set contains a `platform` grant | not a platform admin |
+| `app.is_platform_admin` | `'on'` only when the principal holds `alendei_super_admin` at platform scope | not a platform admin |
+
+**Elevated claims are validated by the database (migration `0010`, ADR-011 D-1).** For any principal RLS binds, `app_current_reseller_id()` returns the claimed reseller only while `app.current_user_id` holds an active `reseller`-scope grant on it, and `app_is_platform_admin()` returns true only while that user holds `alendei_super_admin` at platform scope. An unbacked claim reads as NULL/false. `app.current_org_id` and `app.provisioning` are not validated (`SECURITY.md` §4b).
 | `app.provisioning` | `'on'` only inside the tenant-provisioning path, alongside `app.current_org_id` set to the organization being created | not provisioning |
 
 Every variable is written on **every** transaction, including empty values for absent ones, so a pooled connection can never inherit context from the work that ran on it before.
@@ -243,9 +245,9 @@ Because that layer is the *whole* of the enforcement below organization level, i
 |---|---|---|
 | platform vs. tenant | RLS (`app.is_platform_admin`) + API guard | Yes |
 | reseller vs. reseller | RLS (`app_org_reseller`) + API guard | Yes |
-| organization vs. organization | RLS (`org_id`) + API guard | **Yes — this is the hard tenant boundary** |
-| workspace vs. workspace | API guard + query predicate | No — application-layer only |
-| team vs. team | API guard + query predicate | No — application-layer only |
+| organization vs. organization — including siblings under one reseller | RLS (`org_id`, validated reseller claim) + API guard + list predicates | **Yes — this is the hard tenant boundary.** Proven for the shared-reseller topology in `shared-reseller.int-spec.ts` and `shared-reseller-isolation.sec-spec.ts` (before ADR-011 it did **not** hold for siblings) |
+| workspace vs. workspace | API guard (`AuthorizationService.assert`, DB-resolved chain) | No — application-layer only, **by decision** (ADR-011 D-4) |
+| team vs. team | API guard (`AuthorizationService.assert`, DB-resolved chain) | No — application-layer only, **by decision** (ADR-011 D-4) |
 | role-grant scope integrity | `fn_validate_user_role_scope` trigger + service pre-check | **Yes — the trigger is a hard boundary** |
 | platform permission on a tenant role | `fn_validate_role_permission` trigger | **Yes** |
 
@@ -290,6 +292,8 @@ Steps 4 and 5 are distinct and both mandatory. Holding `workspaces.update` somew
 
 ### 4b. How WebSocket connections enforce the hierarchy
 
+> **Implementation status.** Only ticket **issuance** exists (`POST /ws/ticket`, Phase 1B). The gateway, ticket consumption, single-use enforcement, session-revocation checks and subscription authorization are **DEFERRED** (`DECISIONS.md` D15) — nothing below the first arrow is implemented or tested. Known gaps in issuance, to be closed before a gateway trusts the ticket: the topic scope is computed without a permission check (any member receives `org:{org}`), there is no team-level topic (a team-scoped user receives its workspace's topic), and revoking a session (an `UPDATE`) does not touch its outstanding tickets.
+
 A WebSocket connection never performs its own scope resolution. It inherits a scope decision that was already made over an authenticated HTTP call (`API.md` §9):
 
 ```
@@ -303,7 +307,7 @@ connection bound to the TICKET's recorded context
 subscriptions admitted only within the ticket's recorded topic scope
 ```
 
-Three properties follow, and each is tested independently:
+Three properties are required of the gateway when it is built (DEFERRED — none is testable yet):
 
 - **The connection's tenant context comes from the ticket row, never from anything the socket sends.** A client cannot assert `org_id` on the socket at all.
 - **A connection can never widen its own scope after establishment.** A subscription request outside the ticket's recorded scope is refused; the connection is not re-resolved against the user's current grants mid-session.
@@ -352,8 +356,8 @@ Every mechanism that stops a principal reaching outside its scope, in one place,
 | A worker acting under the wrong tenant | Context comes from the event/job envelope's designated authoritative fields, inside the job's own transaction (§5) |
 | Context leaking between tenants on a pooled connection | `SET LOCAL` resets at transaction end, on commit **and** rollback (§3a, `DATABASE.md` §14a); proven against a real pool on both paths (`TESTING.md` §6h) |
 | Supplying a `workspace_id`/`team_id` that contradicts the resolved context | One declarative cross-check, `AdvisoryTenantGuard`, refusing with `403` before the handler runs (§2b, ADR-004 D-3) |
-| Widening a WebSocket connection's scope after connect | Scope is fixed by the ticket; subscriptions outside it are refused (§4b) |
-| Replaying a WebSocket ticket | Single-use, short-lived, hash-stored (§4b) |
+| Widening a WebSocket connection's scope after connect | **DEFERRED** — no gateway exists (§4b) |
+| Replaying a WebSocket ticket | Short-lived and hash-stored at issuance (implemented); single-use enforcement **DEFERRED** with the gateway (§4b) |
 
 ## 7a. Hostname is branding input, never tenancy input (normative)
 
@@ -370,4 +374,4 @@ The practical consequence for the eventual implementation: the branding resolver
 
 ## 7. Open decisions
 
-Tracked in `DECISIONS.md`: a fuller correction of `app_current_reseller_id()` so the session variable reflects reseller-scope authority rather than derived context (deferred from Phase 1B.6.3 — see `SECURITY.md` §4); physical per-tenant log isolation for regulated/enterprise customers; dedicated Kafka topics/partitions for high-volume tenants; whether `workspace_id` should be mandatory (vs. optional) on every tenant-scoped table — which, if resolved in favour of mandatory, would also let RLS enforce the workspace boundary that §3a currently places in the authorization layer.
+Tracked in `DECISIONS.md`: physical per-tenant log isolation for regulated/enterprise customers; dedicated Kafka topics/partitions for high-volume tenants; whether `workspace_id` should be mandatory (vs. optional) on every tenant-scoped table — which, if resolved in favour of mandatory, would also let RLS enforce the workspace boundary that §3a currently places in the authorization layer.

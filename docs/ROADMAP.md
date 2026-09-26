@@ -167,6 +167,8 @@ Until that test exists, callers use the transactional `record(input, tx)` form, 
 
 ### 4b. Gate B — Phase 1B acceptance
 
+> **Status: NOT PASSED.** The Gate-B read-only security audit (HEAD `df1ec74`) found seven blockers, including a live cross-tenant exposure between organizations sharing a reseller. Branch `fix/gate-b-remediation` remediates them (ADR-011; `TESTING.md` §6o); the result is awaiting the next security review, and Gate B must not be declared passed before that review. Open items that remain after remediation are listed in ADR-011 "Consequences" and `TESTING.md` §6p.
+
 Objectively testable; each is pass/fail.
 
 - **Build and hygiene** — `format:check`, `lint`, `typecheck`, `build` and `audit` all clean.
@@ -183,7 +185,7 @@ Objectively testable; each is pass/fail.
 - **API-key intersection** — taken at the key's binding scope, not the creator's widest scope, and re-evaluated at use.
 
 **What "authorization" means at Gate B, stated plainly.** Phase 1B ships **RBAC with scope coverage**: permissions bundled into roles, granted at a scope, evaluated per coherent grant against a target whose ancestry is resolved from the database. **ABAC attribute conditions are not implemented.** `RBAC.md` §1 describes RBAC *and* ABAC, and the attribute half — `resource.owner_id == user.id`, business-hour and IP-range conditions, the pluggable policy shape — exists as a documented insertion point on `PermissionEvaluator` and nothing more (`DECISIONS.md` D21). Gate B is not weakened to accommodate this; it is stated so that "authorization is production-grade" is a claim about something specific rather than about everything `RBAC.md` §1 mentions.
-- **Tenant isolation** (§6a, §6c, §6d, §6f, §6g, §6h) — including the RLS negative control and the pooled-connection error path. §6h's worker half is **not** required at Gate B: no worker exists in Phase 1B, and the harness is deferred with a recorded decision (ADR-004 D-5), exactly as §6i's WebSocket gateway is.
+- **Tenant isolation** (§6a, §6c, §6d, §6f, §6g, §6h) — including the RLS negative control, the pooled-connection error path, and **sibling organizations sharing a reseller** (§6o, added after the Gate-B audit found them mutually visible). §6h's worker half is **not** required at Gate B: no worker exists in Phase 1B, and the harness is deferred with a recorded decision (ADR-004 D-5), exactly as §6i's WebSocket gateway is.
 - **Workspace/team scope** — a workspace-scoped principal cannot reach a sibling workspace or the organization above it, proven **with RLS satisfied**, since RLS does not enforce below organization (`TENANCY.md` §3a).
 - **Tenant-context selection** (§6l) and **bootstrap** (§6m).
 - **API keys** — org binding, revoked/expired rejection, effective-permission intersection re-evaluated at use, secret shown exactly once and never audited.

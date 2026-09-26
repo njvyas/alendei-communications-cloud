@@ -110,12 +110,14 @@ is deliberately not yet runnable until a managed backend adapter exists.
 
 ## Database principals
 
-| Role               | Used by                                              | Reach                               |
-| ------------------ | ---------------------------------------------------- | ----------------------------------- |
-| owner (`postgres`) | migrations, seeding                                  | full; never used by the running API |
-| `acc_app`          | all tenant-scoped queries                            | RLS-enforced on `org_id`            |
-| `acc_auth`         | credential verification before tenant context exists | identity tables only                |
-| `acc_relay`        | transactional-outbox publisher                       | outbox only                         |
+| Role               | Used by                                                     | Reach                                                                                                                                                           |
+| ------------------ | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| owner (`postgres`) | migrations, seeding                                         | full; never used by the running API                                                                                                                             |
+| `acc_app`          | all tenant-scoped queries                                   | RLS-enforced on `org_id` (reseller/platform claims validated by the database)                                                                                   |
+| `acc_auth`         | credential verification before tenant context exists        | read across the identity, tenancy and RBAC tables; update on `users`, `sessions`, `api_keys`, `ws_tickets`; audit insert limited to platform-scoped auth events |
+| `acc_relay`        | transactional-outbox publisher (DEFERRED — no relay exists) | `SELECT` on `audit_logs` only, and no RLS policy, so zero rows today                                                                                            |
+
+The API refuses to start if `acc_app` or `acc_auth` could bypass RLS (superuser, `BYPASSRLS`, table owner, or member of another role). Exact grants are asserted in `packages/db/src/test/principals.int-spec.ts`.
 
 ## Contributing
 

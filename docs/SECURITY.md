@@ -11,9 +11,9 @@ No certification (SOC 2, ISO 27001) is claimed anywhere in this document or by t
 - **RBAC/ABAC**: `RBAC.md`, including scope-integrity enforcement (`RBAC.md` §6) preventing a role grant from ever pointing at a scope outside its own organization, and the escalation guards in `RBAC.md` §7 — several of which are enforced by database trigger, so they hold even if the service layer is bypassed.
 - **Database principals**: the running application connects only as non-owner roles that cannot bypass RLS (`DATABASE.md` §2a). The schema owner is used for migrations and seeding, never to serve a request.
 - **Session revocation takes effect immediately, not at token expiry**: `AuthGuard` re-reads the session from PostgreSQL on every request, so a revoked session, a rotated session or a disabled user is refused with the token still cryptographically valid. There is deliberately no second session-state model in Redis — PostgreSQL remains the correctness boundary.
-- **Session management**: short-lived JWT access tokens carrying identity and session claims only — never tenancy, roles or permissions (ADR-003 D-3) — plus server-revocable refresh tokens via `sessions`, per-device visibility, and explicit "sign out this device / sign out everywhere." The browser receives its refresh token as an `httpOnly` cookie, never as JavaScript-readable JSON (ADR-003 D-7, `API.md` §3b).
+- **Session management**: short-lived JWT access tokens carrying identity and session claims only — never tenancy, roles or permissions (ADR-003 D-3) — plus server-revocable refresh tokens via `sessions`, per-device visibility (`GET /auth/sessions`), and "sign out this device" (`POST /auth/logout`, `DELETE /auth/sessions/:id`). **"Sign out everywhere" is DEFERRED** — no revoke-all endpoint exists; disabling a user revokes all of that user's sessions. The browser receives its refresh token as an `httpOnly` cookie, never as JavaScript-readable JSON (ADR-003 D-7, `API.md` §3b).
 - **API authentication**: hashed API keys (never stored or returned in plaintext after creation), permanently bound to one organization, and carrying an effective permission set that is the intersection of the key's requested scopes, the permissions its creator holds, and those valid for the operation — re-evaluated at use, so a key never outlives the authority that produced it (`RBAC.md` §5c).
-- **WebSocket authentication**: never a long-lived JWT in the connection URL — a single-use, short-lived ticket minted over an authenticated HTTP call and consumed exactly once at connect time (`API.md` §9, `DATABASE.md` §2 `ws_tickets`).
+- **WebSocket authentication**: never a long-lived JWT in the connection URL — a single-use, short-lived ticket minted over an authenticated HTTP call (`POST /ws/ticket`, implemented, `API.md` §10). **Consumption at connect time, the socket gateway and subscription authorization are DEFERRED** (`DECISIONS.md` D15): no gateway exists, so nothing yet consumes a ticket, enforces single use, or checks a revoked session against an outstanding ticket.
 - **Background worker/job identity**: workers never present an HTTP credential; their authorization boundary is that they only ever act within a tenant context derived from a trusted, already-authenticated source (the job/event payload's designated authoritative field), never from arbitrary payload data — full rule: `TENANCY.md` §5.
 - **Privileged provider/routing operations**: adding, testing, enabling/disabling, draining, re-prioritizing, or migrating a provider — and activating a routing/fallback policy version — are gated behind `providers.manage`/`providers.test_send`-class permissions and are audit-logged without exception, since they can redirect real traffic or (once real providers are connected) incur real cost. Full detail: `PROVIDER_ADAPTER.md` §4.
 
@@ -67,7 +67,7 @@ The precedent is already in the schema and should be followed rather than re-arg
 
 The scope an action occurred at is recorded on the canonical five-level hierarchy (`TENANCY.md` §1a) — `platform`, `reseller`, `organization`, `workspace` or `team` — and the tenancy columns backing it are **derived by the database** from the scope the writer names, never trusted from the writer. ADR-002 (`DECISIONS.md` §1b) is the full decision record.
 
-**Who may read an audit record is enforced at two layers, and both are mandatory.** Row-Level Security guarantees **organization-level tenant isolation**: no principal reaches another organization's audit trail, and platform-scoped records require platform admin. RLS deliberately stops there (`TENANCY.md` §3a). Finer visibility — restricting a workspace- or team-scoped record to principals holding a grant at that workspace or team — is a **required RBAC/ABAC authorization check in the request path**, applied to every audit read including list endpoints, exports and reports. It is **never** delivered by UI filtering or by a client-supplied query predicate: the console is not a security boundary, and a caller reaching the API directly sees whatever the authorization layer permits, not whatever the console chose to display. Treating workspace/team audit visibility as a presentation detail would be a security defect, not a cosmetic one.
+**Who may read an audit record is enforced at two layers, and both are mandatory.** Row-Level Security guarantees **organization-level tenant isolation**: no principal reaches another organization's audit trail — including a sibling organization under the same reseller, which the Gate-B remediation (ADR-011) closed after the audit found it reachable — and platform-scoped records require a platform administrator. RLS deliberately stops there (`TENANCY.md` §3a). Finer visibility — restricting a workspace- or team-scoped record to principals holding a grant at that workspace or team — is a **required RBAC/ABAC authorization check in the request path**, applied to every audit read including list endpoints, exports and reports. It is **never** delivered by UI filtering or by a client-supplied query predicate: the console is not a security boundary, and a caller reaching the API directly sees whatever the authorization layer permits, not whatever the console chose to display. Treating workspace/team audit visibility as a presentation detail would be a security defect, not a cosmetic one.
 
 The set classified as security-sensitive is `SECURITY_SENSITIVE_AUDIT_ACTIONS` in `packages/contracts/src/audit.ts` — role grants, credential changes, session revocations, user disablement, and (from Phase 7) billing adjustments.
 
@@ -133,9 +133,11 @@ A platform with no administrator is unrecoverable through the API: nothing left 
 
 **No bypass exists.** A tenant principal cannot see a platform grant at all — RLS hides it — and an API key is bounded by its binding scope, so neither can reach the mutation. `acc_app` holds neither superuser nor `BYPASSRLS`, and the suite asserts both.
 
+**"Platform administrator" has one definition** (ADR-011): an active holder of `alendei_super_admin` at `platform` scope. The liveness invariant, `app_is_platform_admin()` and `TenantContext.isPlatformAdmin` all use it. `alendei_support` is platform-scoped but read-only and does **not** count — before migration `0010` any platform-scope grant set the RLS flag, which gave the support role unrestricted read *and write* reach in the database and the trigger-level authority to grant platform roles. Removal of a grant by `UPDATE` (changing its scope, user or role) is guarded as well as removal by `DELETE`.
+
 ### Route authorization coverage (Phase 1B.5.7)
 
-Every registered route declares its posture — `@Public()`, `@RequiresPermission`, or `@AuthorizationExempt` with a reason — and §6n case 30 asserts that against the container's own route table. A route that declares nothing fails the suite the moment it is registered, so an endpoint cannot ship unprotected by omission. At this phase: **23 routes — 12 scoped, 5 identity exemptions, 6 public.**
+Every registered route declares its posture — `@Public()`, `@RequiresPermission`, or `@AuthorizationExempt` with a reason — and §6n case 30 asserts that against the container's own route table. A route that declares nothing fails the suite the moment it is registered, so an endpoint cannot ship unprotected by omission. The count recorded at Phase 1B.5.7 was 23 routes; the table has grown since (36 at the Gate-B audit), and the assertion is against the live table, not a number.
 
 `@RequiresPermission` is a declaration, not the enforcement, and the reason is ADR-005 D-5: the chain a decision rests on must be read inside the request's own tenant transaction, which does not exist when a guard runs. A guard that authorized would split the decision and the mutation across two transactions and leave a window between them. Enforcement stays in `AuthorizationService.assert` inside the handler's transaction, before the mutation; `AuthorizationCoverageInterceptor` cross-checks at runtime that the declared permission was actually asked for, suppressing the response when it was not. `RBAC.md` §2a states exactly what that buys for reads versus mutations.
 
@@ -188,7 +190,7 @@ Successful authorization checks are **not** audited. The operation is — `role.
 
 The `acc_auth` database policy permits the system-actor form for this **exact** case only — `action = 'auth.login.failed'` together with `actor_label = 'anonymous_login_attempt'`. It is not opened to arbitrary system-actor writes, because a role that could write any `system` row could fabricate a record of automated action it never took.
 
-> **Implementation status.** As of `db6337e` this is specified but **not yet writable**: the `audit_logs_actor_shape` CHECK constraint already accepts the row shape, but the `audit_logs_auth_insert` RLS policy restricts `acc_auth` to `actor_type IN ('user','api_key')` and rejects it. One migration replacing that single policy is required; migration `0001` is committed and is not edited. Until it lands, unknown-email login failures have no audit representation.
+> **Implementation status: implemented.** Migration `0002` replaced `audit_logs_auth_insert` to admit exactly this form, and `AuthService` writes it for every unknown-address failure (`iam-session.int-spec.ts`, `auth.sec-spec.ts`).
 
 **Redaction is the writer's responsibility.** The database does not and cannot inspect `before`/`after`/`metadata` for credential material, so a single centralized redactor strips it before any insert — recursively through nested objects and arrays, covering `password`, `password_hash`, `key_hash`, `refresh_token_hash`, `mfa_secret_ref`, `ticket_hash`, and any key matching `/secret|token/i` (§2). An audit row must never be the place a credential leaks.
 
@@ -232,7 +234,7 @@ The surface that mints credentials. Six properties carry it, and the first is th
 
 The audit trail is the record of who did what, so a read surface over it is worth more to an attacker than much of the data it describes: it names administrators, enumerates privilege changes, and through `correlation_id` expands one observation into the whole causal fan-out of a request. Two boundaries hold it, and they are independent — `audit_logs_select` decides which rows exist for the transaction, and `AuthorizationService.assert` decides whether the caller may read an audit trail at all, and for a single record, at the scope that record was written at.
 
-**`TenantContext.resellerId` identifies reseller *context*; it does not establish reseller-scope *authorization*.** This distinction is load-bearing and was not previously written down. `ScopeResolver.tenantContextFor` populates `resellerId` for **every** principal by deriving it from the selected organization's reseller — so an ordinary organization administrator has a non-null `resellerId`, and `app_current_reseller_id()` returns it. That value answers "which reseller does this request's organization belong to", which is the right question for the tenancy context and the wrong one for authorization.
+**History — superseded by ADR-011.** When this section was written, `ScopeResolver.tenantContextFor` populated `TenantContext.resellerId` for **every** principal from the selected organization's reseller, so an ordinary organization administrator had a non-null `resellerId` and `app_current_reseller_id()` returned it. Phase 1B.6.3 found one consequence (below) and corrected only that surface. The Gate-B security audit found the general one: `app_org_in_scope()` admits every organization beneath `app_current_reseller_id()`, so **every table it guards was readable across sibling organizations sharing a reseller**, and the workspace, API-key, role-assignment and audit lists — which carried no tenant predicate of their own — would have enumerated them. See "Shared-reseller isolation" below for the fix.
 
 `audit_logs_select`'s third arm admits a reseller row when `reseller_id = app_current_reseller_id()`. Its intent, stated in migration `0001`, is that reseller rows belong to the reseller context — but because the session variable is broader than reseller-scope authority, RLS alone showed an organization administrator its own reseller's audit trail. The detail route was never affected: it authorizes at the row's recorded `{reseller, scope_id}`, and an organization-scope grant cannot cover it, because nothing in the model reaches upward. The list had no per-row equivalent, so the two surfaces disagreed about the same row and **the list was the permissive one**.
 
@@ -240,7 +242,22 @@ The audit trail is the record of who did what, so a read surface over it is wort
 
 This is a **visibility** narrowing layered above RLS, not a second authorization model: it decides which rows a page may contain, while `AuthorizationService.assert` remains the authoritative decision for the endpoint and for every record fetched individually. The flattened `principal.permissions` is not consulted, and no caller-supplied identifier reaches it. The invariant it establishes is asserted directly over all five scope levels: **a row appears in the list if and only if the detail route serves it.**
 
-**RLS was deliberately left unchanged.** The narrower fix would be to make `app_current_reseller_id()` — or the policy arm — reflect reseller-scope authority rather than derived context. That is the more complete correction and it is recommended for a tenancy phase, because it changes behaviour for every reader of every table that consults the variable and requires a migration. Correcting it inside the one surface that exposed it keeps the blast radius proportionate and leaves RLS as the backstop it is meant to be. Recorded as a follow-up rather than silently deferred.
+**Superseded.** The narrowing above remains in place, but it is no longer the fix: RLS itself now only honours a genuine reseller claim (ADR-011), so the reseller arm of `audit_logs_select` no longer admits an organization member at all.
+
+### Shared-reseller isolation (Gate-B remediation, ADR-011)
+
+**The rule.** `app.current_reseller_id` is a *claim of reseller authority*. It is set only when the principal holds a grant at `reseller` scope on the reseller that owns the selected organization — never because the selected organization happens to have a reseller. An organization-, workspace- or team-scoped principal therefore carries no reseller claim, and RLS scopes it to its own organization only.
+
+**Two independent layers enforce it.**
+
+1. **Application** — `ScopeResolver.tenantContextFor` derives `resellerId` from the principal's reseller-scope grants only (and `isPlatformAdmin` from an `alendei_super_admin` grant only).
+2. **Database** — migration `0010` makes `app_current_reseller_id()` and `app_is_platform_admin()` validate the claim against current grants: for any RLS-bound principal, the reseller claim is honoured only while `app.current_user_id` holds an active reseller-scope grant on that reseller, and the platform flag only while it holds `alendei_super_admin` at platform scope. An unbacked claim resolves to NULL/false — the organization arm still applies, nothing widens. A principal that already bypasses RLS (superuser, `BYPASSRLS`, or the schema owner) is trusted as before, which keeps seeding and first-administrator bootstrap working.
+
+The list endpoints that relied on RLS alone (`GET /tenants/workspaces`, `GET /api-keys`, `GET /role-assignments`) now also carry an explicit predicate for the selected organization, and `GET /tenants/workspaces/:id` is pinned to it, so a reseller administrator acting in one organization is not handed another's rows under a check made for the first.
+
+**Proof.** `packages/db/src/test/shared-reseller.int-spec.ts` (direct PostgreSQL as `acc_app`, every tenant table, reads and writes, plus negative controls that restore the unvalidated accessors and watch the sibling reappear) and `apps/api/test/shared-reseller-isolation.sec-spec.ts` (HTTP lists, direct objects, the enrol-then-disable chain, and resolver-computed contexts applied to `acc_app`). Topology: Reseller A → Org A1, Org A2; Reseller B → Org B1.
+
+**What the validation does not defend against.** `app.current_user_id` is itself a session variable. A principal able to run arbitrary SQL as `acc_app` can set it to a real administrator's id. The validation removes the class of defect found — application logic writing a claim the principal does not hold — and is not a defence against a compromised application role (§4b).
 
 **Personal data in the response.** `ip` and `user_agent` are returned. They are personal data, and they are included deliberately: an audit trail that cannot say where a privilege change originated answers half the question an investigation asks. Access is gated by `audit.read`, an administrative permission, and the payload fields (`before`, `after`, `metadata`) carry whatever the **write-time** redactor left — re-redacting on read would be a second redactor, and two redactors drift.
 
@@ -258,11 +275,31 @@ Asserted adversarially rather than assumed: `X-Tenant-ID`, `X-Organization-ID`, 
 
 **The general limiter does not key on IP.** `X-Forwarded-For` therefore cannot influence it at all, which is asserted directly. `TRUSTED_PROXY_HOPS` continues to govern the authentication limiter, which does key on IP and where the trusted-hop count is the control that stops a client choosing its own bucket.
 
-**No request is charged twice.** The general limiter applies only where a principal exists, so public routes — `POST /auth/login`, `POST /auth/refresh`, `/health*`, `/metrics` — pass through it untouched and keep their own arrangements. That is structural rather than an exemption list: with no principal there is no key to build. Probes and scrapers are never throttled.
+**No request is charged twice.** The general limiter applies only where a principal exists, so public routes — `POST /auth/login`, `POST /auth/refresh`, `/health*`, `/metrics` — pass through it untouched and keep their own arrangements (next section). That is structural rather than an exemption list: with no principal there is no key to build. Probes and scrapers are never throttled.
 
 **Fail open, and tested.** A Redis outage allows the request, logs at `warn` and flags the verdict. Refusing all authenticated traffic because a cache is unreachable converts a degraded dependency into a total outage, and the limiter is a throttle rather than the authentication or authorization control — both of which still run. The mutation that flips this to fail-closed fails the suite.
 
 **Limits are deployment-wide.** One ceiling for every tenant, from `RATE_LIMIT_DEFAULT_*`. There is no per-tenant override, so a noisy tenant is bounded but not individually tunable, and a tenant cannot be granted a larger allowance without changing it for everyone. Recorded as a limitation rather than implied away (ADR-010).
+
+### Unauthenticated-path throttles (Gate-B remediation, ADR-011)
+
+The routes that run before any principal exists are throttled by `AuthRateLimitService`, keyed on the client address (so `TRUSTED_PROXY_HOPS` is the control that decides what "address" means — it now defaults to `0`, and production must set it explicitly):
+
+| Path | Buckets | Default (per `RATE_LIMIT_AUTH_WINDOW_SECONDS`, 60 s) |
+|---|---|---|
+| `POST /auth/login` | per IP **and** per account (truncated SHA-256 of the address) | 10 (`RATE_LIMIT_AUTH_MAX`) |
+| `POST /auth/refresh` | per IP | 30 (`RATE_LIMIT_REFRESH_MAX`) |
+| API-key presentation (`Authorization: Bearer ak_…`) | per IP, **failures only**, checked before Argon2 verification | 20 (`RATE_LIMIT_API_KEY_FAILURE_MAX`) |
+
+- **A successful login clears the account bucket only.** It used to clear the IP bucket too, which let one valid account reset the address's allowance between guesses at every other account.
+- **API-key failures are counted, not API-key uses,** and the check precedes the Argon2id verification, so a flooding address stops costing hashing work once it is over its allowance while a working integration never spends it. Consequence, accepted: once an address is over the failure allowance, every key from that address — including a valid one — is refused with `429` until the window passes.
+- All three fail open on a Redis outage, logged at `warn`, like the other limiters.
+
+Proven over HTTP in `auth-abuse.sec-spec.ts` (each case ends on the `429` only the limiter can produce) and at unit level in `auth-rate-limit.spec.ts`.
+
+### Database principal posture at start-up (Gate-B remediation, ADR-011)
+
+RLS binds a principal only while it is not a superuser, not `BYPASSRLS`, and not the owner (or a member of the owner) of a table — RLS is enabled but deliberately **not forced**, so an owner is exempt. Each of those is configuration that can drift without any application test noticing. `DatabaseModule` therefore calls `assertRlsBoundPrincipal` on both request-serving pools at start-up and **refuses to start** if either principal is a superuser, has `BYPASSRLS`, owns or can act as the owner of any `public` table, or is a member of any other role. The catalog itself is asserted in `principals.int-spec.ts`, including exact per-principal grant maps, no role memberships, no `SET ROLE` path, and negative controls proving that a weakened policy, `BYPASSRLS` or table ownership each re-open the boundary.
 
 ### 4a. Append-only enforcement, and its threat model
 
@@ -278,11 +315,15 @@ Append-only is enforced in three layers, each covering something the others cann
 
 The controls that do survive an owner-level adversary live outside this database, and are what the audit trail's integrity actually rests on:
 
-- **Off-box export.** Every `audit_logs` insert is projected to `alendei.audit.action_recorded.v1` for external SIEM export (`EVENTS.md` §4), read by `acc_relay`. A row deleted from PostgreSQL after export is still in the SIEM.
+- **Off-box export — DEFERRED, not in force.** The design projects every `audit_logs` insert to `alendei.audit.action_recorded.v1` for external SIEM export (`EVENTS.md` §4), read by `acc_relay`. **None of it exists yet:** there is no outbox table, no relay process and no event producer, and although `acc_relay` holds `SELECT` on `audit_logs`, no RLS policy targets it, so it reads zero rows (asserted in `principals.int-spec.ts`). Until the relay ships, the audit trail has **no** off-box copy and tamper evidence against an owner-level adversary rests entirely on the infrastructure controls below.
 - **Least privilege on the owner role.** The running application never connects as the owner (`DATABASE.md` §2a); owner credentials are operator-held and their use is an infrastructure-level event, not an application one.
 - **Infrastructure-level controls** — WAL archiving and point-in-time recovery (`DR.md`), and cloud-provider audit logging of administrative database access — are what detect owner-level tampering.
 
 Anyone strengthening this should target that outer layer (export lag, SIEM alerting on gaps, hash-chaining rows so a deletion is detectable) rather than adding further in-database guards, which would add the appearance of protection without the substance.
+
+### 4b. Residual trust in the application database role
+
+Tenant context reaches PostgreSQL as transaction-local session variables (`app.current_org_id`, `app.current_user_id`, `app.current_reseller_id`, `app.is_platform_admin`, `app.provisioning`). PostgreSQL cannot stop a principal from setting a custom variable, so **a principal able to execute arbitrary SQL as `acc_app` can choose its own tenant context** — for example by setting `app.current_user_id` to a real administrator's id together with the platform flag. Migration `0010` validates the reseller and platform claims against grants, which removes *application logic* errors as a way to widen RLS; it does not and cannot remove this. `app.current_org_id` and `app.provisioning` are not validated at all. RLS is therefore a backstop against faulty application code, not against a compromised application process; SQL-injection resistance (parameterized queries only, §6) remains the control for the latter.
 
 ## 5. Webhook & API hardening
 
@@ -303,12 +344,12 @@ Anyone strengthening this should target that outer layer (export lag, SIEM alert
 | Insecure design | Threat modeling per module during design review (dev lifecycle §"SECURITY REVIEW" stage, `ROADMAP.md`) |
 | Security misconfiguration | Infrastructure-as-code for all environments; no manual prod config drift; secure defaults (deny-by-default RBAC, TLS-required) |
 | Vulnerable/outdated components | Automated dependency scanning in CI (`DEPLOYMENT.md` §"CI/CD") |
-| Auth failures | MFA, session revocation, rate-limited login/credential endpoints, generic error messages on auth failure (no user enumeration) |
+| Auth failures | Session revocation; rate limiting on login (per IP and per account; a successful login clears only the account bucket), refresh (per IP) and failed API-key presentations (per IP, checked before Argon2 verification); generic error messages (no user enumeration). MFA is **DEFERRED** (§1). |
 | Software/data integrity failures | Signed webhooks, signed CI artifacts/images, append-only financial/audit tables |
 | Logging/monitoring failures | Structured logs + audit log + full trace correlation (`OBSERVABILITY.md`) |
 | SSRF | Outbound webhook targets and any user-supplied URL fetch (e.g. media URLs) validated against an allowlist/deny-private-IP-range policy before the server ever issues the request |
-| CSRF | Console (browser) session auth uses SameSite cookies + CSRF tokens on state-changing requests; API-key/bearer-token API calls are not cookie-based and are inherently CSRF-exempt |
-| XSS | React/Next.js default escaping, strict CSP headers on the console app, no `dangerouslySetInnerHTML` on user-supplied content |
+| CSRF | Only `/auth/refresh` and `/auth/logout` accept an ambient (cookie) credential. They require the non-simple `X-Acc-Refresh` header, which forces a CORS preflight the origin allowlist refuses; the refresh cookie is `HttpOnly`, `SameSite=Lax`, path `/api/v1/auth`. Login refuses any non-JSON body (`415`), closing login-CSRF from a cross-site form. There are no CSRF tokens. Bearer-token and API-key calls are not cookie-based. Proven through the real bootstrap in `real-bootstrap.sec-spec.ts`. |
+| XSS | React/Next.js default escaping, no `dangerouslySetInnerHTML` on user-supplied content. **CSP on the console app is DEFERRED** (not set by `next.config.ts`); the API sends Helmet's CSP in production only. |
 | Privilege escalation | `RBAC.md` §6 |
 | Secure file handling | Media uploads validated by content-type/magic-byte, size-limited, stored in S3-compatible storage (never on application hosts), served via signed/expiring URLs, never executed/interpreted |
 | Secret leakage | Secrets never logged (structured logger has a redaction list); CI scans for committed secrets pre-merge |

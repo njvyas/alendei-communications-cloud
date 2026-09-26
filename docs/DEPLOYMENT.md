@@ -26,7 +26,13 @@ ACC Shared Production
         └── Customer B1
 ```
 
-One deployment, many resellers, many organizations. Isolation is PostgreSQL RLS beneath the authorization boundary — the same enforcement described in `TENANCY.md` §3, unchanged by the presence of multiple resellers.
+One deployment, many resellers, many organizations. Isolation is PostgreSQL RLS beneath the authorization boundary — the same enforcement described in `TENANCY.md` §3. **Organizations sharing a reseller are isolated from each other**: before the Gate-B remediation (ADR-011) they were not, because every member's session carried its organization's reseller as an RLS claim; that derivation is removed and the database now validates the claim.
+
+**Operational requirements this model depends on (ADR-011):**
+
+- `DATABASE_URL` / `DATABASE_AUTH_URL` must log in as `acc_app` / `acc_auth`. The API **refuses to start** if either principal is a superuser, has `BYPASSRLS`, owns (or is a member of the owner of) any table, or is a member of any other role.
+- `TRUSTED_PROXY_HOPS` defaults to `0` (the socket address is the client address; `X-Forwarded-For` is ignored) and **must be set explicitly in production** to the exact number of reverse proxies in front of the API — over-trusting lets clients choose their own rate-limit bucket.
+- The schema owner used for migrations may be a superuser or a managed-PostgreSQL non-superuser; either way it owns the tables and is exempt from RLS (not forced), which is what seeding and bootstrap rely on.
 
 **MODEL B — DEDICATED DEPLOYMENT**
 

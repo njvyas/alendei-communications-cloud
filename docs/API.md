@@ -46,7 +46,7 @@ Every authenticated caller resolves to exactly one **identity type**, and `audit
 
 | Identity type | Mechanism | Header | Use |
 |---|---|---|---|
-| Human user | Session JWT | `Authorization: Bearer <access_token>` | Web console, MFA-gated |
+| Human user | Session JWT | `Authorization: Bearer <access_token>` | Web console (MFA is DEFERRED, `SECURITY.md` §1) |
 | Service account (API key) | Hashed API key | `Authorization: Bearer <api_key>` (distinguished by prefix, e.g. `ak_live_`) | Server-to-server integration, bound to one org and an explicit permission subset |
 | OAuth2 client | Client credentials / auth-code bearer token | `Authorization: Bearer <token>` | Partner integrations (reserved, Phase 6+); a client is its own identity, distinct from any human user it may act on behalf of |
 | System (background worker) | Internal, no HTTP request in the loop | n/a | Fallback escalation, scheduled jobs, event consumers — never presents an HTTP credential; its tenant context comes from the job/event payload per `TENANCY.md` §5, and its audit rows always carry `actor_type=system` |
@@ -58,7 +58,7 @@ These are not interchangeable for authorization purposes: a permission grant is 
 ```
 effective_permissions =
       requested_key_scopes
-    ∩ permissions_held_by_the_creator_at_the_key's_organization
+    ∩ permissions_held_by_the_creator_at_the_key's_binding_scope   (organization or workspace, RBAC.md §5c)
     ∩ permissions_valid_for_the_target_operation
 ```
 
@@ -81,13 +81,13 @@ Holding `workspaces.update` somewhere is never authority to update *this* worksp
 
 **Enumeration follows the same rule as retrieval.** A list endpoint returns only what is within the caller's scope set; an out-of-scope resource is *absent* from the listing rather than present-and-forbidden. A direct fetch of an out-of-scope resource returns `404` — not `403` — and the error message never echoes the caller-supplied identifier, because either would confirm the resource exists.
 
-**Path identifiers are advisory.** `/tenants/{org_id}/workspaces` may carry an `org_id` for readability and routing, but the authoritative organization is always the one resolved from the credential; a mismatch is `403` (`TENANCY.md` §2b). The same rule applies wherever the identifier arrives — path segment, query parameter, body field or header — and is enforced by one shared mechanism rather than a comparison per endpoint (ADR-004 D-3). Its outcomes are fixed:
+**Path identifiers are advisory.** `GET /tenants/workspaces?orgId=` may carry an `orgId` for readability, but the authoritative organization is always the one resolved from the credential; a mismatch is `403` (`TENANCY.md` §2b). The same rule applies wherever the identifier arrives — path segment, query parameter, body field or header — and is enforced by one shared mechanism rather than a comparison per endpoint (ADR-004 D-3). Its outcomes are fixed:
 
 | Supplied identifier | Response |
 |---|---|
 | Agrees with the resolved context | The request proceeds unchanged |
 | Contradicts it | `403 TENANCY_CONTEXT_MISMATCH` — never substituted, never an empty `200` |
-| Names something that does not exist | The **same** `403`, with an identical message, so the endpoint is not an existence oracle |
+| Names something that does not exist, at a level the context pins | The **same** `403`, with an identical message, so the endpoint is not an existence oracle. At a level the context does **not** pin (e.g. a `workspaceId` supplied by an organization-scoped principal) nothing is checked here; target-scope authorization and RLS decide, and an unreachable target is a `404` (`TENANCY.md` §2b) |
 | Repeated or structured (`?org_id=A&org_id=B`) | `400 VALIDATION_FAILED` — refused, never resolved by parameter order |
 | Malformed or empty | `400 VALIDATION_FAILED` — never treated as absent |
 | Absent, where the endpoint declares it optional | The request proceeds under the resolved context |
@@ -111,9 +111,9 @@ An error never echoes the supplied identifier back.
 | `HttpOnly` | yes | JavaScript cannot read it, so an XSS foothold cannot exfiltrate a 30-day credential |
 | `Secure` | yes | Never transmitted over plaintext HTTP |
 | `SameSite` | `Lax` | Not attached to cross-site subrequests |
-| `Path` | the refresh endpoint only | Not sent on ordinary API calls, so its exposure surface is one route |
+| `Path` | `/api/v1/auth` | Not sent on ordinary API calls; sent only to the `/auth/*` routes (login, refresh, logout, me, sessions) |
 
-`POST /auth/login` sets the cookie. `POST /auth/refresh` consumes it. **The refresh token is never returned as ordinary JSON to browser JavaScript.** Non-browser clients (server-to-server) authenticate with API keys and never use this flow at all.
+`POST /auth/login` sets the cookie, and accepts **only** `Content-Type: application/json` (`415` otherwise) so a cross-site HTML form cannot sign a browser in (login-CSRF, ADR-011 D-6). `POST /auth/refresh` consumes it. **The refresh token is never returned as ordinary JSON to browser JavaScript.** Non-browser clients (server-to-server) authenticate with API keys and never use this flow at all.
 
 **CORS.** Because the refresh call must send a cookie, it is a credentialed cross-origin request: the console sends `credentials: 'include'`, and the API must answer with an explicit `Access-Control-Allow-Origin` drawn from the configured `CORS_ORIGINS` allow-list plus `Access-Control-Allow-Credentials: true`. A wildcard origin is invalid on a credentialed request and must never be configured.
 
@@ -164,7 +164,7 @@ Eleven endpoints, deliberately small: five on `/roles`, one on `/permissions`, f
 
 **`409 AUTHZ_LAST_PLATFORM_ADMIN`** is returned when revoking a grant would leave the platform with no active administrator (`RBAC.md` §7a). It is `409` rather than `403` deliberately: the actor held the authority and the request was well-formed — the platform may simply not enter that state, and the remedy is to appoint another administrator first, not to acquire more permission. The same condition is enforced by a database trigger beneath the service, so it holds for callers that never reach this API.
 
-`scopeType` accepts `reseller`, `organization`, `workspace` and `team`. **`platform` is not representable**: a platform grant is made by the bootstrap CLI under a documented elevation (`RBAC.md` §5b), and leaving it out of the request shape means the refusal does not depend on a guard remembering to run.
+`scopeType` accepts `reseller`, `organization`, `workspace` and `team`. **`platform` is not representable**: a platform grant is made by the bootstrap CLI under a documented elevation (`RBAC.md` §5b), and leaving it out of the request shape means the refusal does not depend on a guard remembering to run. Note that `reseller` is representable but **cannot succeed** through this API: every platform-level role (including `reseller_admin`) is refused with `403 AUTHZ_PLATFORM_ROLE_REQUIRED`, and no tenant role admits `reseller` scope.
 
 **Query cost is constant per request**, independent of how many permissions the role carries: the scope chain is resolved once per check and the evaluator then decides in memory. `GET` list and `GET` detail are 2 queries, `DELETE` is 4, `POST` is 7 — plus the six `SET LOCAL` statements every tenant transaction issues. There is no N+1.
 
@@ -382,9 +382,9 @@ Visibility is decided by `audit_logs_select` (migration `0001`) under the reques
 | Workspace-pinned principal | Refused the list entirely — a workspace grant cannot cover the organization target |
 | API key | Its organization's rows, within its binding; never reseller rows |
 
-**Reseller-scoped rows require a genuine grant at `reseller` scope.** `TenantContext.resellerId` is derived from the selected organization's reseller for *every* principal, so it identifies reseller **context** and is not evidence of reseller **authority** (`SECURITY.md` §4, `TENANCY.md` §4). The list applies this narrowing so that it agrees with the detail route, which authorizes at the record's own scope.
+**Reseller-scoped rows require a genuine grant at `reseller` scope.** Since ADR-011 `TenantContext.resellerId` is itself set only from such a grant and the database validates it, so RLS already enforces this; the list keeps an explicit narrowing from the grants as a second layer, so that it agrees with the detail route, which authorizes at the record's own scope (`SECURITY.md` §4).
 
-**The invariant:** *a row appears in the list if and only if the detail route serves it.* Asserted across all five scope levels.
+**The invariant:** *a row appears in the list if and only if the detail route serves it.* Asserted across all five scope levels, and — since the Gate-B remediation — for sibling organizations sharing a reseller (`shared-reseller-isolation.sec-spec.ts`).
 
 #### Filters, sorting, cost
 
@@ -408,6 +408,8 @@ Idempotency is **execution/replay coordination**: it records that a request ran 
 |---|---|
 | `POST /roles` | Creates a resource; a retry would otherwise be indistinguishable from a genuine duplicate |
 | `POST /role-assignments` | Confers privilege; the same |
+| `POST /users` | Creates an identity (and its initial grant); the same (Phase 1B.6.1) |
+| `POST /api-keys` | Mints a credential; the replay returns `secret: null` (ADR-008, Phase 1B.6.2) |
 
 **Deliberately not supported, with reasons** — this is a classification, not an omission:
 
@@ -495,8 +497,12 @@ On exhaustion: **`429`** with `Retry-After` (seconds) and the standard error env
 
 ### 5b. The authentication buckets (CURRENT, Phase 1B.3)
 
-- Authentication endpoints carry their own stricter bucket (`RATE_LIMIT_AUTH_*`), and apply **two independent buckets** — one keyed by source IP and one by the target account — so that neither address rotation nor a spray across many accounts defeats the control on its own. A refusal from *either* refuses the attempt.
-- The account bucket is keyed by a hash of the identifier, not the identifier itself, so a dump of Redis keys is not a list of the addresses people have tried to sign in with.
+- `POST /auth/login` carries its own stricter limit (`RATE_LIMIT_AUTH_*`), and applies **two independent buckets** — one keyed by source IP and one by the target account — so that neither address rotation nor a spray across many accounts defeats the control on its own. A refusal from *either* refuses the attempt.
+- The account bucket is keyed by a truncated SHA-256 of the identifier (unsalted — a namespacing device), not the identifier itself.
+- **A successful login clears the account bucket only**, never the IP bucket (ADR-011 D-5).
+- `POST /auth/refresh` is throttled per source address (`RATE_LIMIT_REFRESH_MAX`, default 30 per window).
+- Failed API-key presentations are throttled per source address **before** Argon2 verification (`RATE_LIMIT_API_KEY_FAILURE_MAX`, default 20 per window); a successful key presentation never spends the allowance. Once exhausted, every API key from that address is refused with `429` for the rest of the window.
+- `TRUSTED_PROXY_HOPS` defaults to `0` and must be set explicitly in production (ADR-011 D-6).
 - The IP key depends on `req.ip`, which depends in turn on how many proxy hops are trusted (`TRUSTED_PROXY_HOPS`). Trusting more hops than the deployment actually has lets a client forge `X-Forwarded-For` and choose its own bucket, so the value is configuration rather than a constant and `0` disables the trust entirely. **The general limiter does not key on IP at all**, so a forwarded-for value cannot influence it.
 
 ### 5c. Both limiters fail open
@@ -531,7 +537,7 @@ Consistent error envelope across all endpoints:
 }
 ```
 
-- `code`: stable, machine-readable, namespaced by domain (e.g. `MESSAGES_INVALID_RECIPIENT`, `BILLING_INSUFFICIENT_BALANCE`, `AUTH_MFA_REQUIRED`, `IDEMPOTENCY_KEY_PAYLOAD_MISMATCH`) and documented in the OpenAPI spec's shared error schema.
+- `code`: stable, machine-readable, namespaced by domain (e.g. `IDEMPOTENCY_KEY_PAYLOAD_MISMATCH`, `TENANCY_CONTEXT_MISMATCH`; future domains add codes such as `MESSAGES_INVALID_RECIPIENT`). The implemented set is `ERROR_CODES` in `packages/contracts/src/errors.ts`.
 - `retryable`: `true` only for errors where an identical retry (same idempotency key, unchanged payload) is safe and may succeed (e.g. `429`, `503`); `false` for validation/authorization errors where retrying without changing the request is pointless. Clients should not blindly retry on any 4xx/5xx without checking this flag.
 - `details`: structured validation failures where applicable (e.g. per-field messages), never a dump of internal exception state.
 
@@ -623,13 +629,15 @@ Filters and sort fields are **allow-listed per endpoint**. There is no generic f
 
 ### 8c. Where `Idempotency-Key` will fit
 
-Nothing in these conventions conflicts with the idempotency mechanism §4 specifies, and none of it is implemented (Phase 1B.5.9). When it lands it is a **request header** on mutating endpoints, replaying the original **status and body verbatim** — which is exactly `{ "data": … }` or `{ "error": … }` as defined above. The envelope is what gets stored and replayed; pagination is unaffected, being safe and unkeyed.
+Nothing in these conventions conflicts with the idempotency mechanism §4 specifies; it is implemented (Phase 1B.5.9) as a **request header** on the creating endpoints listed in §4, replaying the original **status and body verbatim** — which is exactly `{ "data": … }` or `{ "error": … }` as defined above. The envelope is what gets stored and replayed; pagination is unaffected, being safe and unkeyed.
 
 ## 9. API contract strategy (OpenAPI)
 
-- Every NestJS controller is annotated (`@nestjs/swagger` decorators) so the OpenAPI 3.1 document is generated from source, never hand-maintained separately — the spec cannot drift from the implementation.
-- The generated spec is published per environment (`/api/v1/openapi.json`, human-readable Swagger UI gated behind auth in non-dev environments) and is the input to generated client SDKs (Phase-dependent, tracked in `ROADMAP.md`).
-- Contract tests run in CI against the generated spec (schema validation of real request/response pairs in integration tests) to catch undocumented or drifted fields before merge.
+> **Implementation status.** `@nestjs/swagger` is wired in `createApp()`, but **no controller or DTO carries swagger decorators**, so the generated document lists routes without schemas. When `OPENAPI_UI_ENABLED=true` the UI (`/api/v1/docs`) and document (`/api/v1/openapi.json`) are served **unauthenticated**; production refuses to start with it enabled. There are **no** contract tests in CI. Everything below is DEFERRED design.
+
+- Every NestJS controller is annotated (`@nestjs/swagger` decorators) so the OpenAPI 3.1 document is generated from source, never hand-maintained separately.
+- The generated spec is published per environment and is the input to generated client SDKs (Phase-dependent, tracked in `ROADMAP.md`); the UI is gated behind authentication outside development.
+- Contract tests run in CI against the generated spec to catch undocumented or drifted fields before merge.
 
 ## 9a. Breaking changes introduced by Phase 1B.5.8
 
@@ -646,11 +654,13 @@ This is a pre-production system with no external consumer, so these ship without
 
 ## 10. WebSockets
 
+> **Implementation status.** Only step 1 (ticket issuance, §10b) is implemented. The gateway, steps 2–3 and every property in §10a are **DEFERRED** (`DECISIONS.md` D15).
+
 Real-time channels (inbox live updates, campaign progress, provider health dashboard) are served over WebSocket at `/api/v1/ws`, subscribed to tenant-scoped topics (`org:{org_id}:conversations`, `org:{org_id}:campaigns:{id}`).
 
 **Connection authentication does not use a long-lived JWT placed in the URL** (a query-string token leaks into proxy/access logs and browser history). Instead:
 
-1. An authenticated client first calls `POST /api/v1/ws/ticket` (standard session-JWT/API-key auth) which mints a `ws_tickets` row (`DATABASE.md` §2): a single-use, short-lived (~30s) opaque ticket bound to the caller's already-resolved `TenantContext` and an explicit topic scope.
+1. An authenticated **user session** first calls `POST /api/v1/ws/ticket` (API-key principals are refused, §10b) which mints a `ws_tickets` row (`DATABASE.md` §2): a single-use, short-lived (~30s) opaque ticket bound to the caller's already-resolved `TenantContext` and an explicit topic scope.
 2. The client opens the WebSocket connection and presents the ticket as its very first frame (or via `Sec-WebSocket-Protocol`, never as a URL query parameter).
 3. The server consumes the ticket exactly once (`consumed_at` set — replay of the same ticket is rejected), binds the connection's tenant context to what the ticket recorded (never to anything the client sends afterward), and only then admits subscriptions within the ticket's topic scope.
 
@@ -674,9 +684,9 @@ POST /api/v1/ws/ticket        // no request body of any kind
 
 | Property | How it is obtained |
 |---|---|
-| Bound to the caller | `user_id` and `session_id` come from the authenticated principal; a session `DELETE` cascades the ticket away |
+| Bound to the caller | `user_id` and `session_id` come from the authenticated principal. Sessions are revoked by `UPDATE` and never deleted, so revocation does **not** remove the ticket — the (deferred) gateway must check the session at consumption |
 | Bound to authoritative tenancy | `org_id`/`workspace_id` come from the resolved `TenantContext` (§5), never from the request |
-| Scope is computed, never requested | The endpoint **accepts no body**, so there is no field through which a caller could name a topic, an organization or a workspace. A workspace-pinned context yields `org:{org}:workspace:{ws}` **and not** `org:{org}` — the narrower prefix exclusively, so a ticket cannot admit what its holder cannot reach over HTTP |
+| Scope is computed, never requested | The endpoint **accepts no body**, so there is no field through which a caller could name a topic, an organization or a workspace. A workspace-pinned context yields `org:{org}:workspace:{ws}` **and not** `org:{org}`. **Known gaps (to close before a gateway trusts the ticket):** no permission is checked when computing the topic, so any organization member receives `org:{org}`; there is no team topic, so a team-scoped user receives its workspace's topic |
 | Hashed at rest | Only SHA-256 of the ticket is stored (`ws_tickets.ticket_hash`, unique). The plaintext appears in the 201 body and nowhere else — not in the audit row, not in logs |
 | Short-lived | `expiresAt = issuedAt + auth.wsTicketTtlSeconds` (≤ 300s; ~30s by default), enforced further by the `ws_tickets_ttl_positive` check |
 | Single-use | Guaranteed structurally by the unique hash and `consumed_at`; the consuming half is what is deferred |
@@ -684,13 +694,13 @@ POST /api/v1/ws/ticket        // no request body of any kind
 
 Errors: `400 TENANCY_CONTEXT_REQUIRED` when the principal has no organization context (send `X-Acc-Organization`); `403 AUTHZ_PERMISSION_DENIED` for an **API-key** principal, because `ws_tickets.user_id` is `NOT NULL` and a key has no user to bind to — a schema consequence, not a policy choice; `403 TENANCY_CONTEXT_MISMATCH` for an organization header the caller has no grant in.
 
-No `Idempotency-Key`: the route is not in the §4 list, and a replayed snapshot of a one-time credential is precisely the hazard ADR-008 exists to prevent. Two calls simply mint two tickets, which is correct and cheap. Rate-limited as an ordinary authenticated `write` (§23).
+No `Idempotency-Key`: the route is not in the §4 list, and a replayed snapshot of a one-time credential is precisely the hazard ADR-008 exists to prevent. Two calls simply mint two tickets, which is correct and cheap. Rate-limited as an ordinary authenticated `write` (§5a).
 
 Authorization posture: `@AuthorizationExempt` — the subject of the route is the authenticated principal itself, so there is no target resource to check (`§6n` case 30 allow-lists `WsTicketController` alongside `AuthController` for exactly this reason).
 
 ### 10a. Scope enforcement on a WebSocket connection
 
-The socket performs no scope resolution of its own — it inherits a decision already made over an authenticated HTTP call (`TENANCY.md` §4b). Four properties, each independently testable:
+The socket performs no scope resolution of its own — it inherits a decision already made over an authenticated HTTP call (`TENANCY.md` §4b). Four properties are **required of the deferred gateway** (none is implemented or testable yet):
 
 | Property | Consequence |
 |---|---|

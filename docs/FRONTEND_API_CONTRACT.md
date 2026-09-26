@@ -65,7 +65,7 @@ Two identity types, both resolved by `AuthGuard` (`apps/api/src/auth/auth.guard.
 
 | Step | Contract |
 |---|---|
-| `POST /api/v1/auth/login` | Body `{ email, password }`. Returns `{ accessToken, tokenType: "Bearer", expiresIn }`. |
+| `POST /api/v1/auth/login` | Body `{ email, password }`, sent with **`Content-Type: application/json` (required — any other content type is `415`, the login-CSRF defence, ADR-011)**. Returns `{ "data": { accessToken, tokenType: "Bearer", expiresIn } }`. |
 | Refresh credential | Set as an `httpOnly`, `sameSite=lax` cookie named `acc_refresh`, path-scoped to `/api/v1/auth`. **Never in the response body and never readable by JavaScript.** |
 | Access token | Sent as `Authorization: Bearer <accessToken>`. **Never in a URL, never in `localStorage`.** |
 | `POST /api/v1/auth/refresh` | Requires the cookie **and** the `X-Acc-Refresh` header (see §23). Rotates the token; a refused rotation clears the cookie. |
@@ -134,7 +134,7 @@ has no backend mechanism today. Deciding whether one is needed is a gate item.
 
 ## 7. User identity — IMPLEMENTED
 
-`GET /api/v1/auth/me` returns exactly:
+`GET /api/v1/auth/me` returns exactly this object, inside the `{ "data": … }` envelope (§9):
 
 ```jsonc
 {
@@ -163,8 +163,16 @@ would have selected that organization implicitly.
 **Do not derive the active organization from `tenant.orgId`.** Use
 `authorizedOrganizationIds` (§5) — it is the list of organizations the principal may act
 in, derived from grants on every request, and it is what an organization picker binds to.
-`tenant.resellerId` and `tenant.isPlatformAdmin` *are* populated here, because neither
-depends on a selected organization.
+`tenant.resellerId` and `tenant.isPlatformAdmin` *are* populated here, with these exact
+meanings since ADR-011 (a behaviour change from the earlier draft):
+
+- `tenant.resellerId` is non-null **only** for a principal holding a grant at `reseller`
+  scope — and on this route, only when it holds exactly one. An ordinary organization,
+  workspace or team member always sees `null`, even though its organization has a
+  reseller. Do not use it to display "your reseller".
+- `tenant.isPlatformAdmin` is `true` **only** for `alendei_super_admin`. `alendei_support`
+  sees `false`, although it can still select any organization via `X-Acc-Organization`
+  (its `authorizedOrganizationIds` lists them).
 
 A tenant-scoped endpoint's own response is where a resolved organization appears — for
 example `orgId` on a role assignment or an audit record. There is no endpoint that echoes
@@ -249,7 +257,7 @@ been corrected and no longer needs working around.
 | `403` | Authenticated, but no coherent grant covers the target |
 | `404` | Target does not exist **or is not visible to this tenant** — deliberately indistinguishable (`API.md` §3a) |
 | `409` | Resource conflict |
-| `429` | Rate limited (auth endpoints only today) |
+| `429` | Rate limited — the general limiter on every authenticated route, plus the login, refresh and API-key-failure limiters (§23) |
 | `500` | Unexpected failure; correlation id only |
 
 **The `403`/`404` rule is a security property, not an accident.** The frontend must not
@@ -463,12 +471,19 @@ Retry-After: 37
 - **`X-RateLimit-Reset` is seconds, not a timestamp.** Adding it to `Date.now()` is the intended use; parsing it as an epoch is not.
 - **Polling loops are the main risk.** Anything that polls a list endpoint is spending the shared `read` budget for that user in that organization. Prefer a longer interval, and stop polling on a hidden tab.
 - A **background refresh and a user action compete for the same bucket** when they run as the same user in the same organization and the same class. Budget accordingly.
-- Endpoints that are *not* limited: `POST /auth/login` and `POST /auth/refresh` (they have their own stricter limits, below), and `/health*` and `/metrics`.
+- Endpoints not charged to the general limiter: `POST /auth/login` and `POST /auth/refresh` (they have their own limits, below), and `/health*` and `/metrics`.
 
 ### Authentication limiter — login
 
 - Two independent buckets, source IP and target account, Redis-backed (`apps/api/src/auth/auth-rate-limit.service.ts`). `POST /auth/login` returns `X-RateLimit-Limit` and `X-RateLimit-Remaining`, plus `Retry-After` on `429`.
 - Stricter than the general limiter, and **entirely separate** — a login is never charged to the general limiter, and general traffic never consumes login allowance.
+- A successful login clears only the **account** bucket; the IP bucket keeps counting (ADR-011). A shared office IP with many failed logins can therefore be refused for the rest of the window even for a correct password.
+
+### Refresh and API-key limiters
+
+- `POST /auth/refresh`: per source IP, 30 per window by default. `429` with `Retry-After`. The console should refresh on demand (a 401), not on a timer that multiplies across tabs.
+- API keys (server-to-server, not the console): failed presentations are counted per source IP (20 per window); over the limit, **every** key from that IP gets `429` until the window passes.
+- `Retry-After` and `X-RateLimit-*` are now in the CORS `exposedHeaders`, so browser code can read them.
 
 ### Both fail open
 
@@ -486,12 +501,12 @@ cannot satisfy (`apps/api/src/auth/csrf.guard.ts`).
 `authorization`, `content-type`, `x-correlation-id`, `x-causation-id`,
 `x-acc-organization`, `x-acc-refresh`, `idempotency-key`.
 
-## 24. WebSockets — PLANNED / NOT IMPLEMENTED
+## 24. WebSockets — ISSUANCE ONLY; GATEWAY NOT IMPLEMENTED
 
-`API.md` §9 specifies a ticket-based scheme and the `ws_tickets` table exists, but
-**neither the `POST /ws/ticket` endpoint nor any gateway is implemented**
-(`DECISIONS.md` D15). There is no real-time channel of any kind. The frontend must plan
-for polling until this ships.
+`POST /ws/ticket` **is implemented** (see §30h and `API.md` §10b), but **no WebSocket
+gateway exists and nothing consumes a ticket** (`DECISIONS.md` D15). There is no
+real-time channel of any kind. The frontend must plan for polling until the gateway
+ships, and should not call `POST /ws/ticket` for anything but contract tests.
 
 ## 25. Webhook conventions — PLANNED / NOT IMPLEMENTED
 
@@ -529,9 +544,10 @@ Every breaking change must be recorded in `API.md` and here before it is merged.
 
 ## 29. Tenant isolation expectations
 
-RLS is the correctness backstop, not an application filter: list queries deliberately
-carry no tenant predicate, so a forgotten application-side filter cannot leak another
-tenant's rows. The frontend must never send a tenant identifier expecting it to *select*
+RLS is the correctness backstop beneath the application: since ADR-011 the workspace,
+API-key and role-assignment lists also carry an explicit predicate for the selected
+organization, and RLS independently scopes every query (including across sibling
+organizations under one reseller, which it did not before ADR-011). The frontend must never send a tenant identifier expecting it to *select*
 data — advisory identifiers are cross-checked and refused on mismatch (§4).
 
 ## 29a. Envelope note for the examples below

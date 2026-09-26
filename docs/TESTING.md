@@ -85,7 +85,7 @@ These exercise the canonical scope hierarchy `platform → reseller → organiza
 
 ### 6a. Horizontal isolation (sideways, at the same level)
 
-- Org A → Org B: read, update, delete and enumerate, for every resource type → denied.
+- Org A → Org B: read, update, delete and enumerate, for every resource type → denied — **including sibling organizations under the same reseller**, the topology every direct customer is in. Until the Gate-B remediation no fixture built it (every tenant had its own reseller), and it was reachable; now proven by `shared-reseller.int-spec.ts` and `shared-reseller-isolation.sec-spec.ts` (§6o).
 - Workspace A → Workspace B **within the same organization** → denied. This one matters precisely because RLS does not cover it (`TENANCY.md` §3a); it is the authorization layer's own boundary and is tested as such.
 - Team A → Team B within the same workspace → denied.
 - Reseller A → Reseller B's organizations → denied.
@@ -145,8 +145,8 @@ These connect **directly as the non-owner principal**, bypassing the application
 - `acc_app` with another tenant's context set → sees nothing of this tenant's data, for select, update and delete alike.
 - `acc_app` with *no* tenant context set → sees nothing at all (fails closed, not open).
 - `acc_app` attempting to write a row into another tenant → refused by the policy's `WITH CHECK`, not merely filtered on read.
-- `acc_app` cannot disable RLS, cannot `SET ROLE` to the owner, and is neither table owner nor superuser — asserted against the catalog, not assumed.
-- `acc_auth` and `acc_relay` hold exactly their intended grants and no others — also asserted against the catalog, so a future migration that widens one is caught.
+- `acc_app` cannot disable RLS, cannot `SET ROLE` to the owner, and is neither table owner nor superuser — asserted against the catalog, not assumed (`principals.int-spec.ts`, §6o; before the Gate-B remediation only the superuser/BYPASSRLS half was asserted).
+- `acc_auth` and `acc_relay` hold exactly their intended grants and no others — asserted as an exact grant map against the catalog (`principals.int-spec.ts`), so a future migration that widens one is caught.
 - **Negative control**: a deliberately weakened query (one that omits the application's own `org_id` filter) still returns nothing cross-tenant. Without this test the suite cannot distinguish "RLS works" from "the application filter happened to work".
 
 ### 6h. Worker and pooled-connection context
@@ -159,6 +159,32 @@ Implemented in `packages/db/src/test/tenant-context.int-spec.ts`, against a real
 - **The bare probe** — a query on the same connection with *no* context established at all — returns nothing, before and after each tenant's transaction. This is the load-bearing case: a connection-level `SET` is invisible to every transaction that establishes its own context, because each one overwrites all six variables, so it surfaces only in a query that deliberately establishes none.
 - Reused connection after an error/exception path, not just the happy path: a fault injected mid-transaction after a real write rolls the write back, leaves no context behind, and leaves the connection immediately usable — the next organization's transaction sees only itself.
 - **Mutation-sensitive**: changing `set_config(..., true)` to the connection-level `set_config(..., false)` fails all three integration tests and the `SET LOCAL` unit assertion.
+
+### 6o. Gate-B remediation suites (ADR-011)
+
+| Suite | Cases | What it proves | Fails if… |
+|---|---|---|---|
+| `packages/db/src/test/shared-reseller.int-spec.ts` | 19 | Reseller A → {Org A1, Org A2}, Reseller B → {Org B1}. As the non-owner `acc_app`, with no application filter, on every tenant table: A1 sees only A1 (A2 and B1 denied), Reseller A sees A1+A2 and not B1, Reseller B only B1, platform all; A1 cannot update/delete/insert into A2 or B1, cannot write its own reseller or create an organization under it; support is neither a platform reader nor writer; a disabled reseller administrator's claim stops being honoured | the reseller claim is derived from the organization again **and** accepted by the database; the platform flag is honoured for support; a policy predicate is weakened. Two negative controls restore the pre-0010 unvalidated accessors and watch the sibling reappear |
+| `apps/api/test/shared-reseller-isolation.sec-spec.ts` | 36 | Same topology over real HTTP: organization selection, six list endpoints enumerating nothing of a sibling, direct-object reads and writes with sibling ids all `404`, the enrol-then-disable chain closed, reseller/platform/support reach, workspace- and team-scoped principals refused organization lists; and the context `ScopeResolver` computes for each principal applied to `acc_app` with no filter | the resolver derives `resellerId` from the organization (2 cases fail, verified by mutation); the full original defect is restored — resolver + unvalidated accessor + no list predicates (14 cases fail, verified by mutation) |
+| `packages/db/src/test/principals.int-spec.ts` | 26 | Every `public` table classified and RLS-enabled; no table owned by (or by a role granted to) an application principal; exact grant maps for `acc_app`/`acc_auth`/`acc_relay`; no role memberships; no column privileges or schema `CREATE`; `acc_relay` reads zero audit rows; no `SET ROLE`/`SET SESSION AUTHORIZATION` path; the start-up posture guard accepts the real principals and refuses the owner, a `BYPASSRLS` `acc_app` and a table-owning `acc_app` | negative controls: each of seven policies replaced by `USING (true)`, `ALTER ROLE acc_app BYPASSRLS`, and `ALTER TABLE … OWNER TO acc_app` each re-open the boundary (and are restored, grants included) |
+| `apps/api/test/auth-abuse.sec-spec.ts` | 6 | Successful login does not reset the IP bucket; refresh is throttled per address; API-key failures are throttled before Argon2 and a working key never spends the allowance | each limiter removed (4 cases fail, verified by mutation) |
+| `apps/api/test/real-bootstrap.sec-spec.ts` | 13 | Through `createApp()` — the function `main.ts` calls: Helmet headers, CORS allow/deny with credentials and no wildcard, exposed rate-limit headers, CSRF header on refresh, login refusing form/text bodies (`415`), spoofed `X-Forwarded-For` ignored by default and honoured only with an explicit hop, and start-up refused when `DATABASE_URL` is the schema owner | the edge configuration or the principal guard regresses |
+
+The API suites' `startHarness` still bypasses `main.ts` (by design, for speed); only `real-bootstrap.sec-spec.ts` is evidence for HTTP-edge controls, and the CORS assertions in `auth.sec-spec.ts` should not be cited.
+
+### 6p. Browser E2E evidence — corrections required (Gemini; not changed in the backend remediation)
+
+The Gate-B audit found the following in `apps/web/e2e` at `df1ec74`. They are recorded here for the frontend owner rather than edited, and **none of these tests may be cited as backend security evidence** until corrected:
+
+| Test | Defect | Required correction |
+|---|---|---|
+| E2E-10 (forged `X-Acc-Organization`) | Vacuous: it never asserts that a request was sent or that the import of `/src/lib/api-client.ts` succeeded (the dev server does not serve raw source), so `capturedHeaderValue` stays `null` and the assertion passes regardless | Positive control first (a request *is* observed with the legitimate header), then assert the forged value never reaches the wire; separately, assert the backend's `403 TENANCY_CONTEXT_MISMATCH` for an unheld organization (a backend contract, already proven in `shared-reseller-isolation.sec-spec.ts`) |
+| E2E-11 (low-privilege boundary) | Regex `/unauthorized|access denied/i` does not match the rendered "Access Forbidden" text; would fail if enabled, and asserts UI hiding only | Match the real text, and assert the backend refusal (network `403` with `AUTHZ_SCOPE_DENIED`), not only the rendered page |
+| E2E-09 (audit payload XSS) | Builds its own `<pre>` and sets `textContent`; never renders `AuditLogDetailDialog` | Render the real dialog against a planted audit row containing markup |
+| E2E-07, E2E-12 | Vacuous with zero organizations — only `ZeroOrgView` renders | Run against the fixture below |
+| Storage helper (`e2e/helpers/auth.ts`) | Value regex `[A-Za-z0-9_-]{32,}` cannot match a dotted JWT; IndexedDB/Cache Storage not swept | Match `^[\w-]+\.[\w-]+\.[\w-]+$` (JWT) and sweep IndexedDB/Cache Storage |
+
+**Backend fixture requirement for those corrections (not yet provided):** a deterministic E2E seed with (a) two organizations under one reseller and one under another (the §6o topology), (b) an `org_admin` in each, (c) a low-privilege user (`read_only` at a team), (d) a user holding grants in two organizations, (e) at least one planted audit row per organization. Owner: backend, as a separate task; until then E2E-06/08/11 remain skipped and E2E-07/10/12 prove nothing about authorization.
 
 ### 6i. WebSocket authorization
 
@@ -401,7 +427,7 @@ The suite that makes `RBAC.md` §2's rule testable rather than aspirational. Eve
 
 The phase's defining case is the one that found a defect. `audit_logs_select` admits a reseller row when `reseller_id = app_current_reseller_id()`, and that session variable is derived from the *selected organization's* reseller for **every** principal — so RLS alone showed an organization administrator its own reseller's trail. The detail route always refused it, because it authorizes at the record's recorded `{reseller, …}` scope and nothing reaches upward; the list had no per-row equivalent. **The list was broader than the detail route it links to.**
 
-- **The discriminator** — an organization caller sees neither its own reseller's rows nor another reseller's, in the list *and* on detail (`403` for its own reseller, `404` for another's), while its organization/workspace/team rows are unaffected. A genuine reseller-scope holder keeps its reseller trail and still cannot see another reseller's. A workspace-pinned caller is refused the list outright — stronger than "sees no reseller rows", because a workspace grant cannot cover the organization target. Mixed org+reseller grants do not broaden beyond the held reseller. An API-key principal, bound at organization or workspace and never above, sees no reseller rows at all.
+- **The discriminator** — an organization caller sees neither its own reseller's rows nor another reseller's, in the list *and* on detail (`404` for both since ADR-011 — its own reseller's row was previously `403`, an existence oracle produced by the widened reseller claim), while its organization/workspace/team rows are unaffected. A genuine reseller-scope holder keeps its reseller trail and still cannot see another reseller's. A workspace-pinned caller is refused the list outright — stronger than "sees no reseller rows", because a workspace grant cannot cover the organization target. Mixed org+reseller grants do not broaden beyond the held reseller. An API-key principal, bound at organization or workspace and never above, sees no reseller rows at all.
 - **The invariant, asserted directly** — *a row appears in the list if and only if the detail route serves it*, walked over all five scope levels with the reciprocal `listed === (detail === 200)` assertion, so a future scope type cannot reintroduce a gap in either direction.
 - **Isolation** — cross-organization rows absent from the list and `404` on detail, with a real foreign id byte-identical to an unknown one; the mirror case proving B sees its own trail and none of A's; platform rows invisible to a tenant and visible to a platform administrator; a forged `X-Acc-Organization` refused; `orgId`/`resellerId`/`workspaceId` as query parameters refused rather than ignored.
 - **Redaction, end to end** — a payload written through the real `AuditWriter` with `password`, nested `password_hash`, `refresh_token` and `key_hash` comes back `[redacted]`. Nothing in the read path redacts, so a leak would mean the write-time boundary had failed.
@@ -475,7 +501,7 @@ The first case is the one the rest depend on: **the limiter actually engages**. 
 | 44 | Revoked or expired key at authentication | refused regardless of creator status |
 | 45 | Disabled creator's key | authenticates as an identity, confers nothing, is **not** auto-revoked |
 | 46 | Concurrent revocations of one key | exactly one `200`, one `409`; the conditional write decides |
-| 47 | Organization caller vs. a reseller-scoped audit row | absent from the list **and** `403` on detail |
+| 47 | Organization caller vs. a reseller-scoped audit row | absent from the list **and** `404` on detail (was `403` before ADR-011) |
 | 48 | Audit list membership vs. detail access, all five scope levels | they agree — listed ⟺ readable |
 | 49 | Genuine reseller-scope caller vs. its own reseller's audit rows | visible and readable; another reseller's is not |
 | 50 | API-key principal vs. reseller-scoped audit rows | never visible — a key is never bound above an organization |
