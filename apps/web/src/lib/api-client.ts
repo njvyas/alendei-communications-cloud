@@ -548,13 +548,112 @@ export interface ListPermissionsParams {
   readonly domain?: string;
 }
 
-export interface WorkspaceItem {
+// -----------------------------------------------------------------------------
+// Phase 1C: Organizations, Workspaces, and Teams Models
+// -----------------------------------------------------------------------------
+export type OrganizationStatus = 'active' | 'suspended' | 'closed';
+export type BillingMode = 'prepaid' | 'postpaid';
+export type BillingPolicy = 'charge_per_logical_message' | 'charge_per_attempt';
+
+export interface OrganizationView {
+  readonly id: string;
+  readonly name: string;
+  readonly slug: string;
+  readonly legalName: string | null;
+  readonly gstin: string | null;
+  readonly resellerId: string;
+  readonly status: OrganizationStatus;
+  readonly statusChangedAt: string | null;
+  readonly billingMode: BillingMode;
+  readonly billingPolicy: BillingPolicy;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface ListOrganizationsParams {
+  readonly status?: OrganizationStatus;
+  readonly resellerId?: string;
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: 'name' | 'createdAt' | '-createdAt' | string;
+}
+
+export interface CreateOrganizationParams {
+  readonly name: string;
+  readonly slug: string;
+  readonly legalName?: string | null;
+  readonly gstin?: string | null;
+  readonly resellerId?: string;
+  readonly billingMode?: BillingMode;
+  readonly billingPolicy?: BillingPolicy;
+}
+
+export interface UpdateOrganizationParams {
+  readonly name?: string;
+  readonly legalName?: string | null;
+  readonly gstin?: string | null;
+  readonly billingMode?: BillingMode;
+  readonly billingPolicy?: BillingPolicy;
+}
+
+export type ScopeStatus = 'active' | 'archived';
+
+export interface WorkspaceView {
   readonly id: string;
   readonly orgId: string;
   readonly name: string;
   readonly slug: string;
-  readonly status: string;
+  readonly status: ScopeStatus;
+  readonly isDefault: boolean;
   readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export type WorkspaceItem = WorkspaceView;
+
+export interface ListWorkspacesParams {
+  readonly status?: ScopeStatus;
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: 'name' | 'createdAt' | '-createdAt' | string;
+  readonly orgId?: string;
+}
+
+export interface CreateWorkspaceParams {
+  readonly name: string;
+  readonly slug: string;
+  readonly orgId?: string;
+}
+
+export interface UpdateWorkspaceParams {
+  readonly name?: string;
+}
+
+export interface TeamView {
+  readonly id: string;
+  readonly orgId: string;
+  readonly workspaceId: string;
+  readonly name: string;
+  readonly status: ScopeStatus;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface ListTeamsParams {
+  readonly workspaceId?: string;
+  readonly status?: ScopeStatus;
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: 'name' | 'createdAt' | '-createdAt' | string;
+}
+
+export interface CreateTeamParams {
+  readonly workspaceId: string;
+  readonly name: string;
+}
+
+export interface UpdateTeamParams {
+  readonly name?: string;
 }
 
 export type GrantableScopeType = 'reseller' | 'organization' | 'workspace' | 'team';
@@ -742,12 +841,281 @@ export const permissionsApi = {
 };
 
 // -----------------------------------------------------------------------------
-// Workspaces API (For Workspace Selection during User Creation)
+// Organizations API (Phase 1C.1a)
+// All routes act via path or caller reach; skipTenant is true.
+// -----------------------------------------------------------------------------
+export const organizationsApi = {
+  async list(
+    params: ListOrganizationsParams = {},
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<OrganizationView>> {
+    const query = new URLSearchParams();
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.sort) query.set('sort', params.sort);
+    if (params.status) query.set('status', params.status);
+    if (params.resellerId) query.set('resellerId', params.resellerId);
+
+    const queryString = query.toString();
+    const endpoint = queryString ? `/organizations?${queryString}` : '/organizations';
+
+    return apiFetch<ApiPagedResponse<OrganizationView>>(endpoint, {
+      method: 'GET',
+      signal,
+      skipTenant: true,
+    });
+  },
+
+  async get(id: string, signal?: AbortSignal): Promise<ApiDataResponse<OrganizationView>> {
+    return apiFetch<ApiDataResponse<OrganizationView>>(`/organizations/${encodeURIComponent(id)}`, {
+      method: 'GET',
+      signal,
+      skipTenant: true,
+    });
+  },
+
+  async create(
+    params: CreateOrganizationParams,
+    idempotencyKey?: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<OrganizationView>> {
+    const headers: Record<string, string> = {};
+    if (idempotencyKey) {
+      headers['Idempotency-Key'] = idempotencyKey;
+    }
+
+    return apiFetch<ApiDataResponse<OrganizationView>>('/organizations', {
+      method: 'POST',
+      headers,
+      body: params,
+      signal,
+      skipTenant: true,
+    });
+  },
+
+  async update(
+    id: string,
+    params: UpdateOrganizationParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<OrganizationView>> {
+    return apiFetch<ApiDataResponse<OrganizationView>>(`/organizations/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: params,
+      signal,
+      skipTenant: true,
+    });
+  },
+
+  async suspend(
+    id: string,
+    reason?: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<OrganizationView>> {
+    return apiFetch<ApiDataResponse<OrganizationView>>(`/organizations/${encodeURIComponent(id)}/suspend`, {
+      method: 'POST',
+      body: reason ? { reason } : {},
+      signal,
+      skipTenant: true,
+    });
+  },
+
+  async reactivate(
+    id: string,
+    reason?: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<OrganizationView>> {
+    return apiFetch<ApiDataResponse<OrganizationView>>(`/organizations/${encodeURIComponent(id)}/reactivate`, {
+      method: 'POST',
+      body: reason ? { reason } : {},
+      signal,
+      skipTenant: true,
+    });
+  },
+
+  async close(
+    id: string,
+    reason?: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<OrganizationView>> {
+    return apiFetch<ApiDataResponse<OrganizationView>>(`/organizations/${encodeURIComponent(id)}/close`, {
+      method: 'POST',
+      body: reason ? { reason } : {},
+      signal,
+      skipTenant: true,
+    });
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Workspaces API (Phase 1C.1b)
+// Canonical routes act in selected organization context.
 // -----------------------------------------------------------------------------
 export const workspacesApi = {
-  async list(signal?: AbortSignal): Promise<ApiPagedResponse<WorkspaceItem>> {
-    return apiFetch<ApiPagedResponse<WorkspaceItem>>('/tenants/workspaces', {
+  async list(
+    paramsOrSignal?: ListWorkspacesParams | AbortSignal,
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<WorkspaceView>> {
+    let params: ListWorkspacesParams = {};
+    let sig = signal;
+
+    if (paramsOrSignal instanceof AbortSignal) {
+      sig = paramsOrSignal;
+    } else if (paramsOrSignal) {
+      params = paramsOrSignal;
+    }
+
+    const query = new URLSearchParams();
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.sort) query.set('sort', params.sort);
+    if (params.status) query.set('status', params.status);
+    if (params.orgId) query.set('orgId', params.orgId);
+
+    const queryString = query.toString();
+    const endpoint = queryString ? `/workspaces?${queryString}` : '/workspaces';
+
+    return apiFetch<ApiPagedResponse<WorkspaceView>>(endpoint, {
       method: 'GET',
+      signal: sig,
+    });
+  },
+
+  async get(id: string, signal?: AbortSignal): Promise<ApiDataResponse<WorkspaceView>> {
+    return apiFetch<ApiDataResponse<WorkspaceView>>(`/workspaces/${encodeURIComponent(id)}`, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  async create(
+    params: CreateWorkspaceParams,
+    idempotencyKey?: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<WorkspaceView>> {
+    const headers: Record<string, string> = {};
+    if (idempotencyKey) {
+      headers['Idempotency-Key'] = idempotencyKey;
+    }
+
+    return apiFetch<ApiDataResponse<WorkspaceView>>('/workspaces', {
+      method: 'POST',
+      headers,
+      body: params,
+      signal,
+    });
+  },
+
+  async update(
+    id: string,
+    params: UpdateWorkspaceParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<WorkspaceView>> {
+    const safeBody = { name: params.name };
+    return apiFetch<ApiDataResponse<WorkspaceView>>(`/workspaces/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: safeBody,
+      signal,
+    });
+  },
+
+  async archive(id: string, signal?: AbortSignal): Promise<ApiDataResponse<WorkspaceView>> {
+    return apiFetch<ApiDataResponse<WorkspaceView>>(`/workspaces/${encodeURIComponent(id)}/archive`, {
+      method: 'POST',
+      signal,
+    });
+  },
+
+  async restore(id: string, signal?: AbortSignal): Promise<ApiDataResponse<WorkspaceView>> {
+    return apiFetch<ApiDataResponse<WorkspaceView>>(`/workspaces/${encodeURIComponent(id)}/restore`, {
+      method: 'POST',
+      signal,
+    });
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Teams API (Phase 1C.1b)
+// Canonical routes act in selected organization context.
+// Invariant: NEVER send orgId (causes 400 VALIDATION_FAILED).
+// -----------------------------------------------------------------------------
+export const teamsApi = {
+  async list(
+    params: ListTeamsParams = {},
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<TeamView>> {
+    const query = new URLSearchParams();
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.sort) query.set('sort', params.sort);
+    if (params.status) query.set('status', params.status);
+    if (params.workspaceId) query.set('workspaceId', params.workspaceId);
+    // Explicitly omit orgId
+
+    const queryString = query.toString();
+    const endpoint = queryString ? `/teams?${queryString}` : '/teams';
+
+    return apiFetch<ApiPagedResponse<TeamView>>(endpoint, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  async get(id: string, signal?: AbortSignal): Promise<ApiDataResponse<TeamView>> {
+    return apiFetch<ApiDataResponse<TeamView>>(`/teams/${encodeURIComponent(id)}`, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  async create(
+    params: CreateTeamParams,
+    idempotencyKey?: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<TeamView>> {
+    const headers: Record<string, string> = {};
+    if (idempotencyKey) {
+      headers['Idempotency-Key'] = idempotencyKey;
+    }
+
+    const safeBody = {
+      workspaceId: params.workspaceId,
+      name: params.name,
+    };
+
+    return apiFetch<ApiDataResponse<TeamView>>('/teams', {
+      method: 'POST',
+      headers,
+      body: safeBody,
+      signal,
+    });
+  },
+
+  async update(
+    id: string,
+    params: UpdateTeamParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<TeamView>> {
+    const safeBody = {
+      name: params.name,
+    };
+
+    return apiFetch<ApiDataResponse<TeamView>>(`/teams/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: safeBody,
+      signal,
+    });
+  },
+
+  async archive(id: string, signal?: AbortSignal): Promise<ApiDataResponse<TeamView>> {
+    return apiFetch<ApiDataResponse<TeamView>>(`/teams/${encodeURIComponent(id)}/archive`, {
+      method: 'POST',
+      signal,
+    });
+  },
+
+  async restore(id: string, signal?: AbortSignal): Promise<ApiDataResponse<TeamView>> {
+    return apiFetch<ApiDataResponse<TeamView>>(`/teams/${encodeURIComponent(id)}/restore`, {
+      method: 'POST',
       signal,
     });
   },

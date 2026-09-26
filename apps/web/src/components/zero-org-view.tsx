@@ -1,11 +1,13 @@
 'use client';
 
+import Link from 'next/link';
 import { authApi } from '@/lib/api-client';
-import { useSession } from '@/lib/session-store';
+import { useCanReadOrganizations, useSession } from '@/lib/session-store';
 import { Card, CardDescription, CardTitle } from '@/components/ui/card';
 
 export function ZeroOrgView() {
   const clearSession = useSession((state) => state.clearSession);
+  const canReadOrganizations = useCanReadOrganizations();
 
   const handleSignOut = async () => {
     try {
@@ -23,7 +25,15 @@ export function ZeroOrgView() {
           Your account is successfully authenticated, but you do not hold active grants in any organization.
           Tenant-scoped operations are not available.
         </CardDescription>
-        <div className="mt-6 flex justify-end">
+        <div className="mt-6 flex items-center justify-between gap-3">
+          {canReadOrganizations && (
+            <Link
+              href="/organizations"
+              className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+            >
+              Manage Organizations
+            </Link>
+          )}
           <button
             type="button"
             onClick={handleSignOut}

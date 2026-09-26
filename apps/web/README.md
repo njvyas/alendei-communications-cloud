@@ -127,9 +127,42 @@ The Audit Logs module (`/audit-logs`) implements forensic observation and causal
   - Gated strictly by `audit.read` (`PERMISSIONS.AUDIT_READ`).
   - Held by `org_admin`, `reseller_admin`, `alendei_support`, and `platform_super_admin`.
   - Accounts lacking `audit.read` (such as `workspace_manager`) or unauthenticated visitors fail closed with an explicit unauthorized boundary banner; query execution is completely blocked (`enabled: false`).
-- **Strict Tenant Isolation**:
+- Strict Tenant Isolation:
   - All requests pin `X-Acc-Organization` to the validated active session store.
   - React Query keys are partitioned by `selectedOrgId`, ensuring immediate eviction and zero cross-tenant cache contamination on organization switch.
+
+## Organizations, Workspaces & Teams Administration (Phase 1C)
+
+The Tenancy Administration modules implement resource-oriented organization, workspace, and team management:
+
+### 1. Organizations Module (`/organizations`, `/organizations/[id]`)
+- **List & Discovery**: Lists organizations within the caller's grant-derived reach (`GET /api/v1/organizations`). Supports cursor pagination (`cursor`, `limit`), sort ordering (`name` [default], `createdAt`, `-createdAt`), and status filtering (`active`, `suspended`, `closed`).
+- **Organization Provisioning**: `POST /api/v1/organizations` supports provisioning new tenant organizations beneath target reseller or platform scopes. Idempotency is preserved across retries via persistent `Idempotency-Key`. Supports configuring legal entity (`legalName`, `gstin`) and platform-only billing options (`billingMode`, `billingPolicy`).
+- **Organization Detail**: Displays immutable identifier slug, legal entity attributes, reseller ID, and billing configuration.
+- **Organization Updates**: `PATCH /api/v1/organizations/:id` permits editing mutable fields (`name`, `legalName`, `gstin`, billing). Forbidden immutable fields (`slug`, `resellerId`, `status`) are strictly excluded from update payloads.
+- **Lifecycle Management**:
+  - `POST /organizations/:id/suspend`: Operational suspension with reason. Blocks non-platform members from selecting the organization and halts API key authentication.
+  - `POST /organizations/:id/reactivate`: Restores active status.
+  - `POST /organizations/:id/close`: Terminal non-reversible closure with explicit confirmation. Data is preserved for audit retention.
+- **Tenant Context Independence**: All `/organizations` routes act outside single-tenant pinning (`skipTenant: true`); `X-Acc-Organization` is deliberately omitted. Users with zero authorized organizations but holding `organizations.read` can access `/organizations` to provision and manage tenants.
+
+### 2. Workspaces Module (`/workspaces`, `/workspaces/[id]`)
+- **List & Discovery**: Lists workspaces in the active organization (`GET /api/v1/workspaces`). Pinned strictly to `selectedOrgId` via `X-Acc-Organization`. Supports cursor pagination, status filtering (`active`, `archived`), and sort order (`name` [default], `createdAt`, `-createdAt`).
+- **Workspace Creation**: `POST /api/v1/workspaces` creates workspaces with name and slug. Protected with persistent `Idempotency-Key`.
+- **Workspace Updates**: `PATCH /api/v1/workspaces/:id` allows editing `name`. Forbidden fields (`slug`, `isDefault`, `status`, `orgId`) are stripped.
+- **Lifecycle Management**:
+  - `POST /workspaces/:id/archive`: Archives workspace. Protected: default workspace (`isDefault: true`) cannot be archived. Refuses archive if active teams exist (`409 WORKSPACE_LIFECYCLE_CONFLICT` with `details.activeTeams`).
+  - `POST /workspaces/:id/restore`: Restores archived workspace.
+- **Embedded Teams**: Workspace detail view embeds the list of teams within the workspace (`GET /teams?workspaceId=...`) and provides direct team provisioning within that workspace.
+
+### 3. Teams Module (`/teams`, `/teams/[id]`)
+- **List & Discovery**: Lists teams within the active organization (`GET /api/v1/teams`). Supports filtering by parent workspace (`workspaceId`), status (`active`, `archived`), cursor pagination, and sort order.
+- **Strict Invariant — NO `orgId`**: Per contract §31c, team endpoints (`GET /teams`, `POST /teams`, `PATCH /teams/:id`) strictly omit `orgId` (sending `orgId` triggers `400 VALIDATION_FAILED`). A team's organization is derived exclusively from its parent workspace.
+- **Team Creation**: `POST /api/v1/teams` creates teams with `workspaceId` and `name`. Refused with `409 WORKSPACE_LIFECYCLE_CONFLICT` if the parent workspace is archived.
+- **Team Updates**: `PATCH /api/v1/teams/:id` updates `name`. Immutable fields (`workspaceId`, `orgId`, `status`) are strictly excluded.
+- **Lifecycle Management**:
+  - `POST /teams/:id/archive`: Archives team.
+  - `POST /teams/:id/restore`: Restores team. Refused if parent workspace is archived (`409 WORKSPACE_LIFECYCLE_CONFLICT`).
 
 ## Testing & Verification
 

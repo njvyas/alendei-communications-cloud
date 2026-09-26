@@ -379,7 +379,7 @@ describe('Users Administration API Client', () => {
     await roleAssignmentsApi.listForUser('user-test-123');
 
     const rolesCall = fetchCalls.find((c) => c.url.endsWith('/roles'));
-    const wsCall = fetchCalls.find((c) => c.url.endsWith('/tenants/workspaces'));
+    const wsCall = fetchCalls.find((c) => c.url.endsWith('/workspaces') || c.url.endsWith('/tenants/workspaces'));
     const assignmentsCall = fetchCalls.find((c) => c.url.includes('/role-assignments?userId=user-test-123'));
 
     assert.ok(rolesCall);

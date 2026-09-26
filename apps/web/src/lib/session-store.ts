@@ -265,6 +265,49 @@ export function useHeldOrganizationPermissions(): Set<string> {
 }
 
 /**
+ * React hook evaluating whether the actor can access the Organizations administration section.
+ * Covered if platform admin, or holding `organizations.read` across any grant (platform, reseller, or org).
+ */
+export function useCanReadOrganizations(): boolean {
+  return useSession((state) => {
+    if (!state.authorization) return false;
+    if (state.authorization.isPlatformAdmin) return true;
+    return state.authorization.grants.some((g) => g.permissions.includes('organizations.read'));
+  });
+}
+
+/**
+ * React hook evaluating whether the actor can provision new organizations.
+ * Covered if platform admin, or holding `platform.tenants.manage` at platform scope,
+ * or holding `organizations.create` at reseller scope.
+ */
+export function useCanCreateOrganizations(): boolean {
+  return useSession((state) => {
+    if (!state.authorization) return false;
+    if (state.authorization.isPlatformAdmin) return true;
+    return state.authorization.grants.some(
+      (g) =>
+        (g.scopeType === 'platform' && g.permissions.includes('platform.tenants.manage')) ||
+        (g.scopeType === 'reseller' && g.permissions.includes('organizations.create')),
+    );
+  });
+}
+
+/**
+ * React hook evaluating whether the actor has platform authority to manage tenant lifecycle
+ * (suspend, reactivate, close, or configure billing).
+ */
+export function useCanManagePlatformTenants(): boolean {
+  return useSession((state) => {
+    if (!state.authorization) return false;
+    if (state.authorization.isPlatformAdmin) return true;
+    return state.authorization.grants.some(
+      (g) => g.scopeType === 'platform' && g.permissions.includes('platform.tenants.manage'),
+    );
+  });
+}
+
+/**
  * Initializes the session on application startup via silent refresh.
  * Transitions to 'unauthenticated' if no active session exists.
  */
