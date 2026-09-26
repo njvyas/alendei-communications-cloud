@@ -207,6 +207,102 @@ export class IdempotencyService {
    * updates nothing and returns no row, which is how the caller learns to
    * replay.
    */
+  /**
+   * Idempotent execution for a request that **creates the organization its own
+   * key would be namespaced by** — `POST /organizations` (Phase 1C.1a,
+   * ADR-012).
+   *
+   * `idempotency_keys` is namespaced by organization and RLS-scoped by it, and
+   * the creator of an organization acts in none (a platform or reseller
+   * administrator). Rather than widening that table's key or its policy, this
+   * path keeps both exactly as they are and changes only *how the record is
+   * found*:
+   *
+   *   1. a transaction-scoped advisory lock on `(endpoint, actor, key)`
+   *      serializes concurrent duplicates — the unique index cannot, because the
+   *      organization it would conflict on does not exist yet;
+   *   2. an existing record is looked up by `(endpoint, key, actor)` within the
+   *      caller's own RLS reach — a platform administrator sees every
+   *      organization, a reseller administrator those beneath its reseller;
+   *   3. on a miss, `work` runs and the record is written **in the new
+   *      organization's namespace, in the same transaction** — so an organization
+   *      and its record commit or roll back together, and there is no crash
+   *      window.
+   *
+   * The caller has already authorized the request in `tx` — a replay is never a
+   * credential — and has already elevated `tx` to the provisioning context
+   * before `work` inserts anything. Only successes are stored, as everywhere
+   * else (ADR-006).
+   */
+  async executeOrganizationCreation<T>(
+    tx: Transaction,
+    execution: Omit<IdempotentExecution<T>, 'work' | 'authorize'> & {
+      readonly work: (tx: Transaction) => Promise<{ body: T; orgId: string }>;
+    },
+  ): Promise<IdempotentOutcome<T>> {
+    if (execution.key === null) {
+      const { body } = await execution.work(tx);
+      return { body, status: execution.successStatus, replayed: false };
+    }
+
+    const principal = execution.request.principal;
+    const endpoint = `${execution.request.method.toUpperCase()} ${execution.request.route}`;
+    const hash = fingerprint(execution.request);
+    const key = execution.key;
+    const actor = principal.userId ?? principal.apiKeyId ?? 'anonymous';
+
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`acc:idempotency:${endpoint}:${actor}:${key}`}, 0))`,
+    );
+
+    const [record] = await tx
+      .select()
+      .from(schema.idempotencyKeys)
+      .where(
+        and(
+          eq(schema.idempotencyKeys.endpoint, endpoint),
+          eq(schema.idempotencyKeys.idempotencyKey, key),
+          principal.userId
+            ? eq(schema.idempotencyKeys.actorUserId, principal.userId)
+            : eq(schema.idempotencyKeys.actorApiKeyId, principal.apiKeyId!),
+          sql`${schema.idempotencyKeys.expiresAt} > now()`,
+        ),
+      )
+      .limit(1);
+
+    if (record) {
+      if (record.requestHash !== hash) {
+        throw new AppException({
+          status: HttpStatus.UNPROCESSABLE_ENTITY,
+          code: ERROR_CODES.IDEMPOTENCY_KEY_PAYLOAD_MISMATCH,
+          message: 'This Idempotency-Key was already used for a different request',
+          logContext: { endpoint },
+        });
+      }
+      return {
+        body: record.responseSnapshot as T,
+        status: record.responseStatusCode ?? execution.successStatus,
+        replayed: true,
+      };
+    }
+
+    const { body, orgId } = await execution.work(tx);
+    await tx.insert(schema.idempotencyKeys).values({
+      orgId,
+      endpoint,
+      idempotencyKey: key,
+      requestHash: hash,
+      status: 'completed',
+      responseStatusCode: execution.successStatus,
+      responseSnapshot: body as never,
+      completedAt: new Date(),
+      actorUserId: principal.userId,
+      actorApiKeyId: principal.apiKeyId,
+      correlationId: RequestContext.get()?.correlationId ?? null,
+    });
+    return { body, status: execution.successStatus, replayed: false };
+  }
+
   private async claim<T>(
     tx: Transaction,
     execution: IdempotentExecution<T>,

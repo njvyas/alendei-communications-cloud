@@ -112,9 +112,9 @@ Hard deletion of tenancy rows remains available to the schema owner for developm
 
 **Teams gain the same lifecycle in Phase 1C** (ADR-012 OD-5, F-6): `teams.status` with the existing `workspace_status` values `active | archived`. There is no team `DELETE`. *(IN PHASE 1C — not yet implemented; today `teams` has no status column.)*
 
-## 1c. Organization, workspace and team lifecycle (IN PHASE 1C — NOT IMPLEMENTED, ADR-012)
+## 1c. Organization, workspace and team lifecycle (ADR-012) — organizations IMPLEMENTED (1C.1a); workspaces/teams IN PHASE 1C
 
-Today no API creates or transitions any tenancy row: organizations, workspaces and teams are created only by the owner (seed, bootstrap, fixtures), and every organization is effectively `active`. Phase 1C adds the lifecycle below. Until each part is implemented, this section is a frozen target, not a description of behaviour.
+**Organizations: implemented in Phase 1C.1a** (`/organizations`, migration `0011`). **Workspaces and teams: not yet** — they are still created only by the owner (seed, bootstrap, fixtures) or as an organization's default workspace, and the workspace/team part of this section remains a frozen target.
 
 **Organizations** (`organization_status`, no new values):
 
@@ -133,7 +133,7 @@ Today no API creates or transitions any tenancy row: organizations, workspaces a
 
 **How status is enforced — application authorization, not RLS** (OD-3, F-4, F-5):
 
-- For a principal without any platform-scope grant, a non-`active` organization is removed from the organizations it may select (§2a). Selecting it explicitly or implicitly, or presenting an API key bound to it, is refused on the **next request** with `403 TENANCY_ORGANIZATION_SUSPENDED` / `403 TENANCY_ORGANIZATION_CLOSED` (to principals who hold a grant in, or beneath the reseller of, that organization; anyone else receives the existing `403 TENANCY_CONTEXT_MISMATCH`). Grants and state are re-read on every request, so there is no token-TTL window.
+- For a principal without any platform-scope grant, a non-`active` organization is removed from the organizations it may select (§2a). If that leaves it no active organization and exactly one it is connected to, implicit selection is refused with that organization's status rather than treated as "no organization". Selecting it explicitly or implicitly, or presenting an API key bound to it, is refused on the **next request** with `403 TENANCY_ORGANIZATION_SUSPENDED` / `403 TENANCY_ORGANIZATION_CLOSED` (to principals who hold a grant in, or beneath the reseller of, that organization; anyone else receives the existing `403 TENANCY_CONTEXT_MISMATCH`). Grants and state are re-read on every request, so there is no token-TTL window.
 - Platform principals (super admin and support) can still select and read a suspended or closed organization. Tenant-data mutations in a non-active organization are refused for everyone in Phase 1C, except the lifecycle transitions themselves.
 - RLS is **unchanged**: `app_org_in_scope()` gains no status term. RLS keeps enforcing *which organization*; status decides *whether that organization is usable*, and that decision lives with the rest of authorization. The direct-database guarantees of `§3a` and ADR-011 are therefore unaffected by Phase 1C.
 

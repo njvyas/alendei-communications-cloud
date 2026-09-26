@@ -20,7 +20,7 @@
 > | Blocker | Closes in |
 > |---|---|
 > | ~~**No user lifecycle**~~ — **CLOSED in 1B.6.1** (§30d). List, detail, create, profile update, disable and reactivate are live. What is still missing is narrower and named there: a created user cannot yet *sign in*, because credential delivery is `DECISIONS.md` D16 | 1B.6.1 ✅ / D16 |
-> | **No organization, workspace or team administration** — only workspace *reads* exist (§30). Target contract frozen in §31a–§31c. Reseller CRUD stays in Phase 9 | **Phase 1C (1C.1a/1C.1b)** — was 1B.8 |
+> | **No organization, workspace or team administration** — organizations **CLOSED in 1C.1a** (§31a, implemented); workspaces and teams still *reads* only (§30), target contract frozen in §31b–§31c. Reseller CRUD stays in Phase 9 | **Phase 1C (1C.1a ✅ / 1C.1b)** — was 1B.8 |
 > | ~~**No API-key management**~~ — **CLOSED in 1B.6.2** (§30e). List, detail, create and revoke are live. Rotation and secret recovery are deliberately absent and are not coming: see §30e | 1B.6.2 ✅ |
 > | ~~**No audit read** endpoint~~ — **CLOSED in 1B.6.3** (§30f) | 1B.6.3 ✅ |
 > | **No way for an invited user to obtain a password**, so a user the console creates cannot sign in yet (`DECISIONS.md` D16) | D16 |
@@ -571,6 +571,9 @@ The **entire** implemented API surface at `fa1142b`. This section is the invento
 | `GET` | `/api/v1/auth/sessions` | 1B.3 |
 | `DELETE` | `/api/v1/auth/sessions/:id` | 1B.3 |
 | `POST` | `/api/v1/ws/ticket` | 1B.7-prep (§30h) — **issuance only; no socket gateway exists** |
+| `GET` `POST` | `/api/v1/organizations` | **1C.1a (§31a)** |
+| `GET` `PATCH` | `/api/v1/organizations/:id` | **1C.1a (§31a)** |
+| `POST` | `/api/v1/organizations/:id/suspend` · `/reactivate` · `/close` | **1C.1a (§31a)** |
 | `GET` | `/api/v1/tenants/workspaces` | 1B.3 |
 | `GET` | `/api/v1/tenants/workspaces/:id` | 1B.3 |
 | `GET` `POST` | `/api/v1/users` | **1B.6.1 (§30d)** |
@@ -593,7 +596,7 @@ Every list endpoint above is paginated (§13) except `/auth/sessions` and `/perm
 
 **Correction.** An earlier version of this section was pinned to commit `6e84d7c` and listed `/users`, `/api-keys` and `/audit` as "PLANNED / NOT IMPLEMENTED" — contradicting §§30d–30f, which document all three as implemented. All three shipped in 1B.6.1, 1B.6.2 and 1B.6.3 respectively. The audit route is `/audit-logs`, not `/audit`.
 
-**Still PLANNED / NOT IMPLEMENTED**, and listed in `API.md` §2 as a target map rather than an inventory: `/organizations`, `/workspaces`, `/teams` (**IN PHASE 1C**, §31), `/resellers` (Phase 9), `/messages`, `/providers`, `/channels`, `/routing`, `/campaigns`, `/contacts`, `/templates`, `/billing`, `/wallets`, `/reports`, `/webhook-endpoints`, and the WebSocket gateway itself.
+**Still PLANNED / NOT IMPLEMENTED**, and listed in `API.md` §2 as a target map rather than an inventory: `/workspaces`, `/teams` (**IN PHASE 1C**, §31b–§31c), `/resellers` (Phase 9), `/messages`, `/providers`, `/channels`, `/routing`, `/campaigns`, `/contacts`, `/templates`, `/billing`, `/wallets`, `/reports`, `/webhook-endpoints`, and the WebSocket gateway itself.
 
 ### OpenAPI
 
@@ -1129,7 +1132,11 @@ POST /api/v1/ws/ticket        // no request body
 - **Rate limits:** `X-RateLimit-*` on every response; `429 RATE_LIMIT_EXCEEDED` with `Retry-After` (§23).
 - **New error codes introduced by Phase 1C:** `TENANCY_ORGANIZATION_SUSPENDED`, `TENANCY_ORGANIZATION_CLOSED` (403); `ORGANIZATION_LIFECYCLE_CONFLICT`, `WORKSPACE_LIFECYCLE_CONFLICT`, `TEAM_LIFECYCLE_CONFLICT` (409, `details: { status }`).
 
-### 31a. Organizations — IN PHASE 1C (1C.1a)
+### 31a. Organizations — IMPLEMENTED (Phase 1C.1a)
+
+> **Implemented** in `apps/api/src/organizations/` (migration `0011`). The contract
+> below is what ships; the notes after the table record the details the freeze left
+> implicit.
 
 ```jsonc
 // organization — exhaustive
@@ -1151,7 +1158,7 @@ POST /api/v1/ws/ticket        // no request body
 
 | Method | Path | Auth | Permission | Scope / target | Request | Success | Errors | Idempotency | Audit |
 |---|---|---|---|---|---|---|---|---|---|
-| `GET` | `/api/v1/organizations` | session or key | `organizations.read` | each row must be covered by a grant carrying the permission; **no `X-Acc-Organization`** — the list spans the caller's reach | `status?`, `resellerId?` (platform only), `limit`, `cursor`, `sort` (`name` default, `-createdAt`) | `200 {data:[organization], page}` | `400` bad filter/cursor/sort | safe | — |
+| `GET` | `/api/v1/organizations` | session or key | `organizations.read` | each row must be covered by a grant carrying the permission; the list spans the caller's reach, and `X-Acc-Organization` is **optional** (it never changes the result) | `status?`, `resellerId?` (both narrow within the caller's reach, for everyone), `limit`, `cursor`, `sort` (`name` default, `createdAt`, `-createdAt`) | `200 {data:[organization], page}` | `400` bad filter/cursor/sort | safe | — |
 | `GET` | `/api/v1/organizations/:id` | session or key | `organizations.read` | the organization | — | `200 {data:organization}` | `404` not visible | safe | — |
 | `POST` | `/api/v1/organizations` | **session only** | `platform.tenants.manage` at platform, **or** `organizations.create` at the target reseller | platform or `reseller:{resellerId}` | `{name, slug, legalName?, gstin?, resellerId?, billingMode?, billingPolicy?}` — `resellerId` defaults to the platform-default reseller (platform) or to the caller's single reseller grant (reseller admin); billing fields only with `platform.tenants.manage` | `201 {data:organization}`; the organization's system roles and one default workspace are created in the same transaction | `400`; `403 AUTHZ_SCOPE_DENIED` (reseller not covered, or billing fields without platform authority); `404` reseller not visible; `409 RESOURCE_CONFLICT` slug taken | **`Idempotency-Key` accepted** | `organization.created`, `role.created` ×5, `workspace.created` |
 | `PATCH` | `/api/v1/organizations/:id` | session or key | `organizations.update` | the organization | `{name?, legalName?, gstin?}`; `billingMode?`, `billingPolicy?` only with `platform.tenants.manage` | `200 {data:organization}` | `400` (incl. `slug`/`resellerId`/`status` sent); `403`; `404`; `409 ORGANIZATION_LIFECYCLE_CONFLICT` if not active | not keyed | `organization.updated` (before/after) |
@@ -1162,6 +1169,14 @@ POST /api/v1/ws/ticket        // no request body
 **Who sees what in `GET /organizations`:** a platform principal (super admin or support) — every organization, any status; a reseller administrator — organizations beneath its reseller; everyone else — the organizations they hold grants in that are `active` (non-active ones are omitted for non-platform principals, and selecting them is refused per the common rules).
 
 **There is no `DELETE /organizations/:id`.** Closing is the terminal state and data is retained (ADR-012 OD-12).
+
+**Implementation notes (1C.1a):**
+
+- **`:id` routes take no `X-Acc-Organization`.** The organization is the one in the path. A platform-grant holder may address any organization; anyone else only one it holds a grant in (or is beneath a reseller it administers) and that is `active`. A connected principal naming a suspended/closed one gets `403 TENANCY_ORGANIZATION_SUSPENDED`/`…_CLOSED`; everyone else gets `404`, byte-identical to an unknown id.
+- **Who is refused on `POST`:** an organization administrator or `alendei_support` → `403 AUTHZ_SCOPE_DENIED` (audited at the caller's own organization); a reseller administrator naming another reseller → `404` (that reseller is invisible to it); a reseller administrator holding several reseller grants and naming none → `400 TENANCY_CONTEXT_REQUIRED`; an API key → `403`. A caller with several organizations, no platform or reseller authority and no `X-Acc-Organization` is refused with `403` before any target is evaluated, because there is no scope to attribute the refusal to.
+- **`Idempotency-Key` on `POST` is scoped to the caller:** the same key from another principal is a different request. A replay re-checks current authority first, so a caller who has lost it is refused (`403`/`404`), not replayed. After the stored record expires (24 hours), reusing the key runs a new creation — which normally ends in `409 RESOURCE_CONFLICT` on the slug.
+- **Status enforcement on every other route:** a principal without a platform grant cannot select a suspended or closed organization (explicitly or implicitly) and its API keys stop working, all on the next request. A platform principal can select it and read; any mutating request (`POST`/`PUT`/`PATCH`/`DELETE`) in its context is `409 ORGANIZATION_LIFECYCLE_CONFLICT` with `details.status`. Sign-in is unaffected.
+- **`/auth/me`** lists only `active` organizations in `authorizedOrganizationIds` for principals without a platform grant.
 
 ### 31b. Workspaces — IN PHASE 1C (1C.1b)
 

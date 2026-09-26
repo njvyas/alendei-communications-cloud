@@ -7,6 +7,7 @@ import { validationPipe } from './common/http/validation.pipe';
 import { ApiKeysModule } from './api-keys/api-keys.module';
 import { AuditModule } from './audit/audit.module';
 import { AuditReadModule } from './audit-read/audit-read.module';
+import { OrganizationsModule } from './organizations/organizations.module';
 import { AuthModule } from './auth/auth.module';
 import { AppConfigModule } from './config/config.module';
 import { DatabaseModule } from './database/database.module';
@@ -52,6 +53,7 @@ import { SecretsModule } from './secrets/secrets.module';
     UsersModule,
     ApiKeysModule,
     AuditReadModule,
+    OrganizationsModule,
   ],
   providers: [
     { provide: APP_PIPE, useValue: validationPipe() },

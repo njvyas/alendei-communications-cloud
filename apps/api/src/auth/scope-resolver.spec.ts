@@ -44,6 +44,8 @@ const scopes = (grants: RoleGrant[]): ResolvedScopes => ({
   isPlatformAdmin: isPlatformAdministrator(grants),
   hasPlatformGrant: grants.some((g) => g.scopeType === 'platform'),
   resellerIds: grants.filter((g) => g.scopeType === 'reseller').map((g) => g.scopeId!),
+  inactiveOrganizations: {},
+  organizationStatuses: { [ORG_A1]: 'active' },
 });
 
 describe('ScopeResolver.tenantContextFor — reseller authority, never reseller context', () => {

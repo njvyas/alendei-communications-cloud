@@ -27,6 +27,9 @@ export const AUDIT_ACTIONS = {
 
   ORGANIZATION_CREATED: 'organization.created',
   ORGANIZATION_UPDATED: 'organization.updated',
+  ORGANIZATION_SUSPENDED: 'organization.suspended',
+  ORGANIZATION_REACTIVATED: 'organization.reactivated',
+  ORGANIZATION_CLOSED: 'organization.closed',
   WORKSPACE_CREATED: 'workspace.created',
   WORKSPACE_UPDATED: 'workspace.updated',
   TEAM_CREATED: 'team.created',
@@ -127,6 +130,12 @@ export const SECURITY_SENSITIVE_AUDIT_ACTIONS: readonly AuditAction[] = Object.f
   AUDIT_ACTIONS.USER_REACTIVATED,
   AUDIT_ACTIONS.SESSION_REVOKED,
   AUDIT_ACTIONS.SESSION_REVOKED_ALL,
+  // Organization creation and lifecycle (Phase 1C.1a): each changes who can act
+  // in a tenant at all.
+  AUDIT_ACTIONS.ORGANIZATION_CREATED,
+  AUDIT_ACTIONS.ORGANIZATION_SUSPENDED,
+  AUDIT_ACTIONS.ORGANIZATION_REACTIVATED,
+  AUDIT_ACTIONS.ORGANIZATION_CLOSED,
 ]);
 
 export function isSecuritySensitiveAction(action: string): boolean {

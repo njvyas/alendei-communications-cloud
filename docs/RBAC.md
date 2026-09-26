@@ -117,7 +117,7 @@ These roles have `roles.org_id` set to the owning organization and are seeded pe
 - **Idempotent, and deliberately non-reconciling.** A repeat run creates nothing. It does *not* rewrite an existing role back to the definition: these roles are tenant-editable by design, and overwriting a deliberate edit would be data loss disguised as idempotency.
 - **`role.created` only for a role actually created.** A retry writes no audit rows at all. A trail that gained a creation record per retry would report creations that never happened, which is worse than a missing one because it cannot be told apart from a real one.
 
-It does **not** create organizations and has no HTTP surface: provisioning is a lifecycle step, not an endpoint. Wiring it into organization creation is Phase 1C's (1C.1a, formerly 1B.8), which is the phase that introduces organization creation at all — **IN PHASE 1C, not yet implemented**.
+It does **not** create organizations and has no HTTP surface: provisioning is a lifecycle step, not an endpoint. Wiring it into organization creation is Phase 1C's (1C.1a, formerly 1B.8) — **implemented**: `POST /organizations` seeds the system roles in the creation transaction, and a provisioner failure rolls the organization back.
 
 The `Assignable at scope_type` column below is `roles.allowed_scope_types` from Phase 1B.5.4 (migration `0004`); §7 records that its **grant-time enforcement** is Phase 1B.5.5's.
 
@@ -166,7 +166,7 @@ Administering a scope means creating, updating or deleting the resources at that
 | `workspace` grant | that workspace's teams and grants within it | sibling workspaces; the parent organization; anything above |
 | `team` grant | that team's grants only | sibling teams; the parent workspace; anything above |
 
-**Phase 1C authority rules (IN PHASE 1C — not yet implemented, ADR-012):**
+**Phase 1C authority rules (ADR-012) — the organization rows are IMPLEMENTED (1C.1a); the workspace, team and session rows are IN PHASE 1C:**
 
 | Operation | Required | Notes |
 |---|---|---|

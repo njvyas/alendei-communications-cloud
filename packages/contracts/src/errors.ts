@@ -87,11 +87,27 @@ export const ERROR_CODES = {
    */
   API_KEY_LIFECYCLE_CONFLICT: 'API_KEY_LIFECYCLE_CONFLICT',
 
+  // --- Organization lifecycle (Phase 1C.1a, ADR-012) -----------------------
+  /**
+   * `409`: the organization's current status does not admit the operation — an
+   * illegal lifecycle transition (F-1), or a tenant-data mutation in a
+   * non-active organization (F-5). `details.status` carries the current status.
+   */
+  ORGANIZATION_LIFECYCLE_CONFLICT: 'ORGANIZATION_LIFECYCLE_CONFLICT',
+
   // --- Tenancy -------------------------------------------------------------
   TENANCY_CONTEXT_REQUIRED: 'TENANCY_CONTEXT_REQUIRED',
   /** A client-supplied tenant identifier disagreed with the resolved context. */
   TENANCY_CONTEXT_MISMATCH: 'TENANCY_CONTEXT_MISMATCH',
   TENANCY_SCOPE_OUT_OF_TENANT: 'TENANCY_SCOPE_OUT_OF_TENANT',
+  /**
+   * `403`: the organization is suspended or closed (ADR-012 F-4). Disclosed only
+   * to a principal connected to that organization — holding a grant in it, or at
+   * the reseller above it. Anyone else receives `TENANCY_CONTEXT_MISMATCH` or a
+   * `404`, so an organization's status is never learnable from outside it.
+   */
+  TENANCY_ORGANIZATION_SUSPENDED: 'TENANCY_ORGANIZATION_SUSPENDED',
+  TENANCY_ORGANIZATION_CLOSED: 'TENANCY_ORGANIZATION_CLOSED',
 
   // --- WebSocket tickets ---------------------------------------------------
   WS_TICKET_INVALID: 'WS_TICKET_INVALID',

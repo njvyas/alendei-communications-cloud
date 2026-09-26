@@ -9,6 +9,7 @@ import {
   pgEnum,
   pgTable,
   text,
+  timestamp,
   unique,
   uniqueIndex,
   uuid,
@@ -83,6 +84,13 @@ export const organizations = pgTable(
     /** Home of the fallback-charging decision (`BILLING.md` §5). */
     billingPolicy: billingPolicy('billing_policy').notNull().default('charge_per_logical_message'),
     status: organizationStatus('status').notNull().default('active'),
+    /**
+     * When `status` last changed, and the operator's stated reason (Phase 1C.1a,
+     * ADR-012 F-1). Both `NULL` until the first transition; the audit trail keeps
+     * the full history, these keep the current state self-describing.
+     */
+    statusChangedAt: timestamp('status_changed_at', { withTimezone: true }),
+    statusReason: text('status_reason'),
     ...timestamps(),
   },
   (table) => [
@@ -90,6 +98,10 @@ export const organizations = pgTable(
     index('organizations_reseller_id_idx').on(table.resellerId),
     index('organizations_status_idx').on(table.status),
     // GSTIN is 15 chars: 2 state + 10 PAN + 1 entity + 1 'Z' + 1 checksum.
+    check(
+      'organizations_status_reason_length',
+      sql`${table.statusReason} IS NULL OR char_length(${table.statusReason}) <= 500`,
+    ),
     check(
       'organizations_gstin_format',
       sql`${table.gstin} IS NULL OR ${table.gstin} ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$'`,

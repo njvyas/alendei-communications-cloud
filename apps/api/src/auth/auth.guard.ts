@@ -21,8 +21,14 @@ import { UserLifecycleService } from '../iam/user-lifecycle.service';
 import { TenantDatabase } from '../database/tenant-database.service';
 import { AuthRateLimitService } from './auth-rate-limit.service';
 import { AccessTokenService } from './jwt.service';
-import { ORGANIZATION_HEADER, ScopeResolver } from './scope-resolver.service';
-import { IS_PUBLIC, SKIP_TENANT } from './public.decorator';
+import {
+  ORGANIZATION_HEADER,
+  ScopeResolver,
+  organizationInactiveError,
+  type InactiveOrganizationStatus,
+  type OrganizationStatus,
+} from './scope-resolver.service';
+import { IS_PUBLIC, OPTIONAL_TENANT, SKIP_TENANT } from './public.decorator';
 
 /** How the principal proved who it is. Normalized across both mechanisms. */
 export type AuthMethod = 'session' | 'api_key';
@@ -41,7 +47,22 @@ export interface ResolvedPrincipal extends AuthPrincipal {
    * listing it discloses nothing the principal could not already reach.
    */
   readonly authorizedOrganizationIds: readonly string[];
+  /**
+   * The status of the selected organization, or `null` when none is selected
+   * (Phase 1C.1a). Only a platform-grant holder can reach a request with a
+   * non-`active` value here — everyone else is refused at selection.
+   */
+  readonly organizationStatus: OrganizationStatus | null;
+  /**
+   * Organizations the principal is connected to that are suspended or closed
+   * (ADR-012 F-4) — used by routes that address an organization by id, so they
+   * can answer a connected principal with the status rather than a `404`.
+   */
+  readonly inactiveOrganizations: Readonly<Record<string, InactiveOrganizationStatus>>;
 }
+
+/** Methods that change state, for the non-active-organization rule (ADR-012 F-5). */
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 const BEARER = /^Bearer\s+(.+)$/i;
 const API_KEY_SHAPE = /^(ak_(?:live|test)_[A-Za-z0-9]{16})\.(.+)$/;
@@ -90,6 +111,12 @@ export class AuthGuard implements CanActivate {
         context.getClass(),
       ]) ?? false;
 
+    const optionalTenant =
+      this.reflector.getAllAndOverride<boolean>(OPTIONAL_TENANT, [
+        context.getHandler(),
+        context.getClass(),
+      ]) ?? false;
+
     const authorization = request.headers.authorization ?? '';
     const match = BEARER.exec(authorization);
     if (!match) {
@@ -109,7 +136,29 @@ export class AuthGuard implements CanActivate {
           requestedOrg,
           RequestContext.get()?.ip ?? request.ip ?? null,
         )
-      : await this.resolveSession(credential, requestedOrg, skipTenant);
+      : await this.resolveSession(credential, requestedOrg, skipTenant, optionalTenant);
+
+    // ADR-012 F-5: no tenant-data mutation is accepted in a suspended or closed
+    // organization. Only a platform-grant holder can have selected one (everyone
+    // else was refused at selection), so this is where a platform principal's
+    // inspection stays read-only. Routes that address an organization by id —
+    // the lifecycle routes among them — select no tenant context and decide for
+    // themselves.
+    if (
+      !skipTenant &&
+      !optionalTenant &&
+      principal.tenant.orgId &&
+      principal.organizationStatus !== null &&
+      principal.organizationStatus !== 'active' &&
+      MUTATING_METHODS.has(request.method.toUpperCase())
+    ) {
+      throw new AppException({
+        status: HttpStatus.CONFLICT,
+        code: ERROR_CODES.ORGANIZATION_LIFECYCLE_CONFLICT,
+        message: `This organization is ${principal.organizationStatus}; its data cannot be changed`,
+        details: { status: principal.organizationStatus },
+      });
+    }
 
     RequestContext.setPrincipal(principal);
     return true;
@@ -126,6 +175,7 @@ export class AuthGuard implements CanActivate {
     token: string,
     requestedOrg: string | null,
     skipTenant: boolean,
+    optionalTenant = false,
   ): Promise<ResolvedPrincipal> {
     const claims = this.tokens.verify(token);
 
@@ -155,7 +205,11 @@ export class AuthGuard implements CanActivate {
       }
 
       const scopes = await this.scopes.forUser(tx, user.id);
-      const orgId = skipTenant ? null : this.scopes.selectOrganization(scopes, requestedOrg);
+      const orgId = skipTenant
+        ? null
+        : optionalTenant
+          ? this.selectOptionalOrganization(scopes, requestedOrg)
+          : this.scopes.selectOrganization(scopes, requestedOrg);
       const tenant = await this.scopes.tenantContextFor(tx, scopes, orgId);
 
       await this.sessions.touch(tx, session.id);
@@ -171,8 +225,25 @@ export class AuthGuard implements CanActivate {
         authMethod: 'session',
         authenticatedAt: new Date(claims.iat * 1000),
         authorizedOrganizationIds: scopes.organizationIds,
+        organizationStatus: orgId ? (scopes.organizationStatuses[orgId] ?? null) : null,
+        inactiveOrganizations: scopes.inactiveOrganizations,
       };
     });
+  }
+
+  /** As `selectOrganization`, except that ambiguity selects none (`OptionalTenantContext`). */
+  private selectOptionalOrganization(
+    scopes: Parameters<ScopeResolver['selectOrganization']>[0],
+    requested: string | null,
+  ): string | null {
+    try {
+      return this.scopes.selectOrganization(scopes, requested);
+    } catch (error) {
+      if (error instanceof AppException && error.code === ERROR_CODES.TENANCY_CONTEXT_REQUIRED) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   /**
@@ -248,6 +319,17 @@ export class AuthGuard implements CanActivate {
         throw invalid();
       }
       if (!(await this.credentials.verify(key.keyHash, secret!))) throw invalid();
+
+      // ADR-012 F-4: a key bound to a suspended or closed organization stops
+      // working on its next use. Checked only after the secret verified, so the
+      // status is disclosed to the key's holder and to nobody guessing keys.
+      const [bound] = await tx
+        .select({ status: schema.organizations.status })
+        .from(schema.organizations)
+        .where(eq(schema.organizations.id, key.orgId));
+      if (bound && bound.status !== 'active') {
+        throw organizationInactiveError(key.orgId, bound.status);
+      }
 
       if (requestedOrg && requestedOrg !== key.orgId) {
         throw new AppException({
@@ -357,6 +439,8 @@ export class AuthGuard implements CanActivate {
         authenticatedAt: new Date(),
         // A key is bound to exactly one organization and can never select another.
         authorizedOrganizationIds: [key.orgId],
+        organizationStatus: 'active',
+        inactiveOrganizations: {},
       };
     });
   }

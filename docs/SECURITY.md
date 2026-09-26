@@ -301,15 +301,15 @@ Proven over HTTP in `auth-abuse.sec-spec.ts` (each case ends on the `429` only t
 
 RLS binds a principal only while it is not a superuser, not `BYPASSRLS`, and not the owner (or a member of the owner) of a table — RLS is enabled but deliberately **not forced**, so an owner is exempt. Each of those is configuration that can drift without any application test noticing. `DatabaseModule` therefore calls `assertRlsBoundPrincipal` on both request-serving pools at start-up and **refuses to start** if either principal is a superuser, has `BYPASSRLS`, owns or can act as the owner of any `public` table, or is a member of any other role. The catalog itself is asserted in `principals.int-spec.ts`, including exact per-principal grant maps, no role memberships, no `SET ROLE` path, and negative controls proving that a weakened policy, `BYPASSRLS` or table ownership each re-open the boundary.
 
-### Phase 1C security controls — IN PHASE 1C / NOT IMPLEMENTED (ADR-012)
+### Phase 1C security controls (ADR-012) — organization rows IMPLEMENTED (1C.1a); the rest IN PHASE 1C
 
-Frozen targets; none of this exists yet. Each becomes a Gate C criterion (`ROADMAP.md` §4d).
+The first two rows and the API half of the third are **implemented (Phase 1C.1a)**, proven by `organization-administration.sec-spec.ts`; everything else is a frozen target. Each row is a Gate C criterion (`ROADMAP.md` §4d).
 
 | Control | Target behaviour | Increment |
 |---|---|---|
 | Organization status as authorization | Non-platform principals of a `suspended`/`closed` organization are refused on the next request via session, API key and selection; platform principals can still read; no tenant-data mutation in a closed organization. **Not** an RLS predicate (OD-3) — RLS keeps deciding *which* organization; status decides *whether it is usable* | 1C.1a |
 | Organization creation authority | Platform, or a reseller administrator beneath its own reseller only; seeding and default workspace in the same transaction | 1C.1a |
-| Reseller immutability | `organizations.reseller_id` not changeable through the API, and refused by a database guard for any non-platform writer | 1C.1a / 1C.6 |
+| Reseller immutability | `organizations.reseller_id` not changeable through the API (**implemented**: `PATCH` refuses the field with `400`), and refused by a database guard for any non-platform writer (**1C.6, not yet**) | 1C.1a ✅ / 1C.6 |
 | Maximum sessions | At `AUTH_MAX_SESSIONS_PER_USER`, the oldest eligible session is revoked inside the login transaction, serialized per user, audited | 1C.2 |
 | Revoke-all and scoped administrator revocation | Self revoke-all keeps the current session; an administrator revokes another user's sessions only with `sessions.revoke` covering **every** grant the target holds — sessions are per identity, so anything less would reach organizations the administrator does not administer | 1C.2 |
 | Logout with an expired access token | Accepted via the refresh cookie **plus** `X-Acc-Refresh` (the CSRF control is unchanged); unknown cookies answer `204` (no oracle) | 1C.2 |

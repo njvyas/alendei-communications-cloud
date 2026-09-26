@@ -152,6 +152,17 @@ describe('§6n case 30 — route authorization coverage', () => {
     expect(keys).toContain('POST /api/v1/ws/ticket');
     expect(keys).toContain('GET /api/v1/auth/me/authorization');
     expect(keys).toContain('GET /health');
+    for (const route of [
+      'GET /api/v1/organizations',
+      'POST /api/v1/organizations',
+      'GET /api/v1/organizations/:id',
+      'PATCH /api/v1/organizations/:id',
+      'POST /api/v1/organizations/:id/suspend',
+      'POST /api/v1/organizations/:id/reactivate',
+      'POST /api/v1/organizations/:id/close',
+    ]) {
+      expect(keys).toContain(route);
+    }
   });
 
   it('every route declares its authorization posture — none is silent', () => {
@@ -243,7 +254,10 @@ describe('§6n case 30 — route authorization coverage', () => {
     const scoped = routes.filter((r) => r.required !== undefined);
     const exempt = routes.filter((r) => r.exempt !== undefined);
     const open = routes.filter((r) => r.isPublic);
-    expect(scoped.length).toBe(24);
+    // Phase 1C.1a added seven organization routes, all scoped and all
+    // `deferred` (the organization is named in the path or the body, never
+    // selected): 24 → 31 scoped, 6 → 13 deferred.
+    expect(scoped.length).toBe(31);
     expect(exempt.length).toBe(6);
     expect(open.length).toBe(6);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
@@ -254,7 +268,7 @@ describe('§6n case 30 — route authorization coverage', () => {
     // the key's own stored binding scope (Phase 1B.6.2) or the binding named in
     // the body; and the audit-log detail route, whose target is the scope the
     // record was written at (Phase 1B.6.3).
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(6);
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(13);
   });
 });
 

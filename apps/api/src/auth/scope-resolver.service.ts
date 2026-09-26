@@ -29,6 +29,41 @@ export interface ResolvedScopes {
   readonly hasPlatformGrant: boolean;
   /** Resellers the principal holds a genuine `reseller`-scope grant on. */
   readonly resellerIds: readonly string[];
+  /**
+   * Organizations the principal is *connected to* — holds a grant in, or sits
+   * beneath a reseller it holds a grant at — whose status is not `active`
+   * (Phase 1C.1a, ADR-012 F-4). Never populated for a platform-grant holder,
+   * whose `organizationIds` already includes every organization in any status.
+   * These are excluded from `organizationIds`, and naming one is refused with its
+   * status rather than with the generic mismatch, because the principal already
+   * knows the organization exists.
+   */
+  readonly inactiveOrganizations: Readonly<Record<string, InactiveOrganizationStatus>>;
+  /** The status of every organization in `organizationIds`. */
+  readonly organizationStatuses: Readonly<Record<string, OrganizationStatus>>;
+}
+
+export type OrganizationStatus = 'active' | 'suspended' | 'closed';
+export type InactiveOrganizationStatus = Exclude<OrganizationStatus, 'active'>;
+
+/**
+ * The refusal for acting in a suspended or closed organization (ADR-012 F-4).
+ * Only ever raised for a principal connected to that organization.
+ */
+export function organizationInactiveError(
+  organizationId: string,
+  status: InactiveOrganizationStatus,
+): AppException {
+  return new AppException({
+    status: HttpStatus.FORBIDDEN,
+    code:
+      status === 'suspended'
+        ? ERROR_CODES.TENANCY_ORGANIZATION_SUSPENDED
+        : ERROR_CODES.TENANCY_ORGANIZATION_CLOSED,
+    message:
+      status === 'suspended' ? 'This organization is suspended' : 'This organization is closed',
+    logContext: { organizationId },
+  });
 }
 
 /**
@@ -102,14 +137,33 @@ export class ScopeResolver {
         grants.filter((g) => g.scopeType === 'reseller' && g.scopeId).map((g) => g.scopeId!),
       ),
     ];
-    const organizationIds = await this.organizationsInScope(
-      tx,
-      grants,
-      resellerIds,
-      hasPlatformGrant,
-    );
+    const reachable = await this.organizationsInScope(tx, grants, resellerIds, hasPlatformGrant);
 
-    return { grants, permissions, organizationIds, isPlatformAdmin, hasPlatformGrant, resellerIds };
+    // Status is an authorization input (ADR-012 OD-3, F-4): a platform-grant
+    // holder may select an organization in any status; everyone else may select
+    // only an active one, and is told why when it names one it is connected to.
+    const organizationIds: string[] = [];
+    const organizationStatuses: Record<string, OrganizationStatus> = {};
+    const inactiveOrganizations: Record<string, InactiveOrganizationStatus> = {};
+    for (const org of reachable) {
+      if (hasPlatformGrant || org.status === 'active') {
+        organizationIds.push(org.id);
+        organizationStatuses[org.id] = org.status;
+      } else {
+        inactiveOrganizations[org.id] = org.status as InactiveOrganizationStatus;
+      }
+    }
+
+    return {
+      grants,
+      permissions,
+      organizationIds,
+      isPlatformAdmin,
+      hasPlatformGrant,
+      resellerIds,
+      inactiveOrganizations,
+      organizationStatuses,
+    };
   }
 
   /**
@@ -173,21 +227,26 @@ export class ScopeResolver {
     grants: readonly RoleGrant[],
     resellerIds: readonly string[],
     hasPlatformGrant: boolean,
-  ): Promise<string[]> {
+  ): Promise<{ id: string; status: OrganizationStatus }[]> {
+    const columns = { id: schema.organizations.id, status: schema.organizations.status };
     if (hasPlatformGrant) {
-      const all = await tx.select({ id: schema.organizations.id }).from(schema.organizations);
-      return all.map((o) => o.id);
+      return tx.select(columns).from(schema.organizations).orderBy(schema.organizations.id);
     }
 
-    const direct = grants.filter((g) => g.orgId).map((g) => g.orgId!);
-    if (resellerIds.length === 0) return [...new Set(direct)];
+    const direct = [...new Set(grants.filter((g) => g.orgId).map((g) => g.orgId!))];
+    const conditions = [
+      ...(direct.length > 0 ? [inArray(schema.organizations.id, direct)] : []),
+      ...(resellerIds.length > 0
+        ? [inArray(schema.organizations.resellerId, [...resellerIds])]
+        : []),
+    ];
+    if (conditions.length === 0) return [];
 
-    const beneath = await tx
-      .select({ id: schema.organizations.id })
+    return tx
+      .select(columns)
       .from(schema.organizations)
-      .where(inArray(schema.organizations.resellerId, [...resellerIds]));
-
-    return [...new Set([...direct, ...beneath.map((o) => o.id)])];
+      .where(or(...conditions))
+      .orderBy(schema.organizations.id);
   }
 
   /**
@@ -204,6 +263,8 @@ export class ScopeResolver {
    */
   selectOrganization(scopes: ResolvedScopes, requested: string | null): string | null {
     if (requested) {
+      const inactive = scopes.inactiveOrganizations[requested];
+      if (inactive) throw organizationInactiveError(requested, inactive);
       if (!scopes.organizationIds.includes(requested)) {
         throw new AppException({
           status: HttpStatus.FORBIDDEN,
@@ -217,7 +278,13 @@ export class ScopeResolver {
     }
 
     if (scopes.organizationIds.length === 1) return scopes.organizationIds[0]!;
-    if (scopes.organizationIds.length === 0) return null;
+    if (scopes.organizationIds.length === 0) {
+      // The one organization this principal would have selected implicitly is
+      // not usable: say so, rather than answering as if it had none.
+      const inactive = Object.entries(scopes.inactiveOrganizations);
+      if (inactive.length === 1) throw organizationInactiveError(inactive[0]![0], inactive[0]![1]);
+      return null;
+    }
 
     throw new AppException({
       status: HttpStatus.BAD_REQUEST,
