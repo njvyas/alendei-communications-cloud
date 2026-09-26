@@ -120,6 +120,8 @@ export class AppConfigService {
       defaultMax: this.get('RATE_LIMIT_DEFAULT_MAX'),
       authWindowSeconds: this.get('RATE_LIMIT_AUTH_WINDOW_SECONDS'),
       authMax: this.get('RATE_LIMIT_AUTH_MAX'),
+      refreshMax: this.get('RATE_LIMIT_REFRESH_MAX'),
+      apiKeyFailureMax: this.get('RATE_LIMIT_API_KEY_FAILURE_MAX'),
     } as const;
   }
 

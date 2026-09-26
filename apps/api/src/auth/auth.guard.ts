@@ -19,6 +19,7 @@ import { CredentialService } from '../iam/credential.service';
 import { SessionService } from '../iam/session.service';
 import { UserLifecycleService } from '../iam/user-lifecycle.service';
 import { TenantDatabase } from '../database/tenant-database.service';
+import { AuthRateLimitService } from './auth-rate-limit.service';
 import { AccessTokenService } from './jwt.service';
 import { ORGANIZATION_HEADER, ScopeResolver } from './scope-resolver.service';
 import { IS_PUBLIC, SKIP_TENANT } from './public.decorator';
@@ -72,6 +73,7 @@ export class AuthGuard implements CanActivate {
     private readonly credentials: CredentialService,
     private readonly scopes: ScopeResolver,
     private readonly audit: AuditWriter,
+    private readonly rateLimit: AuthRateLimitService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -102,7 +104,11 @@ export class AuthGuard implements CanActivate {
     const requestedOrg = this.header(request, ORGANIZATION_HEADER);
 
     const principal = API_KEY_SHAPE.test(credential)
-      ? await this.resolveApiKey(credential, requestedOrg)
+      ? await this.resolveThrottledApiKey(
+          credential,
+          requestedOrg,
+          RequestContext.get()?.ip ?? request.ip ?? null,
+        )
       : await this.resolveSession(credential, requestedOrg, skipTenant);
 
     RequestContext.setPrincipal(principal);
@@ -167,6 +173,44 @@ export class AuthGuard implements CanActivate {
         authorizedOrganizationIds: scopes.organizationIds,
       };
     });
+  }
+
+  /**
+   * API-key authentication behind the per-address failure throttle (Gate-B
+   * audit, Blocker 4).
+   *
+   * Every presented key costs a full Argon2id verification before anything is
+   * known about the caller — the real digest for a known prefix, the dummy one
+   * for an unknown prefix, so the two stay indistinguishable by timing. Without a
+   * limit, a stream of garbage keys is a CPU and memory exhaustion attack that
+   * needs no credential at all. So an address that has spent its failure
+   * allowance is refused with `429` *before* any hashing happens, and only a
+   * refused key spends that allowance: a correctly-configured integration never
+   * touches it.
+   */
+  private async resolveThrottledApiKey(
+    credential: string,
+    requestedOrg: string | null,
+    ip: string | null,
+  ): Promise<ResolvedPrincipal> {
+    const verdict = await this.rateLimit.apiKeyFailuresExceeded(ip);
+    if (!verdict.allowed) {
+      throw new AppException({
+        status: HttpStatus.TOO_MANY_REQUESTS,
+        code: ERROR_CODES.RATE_LIMIT_EXCEEDED,
+        message: 'Too many failed API key attempts from this address; try again shortly',
+        details: { retryAfterSeconds: verdict.resetSeconds },
+      });
+    }
+
+    try {
+      return await this.resolveApiKey(credential, requestedOrg);
+    } catch (error) {
+      if (error instanceof AppException && error.code === ERROR_CODES.AUTH_API_KEY_INVALID) {
+        await this.rateLimit.recordApiKeyFailure(ip);
+      }
+      throw error;
+    }
   }
 
   /**

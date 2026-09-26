@@ -2,7 +2,13 @@ import { AuthRateLimitService } from './auth-rate-limit.service';
 
 const config = {
   redis: { keyPrefix: 'acc' },
-  rateLimit: { enabled: true, authWindowSeconds: 60, authMax: 3 },
+  rateLimit: {
+    enabled: true,
+    authWindowSeconds: 60,
+    authMax: 3,
+    refreshMax: 2,
+    apiKeyFailureMax: 2,
+  },
 } as never;
 
 /** A Redis stub whose pipeline returns increasing counters. */
@@ -36,7 +42,12 @@ function workingRedis() {
       };
       return api;
     },
-    del: () => Promise.resolve(1),
+    get: (key: string) => Promise.resolve(counts.has(key) ? String(counts.get(key)) : null),
+    ttl: () => Promise.resolve(60),
+    del: (...keys: string[]) => {
+      for (const key of keys) counts.delete(key);
+      return Promise.resolve(keys.length);
+    },
   };
 }
 
@@ -44,6 +55,8 @@ const brokenRedis = {
   pipeline() {
     throw new Error('ECONNREFUSED');
   },
+  get: () => Promise.reject(new Error('ECONNREFUSED')),
+  ttl: () => Promise.reject(new Error('ECONNREFUSED')),
   del: () => Promise.reject(new Error('ECONNREFUSED')),
 };
 
@@ -103,11 +116,74 @@ describe('AuthRateLimitService', () => {
     expect(verdict.degraded).toBe(true);
   });
 
-  it('does not throw from reset when Redis is unavailable', async () => {
+  it('does not throw from resetAccount when Redis is unavailable', async () => {
     const svc = new AuthRateLimitService(config, brokenRedis as never);
-    await expect(
-      svc.reset({ ip: '198.51.100.1', accountIdentifier: 'a@b.test' }),
-    ).resolves.toBeUndefined();
+    await expect(svc.resetAccount('a@b.test')).resolves.toBeUndefined();
+  });
+
+  /**
+   * Gate-B audit, Blocker 4 — the regression this pins: a successful login used
+   * to delete the IP bucket as well, so one valid account let a single address
+   * spray every other account without ever reaching the IP limit.
+   */
+  it('resetAccount clears the account bucket and leaves the IP bucket intact', async () => {
+    const redis = workingRedis();
+    const svc = new AuthRateLimitService(config, redis as never);
+    const ip = '198.51.100.9';
+
+    // Two guesses against two different victims, then the attacker's own
+    // successful login in between — the interleaving the defect rewarded.
+    await svc.consume({ ip, accountIdentifier: 'victim-1@b.test' });
+    await svc.consume({ ip, accountIdentifier: 'victim-2@b.test' });
+    await svc.consume({ ip, accountIdentifier: 'attacker@b.test' });
+    await svc.resetAccount('attacker@b.test');
+
+    // The IP bucket still carries all three attempts: the next one is over the
+    // limit of 3 regardless of which account it names.
+    const next = await svc.consume({ ip, accountIdentifier: 'victim-3@b.test' });
+    expect(next.allowed).toBe(false);
+    const ipKeys = [...redis.counts.keys()].filter((k) => k.includes(':ip:'));
+    expect(ipKeys).toHaveLength(1);
+    expect(redis.counts.get(ipKeys[0]!)).toBe(4);
+  });
+
+  it('throttles /auth/refresh per source address', async () => {
+    const svc = new AuthRateLimitService(config, workingRedis() as never);
+    const verdicts = [];
+    for (let i = 0; i < 4; i += 1) verdicts.push(await svc.consumeRefresh('203.0.113.4'));
+    expect(verdicts.map((v) => v.allowed)).toEqual([true, true, false, false]);
+    // A different address has its own allowance.
+    expect((await svc.consumeRefresh('203.0.113.5')).allowed).toBe(true);
+  });
+
+  it('counts only API-key failures, and refuses once the allowance is spent', async () => {
+    const svc = new AuthRateLimitService(config, workingRedis() as never);
+    const ip = '203.0.113.7';
+    expect((await svc.apiKeyFailuresExceeded(ip)).allowed).toBe(true);
+    // Checking is free: any number of checks spends nothing.
+    for (let i = 0; i < 5; i += 1) await svc.apiKeyFailuresExceeded(ip);
+    expect((await svc.apiKeyFailuresExceeded(ip)).allowed).toBe(true);
+
+    await svc.recordApiKeyFailure(ip);
+    expect((await svc.apiKeyFailuresExceeded(ip)).allowed).toBe(true);
+    await svc.recordApiKeyFailure(ip);
+    const refused = await svc.apiKeyFailuresExceeded(ip);
+    expect(refused.allowed).toBe(false);
+    expect(refused.remaining).toBe(0);
+    expect((await svc.apiKeyFailuresExceeded('203.0.113.8')).allowed).toBe(true);
+  });
+
+  it('fails open for the refresh and API-key buckets when Redis is unavailable', async () => {
+    const svc = new AuthRateLimitService(config, brokenRedis as never);
+    expect(await svc.consumeRefresh('203.0.113.4')).toMatchObject({
+      allowed: true,
+      degraded: true,
+    });
+    expect(await svc.apiKeyFailuresExceeded('203.0.113.4')).toMatchObject({
+      allowed: true,
+      degraded: true,
+    });
+    await expect(svc.recordApiKeyFailure('203.0.113.4')).resolves.toBeUndefined();
   });
 
   it('never uses the raw account identifier as a key segment', async () => {

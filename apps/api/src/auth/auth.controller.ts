@@ -22,7 +22,7 @@ import { AuthRateLimitService } from './auth-rate-limit.service';
 import { LoginDto } from './auth.dto';
 import { NoTenantContext, Public } from './public.decorator';
 import { AuthorizationExempt } from './requires-permission.decorator';
-import { RequireCsrfHeader } from './csrf.guard';
+import { RequireCsrfHeader, RequireJsonBody } from './csrf.guard';
 import type { ResolvedPrincipal } from './auth.guard';
 
 /** The cookie carrying the refresh token. Never readable by JavaScript. */
@@ -96,6 +96,9 @@ export class AuthController {
   }
 
   @Public()
+  // Login-CSRF: a hostile page must not be able to sign a victim's browser into
+  // an attacker's account with a cross-site form post (`RequireJsonBody`).
+  @RequireJsonBody()
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(
@@ -122,7 +125,8 @@ export class AuthController {
     }
 
     const tokens = await this.auth.login(dto.email, dto.password, meta);
-    await this.rateLimit.reset({ ip: meta.ip, accountIdentifier: dto.email.toLowerCase() });
+    // The account bucket only — never the IP bucket (see `resetAccount`).
+    await this.rateLimit.resetAccount(dto.email.toLowerCase());
 
     this.setRefreshCookie(response, tokens.refreshToken);
     return this.body(tokens);
@@ -141,6 +145,20 @@ export class AuthController {
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   async refresh(@Req() request: Request, @Res({ passthrough: true }) response: Response) {
+    // Public, so the general per-principal limiter never sees this route; it is
+    // throttled per source address here instead (Gate-B audit, Blocker 4).
+    const verdict = await this.rateLimit.consumeRefresh(this.meta(request).ip);
+    response.setHeader('X-RateLimit-Limit', verdict.limit);
+    response.setHeader('X-RateLimit-Remaining', verdict.remaining);
+    if (!verdict.allowed) {
+      response.setHeader('Retry-After', verdict.resetSeconds);
+      throw new AppException({
+        status: HttpStatus.TOO_MANY_REQUESTS,
+        code: ERROR_CODES.RATE_LIMIT_EXCEEDED,
+        message: 'Too many refresh attempts; try again shortly',
+      });
+    }
+
     const presented = (request.cookies as Record<string, string> | undefined)?.[REFRESH_COOKIE];
     if (!presented) {
       throw new AppException({

@@ -76,6 +76,7 @@ describe('validateEnv', () => {
       LOG_PRETTY: 'false',
       DATABASE_SSL: 'true',
       OPENAPI_UI_ENABLED: 'false',
+      TRUSTED_PROXY_HOPS: '1',
     } as const;
 
     it('accepts a correctly hardened production environment', () => {
@@ -102,6 +103,17 @@ describe('validateEnv', () => {
       expect(() => validateEnv({ ...PRODUCTION, DATABASE_SSL: 'false' })).toThrow(
         /DATABASE_SSL must be true/,
       );
+    });
+
+    it('defaults to trusting no proxy hop', () => {
+      expect(validateEnv({ ...MINIMAL_ENV }).TRUSTED_PROXY_HOPS).toBe(0);
+    });
+
+    it('refuses production without an explicit proxy hop count', () => {
+      const { TRUSTED_PROXY_HOPS: _omitted, ...withoutHops } = PRODUCTION;
+      void _omitted;
+      expect(() => validateEnv({ ...withoutHops })).toThrow(/TRUSTED_PROXY_HOPS must be set/);
+      expect(() => validateEnv({ ...PRODUCTION, TRUSTED_PROXY_HOPS: '0' })).not.toThrow();
     });
 
     it('refuses pretty logging in production', () => {

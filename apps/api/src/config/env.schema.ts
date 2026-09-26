@@ -58,9 +58,14 @@ export const envSchema = z.object({
   /**
    * How many reverse-proxy hops to trust for the client IP. Anything above the
    * real hop count lets a client forge `X-Forwarded-For` and bypass the
-   * IP-keyed auth rate limit; `0` trusts nothing and uses the socket address.
+   * IP-keyed auth rate limits; `0` trusts nothing and uses the socket address.
+   *
+   * **Defaults to `0` — secure by default** (Gate-B audit, Blocker 5). The
+   * previous default of `1` meant a directly-exposed instance let every client
+   * choose its own rate-limit bucket. A deployment behind an ingress sets the
+   * real hop count explicitly; production requires it to be set at all.
    */
-  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(1),
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
   SHUTDOWN_TIMEOUT_SECONDS: positiveInt.max(300).default(15),
   OPENAPI_UI_ENABLED: booleanFromEnv.default(false),
 
@@ -121,6 +126,10 @@ export const envSchema = z.object({
   RATE_LIMIT_DEFAULT_MAX: positiveInt.default(600),
   RATE_LIMIT_AUTH_WINDOW_SECONDS: positiveInt.default(60),
   RATE_LIMIT_AUTH_MAX: positiveInt.default(10),
+  /** `/auth/refresh` attempts per source IP per auth window. */
+  RATE_LIMIT_REFRESH_MAX: positiveInt.default(30),
+  /** Failed API-key presentations per source IP per auth window. */
+  RATE_LIMIT_API_KEY_FAILURE_MAX: positiveInt.default(20),
 
   // --- Observability -------------------------------------------------------
   OTEL_ENABLED: booleanFromEnv.default(false),
@@ -186,6 +195,18 @@ export function validateEnv(raw: Record<string, unknown>): Env {
   }
 
   const problems = productionHardening(parsed.data);
+  // Checked against the raw input, because after parsing a default is
+  // indistinguishable from a choice: production must *state* how many proxy
+  // hops sit in front of it rather than inherit one (Gate-B audit, Blocker 5).
+  if (
+    parsed.data.APP_ENV === 'production' &&
+    (raw.TRUSTED_PROXY_HOPS === undefined || String(raw.TRUSTED_PROXY_HOPS).trim() === '')
+  ) {
+    problems.push(
+      'TRUSTED_PROXY_HOPS must be set explicitly when APP_ENV=production (0 when directly ' +
+        'exposed, otherwise the exact number of reverse proxies in front of the API)',
+    );
+  }
   if (problems.length > 0) {
     throw new ConfigurationError(problems);
   }

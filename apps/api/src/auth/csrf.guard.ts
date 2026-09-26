@@ -16,6 +16,19 @@ export const CSRF_HEADER = 'x-acc-refresh';
  */
 export const RequireCsrfHeader = () => SetMetadata(REQUIRE_CSRF, true);
 
+export const REQUIRE_JSON = 'acc:auth:require-json';
+
+/**
+ * Marks an unauthenticated endpoint that must only accept a JSON body — the
+ * login-CSRF defence (Gate-B audit, Blocker 5). A cross-site HTML form can send
+ * `application/x-www-form-urlencoded`, `multipart/form-data` or `text/plain`
+ * without a CORS preflight; `application/json` it cannot. So an endpoint that
+ * refuses everything else can only be reached cross-origin through the
+ * preflight the origin allowlist refuses — without a token, and without asking
+ * the console to send any header it does not already send.
+ */
+export const RequireJsonBody = () => SetMetadata(REQUIRE_JSON, true);
+
 /**
  * CSRF protection for the cookie-authenticated endpoints (`API.md` §3b).
  *
@@ -36,13 +49,25 @@ export class CsrfGuard implements CanActivate {
   constructor(private readonly reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
-    const required = this.reflector.getAllAndOverride<boolean>(REQUIRE_CSRF, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
+    const targets = [context.getHandler(), context.getClass()];
+    const request = context.switchToHttp().getRequest<Request>();
+
+    // Runs in a guard rather than the handler so it precedes body validation:
+    // a refused content type is refused for that reason, deterministically.
+    if (
+      this.reflector.getAllAndOverride<boolean>(REQUIRE_JSON, targets) &&
+      !request.is('application/json')
+    ) {
+      throw new AppException({
+        status: HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: 'This endpoint requires a JSON request body (Content-Type: application/json)',
+      });
+    }
+
+    const required = this.reflector.getAllAndOverride<boolean>(REQUIRE_CSRF, targets);
     if (!required) return true;
 
-    const request = context.switchToHttp().getRequest<Request>();
     const header = request.headers[CSRF_HEADER];
     const present = Array.isArray(header) ? header.length > 0 : typeof header === 'string';
 
