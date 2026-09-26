@@ -2,12 +2,13 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   AUDIT_ACTIONS,
   ERROR_CODES,
+  PLATFORM_ROLE_KEYS,
   type AuthPrincipal,
   type PageInfo,
   type ScopeType,
 } from '@acc/contracts';
 import { PLATFORM_ADMIN_LOCK_KEY, schema, type Transaction } from '@acc/db';
-import { and, eq, exists, sql, type SQL } from 'drizzle-orm';
+import { and, eq, exists, isNull, sql, type SQL } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 
 import { AppException } from '../common/errors/app.exception';
@@ -619,9 +620,10 @@ export class UserAdministrationService {
    * this transaction will need. The trigger re-acquires the same key, which
    * within one transaction is a no-op.
    *
-   * The count mirrors the trigger's exactly — an active user holding a grant at
-   * `platform` scope, excluding this one — because a second definition of
-   * "platform administrator" would drift from the first.
+   * The count mirrors the trigger's exactly — an active user holding
+   * `alendei_super_admin` at `platform` scope, excluding this one (migration
+   * `0010`) — because a second definition of "platform administrator" would
+   * drift from the first. A support grant is platform-scoped and does not count.
    */
   private async assertPlatformAdminRemains(
     tx: Transaction,
@@ -630,10 +632,13 @@ export class UserAdministrationService {
     const [holder] = await tx
       .select({ id: schema.userRoles.id })
       .from(schema.userRoles)
+      .innerJoin(schema.roles, eq(schema.roles.id, schema.userRoles.roleId))
       .where(
         and(
           eq(schema.userRoles.userId, excludingUserId),
           eq(schema.userRoles.scopeType, 'platform'),
+          isNull(schema.roles.orgId),
+          eq(schema.roles.key, PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN),
         ),
       )
       .limit(1);
@@ -648,7 +653,10 @@ export class UserAdministrationService {
       SELECT count(*) AS remaining
       FROM user_roles ur
       JOIN users u ON u.id = ur.user_id
+      JOIN roles r ON r.id = ur.role_id
       WHERE ur.scope_type = 'platform'
+        AND r.org_id IS NULL
+        AND r.key = ${PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN}
         AND u.status = 'active'
         AND ur.user_id <> ${excludingUserId}
     `);

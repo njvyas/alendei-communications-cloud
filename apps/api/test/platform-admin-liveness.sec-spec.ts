@@ -474,7 +474,10 @@ describe('last-platform-admin invariant', () => {
       const assignmentId = await assignmentIdFor(only.userId);
 
       await expectDbRefusal(
-        db.withTenant({ isPlatformAdmin: true }, (tx) =>
+        // The administrator's own, genuine platform context — the strongest
+        // position `acc_app` can legitimately occupy — still cannot remove the
+        // last grant.
+        db.withTenant({ isPlatformAdmin: true, userId: only.userId }, (tx) =>
           tx.delete(schema.userRoles).where(eq(schema.userRoles.id, assignmentId)),
         ),
         /no active administrator/,
@@ -520,11 +523,17 @@ describe('last-platform-admin invariant', () => {
        * and grants are re-read from the database on every request (ADR-003 D-3).
        * The second request then arrives with no authority to revoke anything.
        *
+       * `404` when that same loss of authority reaches the database first:
+       * since migration `0010`, `app_is_platform_admin()` re-reads the grant
+       * inside the second transaction, so once `idA`'s removal has committed
+       * the platform claim is no longer honoured and RLS hides the platform
+       * grant outright — the stronger form of the `403`.
+       *
        * Pinning this to `409` asserted a scheduling accident, which is why it
        * failed on roughly half of runs. What the case is actually about is
        * below, and it is unconditional.
        */
-      expect([403, 409]).toContain(statuses.find((s) => s !== 204));
+      expect([403, 404, 409]).toContain(statuses.find((s) => s !== 204));
       // The assertion that matters: the final state, not the status codes.
       expect(await admins()).toBe(1);
     });

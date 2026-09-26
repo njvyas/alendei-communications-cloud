@@ -92,7 +92,14 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     admin,
     jwt: app.get(AccessTokenService),
     async clearRateLimits() {
-      const keys = await redis.keys('*ratelimit:auth:*');
+      // Every unauthenticated-path bucket: sign-in, refresh and API-key
+      // failures (Gate-B audit, Blocker 4). The per-principal general limiter is
+      // not touched here; its own suite owns it.
+      const keys = [
+        ...(await redis.keys('*ratelimit:auth:*')),
+        ...(await redis.keys('*ratelimit:refresh:*')),
+        ...(await redis.keys('*ratelimit:apikey-fail:*')),
+      ];
       if (keys.length > 0) await redis.del(...keys);
     },
     async close() {
@@ -286,6 +293,103 @@ export async function purgeAudit(admin: Database, where = sql`true`): Promise<vo
   } finally {
     await admin.execute(sql`ALTER TABLE audit_logs ENABLE TRIGGER trg_audit_logs_append_only`);
   }
+}
+
+/**
+ * Plants an active identity holding `alendei_super_admin` at platform scope, for
+ * tests that run `acc_app` under a platform-admin tenant context.
+ *
+ * Since migration `0010` the database honours `app.is_platform_admin` for an
+ * RLS-bound principal only while `app.current_user_id` actually holds that
+ * grant, so a bare `{ isPlatformAdmin: true }` session is — correctly — no
+ * longer enough. Planted by the owner under the same transaction-local flag
+ * `seed.ts` uses; the credential column is a placeholder because the identity
+ * never signs in.
+ */
+export async function plantPlatformIdentity(admin: Database, label: string): Promise<string> {
+  const email = `${label}-${uuidv7().replace(/-/g, '').slice(-12)}@example.test`;
+  return admin.transaction(async (tx) => {
+    await tx.execute(sql`select set_config('app.is_platform_admin','on',true)`);
+    const [role] = await tx
+      .select({ id: schema.roles.id })
+      .from(schema.roles)
+      .where(
+        and(
+          eq(schema.roles.key, PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN),
+          isNull(schema.roles.orgId),
+        ),
+      );
+    const [user] = await tx
+      .insert(schema.users)
+      .values({ email, status: 'active', passwordHash: 'not-a-login-credential' })
+      .returning({ id: schema.users.id });
+    await tx
+      .insert(schema.userRoles)
+      .values({ userId: user!.id, roleId: role!.id, scopeType: 'platform' });
+    return user!.id;
+  });
+}
+
+/**
+ * Plants an active identity holding `reseller_admin` at `reseller` scope on
+ * `resellerId` — the grant migration `0010` requires before
+ * `app.current_reseller_id` is honoured for an RLS-bound principal.
+ */
+export async function plantResellerIdentity(
+  admin: Database,
+  resellerId: string,
+  label: string,
+): Promise<string> {
+  const email = `${label}-${uuidv7().replace(/-/g, '').slice(-12)}@example.test`;
+  return admin.transaction(async (tx) => {
+    await tx.execute(sql`select set_config('app.is_platform_admin','on',true)`);
+    const [role] = await tx
+      .select({ id: schema.roles.id })
+      .from(schema.roles)
+      .where(
+        and(eq(schema.roles.key, PLATFORM_ROLE_KEYS.RESELLER_ADMIN), isNull(schema.roles.orgId)),
+      );
+    const [user] = await tx
+      .insert(schema.users)
+      .values({ email, status: 'active', passwordHash: 'not-a-login-credential' })
+      .returning({ id: schema.users.id });
+    await tx
+      .insert(schema.userRoles)
+      .values({ userId: user!.id, roleId: role!.id, scopeType: 'reseller', scopeId: resellerId });
+    return user!.id;
+  });
+}
+
+/**
+ * Removes identities planted by the two helpers above. The liveness trigger is
+ * disabled for the statement — the same owner capability `purgeAudit` uses —
+ * because a planted platform administrator may be the only one in the database.
+ */
+export async function removeIdentities(admin: Database, userIds: readonly string[]): Promise<void> {
+  if (userIds.length === 0) return;
+  await purgeAudit(
+    admin,
+    sql`actor_user_id IN (${sql.join(
+      userIds.map((id) => sql`${id}`),
+      sql`, `,
+    )})`,
+  );
+  await admin.transaction(async (tx) => {
+    await tx.execute(
+      sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
+    );
+    try {
+      for (const id of userIds) {
+        await tx.execute(sql`DELETE FROM sessions WHERE user_id = ${id}`);
+        await tx.execute(sql`DELETE FROM user_roles WHERE user_id = ${id}`);
+        await tx.execute(sql`DELETE FROM users WHERE id = ${id}`);
+      }
+    } finally {
+      await tx.execute(
+        sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
+      );
+    }
+  });
 }
 
 export const PLATFORM_ROLE = PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN;

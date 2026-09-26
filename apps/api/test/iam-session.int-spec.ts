@@ -31,6 +31,7 @@ import { UserLifecycleService } from '../src/iam/user-lifecycle.service';
 import { hashRefreshToken } from '../src/iam/refresh-token';
 import { APP_DB, AUTH_DB } from '../src/database/database.tokens';
 import { connectAdmin, expectRejected, purgeAudit, type AdminHandle } from './audit-fixtures';
+import { plantPlatformIdentity, removeIdentities } from './auth-harness';
 
 describe('IAM foundation', () => {
   let admin: AdminHandle;
@@ -43,6 +44,11 @@ describe('IAM foundation', () => {
   let close: () => Promise<void>;
   let userId: string;
   const createdUserIds: string[] = [];
+  /**
+   * Platform context backed by a real administrator: since migration `0010` the
+   * flag alone is not honoured for `acc_app`.
+   */
+  let platform: { isPlatformAdmin: true; userId: string };
 
   /** A second, independent connection pool, for genuine concurrency. */
   let rivalPool: ReturnType<typeof createPool>;
@@ -68,8 +74,12 @@ describe('IAM foundation', () => {
       applicationName: 'acc-test-rival',
     });
     rivalDb = createDatabase(rivalPool);
+    platform = {
+      isPlatformAdmin: true,
+      userId: await plantPlatformIdentity(admin.db, 'iam-platform'),
+    };
 
-    const user = await withTenantTransaction(appDb, { isPlatformAdmin: true }, (tx) =>
+    const user = await withTenantTransaction(appDb, platform, (tx) =>
       users.invite(tx, `iam-${uuidv7().replace(/-/g, '').slice(-12)}@example.test`),
     );
     userId = user.id;
@@ -78,6 +88,7 @@ describe('IAM foundation', () => {
 
   afterAll(async () => {
     await purgeAudit(admin.db, sql`true`);
+    await removeIdentities(admin.db, [platform.userId]);
     for (const id of createdUserIds) {
       await admin.db.execute(sql`DELETE FROM sessions WHERE user_id = ${id}`);
       await admin.db.execute(sql`DELETE FROM users WHERE id = ${id}`);
@@ -94,7 +105,7 @@ describe('IAM foundation', () => {
    * them.
    */
   const newUser = async (label: string): Promise<string> => {
-    const user = await withTenantTransaction(appDb, { isPlatformAdmin: true }, (tx) =>
+    const user = await withTenantTransaction(appDb, platform, (tx) =>
       users.invite(tx, `${label}-${uuidv7().replace(/-/g, '').slice(-12)}@example.test`),
     );
     createdUserIds.push(user.id);
@@ -103,7 +114,7 @@ describe('IAM foundation', () => {
 
   /** Runs lifecycle work as acc_app with platform context. */
   const asPlatform = <T>(work: (tx: Transaction) => Promise<T>): Promise<T> =>
-    withTenantTransaction(appDb, { isPlatformAdmin: true }, work);
+    withTenantTransaction(appDb, platform, work);
 
   // ---------------------------------------------------------------------------
   // User lifecycle

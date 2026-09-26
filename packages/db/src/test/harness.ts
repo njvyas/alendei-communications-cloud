@@ -95,18 +95,33 @@ export interface TenantFixture {
   readonly roleId: string;
   readonly apiKeyId: string;
   readonly slug: string;
+  /** False when the tenant joined an existing reseller; teardown then leaves it. */
+  readonly ownsReseller: boolean;
 }
 
-export async function createTenant(admin: Db, label: string): Promise<TenantFixture> {
+/**
+ * Plants a tenant. With `options.resellerId` the organization joins that
+ * existing reseller instead of getting its own — the topology every direct
+ * customer is in (one shared "Alendei Direct" reseller), and the one the
+ * fixtures previously never built, which is how the shared-reseller isolation
+ * defect went unseen (Gate-B audit, Blocker 1).
+ */
+export async function createTenant(
+  admin: Db,
+  label: string,
+  options: { readonly resellerId?: string } = {},
+): Promise<TenantFixture> {
   // The random low bits, not the UUIDv7 timestamp prefix: the leading bytes are
   // identical for every fixture created within the same ~65-second window, which
   // made concurrent or repeated runs collide on `resellers_slug_key`.
   const slug = `${label}-${uuidv7().replace(/-/g, '').slice(-12)}`;
 
-  const [reseller] = await admin
-    .insert(schema.resellers)
-    .values({ name: `Reseller ${slug}`, slug: `rs-${slug}` })
-    .returning({ id: schema.resellers.id });
+  const [reseller] = options.resellerId
+    ? [{ id: options.resellerId }]
+    : await admin
+        .insert(schema.resellers)
+        .values({ name: `Reseller ${slug}`, slug: `rs-${slug}` })
+        .returning({ id: schema.resellers.id });
   const [org] = await admin
     .insert(schema.organizations)
     .values({ name: `Org ${slug}`, slug: `org-${slug}`, resellerId: reseller!.id })
@@ -159,6 +174,7 @@ export async function createTenant(admin: Db, label: string): Promise<TenantFixt
     roleId: role!.id,
     apiKeyId: apiKey!.id,
     slug,
+    ownsReseller: !options.resellerId,
   };
 }
 
@@ -179,6 +195,84 @@ export async function purgeAuditRows(admin: Db, orgId: string): Promise<void> {
   } finally {
     await admin.execute(sql`ALTER TABLE audit_logs ENABLE TRIGGER trg_audit_logs_append_only`);
   }
+}
+
+/**
+ * Plants an active identity holding a platform-level role, as the owner.
+ *
+ * Migration `0010` validates the elevated tenant-context claims for every
+ * RLS-bound principal: `app.is_platform_admin` is honoured only while
+ * `app.current_user_id` holds `alendei_super_admin` at platform scope, and
+ * `app.current_reseller_id` only while it holds a grant at that reseller. Tests
+ * that exercise those contexts therefore run them as a real identity.
+ */
+async function plantIdentity(
+  admin: Db,
+  label: string,
+  roleKey: 'alendei_super_admin' | 'alendei_support' | 'reseller_admin',
+  scope: { scopeType: 'platform' } | { scopeType: 'reseller'; scopeId: string },
+): Promise<string> {
+  const email = `${label}-${uuidv7().replace(/-/g, '').slice(-12)}@example.test`;
+  return admin.transaction(async (tx) => {
+    await tx.execute(sql`select set_config('app.is_platform_admin','on',true)`);
+    const { rows } = await tx.execute<{ id: string }>(
+      sql`SELECT id FROM roles WHERE key = ${roleKey} AND org_id IS NULL`,
+    );
+    const [user] = await tx
+      .insert(schema.users)
+      .values({ email, status: 'active', passwordHash: 'not-a-login-credential' })
+      .returning({ id: schema.users.id });
+    await tx.insert(schema.userRoles).values({
+      userId: user!.id,
+      roleId: rows[0]!.id,
+      scopeType: scope.scopeType,
+      scopeId: 'scopeId' in scope ? scope.scopeId : null,
+    });
+    return user!.id;
+  });
+}
+
+export const plantPlatformAdmin = (admin: Db, label: string): Promise<string> =>
+  plantIdentity(admin, label, 'alendei_super_admin', { scopeType: 'platform' });
+
+export const plantPlatformSupport = (admin: Db, label: string): Promise<string> =>
+  plantIdentity(admin, label, 'alendei_support', { scopeType: 'platform' });
+
+export const plantResellerAdmin = (admin: Db, resellerId: string, label: string): Promise<string> =>
+  plantIdentity(admin, label, 'reseller_admin', { scopeType: 'reseller', scopeId: resellerId });
+
+/**
+ * Removes planted identities. The liveness trigger is disabled for the
+ * transaction because a planted administrator may be the only one present —
+ * the same owner capability `purgeAuditRows` uses against the append-only
+ * trigger.
+ */
+export async function removeIdentities(admin: Db, userIds: readonly string[]): Promise<void> {
+  if (userIds.length === 0) return;
+  await admin.execute(sql`ALTER TABLE audit_logs DISABLE TRIGGER trg_audit_logs_append_only`);
+  try {
+    for (const id of userIds) {
+      await admin.execute(sql`DELETE FROM audit_logs WHERE actor_user_id = ${id}`);
+    }
+  } finally {
+    await admin.execute(sql`ALTER TABLE audit_logs ENABLE TRIGGER trg_audit_logs_append_only`);
+  }
+  await admin.transaction(async (tx) => {
+    await tx.execute(
+      sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
+    );
+    try {
+      for (const id of userIds) {
+        await tx.execute(sql`DELETE FROM sessions WHERE user_id = ${id}`);
+        await tx.execute(sql`DELETE FROM user_roles WHERE user_id = ${id}`);
+        await tx.execute(sql`DELETE FROM users WHERE id = ${id}`);
+      }
+    } finally {
+      await tx.execute(
+        sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
+      );
+    }
+  });
 }
 
 /** Removes a fixture tenant and everything under it. */
@@ -204,5 +298,25 @@ export async function destroyTenant(admin: Db, tenant: TenantFixture): Promise<v
   await admin.execute(sql`DELETE FROM workspaces WHERE org_id = ${tenant.orgId}`);
   await admin.execute(sql`DELETE FROM users WHERE id = ${tenant.userId}`);
   await admin.execute(sql`DELETE FROM organizations WHERE id = ${tenant.orgId}`);
-  await admin.execute(sql`DELETE FROM resellers WHERE id = ${tenant.resellerId}`);
+  if (tenant.ownsReseller) await destroyReseller(admin, tenant.resellerId);
+}
+
+/** Plants a bare reseller for tenants to join; remove it with `destroyReseller`. */
+export async function createReseller(admin: Db, label: string): Promise<string> {
+  const slug = `rs-${label}-${uuidv7().replace(/-/g, '').slice(-12)}`;
+  const [row] = await admin
+    .insert(schema.resellers)
+    .values({ name: `Reseller ${slug}`, slug })
+    .returning({ id: schema.resellers.id });
+  return row!.id;
+}
+
+export async function destroyReseller(admin: Db, resellerId: string): Promise<void> {
+  await admin.execute(sql`ALTER TABLE audit_logs DISABLE TRIGGER trg_audit_logs_append_only`);
+  try {
+    await admin.execute(sql`DELETE FROM audit_logs WHERE reseller_id = ${resellerId}`);
+  } finally {
+    await admin.execute(sql`ALTER TABLE audit_logs ENABLE TRIGGER trg_audit_logs_append_only`);
+  }
+  await admin.execute(sql`DELETE FROM resellers WHERE id = ${resellerId}`);
 }

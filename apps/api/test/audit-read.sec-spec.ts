@@ -391,8 +391,14 @@ describe('audit read', () => {
       expect(ids).not.toContain(otherResellerRow);
       expect(ids.every((id) => id === ownOrgRow)).toBe(true);
 
-      // The detail route agrees with the list, which is the whole point.
-      await api(adminToken).get(ownResellerRow).expect(403);
+      // The detail route agrees with the list, which is the whole point. Both
+      // reseller rows are now `404`: an organization grant confers no reseller
+      // claim, so RLS no longer shows the organization its own reseller's row
+      // at all (Gate-B audit, Blocker 1). It previously answered `403`, which
+      // is exactly the existence oracle that widened claim produced — so a
+      // `403` here means the reseller claim is being derived from the selected
+      // organization again.
+      await api(adminToken).get(ownResellerRow).expect(404);
       await api(adminToken).get(otherResellerRow).expect(404);
     });
 
@@ -442,9 +448,10 @@ describe('audit read', () => {
       const list = await api(token).list().expect(403);
       expect(list.body.error.code).toBe(ERROR_CODES.AUTHZ_SCOPE_DENIED);
 
-      // And the detail route refuses the reseller row on its own terms.
-      const detail = await api(token).get(resellerRow).expect(403);
-      expect(detail.body.error.code).toBe(ERROR_CODES.AUTHZ_SCOPE_DENIED);
+      // And the detail route cannot even see the reseller row: a workspace
+      // grant carries no reseller claim, so RLS hides it (`404`, no oracle).
+      const detail = await api(token).get(resellerRow).expect(404);
+      expect(detail.body.error.code).toBe(ERROR_CODES.RESOURCE_NOT_FOUND);
     });
 
     it('case 3 — mixed grants do not broaden reseller visibility', async () => {
@@ -628,10 +635,12 @@ describe('audit read', () => {
     }
 
     // An organization administrator: everything inside its organization, and
-    // nothing at or above the reseller.
+    // nothing at or above the reseller — not even the knowledge that its
+    // reseller's row exists (`404`, since the reseller claim is never derived
+    // from the selected organization).
     expect(observed).toEqual({
       platform: { listed: false, detail: 404 },
-      reseller: { listed: false, detail: 403 },
+      reseller: { listed: false, detail: 404 },
       organization: { listed: true, detail: 200 },
       workspace: { listed: true, detail: 200 },
       team: { listed: true, detail: 200 },

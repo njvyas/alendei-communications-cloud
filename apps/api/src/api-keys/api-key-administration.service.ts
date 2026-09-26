@@ -168,10 +168,10 @@ export class ApiKeyAdministrationService {
 
     const resolved = this.lists.resolve(filter, this.listSpec);
 
-    // No tenant predicate of its own: `api_keys_tenant` is what scopes this
-    // table, so a forgotten filter cannot leak another tenant's keys and a
-    // supplied one cannot reach past what RLS already allows.
-    const predicates: SQL[] = [];
+    // Pinned to the organization the list was authorized against; RLS
+    // (`api_keys_tenant`) beneath it independently holds the tenant boundary if
+    // this predicate is ever lost (Gate-B audit, Blocker 1).
+    const predicates: SQL[] = [eq(schema.apiKeys.orgId, orgId)];
     if (filter.status) predicates.push(this.statusPredicate(filter.status));
     if (filter.scopeType) predicates.push(this.scopeTypePredicate(filter.scopeType));
     if (filter.scopeId) {

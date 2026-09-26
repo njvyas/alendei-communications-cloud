@@ -1,5 +1,12 @@
-import { Global, Inject, Logger, Module, type OnApplicationShutdown } from '@nestjs/common';
-import { createDatabase, createPool, type Database } from '@acc/db';
+import {
+  Global,
+  Inject,
+  Logger,
+  Module,
+  type OnApplicationShutdown,
+  type OnModuleInit,
+} from '@nestjs/common';
+import { assertRlsBoundPrincipal, createDatabase, createPool, type Database } from '@acc/db';
 import type { Pool } from 'pg';
 
 import { AppConfigService } from '../config/app-config.service';
@@ -64,13 +71,26 @@ import { TenantDatabase } from './tenant-database.service';
   ],
   exports: [APP_POOL, APP_DB, AUTH_POOL, AUTH_DB, TenantDatabase],
 })
-export class DatabaseModule implements OnApplicationShutdown {
+export class DatabaseModule implements OnModuleInit, OnApplicationShutdown {
   private readonly logger = new Logger(DatabaseModule.name);
 
   constructor(
     @Inject(APP_POOL) private readonly appPool: Pool,
     @Inject(AUTH_POOL) private readonly authPool: Pool,
   ) {}
+
+  /**
+   * Refuses to serve with a pool whose principal RLS would not bind (Gate-B
+   * audit, Blocker 2): a superuser, a `BYPASSRLS` role, an owner (or member of
+   * the owner) of any `public` table, or a member of any other role. The check
+   * reads the catalog as the pool's own principal, so it reports what the
+   * connection string actually logs in as, not what configuration claims.
+   */
+  async onModuleInit(): Promise<void> {
+    const app = await assertRlsBoundPrincipal(this.appPool, 'application (acc_app)');
+    const auth = await assertRlsBoundPrincipal(this.authPool, 'identity (acc_auth)');
+    this.logger.log(`Database principals verified RLS-bound: ${app.role}, ${auth.role}`);
+  }
 
   /** Drains both pools so in-flight statements finish before the process exits. */
   async onApplicationShutdown(): Promise<void> {

@@ -2,13 +2,14 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   AUDIT_ACTIONS,
   ERROR_CODES,
+  PLATFORM_ROLE_KEYS,
   type AuthPrincipal,
   type PageInfo,
   type ScopeRef,
   type ScopeType,
 } from '@acc/contracts';
 import { PLATFORM_ADMIN_LOCK_KEY, schema, type Transaction } from '@acc/db';
-import { and, eq, sql, type SQL } from 'drizzle-orm';
+import { and, eq, or, sql, type SQL } from 'drizzle-orm';
 
 import { AppException } from '../common/errors/app.exception';
 import { actorFromPrincipal } from '../audit/audit-actor';
@@ -176,11 +177,14 @@ export class RoleAssignmentService {
 
     const resolved = this.lists.resolve(filter, this.listSpec);
 
-    // Filters narrow; they never widen. The query still carries no tenant
-    // predicate of its own — RLS is what scopes it, so a forgotten filter here
-    // cannot leak another tenant's grants, and a supplied one cannot reach past
-    // what RLS already allows.
-    const predicates: SQL[] = [];
+    // Pinned to the organization the list was authorized against, plus
+    // reseller-scoped grants — which RLS admits only to a genuine reseller
+    // administrator of that reseller (`user_roles_tenant`, migration `0010`).
+    // RLS beneath this independently holds the tenant boundary if the predicate
+    // is ever lost (Gate-B audit, Blocker 1). Filters narrow; they never widen.
+    const predicates: SQL[] = [
+      or(eq(schema.userRoles.orgId, orgId), eq(schema.userRoles.scopeType, 'reseller'))!,
+    ];
     if (filter.userId) predicates.push(eq(schema.userRoles.userId, filter.userId));
     if (filter.scopeType) predicates.push(eq(schema.userRoles.scopeType, filter.scopeType));
     if (filter.scopeId) predicates.push(eq(schema.userRoles.scopeId, filter.scopeId));
@@ -338,29 +342,20 @@ export class RoleAssignmentService {
 
     // The last-platform-admin invariant (ADR-005 D-7). Only for a platform
     // grant: every other revocation takes no lock and runs no count.
-    if (assignment.scopeType === 'platform') {
+    if (
+      assignment.scopeType === 'platform' &&
+      assignment.roleKey === PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN
+    ) {
       await this.assertPlatformAdminRemains(tx, assignment.id);
     }
 
-    // Conditional delete rather than a read-then-delete: two concurrent
-    // revocations of the same assignment must not both report success, and the
-    // row lock is what decides which one did the work.
-    const deleted = await tx
-      .delete(schema.userRoles)
-      .where(eq(schema.userRoles.id, id))
-      .returning({ id: schema.userRoles.id });
-
-    if (deleted.length === 0) {
-      // The other revocation won. Reporting `404` is honest — the assignment is
-      // gone — and matches `API.md` §3c's "404 if already gone".
-      throw new AppException({
-        status: HttpStatus.NOT_FOUND,
-        code: ERROR_CODES.RESOURCE_NOT_FOUND,
-        message: 'Role assignment not found',
-        logContext: { requestedAssignmentId: id },
-      });
-    }
-
+    // The audit row is written *before* the delete, inside the same
+    // transaction. Order matters for one case: an administrator revoking their
+    // own `alendei_super_admin` grant stops being a platform administrator the
+    // moment the row is gone, and `app_is_platform_admin()` re-reads current
+    // state (migration `0010`) — so a platform-scoped audit row written after
+    // the delete would be refused by RLS. Atomicity is unchanged: if the delete
+    // below finds nothing, the thrown `404` rolls this row back with it.
     await this.audit.record(
       {
         scopeType: assignment.scopeType,
@@ -382,6 +377,26 @@ export class RoleAssignmentService {
       },
       tx,
     );
+
+    // Conditional delete rather than a read-then-delete: two concurrent
+    // revocations of the same assignment must not both report success, and the
+    // row lock is what decides which one did the work.
+    const deleted = await tx
+      .delete(schema.userRoles)
+      .where(eq(schema.userRoles.id, id))
+      .returning({ id: schema.userRoles.id });
+
+    if (deleted.length === 0) {
+      // The other revocation won. Reporting `404` is honest — the assignment is
+      // gone — and matches `API.md` §3c's "404 if already gone". Throwing also
+      // rolls back the audit row written above.
+      throw new AppException({
+        status: HttpStatus.NOT_FOUND,
+        code: ERROR_CODES.RESOURCE_NOT_FOUND,
+        message: 'Role assignment not found',
+        logContext: { requestedAssignmentId: id },
+      });
+    }
   }
 
   // --- guards ---------------------------------------------------------------
@@ -553,10 +568,10 @@ export class RoleAssignmentService {
    * transaction is a no-op.
    *
    * The count deliberately mirrors the trigger's exactly: an active user holding
-   * a grant at `platform` scope. It is the authorization model's own definition
-   * of a platform administrator — `ScopeResolver` derives `isPlatformAdmin` as
-   * "holds some grant at platform scope" — and not a second notion invented for
-   * this check, which would drift.
+   * `alendei_super_admin` at `platform` scope (migration `0010`). It is the
+   * authorization model's own definition of a platform administrator —
+   * `isPlatformAdministrator` in `ScopeResolver` — and not a second notion
+   * invented for this check, which would drift.
    */
   private async assertPlatformAdminRemains(tx: Transaction, excludingId: string): Promise<void> {
     await tx.execute(sql`select pg_advisory_xact_lock(${PLATFORM_ADMIN_LOCK_KEY})`);
@@ -565,7 +580,10 @@ export class RoleAssignmentService {
       SELECT count(*) AS remaining
       FROM user_roles ur
       JOIN users u ON u.id = ur.user_id
+      JOIN roles r ON r.id = ur.role_id
       WHERE ur.scope_type = 'platform'
+        AND r.org_id IS NULL
+        AND r.key = ${PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN}
         AND u.status = 'active'
         AND ur.id <> ${excludingId}
     `);

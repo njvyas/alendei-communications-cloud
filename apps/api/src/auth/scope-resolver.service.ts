@@ -1,5 +1,11 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { ERROR_CODES, type RoleGrant, type ScopeType, type TenantContext } from '@acc/contracts';
+import {
+  ERROR_CODES,
+  PLATFORM_ROLE_KEYS,
+  type RoleGrant,
+  type ScopeType,
+  type TenantContext,
+} from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 
@@ -10,8 +16,31 @@ export interface ResolvedScopes {
   readonly permissions: readonly string[];
   /** Every organization the principal can legitimately act in. */
   readonly organizationIds: readonly string[];
+  /**
+   * An active holder of `alendei_super_admin` at platform scope — the only
+   * principal RLS treats as unrestricted (`isPlatformAdministrator`).
+   */
   readonly isPlatformAdmin: boolean;
+  /**
+   * Holds *some* grant at platform scope (super admin or support). Widens which
+   * organizations may be selected, and nothing else: inside the selected
+   * organization RLS scopes a support principal exactly like a member.
+   */
+  readonly hasPlatformGrant: boolean;
+  /** Resellers the principal holds a genuine `reseller`-scope grant on. */
   readonly resellerIds: readonly string[];
+}
+
+/**
+ * The one definition of a platform administrator, shared with
+ * `app_is_platform_admin()` (migration `0010`) and the liveness invariant: a grant
+ * of `alendei_super_admin` at `platform` scope. A support grant is platform-scoped
+ * too, and deliberately does not qualify.
+ */
+export function isPlatformAdministrator(grants: readonly RoleGrant[]): boolean {
+  return grants.some(
+    (g) => g.scopeType === 'platform' && g.roleKey === PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN,
+  );
 }
 
 /** The canonical header for choosing among authorized organizations. */
@@ -40,7 +69,10 @@ export class ScopeResolver {
       })
       .from(schema.userRoles)
       .innerJoin(schema.roles, eq(schema.roles.id, schema.userRoles.roleId))
-      .where(eq(schema.userRoles.userId, userId));
+      .where(eq(schema.userRoles.userId, userId))
+      // Deterministic, so every "first matching grant" below is the same grant
+      // on every request rather than whatever order the heap returned.
+      .orderBy(schema.userRoles.id);
 
     // Per role, not flattened. Keeping the role-to-permission mapping is what
     // makes a coherent-grant decision possible at all (ADR-005 D-1); collapsing
@@ -63,7 +95,8 @@ export class ScopeResolver {
     // two can never disagree. Non-authoritative for authorization (ADR-005 D-3).
     const permissions = [...new Set(grants.flatMap((g) => g.permissions))];
 
-    const isPlatformAdmin = grants.some((g) => g.scopeType === 'platform');
+    const isPlatformAdmin = isPlatformAdministrator(grants);
+    const hasPlatformGrant = grants.some((g) => g.scopeType === 'platform');
     const resellerIds = [
       ...new Set(
         grants.filter((g) => g.scopeType === 'reseller' && g.scopeId).map((g) => g.scopeId!),
@@ -73,10 +106,10 @@ export class ScopeResolver {
       tx,
       grants,
       resellerIds,
-      isPlatformAdmin,
+      hasPlatformGrant,
     );
 
-    return { grants, permissions, organizationIds, isPlatformAdmin, resellerIds };
+    return { grants, permissions, organizationIds, isPlatformAdmin, hasPlatformGrant, resellerIds };
   }
 
   /**
@@ -139,9 +172,9 @@ export class ScopeResolver {
     tx: Transaction,
     grants: readonly RoleGrant[],
     resellerIds: readonly string[],
-    isPlatformAdmin: boolean,
+    hasPlatformGrant: boolean,
   ): Promise<string[]> {
-    if (isPlatformAdmin) {
+    if (hasPlatformGrant) {
       const all = await tx.select({ id: schema.organizations.id }).from(schema.organizations);
       return all.map((o) => o.id);
     }
@@ -194,13 +227,29 @@ export class ScopeResolver {
     });
   }
 
-  /** Builds the authoritative tenant context for the selected organization. */
+  /**
+   * Builds the authoritative tenant context for the selected organization.
+   *
+   * **`resellerId` is reseller *authority*, never reseller *context*.** It is set
+   * only when the principal holds a genuine `reseller`-scope grant on the
+   * reseller that owns the selected organization — because this value becomes
+   * `app.current_reseller_id`, and `app_org_in_scope()` admits every
+   * organization beneath it. It previously fell back to the selected
+   * organization's own reseller for every principal, which handed an ordinary
+   * organization member RLS visibility of every sibling organization under the
+   * same reseller (Gate-B audit, Blocker 1). The database now refuses that claim
+   * independently (migration `0010`), but the application does not make it.
+   *
+   * With no organization selected, a principal holding exactly one reseller
+   * grant acts as that reseller; holding several, it acts as none, rather than
+   * as whichever sorted first.
+   */
   async tenantContextFor(
     tx: Transaction,
     scopes: ResolvedScopes,
     orgId: string | null,
   ): Promise<TenantContext> {
-    let resellerId: string | null = scopes.resellerIds[0] ?? null;
+    let resellerId: string | null = null;
     let workspaceId: string | null = null;
 
     if (orgId) {
@@ -224,13 +273,12 @@ export class ScopeResolver {
         }
       }
 
-      if (!resellerId) {
-        const [org] = await tx
-          .select({ resellerId: schema.organizations.resellerId })
-          .from(schema.organizations)
-          .where(eq(schema.organizations.id, orgId));
-        resellerId = org?.resellerId ?? null;
+      if (scopes.resellerIds.length > 0) {
+        const owner = await this.resellerForOrganization(tx, orgId);
+        if (owner && scopes.resellerIds.includes(owner)) resellerId = owner;
       }
+    } else if (scopes.resellerIds.length === 1) {
+      resellerId = scopes.resellerIds[0]!;
     }
 
     return {

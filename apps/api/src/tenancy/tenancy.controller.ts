@@ -108,11 +108,13 @@ export class TenancyController {
         resourceType: 'Organization',
       });
 
-      // The query still carries no tenant predicate of its own on purpose: RLS
-      // is what scopes it, so a missing application-side filter cannot leak
-      // another tenant's rows — and the filters below narrow that set, never
-      // widen it.
-      const predicates: SQL[] = [];
+      // Two layers, each sufficient on its own for the tenant boundary. The
+      // explicit predicate pins the page to the organization the request was
+      // authorized against — without it a reseller administrator acting in one
+      // organization would be handed every sibling organization's workspaces
+      // under a check made for this one. RLS beneath it is what holds when an
+      // application-side filter is missing (Gate-B audit, Blocker 1).
+      const predicates: SQL[] = [eq(schema.workspaces.orgId, orgId)];
       if (query.status) predicates.push(eq(schema.workspaces.status, query.status));
       if (resolved.after) predicates.push(resolved.after);
 
@@ -170,16 +172,21 @@ export class TenancyController {
         resourceType: 'Organization',
       });
 
-      return tx
-        .select({
-          id: schema.workspaces.id,
-          orgId: schema.workspaces.orgId,
-          name: schema.workspaces.name,
-          slug: schema.workspaces.slug,
-          status: schema.workspaces.status,
-        })
-        .from(schema.workspaces)
-        .where(eq(schema.workspaces.id, id));
+      return (
+        tx
+          .select({
+            id: schema.workspaces.id,
+            orgId: schema.workspaces.orgId,
+            name: schema.workspaces.name,
+            slug: schema.workspaces.slug,
+            status: schema.workspaces.status,
+          })
+          .from(schema.workspaces)
+          // Pinned to the organization this request was authorized against, so an
+          // id from a sibling organization is `404` even for a principal whose
+          // RLS view spans several (a reseller administrator).
+          .where(and(eq(schema.workspaces.id, id), eq(schema.workspaces.orgId, orgId)))
+      );
     });
 
     const workspace = rows[0];

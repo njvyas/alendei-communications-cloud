@@ -40,6 +40,8 @@ import {
   startHarness,
   type Harness,
   type TenantFixture,
+  plantPlatformIdentity,
+  removeIdentities,
 } from './auth-harness';
 
 const READ = PERMISSIONS.WORKSPACES_READ;
@@ -53,6 +55,7 @@ describe('AuthorizationService', () => {
   let orgB: TenantFixture;
   let workspaceTwoId: string;
   let resellerUser: { userId: string; email: string };
+  let platformIdentity: string;
 
   beforeAll(async () => {
     h = await startHarness();
@@ -69,6 +72,8 @@ describe('AuthorizationService', () => {
       .values({ orgId: orgA.orgId, name: 'Second', slug: 'second' })
       .returning({ id: schema.workspaces.id });
     workspaceTwoId = second!.id;
+    platformIdentity = await plantPlatformIdentity(h.admin, 'authz-platform');
+    SEES_ALL = { isPlatformAdmin: true, userId: platformIdentity };
 
     // A real, loggable principal whose only grant is at reseller scope over
     // Organization A's reseller.
@@ -99,6 +104,7 @@ describe('AuthorizationService', () => {
   }, 60_000);
 
   afterAll(async () => {
+    await removeIdentities(h.admin, [platformIdentity]);
     await destroyUser(h.admin, resellerUser.userId);
     await h.admin.execute(sql`DELETE FROM workspaces WHERE id = ${workspaceTwoId}`);
     await destroyTenant(h.admin, orgA);
@@ -141,11 +147,19 @@ describe('AuthorizationService', () => {
     permissions: [...new Set(roles.flatMap((r) => r.permissions))],
   });
 
-  /** Tenant context that can see everything, so visibility is not the variable. */
-  const SEES_ALL: TenantSession = { isPlatformAdmin: true };
+  /**
+   * Tenant context that can see everything, so visibility is not the variable.
+   * Backed by a real platform administrator: since migration `0010` the flag
+   * alone is not honoured for `acc_app`.
+   */
+  let SEES_ALL: TenantSession;
+  /**
+   * The context a member of `t` acting in its own organization establishes: no
+   * reseller claim, because an organization grant confers no reseller authority.
+   */
   const sessionFor = (t: TenantFixture): TenantSession => ({
     orgId: t.orgId,
-    resellerId: t.resellerId,
+    resellerId: null,
   });
 
   /**

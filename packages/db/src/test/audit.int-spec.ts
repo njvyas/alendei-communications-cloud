@@ -15,13 +15,20 @@ import {
   connect,
   createTenant,
   destroyTenant,
+  plantPlatformAdmin,
+  plantResellerAdmin,
   purgeAuditRows,
+  removeIdentities,
   type Db,
   type Principals,
   type TenantFixture,
 } from './harness';
 
-const PLATFORM = { isPlatformAdmin: true } as const;
+/**
+ * A platform-admin tenant context. Assigned once a real `alendei_super_admin`
+ * identity exists: since migration `0010` the flag alone is not honoured.
+ */
+let PLATFORM: { isPlatformAdmin: true; userId: string };
 
 /** A complete audit row with every non-derived column set to something valid. */
 function auditRow(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -102,14 +109,25 @@ describe('audit_logs', () => {
   let db: Principals;
   let orgA: TenantFixture;
   let orgB: TenantFixture;
+  /** A genuine reseller-scope identity over Organization A's reseller. */
+  let resellerA: { resellerId: string; userId: string };
 
   beforeAll(async () => {
     db = connect();
     orgA = await createTenant(db.admin, 'audit-a');
     orgB = await createTenant(db.admin, 'audit-b');
+    PLATFORM = {
+      isPlatformAdmin: true,
+      userId: await plantPlatformAdmin(db.admin, 'audit-platform'),
+    };
+    resellerA = {
+      resellerId: orgA.resellerId,
+      userId: await plantResellerAdmin(db.admin, orgA.resellerId, 'audit-reseller'),
+    };
   });
 
   afterAll(async () => {
+    await removeIdentities(db.admin, [PLATFORM.userId, resellerA.userId]);
     await destroyTenant(db.admin, orgA);
     await destroyTenant(db.admin, orgB);
     await db.close();
@@ -401,7 +419,7 @@ describe('audit_logs', () => {
     });
 
     it('accepts a reseller-scoped row in reseller context', async () => {
-      await asTenant(db.app, { resellerId: orgA.resellerId }, (tx) =>
+      await asTenant(db.app, resellerA, (tx) =>
         insertAudit(tx, auditRow({ scope_type: 'reseller', scope_id: orgA.resellerId })),
       );
       const { rows } = await db.admin.execute<{ reseller_id: string; org_id: string | null }>(
@@ -787,7 +805,7 @@ describe('audit_logs', () => {
     });
 
     it('lets a reseller read the audit trail of organizations beneath it', async () => {
-      const visible = await asTenant(db.app, { resellerId: orgA.resellerId }, async (tx) => {
+      const visible = await asTenant(db.app, resellerA, async (tx) => {
         const { rows } = await tx.execute<{ org_id: string }>(
           sql`SELECT org_id FROM audit_logs WHERE org_id IS NOT NULL`,
         );

@@ -28,6 +28,8 @@ import {
   startHarness,
   type Harness,
   type TenantFixture,
+  plantPlatformIdentity,
+  removeIdentities,
 } from './auth-harness';
 
 describe('ScopeChainResolver', () => {
@@ -37,6 +39,9 @@ describe('ScopeChainResolver', () => {
   let orgA: TenantFixture;
   let orgB: TenantFixture;
   let workspaceTwoId: string;
+  /** A real platform administrator, so the platform context is honoured (`0010`). */
+  let platform: TenantSession;
+  let platformIdentity: string;
 
   /** Runs `work` as `acc_app` under an explicit tenant context, as a handler does. */
   const runAs = <T>(session: TenantSession, work: Parameters<TenantDatabase['withTenant']>[1]) =>
@@ -60,9 +65,12 @@ describe('ScopeChainResolver', () => {
       .values({ orgId: orgA.orgId, name: 'Second', slug: 'second' })
       .returning({ id: schema.workspaces.id });
     workspaceTwoId = second!.id;
+    platformIdentity = await plantPlatformIdentity(h.admin, 'chain-platform');
+    platform = { isPlatformAdmin: true, userId: platformIdentity };
   }, 60_000);
 
   afterAll(async () => {
+    await removeIdentities(h.admin, [platformIdentity]);
     await h.admin.execute(sql`DELETE FROM workspaces WHERE id = ${workspaceTwoId}`);
     await destroyTenant(h.admin, orgA);
     await destroyTenant(h.admin, orgB);
@@ -72,7 +80,9 @@ describe('ScopeChainResolver', () => {
   /** The tenant context a request acting in this organization would establish. */
   const sessionFor = (t: TenantFixture): TenantSession => ({
     orgId: t.orgId,
-    resellerId: t.resellerId,
+    // An organization grant confers no reseller authority, so a member's
+    // request carries no reseller claim (Gate-B audit, Blocker 1).
+    resellerId: null,
     isPlatformAdmin: false,
   });
 
@@ -216,14 +226,14 @@ describe('ScopeChainResolver', () => {
         // session rather than from the row would disagree here — which is the
         // mutation this case exists to catch.
         const own = await resolve(sessionFor(orgA), scopeType, id());
-        const platform = await resolve({ isPlatformAdmin: true }, scopeType, id());
+        const asPlatform = await resolve(platform, scopeType, id());
 
-        expect(platform).toEqual(own);
-        expect(platform!.orgId).toBe(orgA.orgId);
-        expect(platform!.resellerId).toBe(orgA.resellerId);
+        expect(asPlatform).toEqual(own);
+        expect(asPlatform!.orgId).toBe(orgA.orgId);
+        expect(asPlatform!.resellerId).toBe(orgA.resellerId);
         // And specifically: never Organization B's ancestry, under any context.
-        expect(platform!.orgId).not.toBe(orgB.orgId);
-        expect(platform!.resellerId).not.toBe(orgB.resellerId);
+        expect(asPlatform!.orgId).not.toBe(orgB.orgId);
+        expect(asPlatform!.resellerId).not.toBe(orgB.resellerId);
       },
     );
 
@@ -232,7 +242,7 @@ describe('ScopeChainResolver', () => {
       // so this pins the property that the *row* decides: Organization B's
       // workspace resolves to Organization B's ancestry even when the reading
       // session was last used for Organization A.
-      expect(await resolve({ isPlatformAdmin: true }, 'workspace', orgB.workspaceId)).toEqual({
+      expect(await resolve(platform, 'workspace', orgB.workspaceId)).toEqual({
         ...chainOf(orgB),
         workspaceId: orgB.workspaceId,
       });

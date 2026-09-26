@@ -31,6 +31,7 @@ import {
   type AdminHandle,
   type TenantFixture,
 } from './audit-fixtures';
+import { plantPlatformIdentity, plantResellerIdentity, removeIdentities } from './auth-harness';
 
 /** A complete, valid record; individual tests override only what they test. */
 function record(over: Partial<AuditRecordInput> = {}): AuditWriteInput {
@@ -314,11 +315,20 @@ describe('AuditWriter', () => {
   // Scope derivation
   // ---------------------------------------------------------------------------
   describe('scope derivation', () => {
+    // Platform and reseller contexts are claims the database now validates
+    // against real grants (migration `0010`), so each is backed by one.
+    let platformIdentity: string;
+    let resellerIdentity: string;
+    beforeAll(async () => {
+      platformIdentity = await plantPlatformIdentity(admin.db, 'aw-platform');
+      resellerIdentity = await plantResellerIdentity(admin.db, orgA.resellerId, 'aw-reseller');
+    });
+    afterAll(() => removeIdentities(admin.db, [platformIdentity, resellerIdentity]));
     afterEach(() => purgeAudit(admin.db, sql`true`));
 
     it('derives nothing at platform scope', async () => {
       const correlationId = uuidv7();
-      await asTenant({ isPlatformAdmin: true }, (tx) =>
+      await asTenant({ isPlatformAdmin: true, userId: platformIdentity }, (tx) =>
         writer.record(record({ correlationId }), tx),
       );
       const row = (await rowsFor(correlationId))[0]!;
@@ -332,7 +342,7 @@ describe('AuditWriter', () => {
 
     it('derives reseller_id at reseller scope', async () => {
       const correlationId = uuidv7();
-      await asTenant({ resellerId: orgA.resellerId }, (tx) =>
+      await asTenant({ resellerId: orgA.resellerId, userId: resellerIdentity }, (tx) =>
         writer.record(
           record({ scopeType: 'reseller', scopeId: orgA.resellerId, correlationId }),
           tx,

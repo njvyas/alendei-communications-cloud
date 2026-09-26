@@ -71,6 +71,13 @@
       "when": 1789269000000,
       "tag": "0009_phase1b62_api_key_list_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789269600000,
+      "tag": "0010_gateb_validated_scope_claims",
+      "breakpoints": true
     }
   ]
 }

@@ -37,8 +37,25 @@ export type ActorType = (typeof ACTOR_TYPES)[number];
 export interface TenantContext {
   readonly orgId: string | null;
   readonly workspaceId: string | null;
+  /**
+   * The reseller this request acts **as** — set only when the principal holds a
+   * genuine grant at `reseller` scope on the reseller that owns the selected
+   * organization (or, with no organization selected, on its single reseller).
+   *
+   * It is never the selected organization's reseller merely because the
+   * organization has one: this value becomes `app.current_reseller_id`, and
+   * RLS treats every organization under it as in scope. Deriving it from the
+   * organization gave every organization member reseller-wide visibility of its
+   * sibling organizations (Gate-B audit, Blocker 1).
+   */
   readonly resellerId: string | null;
-  /** True only for holders of a platform-scoped role (`RBAC.md` §3). */
+  /**
+   * True only for an active holder of `alendei_super_admin` at platform scope.
+   *
+   * Not "holds some platform-scope grant": `alendei_support` is platform-scoped
+   * and read-only, and this flag becomes `app.is_platform_admin`, which RLS
+   * treats as unrestricted read **and write**.
+   */
   readonly isPlatformAdmin: boolean;
 }
 
