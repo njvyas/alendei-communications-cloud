@@ -16,6 +16,7 @@ import { actorFromPrincipal } from '../audit/audit-actor';
 import { AuditWriter } from '../audit/audit-writer.service';
 import { AuthorizationService } from '../auth/authorization.service';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
+import { assertScopeAcceptsNewMembers } from '../tenancy/scope-lifecycle';
 
 export interface AssignmentView {
   readonly id: string;
@@ -274,6 +275,10 @@ export class RoleAssignmentService {
       target,
       resourceType: 'Scope',
     });
+
+    // An archived workspace or team receives no new grants (ADR-012 F-6).
+    // After guard 1, so only an actor who may grant here learns the state.
+    await assertScopeAcceptsNewMembers(tx, target);
 
     // Guard 2 — a real, visible, assignable role.
     const role = await this.loadAssignableRole(tx, input.roleId);

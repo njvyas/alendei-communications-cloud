@@ -32,8 +32,12 @@ export const AUDIT_ACTIONS = {
   ORGANIZATION_CLOSED: 'organization.closed',
   WORKSPACE_CREATED: 'workspace.created',
   WORKSPACE_UPDATED: 'workspace.updated',
+  WORKSPACE_ARCHIVED: 'workspace.archived',
+  WORKSPACE_RESTORED: 'workspace.restored',
   TEAM_CREATED: 'team.created',
   TEAM_UPDATED: 'team.updated',
+  TEAM_ARCHIVED: 'team.archived',
+  TEAM_RESTORED: 'team.restored',
 
   USER_INVITED: 'user.invited',
   USER_UPDATED: 'user.updated',
@@ -136,6 +140,12 @@ export const SECURITY_SENSITIVE_AUDIT_ACTIONS: readonly AuditAction[] = Object.f
   AUDIT_ACTIONS.ORGANIZATION_SUSPENDED,
   AUDIT_ACTIONS.ORGANIZATION_REACTIVATED,
   AUDIT_ACTIONS.ORGANIZATION_CLOSED,
+  // Workspace and team lifecycle (Phase 1C.1b): archiving decides whether a
+  // scope can receive new grants and API keys (ADR-012 F-6).
+  AUDIT_ACTIONS.WORKSPACE_ARCHIVED,
+  AUDIT_ACTIONS.WORKSPACE_RESTORED,
+  AUDIT_ACTIONS.TEAM_ARCHIVED,
+  AUDIT_ACTIONS.TEAM_RESTORED,
 ]);
 
 export function isSecuritySensitiveAction(action: string): boolean {

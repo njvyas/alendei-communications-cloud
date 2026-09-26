@@ -256,8 +256,12 @@ describe('§6n case 30 — route authorization coverage', () => {
     const open = routes.filter((r) => r.isPublic);
     // Phase 1C.1a added seven organization routes, all scoped and all
     // `deferred` (the organization is named in the path or the body, never
-    // selected): 24 → 31 scoped, 6 → 13 deferred.
-    expect(scoped.length).toBe(31);
+    // selected): 24 → 31 scoped, 6 → 13 deferred. Phase 1C.1b added twelve
+    // workspace and team routes, all scoped: the workspace list, create,
+    // archive and restore target the selected organization; the two workspace
+    // `:id` routes and all six team routes target a workspace or team resolved
+    // from the database: 31 → 43 scoped, 13 → 21 deferred.
+    expect(scoped.length).toBe(43);
     expect(exempt.length).toBe(6);
     expect(open.length).toBe(6);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
@@ -268,7 +272,7 @@ describe('§6n case 30 — route authorization coverage', () => {
     // the key's own stored binding scope (Phase 1B.6.2) or the binding named in
     // the body; and the audit-log detail route, whose target is the scope the
     // record was written at (Phase 1B.6.3).
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(13);
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(21);
   });
 });
 

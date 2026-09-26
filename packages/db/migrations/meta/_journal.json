@@ -85,6 +85,13 @@
       "when": 1790413354206,
       "tag": "0011_phase1c1a_organization_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790437919138,
+      "tag": "0012_phase1c1b_team_lifecycle",
+      "breakpoints": true
     }
   ]
 }

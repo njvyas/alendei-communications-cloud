@@ -207,13 +207,13 @@ Objectively testable; each is pass/fail.
 
 ### 4c. Phase 1C — tenant administration, session lifecycle, integrity and contract (ADR-012)
 
-**Status: SCOPE FROZEN; 1C.1a IMPLEMENTED (awaiting review); 1C.1b, 1C.2, 1C.6, 1C.3, 1C.4a/b NOT STARTED.** Gate C is not passed. Phase 1C is the successor to the previously unscheduled 1B.8 (tenant administration), 1B.9 (OpenAPI) and 1B.10 (development bootstrap), plus the Gate-B items ADR-011 D-8 scheduled for it. It builds on the Phase 1B architecture unchanged.
+**Status: SCOPE FROZEN; 1C.1a IMPLEMENTED (approved); 1C.1b IMPLEMENTED (awaiting review); 1C.2, 1C.6, 1C.3, 1C.4a/b NOT STARTED.** Gate C is not passed. Phase 1C is the successor to the previously unscheduled 1B.8 (tenant administration), 1B.9 (OpenAPI) and 1B.10 (development bootstrap), plus the Gate-B items ADR-011 D-8 scheduled for it. It builds on the Phase 1B architecture unchanged.
 
 | Step | Objective | Schema (planned — not yet written) | Exit criterion |
 |---|---|---|---|
 | **1C.0** | ADR-012 and this documentation freeze | none | Decisions recorded; every affected document agrees; no code changed |
 | **1C.1a** ✅ implemented | Organization create/read/update; suspend, reactivate, close (terminal); `TenantRoleProvisioner` and default-workspace creation in the same transaction; status enforcement as application authorization (ADR-012 F-1…F-5, F-8) | migration `0011`: `status_changed_at`, `status_reason` | §31a contract implemented; status enforcement proven for sessions, API keys, selection and lists; shared-reseller isolation proven for every new route |
-| **1C.1b** | Workspace create/read/update/archive/restore; team create/read/update/archive/restore; `/tenants/workspaces` kept as a deprecated alias (ADR-012 F-6, F-7) | `teams.status` using the existing `workspace_status` values | §31b–§31c implemented; no hard team deletion; archive rules proven |
+| **1C.1b** ✅ implemented | Workspace create/read/update/archive/restore; team create/read/update/archive/restore; `/tenants/workspaces` kept as a deprecated alias (ADR-012 F-6, F-7) | migration `0012`: `teams.status` using the existing `workspace_status` values | §31b–§31c implemented; no hard team deletion; archive rules proven |
 | **1C.2** | Maximum sessions with race-safe oldest-session eviction; self revoke-all; scoped administrator revocation; logout with an expired access token; CSRF preserved (ADR-012 F-9…F-12) | none expected | §31d implemented; eviction proven under concurrency; no cross-scope revocation |
 | **1C.6** | Composite `(workspace_id, org_id)` FKs on `api_keys`/`ws_tickets`; DB enforcement of `roles.allowed_scope_types`; `organizations.reseller_id` immutability; backfill verification | constraints and trigger changes with a verifying backfill | each constraint proven with the service bypassed; migration applies on the Gate-B database |
 | **1C.3** | OpenAPI reconciliation: full schemas, security schemes, headers, envelopes, idempotency and rate-limit documentation; generated spec; CI drift gate; authenticated UI outside development (ADR-012 F-13) | none | generated spec matches the route table and §31; snapshot drift gate in CI |

@@ -207,6 +207,49 @@ describe('Phase 1 schema', () => {
   });
 
   /**
+   * Phase 1C.1b (migration `0012`): teams carry the workspace lifecycle, using
+   * the same enum, defaulting to `active`, with the status-filter index — and no
+   * RLS policy changed to get there (`teams_tenant` stays organization-scoped).
+   */
+  it('gives teams the workspace lifecycle without touching their policies', async () => {
+    const column = await db.admin.execute<{ udt: string; nullable: string; def: string }>(sql`
+      SELECT udt_name AS udt, is_nullable AS nullable, column_default AS def
+      FROM information_schema.columns WHERE table_name = 'teams' AND column_name = 'status'`);
+    expect(column.rows).toEqual([
+      { udt: 'workspace_status', nullable: 'NO', def: "'active'::workspace_status" },
+    ]);
+    const index = await db.admin.execute<{ indexdef: string }>(
+      sql`SELECT indexdef FROM pg_indexes WHERE indexname = 'teams_org_id_status_idx'`,
+    );
+    expect(index.rows[0]?.indexdef).toContain('(org_id, status)');
+    const policies = await db.admin.execute<{ polname: string; qual: string }>(sql`
+      SELECT polname, pg_get_expr(polqual, polrelid) AS qual FROM pg_policy
+      WHERE polrelid = 'teams'::regclass ORDER BY polname`);
+    expect(policies.rows).toEqual([
+      { polname: 'teams_auth_read', qual: 'true' },
+      { polname: 'teams_tenant', qual: 'app_org_in_scope(org_id)' },
+    ]);
+
+    const tenant = await createTenant(db.admin, 'teamstatus');
+    try {
+      const inserted = await db.adminPool.query<{ status: string }>(
+        `INSERT INTO teams (workspace_id, org_id, name) VALUES ($1, $2, 'x') RETURNING status`,
+        [tenant.workspaceId, tenant.orgId],
+      );
+      expect(inserted.rows[0]!.status).toBe('active');
+      await expect(
+        db.adminPool.query(
+          `INSERT INTO teams (workspace_id, org_id, name, status) VALUES ($1, $2, 'y', 'deleted')`,
+          [tenant.workspaceId, tenant.orgId],
+        ),
+      ).rejects.toMatchObject({ code: '22P02' });
+    } finally {
+      await db.adminPool.query(`DELETE FROM teams WHERE org_id = $1`, [tenant.orgId]);
+      await destroyTenant(db.admin, tenant);
+    }
+  });
+
+  /**
    * The catalogue in the database is the one the code checks against.
    *
    * `AuthorizationService` compares against permission *keys*; a key the code

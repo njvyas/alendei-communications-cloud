@@ -16,6 +16,7 @@ import { AuthorizationService } from '../auth/authorization.service';
 import { AppConfigService } from '../config/app-config.service';
 import { CredentialService } from '../iam/credential.service';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
+import { assertScopeAcceptsNewMembers } from '../tenancy/scope-lifecycle';
 import { mintApiKey } from './api-key-secret';
 import type { ApiKeyScopeType, ApiKeyStatus } from './api-key.dto';
 
@@ -292,6 +293,9 @@ export class ApiKeyAdministrationService {
 
     // 3 — the binding, read from the database rather than from the request.
     const binding = await this.resolveBinding(tx, input.scopeType, input.scopeId);
+
+    // An archived workspace receives no new API keys (ADR-012 F-6).
+    await assertScopeAcceptsNewMembers(tx, target);
 
     // 4 — the key may not ask for more than its creator holds at the binding
     // scope. The same question role composition asks, through the same boundary

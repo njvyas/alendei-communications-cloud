@@ -95,6 +95,22 @@ export const ERROR_CODES = {
    */
   ORGANIZATION_LIFECYCLE_CONFLICT: 'ORGANIZATION_LIFECYCLE_CONFLICT',
 
+  // --- Workspace and team lifecycle (Phase 1C.1b, ADR-012 F-6) -------------
+  /**
+   * `409`: the workspace's current state does not admit the operation — it is
+   * archived (update, archive, or receiving a new team, grant or API key), it is
+   * the default workspace (archive), it still holds active teams (archive;
+   * `details.activeTeams`), or it is not archived (restore). `details.status`
+   * carries the current status.
+   */
+  WORKSPACE_LIFECYCLE_CONFLICT: 'WORKSPACE_LIFECYCLE_CONFLICT',
+  /**
+   * `409`: the team's current status does not admit the operation — archived
+   * (update, archive, or receiving a new grant), or not archived (restore).
+   * `details.status` carries the current status.
+   */
+  TEAM_LIFECYCLE_CONFLICT: 'TEAM_LIFECYCLE_CONFLICT',
+
   // --- Tenancy -------------------------------------------------------------
   TENANCY_CONTEXT_REQUIRED: 'TENANCY_CONTEXT_REQUIRED',
   /** A client-supplied tenant identifier disagreed with the resolved context. */

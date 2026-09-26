@@ -112,9 +112,9 @@ Hard deletion of tenancy rows remains available to the schema owner for developm
 
 **Teams gain the same lifecycle in Phase 1C** (ADR-012 OD-5, F-6): `teams.status` with the existing `workspace_status` values `active | archived`. There is no team `DELETE`. *(IN PHASE 1C — not yet implemented; today `teams` has no status column.)*
 
-## 1c. Organization, workspace and team lifecycle (ADR-012) — organizations IMPLEMENTED (1C.1a); workspaces/teams IN PHASE 1C
+## 1c. Organization, workspace and team lifecycle (ADR-012) — organizations IMPLEMENTED (1C.1a); workspaces/teams IMPLEMENTED (1C.1b)
 
-**Organizations: implemented in Phase 1C.1a** (`/organizations`, migration `0011`). **Workspaces and teams: not yet** — they are still created only by the owner (seed, bootstrap, fixtures) or as an organization's default workspace, and the workspace/team part of this section remains a frozen target.
+**Organizations: implemented in Phase 1C.1a** (`/organizations`, migration `0011`). **Workspaces and teams: implemented in Phase 1C.1b** (`/workspaces`, `/teams`, migration `0012`).
 
 **Organizations** (`organization_status`, no new values):
 
@@ -138,6 +138,9 @@ Hard deletion of tenancy rows remains available to the schema owner for developm
 - RLS is **unchanged**: `app_org_in_scope()` gains no status term. RLS keeps enforcing *which organization*; status decides *whether that organization is usable*, and that decision lives with the rest of authorization. The direct-database guarantees of `§3a` and ADR-011 are therefore unaffected by Phase 1C.
 
 **Workspaces and teams** (`active | archived`, F-6): archive and restore; the default workspace cannot be archived; archiving a workspace is refused while it holds active teams; an archived workspace or team cannot receive new teams, grants or API keys, while existing grants and keys keep working. Cross-organization moves are not supported.
+
+- **Where the boundaries are (1C.1b).** Every workspace and team route acts in the selected organization. PostgreSQL RLS guarantees the **organization** boundary: an addressed workspace or team is read under the request's tenant context, so another organization's row is invisible even if the application's check were wrong or missing (proven by widening the application's authorization in `workspace-team-administration.sec-spec.ts`). **Workspace and team isolation inside the organization is application authorization** (ADR-011 D-4): the target's ancestry is read from the database by `ScopeChainResolver`, the decision is `AuthorizationService`'s coherent-grant check, and a target the caller cannot read is `404`. A team's organization is always its workspace's; the composite foreign key `teams_workspace_org_fk` makes any other combination unrepresentable.
+- **Status inside the transaction.** Each workspace/team mutation re-reads its organization's status with `FOR SHARE`, and lifecycle writes lock the workspace or team row, so a suspension, an archive and a team creation cannot interleave into a state the rules forbid.
 
 ## 2. Tenant context resolution
 

@@ -1,4 +1,4 @@
-import { Controller, Get, HttpStatus, Param, ParseUUIDPipe, Query } from '@nestjs/common';
+import { Controller, Get, Header, HttpStatus, Param, ParseUUIDPipe, Query } from '@nestjs/common';
 import { ERROR_CODES, PERMISSIONS } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { and, eq, type SQL } from 'drizzle-orm';
@@ -12,6 +12,14 @@ import type { ResolvedPrincipal } from '../auth/auth.guard';
 import { ListQuery, type ListQuerySpec } from '../common/http/list-query';
 import { AdvisoryTenantIds } from './advisory-identifier';
 import { ListWorkspacesQueryDto } from './tenancy.dto';
+
+/**
+ * `/tenants/workspaces` is a deprecated alias of `/workspaces` through Phase 1C
+ * (ADR-012 F-7, `FRONTEND_API_CONTRACT.md` §31b): behaviour and shape are
+ * unchanged; every successful response says so.
+ */
+const DEPRECATION = 'true';
+const SUCCESSOR = '</api/v1/workspaces>; rel="successor-version"';
 
 /**
  * The minimum tenant-scoped read surface Phase 1B.3 needs.
@@ -80,6 +88,8 @@ export class TenancyController {
    * not a copy per endpoint.
    */
   @Get('workspaces')
+  @Header('Deprecation', DEPRECATION)
+  @Header('Link', SUCCESSOR)
   @RequiresPermission(PERMISSIONS.WORKSPACES_READ)
   @AdvisoryTenantIds({ level: 'organization', source: 'query', key: 'orgId' })
   async listWorkspaces(@Query() query: ListWorkspacesQueryDto) {
@@ -152,6 +162,8 @@ export class TenancyController {
    * that absence is the point, and is what the cross-tenant test proves.
    */
   @Get('workspaces/:id')
+  @Header('Deprecation', DEPRECATION)
+  @Header('Link', SUCCESSOR)
   @RequiresPermission(PERMISSIONS.WORKSPACES_READ)
   async getWorkspace(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();

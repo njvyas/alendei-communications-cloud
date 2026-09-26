@@ -24,6 +24,7 @@ import { RedisModule } from './redis/redis.module';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { UsersModule } from './users/users.module';
 import { SecretsModule } from './secrets/secrets.module';
+import { WorkspacesModule } from './workspaces/workspaces.module';
 
 /**
  * Root module.
@@ -54,6 +55,7 @@ import { SecretsModule } from './secrets/secrets.module';
     ApiKeysModule,
     AuditReadModule,
     OrganizationsModule,
+    WorkspacesModule,
   ],
   providers: [
     { provide: APP_PIPE, useValue: validationPipe() },

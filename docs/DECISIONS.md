@@ -925,6 +925,15 @@ Each is the narrowest reading consistent with the approved decisions and the exi
 - **Creation idempotency** uses `IdempotencyService.executeOrganizationCreation` (advisory lock on `(endpoint, actor, key)`; lookup within the caller's RLS reach; record written in the new organization's namespace in the same transaction). The key is per-actor; an expired record means a reused key runs a new creation.
 - **Provisioning elevation** reuses `app.provisioning` exactly as documented in migration `0000`: set, transaction-locally, only after authorization, together with `app.current_org_id` set to the new organization's pre-generated id.
 
+### 1C.1b implementation notes (implemented; reviewable)
+
+- **Selected organization, not addressing.** Unlike `/organizations/:id`, every workspace and team route runs in the organization `AuthGuard` selected, so the F-4/F-5 guard applies unchanged. Addressed workspaces and teams are read pinned to that organization and under RLS; a reseller administrator reaches a sibling organization's workspace only by selecting that organization.
+- **Visibility is the read permission.** No `workspaces.read` / `teams.read` covering the target → `404` (never a `403` that would confirm a sibling's id); readable but not writable → audited `403`. Decided by the existing `AuthorizationService` (`allows` for visibility, `assert` for the operation) over the database-resolved chain — no second mechanism.
+- **Archived targets (F-6)** are enforced by one helper (`tenancy/scope-lifecycle.ts`) called after authorization from team creation, `RoleAssignmentService.grant` and `ApiKeyAdministrationService.create`; it takes `FOR SHARE` on the workspace/team row. Archiving takes `FOR UPDATE` on the workspace before counting active teams, so the two serialize.
+- **Organization status in the transaction.** Each workspace/team mutation re-reads the organization's status `FOR SHARE` (`409 ORGANIZATION_LIFECYCLE_CONFLICT`), closing the window between the guard's read and the write. Same rule as F-5, held at the row — not a new policy and not an RLS predicate.
+- **Schema:** migration `0012` only (`teams.status`, reusing `workspace_status`, plus `teams_org_id_status_idx`). No RLS, policy or grant change; the 1C.6 integrity work is untouched.
+- **Audit:** `workspace.archived/restored` and `team.archived/restored` added, and classified security-sensitive with the organization lifecycle actions.
+
 ### Explicitly out of scope
 
 Credential delivery/invitations (OD-9, D16), WebSocket gateway/consumption/subscriptions (OD-11, D15), providers and provider health (Phase 2), outbox/event consumers/SIEM (Phase 2), delivery state (Phase 3+), routing/fallback (Phases 5–6), billing (Phase 7), reseller lifecycle/CRUD and white-label (Phase 9, OD-2), deployment artifacts (OD-10), workspace/team-level RLS (ADR-011 D-4), physical data deletion or retention automation (OD-12), MFA, password reset, lockout, SSO/OAuth2, API-key rotation, ABAC, scope-set caching.

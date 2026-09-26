@@ -158,6 +158,12 @@ export const teams = pgTable(
       .notNull()
       .references(() => organizations.id, { onDelete: 'restrict' }),
     name: text('name').notNull(),
+    /**
+     * Phase 1C.1b (ADR-012 F-6, OD-5): the same `active | archived` lifecycle as
+     * workspaces, reusing their enum so there is one status model below the
+     * organization. Teams are archived, never deleted.
+     */
+    status: workspaceStatus('status').notNull().default('active'),
     ...timestamps(),
   },
   (table) => [
@@ -170,6 +176,8 @@ export const teams = pgTable(
     unique('teams_id_org_id_key').on(table.id, table.orgId),
     index('teams_org_id_idx').on(table.orgId),
     index('teams_workspace_id_idx').on(table.workspaceId),
+    // `status` filters on `GET /teams` (Phase 1C.1b), within the organization.
+    index('teams_org_id_status_idx').on(table.orgId, table.status),
   ],
 );
 

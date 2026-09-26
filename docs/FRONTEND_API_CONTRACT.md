@@ -20,7 +20,7 @@
 > | Blocker | Closes in |
 > |---|---|
 > | ~~**No user lifecycle**~~ — **CLOSED in 1B.6.1** (§30d). List, detail, create, profile update, disable and reactivate are live. What is still missing is narrower and named there: a created user cannot yet *sign in*, because credential delivery is `DECISIONS.md` D16 | 1B.6.1 ✅ / D16 |
-> | **No organization, workspace or team administration** — organizations **CLOSED in 1C.1a** (§31a, implemented); workspaces and teams still *reads* only (§30), target contract frozen in §31b–§31c. Reseller CRUD stays in Phase 9 | **Phase 1C (1C.1a ✅ / 1C.1b)** — was 1B.8 |
+> | ~~**No organization, workspace or team administration**~~ — organizations **CLOSED in 1C.1a** (§31a), workspaces and teams **CLOSED in 1C.1b** (§31b–§31c, implemented). Reseller CRUD stays in Phase 9 | **Phase 1C (1C.1a ✅ / 1C.1b ✅)** — was 1B.8 |
 > | ~~**No API-key management**~~ — **CLOSED in 1B.6.2** (§30e). List, detail, create and revoke are live. Rotation and secret recovery are deliberately absent and are not coming: see §30e | 1B.6.2 ✅ |
 > | ~~**No audit read** endpoint~~ — **CLOSED in 1B.6.3** (§30f) | 1B.6.3 ✅ |
 > | **No way for an invited user to obtain a password**, so a user the console creates cannot sign in yet (`DECISIONS.md` D16) | D16 |
@@ -574,8 +574,14 @@ The **entire** implemented API surface at `fa1142b`. This section is the invento
 | `GET` `POST` | `/api/v1/organizations` | **1C.1a (§31a)** |
 | `GET` `PATCH` | `/api/v1/organizations/:id` | **1C.1a (§31a)** |
 | `POST` | `/api/v1/organizations/:id/suspend` · `/reactivate` · `/close` | **1C.1a (§31a)** |
-| `GET` | `/api/v1/tenants/workspaces` | 1B.3 |
-| `GET` | `/api/v1/tenants/workspaces/:id` | 1B.3 |
+| `GET` `POST` | `/api/v1/workspaces` | **1C.1b (§31b)** |
+| `GET` `PATCH` | `/api/v1/workspaces/:id` | **1C.1b (§31b)** |
+| `POST` | `/api/v1/workspaces/:id/archive` · `/restore` | **1C.1b (§31b)** |
+| `GET` `POST` | `/api/v1/teams` | **1C.1b (§31c)** |
+| `GET` `PATCH` | `/api/v1/teams/:id` | **1C.1b (§31c)** |
+| `POST` | `/api/v1/teams/:id/archive` · `/restore` | **1C.1b (§31c)** |
+| `GET` | `/api/v1/tenants/workspaces` | 1B.3 — **deprecated** alias of `/workspaces` (ADR-012 F-7) |
+| `GET` | `/api/v1/tenants/workspaces/:id` | 1B.3 — **deprecated** alias of `/workspaces/:id` (ADR-012 F-7) |
 | `GET` `POST` | `/api/v1/users` | **1B.6.1 (§30d)** |
 | `GET` `PATCH` | `/api/v1/users/:id` | **1B.6.1 (§30d)** |
 | `POST` | `/api/v1/users/:id/disable` · `/reactivate` | **1B.6.1 (§30d)** |
@@ -1178,7 +1184,10 @@ POST /api/v1/ws/ticket        // no request body
 - **Status enforcement on every other route:** a principal without a platform grant cannot select a suspended or closed organization (explicitly or implicitly) and its API keys stop working, all on the next request. A platform principal can select it and read; any mutating request (`POST`/`PUT`/`PATCH`/`DELETE`) in its context is `409 ORGANIZATION_LIFECYCLE_CONFLICT` with `details.status`. Sign-in is unaffected.
 - **`/auth/me`** lists only `active` organizations in `authorizedOrganizationIds` for principals without a platform grant.
 
-### 31b. Workspaces — IN PHASE 1C (1C.1b)
+### 31b. Workspaces — IMPLEMENTED (Phase 1C.1b)
+
+> **Implemented** in `apps/api/src/workspaces/`. The contract below is what ships;
+> the notes after §31c record the details the freeze left implicit.
 
 ```jsonc
 // workspace — exhaustive
@@ -1209,7 +1218,9 @@ Every route acts in the organization selected by `X-Acc-Organization` (or implic
 
 **Archived means:** no new teams, grants or API keys can target it (`409 WORKSPACE_LIFECYCLE_CONFLICT`); existing grants and keys keep working; it still appears in lists (filter with `status=active`).
 
-### 31c. Teams — IN PHASE 1C (1C.1b)
+### 31c. Teams — IMPLEMENTED (Phase 1C.1b)
+
+> **Implemented** in `apps/api/src/workspaces/` (migration `0012` adds `teams.status`).
 
 ```jsonc
 // team — exhaustive
@@ -1233,7 +1244,20 @@ Every route acts in the organization selected by `X-Acc-Organization` (or implic
 | `POST` | `/api/v1/teams/:id/archive` | `teams.update` | **the workspace** | — | `200 {data:team}` | `409 TEAM_LIFECYCLE_CONFLICT` if archived | not keyed | `team.archived` |
 | `POST` | `/api/v1/teams/:id/restore` | `teams.update` | the workspace | — | `200 {data:team}` | `409 TEAM_LIFECYCLE_CONFLICT` unless archived; `409 WORKSPACE_LIFECYCLE_CONFLICT` if its workspace is archived | not keyed | `team.restored` |
 
-**There is no `DELETE /teams/:id`** (ADR-012 OD-5).
+**There is no `DELETE /teams/:id`** (ADR-012 OD-5), and no `DELETE /workspaces/:id`.
+
+**Implementation notes (1C.1b), for §31b and §31c:**
+
+- **Every route acts in the selected organization.** A workspace or team id is looked up pinned to that organization, so an id from another organization is `404` even for a principal whose reach spans several (a reseller administrator acting in one organization cannot address a sibling organization's workspace through it — it selects that organization instead).
+- **Visibility is the read permission.** A workspace the caller holds no `workspaces.read` covering, or a team with no `teams.read` covering, is `404` — byte-identical to an unknown id, never echoing it — including for siblings inside the same organization (a workspace manager naming another workspace; a team member naming another team). Only a caller that can read the target but lacks the write permission gets `403 AUTHZ_SCOPE_DENIED`, with an `authorization.denied` audit row.
+- **`GET /teams?workspaceId=` authorizes at that workspace**, which must be visible (`404` otherwise); without `workspaceId` it authorizes at the organization, so a workspace- or team-scoped principal gets `403` there and uses the workspace-filtered list or `GET /teams/:id`.
+- **`orgId` is advisory** on `GET /workspaces`, `GET /teams` (query) and `POST /workspaces`, `POST /teams` (body): a value other than the selected organization is `403 TENANCY_CONTEXT_MISMATCH`. `workspaceId` is a target, never a context. A team's `orgId` is always its workspace's.
+- **`409 WORKSPACE_LIFECYCLE_CONFLICT` details:** `{status}`; archiving the default workspace adds `isDefault: true`; archiving while teams are active adds `activeTeams` (the count). Archiving is refused while any team is active — archive the teams first; nothing cascades.
+- **Archived targets** refuse new teams (`POST /teams`), new role grants (`POST /role-assignments` at that workspace or team) and new API keys bound to that workspace, with `409 WORKSPACE_LIFECYCLE_CONFLICT` / `409 TEAM_LIFECYCLE_CONFLICT`, after the caller is authorized. Existing grants and keys keep working. Restoring a team whose workspace is archived is `409 WORKSPACE_LIFECYCLE_CONFLICT`.
+- **Organization status:** members of a suspended or closed organization are refused at selection (`403 TENANCY_ORGANIZATION_*`); a platform principal can read there, and every mutation — including restore — is `409 ORGANIZATION_LIFECYCLE_CONFLICT`. The status is also re-checked, with a row lock, inside each mutation's transaction, so a suspension cannot be raced past.
+- **Concurrency:** archiving a workspace and creating or restoring a team in it serialize on the workspace row; an archived workspace never ends up holding an active team.
+- **Audit:** `workspace.created` / `.updated` / `.archived` / `.restored` at the workspace, `team.created` / `.updated` / `.archived` / `.restored` at the team; each in the mutation's transaction. Archive and restore are security-sensitive actions.
+- **`/tenants/workspaces` aliases:** unchanged in behaviour and shape; successful responses carry `Deprecation: true` and `Link: </api/v1/workspaces>; rel="successor-version"`.
 
 ### 31d. Session lifecycle — IN PHASE 1C (1C.2)
 
