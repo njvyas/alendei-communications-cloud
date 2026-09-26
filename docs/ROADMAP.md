@@ -102,7 +102,7 @@ Sequenced by dependency, and the order is load-bearing: the evaluator correction
 
 **The last-platform-admin invariant is not part of 1B.5.5.** `API.md` §3c specifies `409` on a revocation that would remove the last active platform administrator, and `DELETE /role-assignments/:id` therefore ships in 1B.5.5 *without* it. That is deliberate: the invariant is "at least one row exists", which no application count can hold under concurrency, and 1B.5.6 ships the `pg_advisory_xact_lock` trigger (migration `0005`) that makes it true (ADR-005 D-7). A service-only check would look like an invariant while losing under exactly the conditions it exists for, which is worse than its absence.
 
-**Organization-creation integration is deferred to 1B.8.** `TenantRoleProvisioner` ships in 1B.5.4 as the sanctioned seeding mechanism and is tested directly, but no organization-creation path exists to call it yet — 1B.8 wires it in. It deliberately does not create organizations and offers no HTTP surface.
+**Organization-creation integration is deferred to Phase 1C (1C.1a, formerly 1B.8).** `TenantRoleProvisioner` ships in 1B.5.4 as the sanctioned seeding mechanism and is tested directly, but no organization-creation path exists to call it yet — 1C.1a wires it in. It deliberately does not create organizations and offers no HTTP surface.
 
 Two deliberate departures from the obvious ordering. Denial auditing (1B.5.3) comes **before** administration, because it is part of every administrative endpoint's security contract rather than a follow-up to them. Escalation guards merge into 1B.5.5 rather than forming their own increment, because a grant endpoint without its non-escalation guard must not exist even transiently.
 
@@ -167,7 +167,7 @@ Until that test exists, callers use the transactional `record(input, tx)` form, 
 
 ### 4b. Gate B — Phase 1B acceptance
 
-> **Status: NOT PASSED.** The Gate-B read-only security audit (HEAD `df1ec74`) found seven blockers, including a live cross-tenant exposure between organizations sharing a reseller. Branch `fix/gate-b-remediation` remediates them (ADR-011; `TESTING.md` §6o); the result is awaiting the next security review, and Gate B must not be declared passed before that review. Open items that remain after remediation are listed in ADR-011 "Consequences" and `TESTING.md` §6p.
+> **Status: CLOSED by the project reviewer at `2b007224b66bf3917bde54c509d7ac1835082aad`.** The Gate-B read-only security audit (HEAD `df1ec74`) found seven blockers, including a live cross-tenant exposure between organizations sharing a reseller; they were remediated (ADR-011; `TESTING.md` §6o), the remaining items were classified (ADR-011 D-8), and the reviewer closed the gate on that evidence. Items carried forward are scheduled in Phase 1C (§4c, ADR-012) or explicitly deferred.
 
 Objectively testable; each is pass/fail.
 
@@ -204,6 +204,42 @@ Objectively testable; each is pass/fail.
 - **Acceptance criteria**: a user can register/log in, be assigned roles at any valid scope of the canonical hierarchy, and the full `TESTING.md` §6 isolation matrix passes — including the negative cross-tenant tests and the negative control proving the suite would fail if RLS were weakened.
 - **Deployment requirements**: Dev environment stood up.
 - **Rollback strategy**: standard app rollback (`DEPLOYMENT.md` §7); no external-facing risk yet.
+
+### 4c. Phase 1C — tenant administration, session lifecycle, integrity and contract (ADR-012)
+
+**Status: SCOPE FROZEN; IMPLEMENTATION NOT STARTED.** Phase 1C is the successor to the previously unscheduled 1B.8 (tenant administration), 1B.9 (OpenAPI) and 1B.10 (development bootstrap), plus the Gate-B items ADR-011 D-8 scheduled for it. It builds on the Phase 1B architecture unchanged.
+
+| Step | Objective | Schema (planned — not yet written) | Exit criterion |
+|---|---|---|---|
+| **1C.0** | ADR-012 and this documentation freeze | none | Decisions recorded; every affected document agrees; no code changed |
+| **1C.1a** | Organization create/read/update; suspend, reactivate, close (terminal); `TenantRoleProvisioner` and default-workspace creation in the same transaction; status enforcement as application authorization (ADR-012 F-1…F-5, F-8) | organization status-transition metadata (`status_changed_at`, `status_reason`) | §31a contract implemented; status enforcement proven for sessions, API keys, selection and lists; shared-reseller isolation proven for every new route |
+| **1C.1b** | Workspace create/read/update/archive/restore; team create/read/update/archive/restore; `/tenants/workspaces` kept as a deprecated alias (ADR-012 F-6, F-7) | `teams.status` using the existing `workspace_status` values | §31b–§31c implemented; no hard team deletion; archive rules proven |
+| **1C.2** | Maximum sessions with race-safe oldest-session eviction; self revoke-all; scoped administrator revocation; logout with an expired access token; CSRF preserved (ADR-012 F-9…F-12) | none expected | §31d implemented; eviction proven under concurrency; no cross-scope revocation |
+| **1C.6** | Composite `(workspace_id, org_id)` FKs on `api_keys`/`ws_tickets`; DB enforcement of `roles.allowed_scope_types`; `organizations.reseller_id` immutability; backfill verification | constraints and trigger changes with a verifying backfill | each constraint proven with the service bypassed; migration applies on the Gate-B database |
+| **1C.3** | OpenAPI reconciliation: full schemas, security schemes, headers, envelopes, idempotency and rate-limit documentation; generated spec; CI drift gate; authenticated UI outside development (ADR-012 F-13) | none | generated spec matches the route table and §31; snapshot drift gate in CI |
+| **1C.4a** | Deterministic dev/test fixture and bootstrap command | data only | **authorized separately** after the backend contract is stable |
+| **1C.4b** | Gemini E2E corrections (`TESTING.md` §6p) | — | **authorized separately; Gemini** |
+
+**Order:** 1C.0 → 1C.1a → 1C.1b → 1C.6 → 1C.3, with 1C.2 in parallel after 1C.0. Backend implementation then stops and the finalized frontend contract is handed to Gemini.
+
+**Out of scope for Phase 1C:** credential delivery/invitations (D16), WebSocket gateway/consumption/subscriptions (D15), providers and provider health (Phase 2), outbox/event consumers/SIEM (Phase 2), delivery state (Phase 3+), routing/fallback (Phases 5–6), billing (Phase 7), reseller lifecycle/CRUD and white-label (Phase 9), deployment artifacts (separate track), workspace/team-level RLS (ADR-011 D-4), physical data deletion or retention automation, MFA, password reset, lockout, SSO/OAuth2, API-key rotation, ABAC, scope-set caching.
+
+### 4d. Gate C — Phase 1C acceptance
+
+Objectively testable; each is pass/fail. Evidence runs on an isolated test database, never on the development database.
+
+- **Functional** — every route in `FRONTEND_API_CONTRACT.md` §31a–§31d behaves as specified; organization creation atomically seeds the system roles and the default workspace with audit rows; every illegal lifecycle transition is refused with the specified code; no `DELETE` route exists for organizations, workspaces or teams.
+- **Security** — non-platform principals of a suspended/closed organization are refused on the next request via session, API key, explicit and implicit selection, with no token-TTL window; platform principals can still read it; no tenant-data mutation succeeds in a closed organization; organization creation outside the creator's authority is refused; administrator session revocation is refused whenever the target holds a grant the administrator does not cover; the cookie logout path requires `X-Acc-Refresh`; every new route appears in the route-coverage test, authorizes through `AuthorizationService.assert`, writes denial audits and is rate-limited.
+- **Isolation** — the shared-reseller topology (`TESTING.md` §6o) is applied to every new route: no list enumerates a sibling organization, every sibling id is `404`, and workspace/team boundaries hold over HTTP as in `workspace-team-boundary.sec-spec.ts`.
+- **Session policy** — the maximum is never exceeded under concurrent logins on independent connections; eviction removes the oldest eligible session and audits it.
+- **Database / RLS** — every Phase 1C migration applies from empty and on top of the Gate-B database, re-runs as a no-op and leaves drizzle reporting no drift; any new table ships RLS in its creating migration and is classified in `principals.int-spec.ts` with exact grants; the composite FKs, `allowed_scope_types` enforcement and `reseller_id` immutability are each proven with the service bypassed; the existing principal, shared-reseller, trust-model and workspace/team suites pass unchanged; no RLS predicate for organization status is added (ADR-012 OD-3).
+- **API contract** — the generated OpenAPI covers every route with request/response/error/security schemas and matches the route table in both directions and `FRONTEND_API_CONTRACT.md` §31; the committed snapshot equals the generated spec in CI; the UI and JSON require authentication outside development.
+- **WebSocket** — not applicable (deferred, ADR-012 OD-11); the existing ticket-issuance suite still passes and consumption remains documented as DEFERRED.
+- **Mutation proof** — each of the following is executed and caught, with failing test names recorded: status check removed; creation authority widened; lifecycle permission widened; `reseller_id` guard dropped; composite FK dropped; `allowed_scope_types` check removed from the trigger; session cap removed; eviction made non-atomic; cross-scope administrator revocation allowed; logout CSRF requirement removed; spec drift introduced.
+- **Regression** — the full backend suite is green with the 1,215 Gate-B tests intact (none weakened without a recorded reason) plus the Phase 1C suites; zero skipped backend security tests; lint, typecheck, build and the dependency audit pass; formatting passes for every non-frontend file.
+- **Documentation** — `API.md`, `FRONTEND_API_CONTRACT.md` (§31 re-marked IMPLEMENTED per subsection), `TENANCY.md`, `RBAC.md`, `SECURITY.md`, `DATABASE.md`, `TESTING.md` and this roadmap describe exactly what exists; anything not built stays marked DEFERRED.
+- **Observability** — audit actions exist for every organization lifecycle transition, workspace/team create/update/archive/restore, session eviction and revoke-all; structured logs carry `orgId` for the new routes; metrics count refusals caused by organization status and session-cap evictions.
+- **Explicitly not required at Gate C:** everything listed as out of scope in §4c, plus 1C.4a/1C.4b and the Gemini console work, which are authorized and gated separately.
 
 ## 5. Phase 2 — Provider abstraction + simulator
 

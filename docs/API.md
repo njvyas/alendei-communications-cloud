@@ -10,7 +10,7 @@ All public and console APIs are served under `/api/v1`. Breaking changes ship as
 |---|---|---|
 | `/auth` | `iam` | Login, refresh, logout, session management, `/auth/me`. **Built in Phase 1B.3.** No MFA challenge — MFA is not implemented (ADR-003 D-6) |
 | `/ws/ticket` | `iam` | Mints a single-use, short-lived WebSocket connection ticket (§9). Issuance ships in Phase 1B; ticket *consumption* and the socket gateway are deferred (`DECISIONS.md` D15) |
-| `/tenants` | `tenancy` | Organization/workspace/team CRUD (scoped by caller's role) |
+| `/organizations`, `/workspaces`, `/teams` | `tenancy` | Organization/workspace/team administration — **IN PHASE 1C** (§3g, ADR-012 OD-4). `/tenants/workspaces` exists today as a read-only surface and is kept as a deprecated alias through Phase 1C; no new `/tenants/*` route is added |
 | `/audit-logs` | `audit-read` | Audit trail read: list and detail. **Built in Phase 1B.6.3** (§3f). Read-only — the write path is `AuditWriter` and is unchanged |
 | `/api-keys` | `api-keys` | API-key administration: list, detail, create, revoke. **Built in Phase 1B.6.2** (§3e). Authentication of API keys is `auth`'s and is unchanged (§3) |
 | `/users` | `users` | User lifecycle administration: list, detail, create, profile update, disable, reactivate. **Built in Phase 1B.6.1** (§3d). Its own module rather than `tenancy`: `AuthModule` imports `IamModule` for the credential and session primitives, so a user controller placed there and needing `RoleAssignmentService` would close a cycle through `RbacModule` |
@@ -394,6 +394,26 @@ Sorting is `occurredAt` only, default `-occurredAt`. An audit trail is read chro
 
 **Query cost**: list is 2 queries (the authorization chain resolve, then one page), detail is 1–2 (the row, then a chain resolve that is free for `platform` scope). No `COUNT(*)`, no N+1. `EXPLAIN` confirms the default ordering is served by `Index Scan Backward using audit_logs_pkey`, so **no index was added** — none would be used by the current predicate shape, since the RLS disjunction is not sargable. At scale the cost characteristic is filter selectivity rather than a missing index; the fix would be a sargable tenant predicate, which is deferred because it conflicts with the reseller view.
 
+### 3g. Phase 1C resources — IN PHASE 1C / NOT IMPLEMENTED (ADR-012)
+
+**Implementation status: none of this exists yet.** The field-level contract — schemas, request bodies, success and error responses, idempotency and audit — is frozen in **`FRONTEND_API_CONTRACT.md` §31**, which is the single authority for these routes. This section indexes it and states the server-side rules; it deliberately does not restate fields, so the two cannot drift. The OpenAPI document generated in 1C.3 is asserted against §31.
+
+| Area | Routes | Increment | Target scope rule |
+|---|---|---|---|
+| Organizations | `GET/POST /organizations`, `GET/PATCH /organizations/:id`, `POST /organizations/:id/suspend` · `/reactivate` · `/close` | 1C.1a | read/update at the organization; create at platform or at the creator's reseller; lifecycle at platform only (ADR-012 F-2, F-3) |
+| Workspaces | `GET/POST /workspaces`, `GET/PATCH /workspaces/:id`, `POST /workspaces/:id/archive` · `/restore` | 1C.1b | list/create/archive/restore at the organization; read/update at the workspace |
+| Teams | `GET/POST /teams`, `GET/PATCH /teams/:id`, `POST /teams/:id/archive` · `/restore` | 1C.1b | create/archive/restore at the workspace; read/update at the team |
+| Sessions | `POST /auth/sessions/revoke-all`; `GET /users/:id/sessions`; `POST /users/:id/sessions/revoke-all`; `DELETE /users/:id/sessions/:sessionId`; changed `POST /auth/login` (eviction) and `POST /auth/logout` (expired-token path) | 1C.2 | self, or `sessions.read`/`sessions.revoke` covering the organization **and** every grant the target holds (ADR-012 F-9) |
+
+**Server-side rules that apply to all of them:**
+
+- Authorization goes through `AuthorizationService.assert` inside the request's tenant transaction, with the target's ancestry read from the database; every route is declared for the §6n case 30 route-coverage test; refusals write `authorization.denied`.
+- **Organization status is an authorization input, not an RLS predicate** (ADR-012 OD-3, F-4, F-5): non-platform principals cannot select a `suspended`/`closed` organization (`403 TENANCY_ORGANIZATION_SUSPENDED` / `…_CLOSED`), and tenant-data mutations in a non-active organization are refused for everyone except the lifecycle transitions (`409 ORGANIZATION_LIFECYCLE_CONFLICT`). Platform principals keep read access.
+- Creating routes accept `Idempotency-Key` (§4); lifecycle routes are not keyed.
+- All routes are authenticated `read`/`write` for the general limiter (§5a).
+- **Compatibility:** `GET /tenants/workspaces` and `GET /tenants/workspaces/:id` remain as deprecated aliases through Phase 1C (ADR-012 F-7); no new `/tenants/*` route is added.
+- **Not in Phase 1C:** `DELETE` for organizations, workspaces or teams; reseller CRUD or suspension (Phase 9); invitation/credential delivery (D16).
+
 ## 4. Idempotency
 
 This section is the API-facing view of the tier-1 mechanism defined canonically in `DATABASE.md` §7.1 — see that section before implementing; do not re-derive the semantics independently here. **Implemented in Phase 1B.5.9** (ADR-006).
@@ -633,7 +653,7 @@ Nothing in these conventions conflicts with the idempotency mechanism §4 specif
 
 ## 9. API contract strategy (OpenAPI)
 
-> **Implementation status.** `@nestjs/swagger` is wired in `createApp()`, but **no controller or DTO carries swagger decorators**, so the generated document lists routes without schemas. When `OPENAPI_UI_ENABLED=true` the UI (`/api/v1/docs`) and document (`/api/v1/openapi.json`) are served **unauthenticated**; production refuses to start with it enabled. There are **no** contract tests in CI. Everything below is DEFERRED design.
+> **Implementation status.** `@nestjs/swagger` is wired in `createApp()`, but **no controller or DTO carries swagger decorators**, so the generated document lists routes without schemas. When `OPENAPI_UI_ENABLED=true` the UI (`/api/v1/docs`) and document (`/api/v1/openapi.json`) are served **unauthenticated**; production refuses to start with it enabled. There are **no** contract tests in CI. Everything below is **IN PHASE 1C (1C.3, ADR-012)** — not yet implemented. OD-8 changes the UI rule: available in development, **authenticated** elsewhere (replacing today's production refusal).
 
 - Every NestJS controller is annotated (`@nestjs/swagger` decorators) so the OpenAPI 3.1 document is generated from source, never hand-maintained separately.
 - The generated spec is published per environment and is the input to generated client SDKs (Phase-dependent, tracked in `ROADMAP.md`); the UI is gated behind authentication outside development.

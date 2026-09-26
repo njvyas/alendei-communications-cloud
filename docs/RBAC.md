@@ -117,7 +117,7 @@ These roles have `roles.org_id` set to the owning organization and are seeded pe
 - **Idempotent, and deliberately non-reconciling.** A repeat run creates nothing. It does *not* rewrite an existing role back to the definition: these roles are tenant-editable by design, and overwriting a deliberate edit would be data loss disguised as idempotency.
 - **`role.created` only for a role actually created.** A retry writes no audit rows at all. A trail that gained a creation record per retry would report creations that never happened, which is worse than a missing one because it cannot be told apart from a real one.
 
-It does **not** create organizations and has no HTTP surface: provisioning is a lifecycle step, not an endpoint. Wiring it into organization creation is Phase 1B.8's, which is the phase that introduces organization creation at all.
+It does **not** create organizations and has no HTTP surface: provisioning is a lifecycle step, not an endpoint. Wiring it into organization creation is Phase 1C's (1C.1a, formerly 1B.8), which is the phase that introduces organization creation at all — **IN PHASE 1C, not yet implemented**.
 
 The `Assignable at scope_type` column below is `roles.allowed_scope_types` from Phase 1B.5.4 (migration `0004`); §7 records that its **grant-time enforcement** is Phase 1B.5.5's.
 
@@ -147,6 +147,8 @@ The complete assignability matrix. A blank cell is refused. **Which layer refuse
 | `read_only` | | | ✓ | ✓ | ✓ |
 | custom tenant role | | | ✓ | ✓ | ✓ |
 
+*Phase 1C (1C.6, IN PHASE 1C) moves the per-role column into `fn_validate_user_role_scope` as well, so the database will refuse a grant at a scope type the role does not admit even with the service bypassed; until then the service is the only enforcement of the column.*
+
 Two structural rules generate the level split of this table, and the database enforces both independently of the service:
 
 1. **A platform-level role (`roles.org_id IS NULL`) may only be granted at `platform` or `reseller` scope**, never at a tenant scope. Granting `alendei_super_admin` at `organization` scope is refused.
@@ -163,6 +165,19 @@ Administering a scope means creating, updating or deleting the resources at that
 | `organization` grant | that organization's workspaces, teams, tenant roles and role grants | the organization's own reseller; sibling organizations; platform or reseller role grants |
 | `workspace` grant | that workspace's teams and grants within it | sibling workspaces; the parent organization; anything above |
 | `team` grant | that team's grants only | sibling teams; the parent workspace; anything above |
+
+**Phase 1C authority rules (IN PHASE 1C — not yet implemented, ADR-012):**
+
+| Operation | Required | Notes |
+|---|---|---|
+| Create an organization | `platform.tenants.manage` at `platform`, **or** `organizations.create` at the target `reseller` | a reseller administrator creates only beneath its own reseller (F-3) |
+| Update an organization | `organizations.update` covering it | billing fields require `platform.tenants.manage`; `slug`, `resellerId` immutable (F-8) |
+| Suspend / reactivate / close an organization | `platform.tenants.manage` at `platform` | organization and reseller principals cannot change organization status in Phase 1C (F-2, OD-2) |
+| Create / archive / restore a workspace | `workspaces.create` / `workspaces.update` at the organization | update of a workspace's own fields may be done at the workspace |
+| Create / archive / restore a team | `teams.create` / `teams.update` at the workspace | update of a team's own fields may be done at the team |
+| List or revoke **another** user's sessions | `sessions.read` / `sessions.revoke` covering the organization **and** every grant the target holds | sessions are per identity; covering all the target's grants is what keeps this within the administrator's scope (F-9, OD-7) |
+
+No new permission key is introduced: every operation uses a key already in the catalogue (`packages/contracts/src/permissions.ts`) and already attached to the seeded roles as today.
 
 The recurring pattern: **an actor may administer downward, never its own level's parent and never sideways.** A reseller admin creating an organization is administering downward. An organization admin changing which reseller owns their organization would be administering upward, and is refused.
 

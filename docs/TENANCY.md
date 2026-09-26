@@ -110,6 +110,35 @@ This is enforced, not merely intended. Foreign keys into tenancy rows are `ON DE
 
 Hard deletion of tenancy rows remains available to the schema owner for development fixtures and for a genuine erasure request (`DECISIONS.md` D8), and in both cases it is an explicit, owner-level operation rather than something the application can do.
 
+**Teams gain the same lifecycle in Phase 1C** (ADR-012 OD-5, F-6): `teams.status` with the existing `workspace_status` values `active | archived`. There is no team `DELETE`. *(IN PHASE 1C — not yet implemented; today `teams` has no status column.)*
+
+## 1c. Organization, workspace and team lifecycle (IN PHASE 1C — NOT IMPLEMENTED, ADR-012)
+
+Today no API creates or transitions any tenancy row: organizations, workspaces and teams are created only by the owner (seed, bootstrap, fixtures), and every organization is effectively `active`. Phase 1C adds the lifecycle below. Until each part is implemented, this section is a frozen target, not a description of behaviour.
+
+**Organizations** (`organization_status`, no new values):
+
+```
+            suspend                    close
+ active ─────────────▶ suspended ─────────────▶ closed   (terminal)
+   ▲                      │
+   └──── reactivate ──────┘
+ active ──────────────── close ───────────────▶ closed
+```
+
+- Transitions are performed only by a principal holding `platform.tenants.manage` at platform scope (F-2). Reseller-initiated suspension, and any cascade from a suspended reseller, are **DEFERRED** with reseller lifecycle (OD-2).
+- Creation: by `platform.tenants.manage` (any reseller) or by `organizations.create` at `reseller` scope beneath that reseller only (F-3). The organization's tenant system roles (`TenantRoleProvisioner`) and **one default workspace** (`is_default = true`) are created in the same transaction. This is what makes `DECISIONS.md` D3's "every organization gets a seeded default workspace" true for API-created organizations.
+- `resellerId` and `slug` are immutable (F-8); moving an organization between resellers is not a Phase 1C operation, and 1C.6 adds a database guard so a direct write cannot do it either.
+- **Closing deletes nothing** (OD-12). Data is retained, inaccessible to organization principals, readable by platform principals, and no mutation of tenant data is accepted in a closed organization. Physical deletion and retention automation are out of scope.
+
+**How status is enforced — application authorization, not RLS** (OD-3, F-4, F-5):
+
+- For a principal without any platform-scope grant, a non-`active` organization is removed from the organizations it may select (§2a). Selecting it explicitly or implicitly, or presenting an API key bound to it, is refused on the **next request** with `403 TENANCY_ORGANIZATION_SUSPENDED` / `403 TENANCY_ORGANIZATION_CLOSED` (to principals who hold a grant in, or beneath the reseller of, that organization; anyone else receives the existing `403 TENANCY_CONTEXT_MISMATCH`). Grants and state are re-read on every request, so there is no token-TTL window.
+- Platform principals (super admin and support) can still select and read a suspended or closed organization. Tenant-data mutations in a non-active organization are refused for everyone in Phase 1C, except the lifecycle transitions themselves.
+- RLS is **unchanged**: `app_org_in_scope()` gains no status term. RLS keeps enforcing *which organization*; status decides *whether that organization is usable*, and that decision lives with the rest of authorization. The direct-database guarantees of `§3a` and ADR-011 are therefore unaffected by Phase 1C.
+
+**Workspaces and teams** (`active | archived`, F-6): archive and restore; the default workspace cannot be archived; archiving a workspace is refused while it holds active teams; an archived workspace or team cannot receive new teams, grants or API keys, while existing grants and keys keep working. Cross-organization moves are not supported.
+
 ## 2. Tenant context resolution
 
 Tenant context is a server-derived triple `{org_id, workspace_id?, reseller_id?}` (workspace/reseller optional depending on the call). It is resolved exactly once per request, immediately after authentication, from:

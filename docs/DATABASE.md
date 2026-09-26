@@ -59,7 +59,20 @@ Both admit exactly two transaction-local escapes, and neither is settable by an 
 
 **Phase 1B.5 migrations — historical design record, now applied** (`0004`–`0009`, plus `0010` from the Gate-B remediation below). Committed migrations are never edited (ADR-002, ADR-004).
 
-**Migration `0010` — validated scope claims (Gate-B remediation, ADR-011).** Replaces `app_current_reseller_id()` and `app_is_platform_admin()` with SECURITY DEFINER functions that honour the claim, for any RLS-bound principal, only while `app.current_user_id` holds the conferring grant (an active reseller-scope grant on that reseller; `alendei_super_admin` at platform scope); adds `app_session_bypasses_rls()`; redefines the liveness count as active `alendei_super_admin` holders; and adds `trg_user_roles_platform_admin_liveness_update` for removal-by-`UPDATE`. No table, column or policy text changes.
+**Migration `0010` — validated scope claims (Gate-B remediation, ADR-011).** Replaces `app_current_reseller_id()` and `app_is_platform_admin()` with SECURITY DEFINER functions that honour the claim, for any RLS-bound principal, only while `app.current_user_id` holds the conferring grant (an active reseller-scope grant on that reseller; `alendei_super_admin` at platform scope); adds `app_session_bypasses_rls()`; redefines the liveness count as active `alendei_super_admin` holders; and adds `trg_user_roles_platform_admin_liveness_update` for removal-by-`UPDATE`. No table, column or policy text changes. **This is the last applied migration** (`0000`–`0010`).
+
+**Phase 1C schema changes — PLANNED, NOT WRITTEN (ADR-012).** Recorded so the design is reviewable before it ships; numbering is assigned when each migration is written, and committed migrations are never edited.
+
+| Increment | Change | Why a database change |
+|---|---|---|
+| 1C.1a | `organizations.status_changed_at timestamptz NULL`, `organizations.status_reason text NULL` (length-bounded) | lifecycle transitions must be recorded on the row the policy and the audit both describe. No new status value; no RLS change (status is enforced by authorization, OD-3) |
+| 1C.1b | `teams.status workspace_status NOT NULL DEFAULT 'active'`, backfilled `active`, with an index supporting `status` filters | teams need the same `active | archived` lifecycle as workspaces (OD-5, F-6); reusing the existing enum avoids a second status model |
+| 1C.6 | composite FKs `api_keys(workspace_id, org_id) → workspaces(id, org_id)` and `ws_tickets(workspace_id, org_id) → workspaces(id, org_id)` | a key or ticket whose workspace belongs to another organization becomes unrepresentable, not merely unwritten |
+| 1C.6 | `fn_validate_user_role_scope` also refuses `NEW.scope_type` outside `roles.allowed_scope_types` | makes the per-role assignability column a database guarantee (today service-only) |
+| 1C.6 | a guard (trigger) refusing any change to `organizations.reseller_id` unless the writer is a platform administrator (validated claim) or a principal that bypasses RLS | closes the gap noted in the Gate-B audit: `organizations_update`'s WITH CHECK reads the pre-update reseller, so RLS alone does not prevent a move |
+| 1C.6 | a verifying backfill step that fails the migration loudly if existing rows violate any new constraint | a constraint added over bad data must not be silently skipped |
+
+Every Phase 1C migration must apply from empty and on top of the Gate-B database, re-run as a no-op, and leave drizzle reporting no drift. **No new tenant table is planned**; if one becomes necessary, its RLS ships in the creating migration and it is classified in `principals.int-spec.ts`.
 
 | Migration | Content | Why it is a database change rather than a service check |
 |---|---|---|

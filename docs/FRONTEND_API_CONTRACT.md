@@ -20,13 +20,13 @@
 > | Blocker | Closes in |
 > |---|---|
 > | ~~**No user lifecycle**~~ — **CLOSED in 1B.6.1** (§30d). List, detail, create, profile update, disable and reactivate are live. What is still missing is narrower and named there: a created user cannot yet *sign in*, because credential delivery is `DECISIONS.md` D16 | 1B.6.1 ✅ / D16 |
-> | **No organization, workspace, team or reseller CRUD** — only workspace *reads* exist (§30) | 1B.8 |
+> | **No organization, workspace or team administration** — only workspace *reads* exist (§30). Target contract frozen in §31a–§31c. Reseller CRUD stays in Phase 9 | **Phase 1C (1C.1a/1C.1b)** — was 1B.8 |
 > | ~~**No API-key management**~~ — **CLOSED in 1B.6.2** (§30e). List, detail, create and revoke are live. Rotation and secret recovery are deliberately absent and are not coming: see §30e | 1B.6.2 ✅ |
 > | ~~**No audit read** endpoint~~ — **CLOSED in 1B.6.3** (§30f) | 1B.6.3 ✅ |
 > | **No way for an invited user to obtain a password**, so a user the console creates cannot sign in yet (`DECISIONS.md` D16) | D16 |
-> | **OpenAPI is effectively empty of business schemas** — 5 decorators, all on health. No typed client can be generated (§30) | 1B.9 |
+> | **OpenAPI is effectively empty of business schemas** — 5 decorators, all on health. No typed client can be generated (§30, target §31e) | **Phase 1C (1C.3)** — was 1B.9 |
 > | ~~**No general rate limiting**~~ — **CLOSED in 1B.6.4** (§23). Every authenticated endpoint is limited and returns `X-RateLimit-*` | 1B.6.4 ✅ |
-> | **No development bootstrap**: no one-command way to obtain a working tenant and credentials | 1B.10 |
+> | **No development bootstrap**: no one-command way to obtain a working tenant and credentials | **Phase 1C (1C.4a, authorized separately)** — was 1B.10 |
 > | **No WebSocket or webhook surface** — plan for polling (§§24-25) | later |
 >
 > When those are closed this becomes FROZEN, and changes to it then follow §27's
@@ -593,7 +593,7 @@ Every list endpoint above is paginated (§13) except `/auth/sessions` and `/perm
 
 **Correction.** An earlier version of this section was pinned to commit `6e84d7c` and listed `/users`, `/api-keys` and `/audit` as "PLANNED / NOT IMPLEMENTED" — contradicting §§30d–30f, which document all three as implemented. All three shipped in 1B.6.1, 1B.6.2 and 1B.6.3 respectively. The audit route is `/audit-logs`, not `/audit`.
 
-**Still PLANNED / NOT IMPLEMENTED**, and listed in `API.md` §2 as a target map rather than an inventory: `/organizations`, `/resellers`, `/teams` (1B.8), `/messages`, `/providers`, `/channels`, `/routing`, `/campaigns`, `/contacts`, `/templates`, `/billing`, `/wallets`, `/reports`, `/webhook-endpoints`, and the WebSocket gateway itself.
+**Still PLANNED / NOT IMPLEMENTED**, and listed in `API.md` §2 as a target map rather than an inventory: `/organizations`, `/workspaces`, `/teams` (**IN PHASE 1C**, §31), `/resellers` (Phase 9), `/messages`, `/providers`, `/channels`, `/routing`, `/campaigns`, `/contacts`, `/templates`, `/billing`, `/wallets`, `/reports`, `/webhook-endpoints`, and the WebSocket gateway itself.
 
 ### OpenAPI
 
@@ -1108,7 +1108,140 @@ POST /api/v1/ws/ticket        // no request body
 - **Requires an organization context.** Without one, `400 TENANCY_CONTEXT_REQUIRED`; send `X-Acc-Organization` if you belong to several (§5).
 - Subject to the general rate limiter as an ordinary `write` (§23).
 
-## 31. Related
+## 31. Phase 1C contracts — IN PHASE 1C / NOT IMPLEMENTED (ADR-012)
+
+> **Do not build against this section until each subsection is re-marked IMPLEMENTED.**
+> It is the authoritative *target* contract for Phase 1C, frozen before implementation
+> so the backend and the console agree in advance. 1C.3 generates OpenAPI from the
+> implementation and asserts it against this section; any disagreement is resolved
+> before Gemini implements. Everything here uses the §9 envelope, §13 cursor
+> pagination, §14–§15 filter/sort rules, the §10 error envelope, `X-Acc-Organization`
+> selection (§5) and the §23 general limiter (every route below is an authenticated
+> `read` or `write`).
+
+**Common rules for every route in this section**
+
+- **Authentication:** session bearer token or API key, unless stated. API-key principals are bound to one organization and never hold platform or reseller authority, so every platform-only route below refuses them with `403 AUTHZ_SCOPE_DENIED`.
+- **Authorization:** decided server-side per coherent grant against the target's database-resolved ancestry (`RBAC.md` §2). Anything the caller cannot see is `404` with no echo of the id; something visible but not covered is `403 AUTHZ_SCOPE_DENIED` and writes an `authorization.denied` audit row.
+- **Organization status (ADR-012 F-4/F-5):** principals without a platform grant cannot act in a `suspended` or `closed` organization — `403 TENANCY_ORGANIZATION_SUSPENDED` / `403 TENANCY_ORGANIZATION_CLOSED`. Tenant-data mutations in a non-active organization are refused for everyone with `409 ORGANIZATION_LIFECYCLE_CONFLICT`, except the lifecycle transitions in §31a.
+- **Unknown fields** in a body or query are `400 VALIDATION_FAILED` (§22). Immutable fields sent to a `PATCH` are `400`.
+- **Idempotency:** creating `POST`s accept `Idempotency-Key` (§17); lifecycle actions are not keyed — the transition is its own answer (a repeat is `409 …_LIFECYCLE_CONFLICT` naming the current `status`).
+- **Rate limits:** `X-RateLimit-*` on every response; `429 RATE_LIMIT_EXCEEDED` with `Retry-After` (§23).
+- **New error codes introduced by Phase 1C:** `TENANCY_ORGANIZATION_SUSPENDED`, `TENANCY_ORGANIZATION_CLOSED` (403); `ORGANIZATION_LIFECYCLE_CONFLICT`, `WORKSPACE_LIFECYCLE_CONFLICT`, `TEAM_LIFECYCLE_CONFLICT` (409, `details: { status }`).
+
+### 31a. Organizations — IN PHASE 1C (1C.1a)
+
+```jsonc
+// organization — exhaustive
+{
+  "id": "uuid",
+  "name": "Acme Retail",
+  "slug": "acme-retail",            // immutable after creation
+  "legalName": "Acme Retail Pvt Ltd", // or null
+  "gstin": "24ABCDE1234F1Z5",       // or null; validated format
+  "resellerId": "uuid",             // immutable; visible to every reader of the organization
+  "status": "active",               // active | suspended | closed
+  "statusChangedAt": "ISO-8601|null",
+  "billingMode": "prepaid",         // prepaid | postpaid — platform-settable only
+  "billingPolicy": "charge_per_logical_message", // platform-settable only
+  "createdAt": "ISO-8601",
+  "updatedAt": "ISO-8601"
+}
+```
+
+| Method | Path | Auth | Permission | Scope / target | Request | Success | Errors | Idempotency | Audit |
+|---|---|---|---|---|---|---|---|---|---|
+| `GET` | `/api/v1/organizations` | session or key | `organizations.read` | each row must be covered by a grant carrying the permission; **no `X-Acc-Organization`** — the list spans the caller's reach | `status?`, `resellerId?` (platform only), `limit`, `cursor`, `sort` (`name` default, `-createdAt`) | `200 {data:[organization], page}` | `400` bad filter/cursor/sort | safe | — |
+| `GET` | `/api/v1/organizations/:id` | session or key | `organizations.read` | the organization | — | `200 {data:organization}` | `404` not visible | safe | — |
+| `POST` | `/api/v1/organizations` | **session only** | `platform.tenants.manage` at platform, **or** `organizations.create` at the target reseller | platform or `reseller:{resellerId}` | `{name, slug, legalName?, gstin?, resellerId?, billingMode?, billingPolicy?}` — `resellerId` defaults to the platform-default reseller (platform) or to the caller's single reseller grant (reseller admin); billing fields only with `platform.tenants.manage` | `201 {data:organization}`; the organization's system roles and one default workspace are created in the same transaction | `400`; `403 AUTHZ_SCOPE_DENIED` (reseller not covered, or billing fields without platform authority); `404` reseller not visible; `409 RESOURCE_CONFLICT` slug taken | **`Idempotency-Key` accepted** | `organization.created`, `role.created` ×5, `workspace.created` |
+| `PATCH` | `/api/v1/organizations/:id` | session or key | `organizations.update` | the organization | `{name?, legalName?, gstin?}`; `billingMode?`, `billingPolicy?` only with `platform.tenants.manage` | `200 {data:organization}` | `400` (incl. `slug`/`resellerId`/`status` sent); `403`; `404`; `409 ORGANIZATION_LIFECYCLE_CONFLICT` if not active | not keyed | `organization.updated` (before/after) |
+| `POST` | `/api/v1/organizations/:id/suspend` | **session only** | `platform.tenants.manage` | platform | `{reason?: string ≤ 500}` | `200 {data:organization}` | `403`; `404`; `409 ORGANIZATION_LIFECYCLE_CONFLICT` unless `active` | not keyed | `organization.suspended` |
+| `POST` | `/api/v1/organizations/:id/reactivate` | **session only** | `platform.tenants.manage` | platform | `{reason?}` | `200 {data:organization}` | `409 …` unless `suspended` | not keyed | `organization.reactivated` |
+| `POST` | `/api/v1/organizations/:id/close` | **session only** | `platform.tenants.manage` | platform | `{reason?}` | `200 {data:organization}` — **terminal**; no data is deleted | `409 …` if already `closed` | not keyed | `organization.closed` |
+
+**Who sees what in `GET /organizations`:** a platform principal (super admin or support) — every organization, any status; a reseller administrator — organizations beneath its reseller; everyone else — the organizations they hold grants in that are `active` (non-active ones are omitted for non-platform principals, and selecting them is refused per the common rules).
+
+**There is no `DELETE /organizations/:id`.** Closing is the terminal state and data is retained (ADR-012 OD-12).
+
+### 31b. Workspaces — IN PHASE 1C (1C.1b)
+
+```jsonc
+// workspace — exhaustive
+{
+  "id": "uuid",
+  "orgId": "uuid",
+  "name": "Brand One",
+  "slug": "brand-one",   // immutable after creation
+  "status": "active",    // active | archived
+  "isDefault": false,    // immutable; the default workspace cannot be archived
+  "createdAt": "ISO-8601",
+  "updatedAt": "ISO-8601"
+}
+```
+
+Every route acts in the organization selected by `X-Acc-Organization` (or implicitly, §5); `orgId` in a body or query is advisory and must match (`API.md` §3a).
+
+| Method | Path | Permission | Target scope | Request | Success | Errors | Idempotency | Audit |
+|---|---|---|---|---|---|---|---|---|
+| `GET` | `/api/v1/workspaces` | `workspaces.read` | organization | `status?`, `limit`, `cursor`, `sort` (`name` default, `createdAt`) | `200 {data:[workspace], page}` | `400`; `403` (e.g. a workspace-scoped principal — use `GET /workspaces/:id`) | safe | — |
+| `GET` | `/api/v1/workspaces/:id` | `workspaces.read` | **the workspace** | — | `200 {data:workspace}` | `404` | safe | — |
+| `POST` | `/api/v1/workspaces` | `workspaces.create` | organization | `{name, slug}` | `201 {data:workspace}` | `400`; `403`; `409 RESOURCE_CONFLICT` slug taken in the organization | **`Idempotency-Key` accepted** | `workspace.created` |
+| `PATCH` | `/api/v1/workspaces/:id` | `workspaces.update` | the workspace | `{name?}` | `200 {data:workspace}` | `400`; `403`; `404`; `409 WORKSPACE_LIFECYCLE_CONFLICT` if archived | not keyed | `workspace.updated` |
+| `POST` | `/api/v1/workspaces/:id/archive` | `workspaces.update` | **organization** | — | `200 {data:workspace}` | `409 WORKSPACE_LIFECYCLE_CONFLICT` if archived, if it is the default workspace, or while it holds active teams (`details.activeTeams`) | not keyed | `workspace.archived` |
+| `POST` | `/api/v1/workspaces/:id/restore` | `workspaces.update` | organization | — | `200 {data:workspace}` | `409 …` unless archived | not keyed | `workspace.restored` |
+
+**Compatibility (ADR-012 F-7):** `GET /api/v1/tenants/workspaces` and `GET /api/v1/tenants/workspaces/:id` (§30) keep their current behaviour and shape through Phase 1C, as **deprecated** aliases carrying `Deprecation: true` and `Link: </api/v1/workspaces>; rel="successor-version"`. Two differences to be aware of when migrating: the new resource adds `isDefault`, `createdAt` and `updatedAt`, and `GET /workspaces/:id` authorizes at the **workspace** (so a workspace-scoped principal can read its own workspace), where the alias authorizes at the organization. Removal of the aliases is a separate, later change.
+
+**Archived means:** no new teams, grants or API keys can target it (`409 WORKSPACE_LIFECYCLE_CONFLICT`); existing grants and keys keep working; it still appears in lists (filter with `status=active`).
+
+### 31c. Teams — IN PHASE 1C (1C.1b)
+
+```jsonc
+// team — exhaustive
+{
+  "id": "uuid",
+  "orgId": "uuid",
+  "workspaceId": "uuid",   // immutable
+  "name": "Support",
+  "status": "active",      // active | archived — same values as workspace
+  "createdAt": "ISO-8601",
+  "updatedAt": "ISO-8601"
+}
+```
+
+| Method | Path | Permission | Target scope | Request | Success | Errors | Idempotency | Audit |
+|---|---|---|---|---|---|---|---|---|
+| `GET` | `/api/v1/teams` | `teams.read` | the workspace named by `workspaceId`, else the organization | `workspaceId?`, `status?`, `limit`, `cursor`, `sort` (`name` default, `createdAt`) | `200 {data:[team], page}` | `400`; `403`; `404` workspace not visible | safe | — |
+| `GET` | `/api/v1/teams/:id` | `teams.read` | the team | — | `200 {data:team}` | `404` | safe | — |
+| `POST` | `/api/v1/teams` | `teams.create` | the workspace | `{workspaceId, name}` | `201 {data:team}` | `400`; `403`; `404` workspace; `409 WORKSPACE_LIFECYCLE_CONFLICT` archived workspace; `409 RESOURCE_CONFLICT` name taken in the workspace | **`Idempotency-Key` accepted** | `team.created` |
+| `PATCH` | `/api/v1/teams/:id` | `teams.update` | the team | `{name?}` | `200 {data:team}` | `400`; `403`; `404`; `409 TEAM_LIFECYCLE_CONFLICT` if archived | not keyed | `team.updated` |
+| `POST` | `/api/v1/teams/:id/archive` | `teams.update` | **the workspace** | — | `200 {data:team}` | `409 TEAM_LIFECYCLE_CONFLICT` if archived | not keyed | `team.archived` |
+| `POST` | `/api/v1/teams/:id/restore` | `teams.update` | the workspace | — | `200 {data:team}` | `409 TEAM_LIFECYCLE_CONFLICT` unless archived; `409 WORKSPACE_LIFECYCLE_CONFLICT` if its workspace is archived | not keyed | `team.restored` |
+
+**There is no `DELETE /teams/:id`** (ADR-012 OD-5).
+
+### 31d. Session lifecycle — IN PHASE 1C (1C.2)
+
+| Method | Path | Auth | Permission | Scope | Request | Success | Errors | Idempotency | Audit |
+|---|---|---|---|---|---|---|---|---|---|
+| `POST` | `/api/v1/auth/login` *(changed)* | public, JSON only | — | — | unchanged | unchanged; when the caller already holds `AUTH_MAX_SESSIONS_PER_USER` live sessions, the **oldest** is revoked so the new one fits | unchanged | not keyed | `session.revoked` (reason `session_limit_exceeded`) per eviction |
+| `POST` | `/api/v1/auth/sessions/revoke-all` | session | — (self) | self | — | `200 {data:{revoked: number}}` — every **other** live session revoked; the current one is kept | `401` | not keyed | `session.revoked_all` |
+| `POST` | `/api/v1/auth/logout` *(changed)* | bearer **or**, when no valid bearer is presented, the refresh cookie **with** `X-Acc-Refresh` | — | self | — | `204`, cookie cleared — including for an unknown or already-revoked cookie (no oracle) | `403` missing `X-Acc-Refresh` on the cookie path | not keyed | `auth.logout` when a session was revoked |
+| `GET` | `/api/v1/users/:id/sessions` | session or key | `sessions.read` | organization, **and** every grant the target holds must be covered by the caller (ADR-012 F-9) | — | `200 {data:[session]}` (same shape as `GET /auth/sessions`, no `page`) | `404` user not a member; `403 AUTHZ_SCOPE_DENIED` target holds a grant outside the caller's scope | safe | — |
+| `POST` | `/api/v1/users/:id/sessions/revoke-all` | session | `sessions.revoke` | as above | — | `200 {data:{revoked: number}}` | `404`; `403` | not keyed | `session.revoked_all` (actor = administrator) |
+| `DELETE` | `/api/v1/users/:id/sessions/:sessionId` | session | `sessions.revoke` | as above | — | `204` | `404` user or session; `403` | naturally idempotent (repeat → `404`) | `session.revoked` |
+
+**Note for the console:** sessions belong to the identity, not the organization. Revoking a user's sessions signs them out everywhere, which is why the administrator must cover **all** of the target's grants (ADR-012 F-9).
+
+### 31e. OpenAPI — IN PHASE 1C (1C.3)
+
+The generated document (`/api/v1/openapi.json`) will describe every route with request, response and error schemas, security schemes (`bearer`, `apiKey`, and the refresh-cookie-plus-`X-Acc-Refresh` scheme), the `X-Acc-Organization`, `Idempotency-Key`, `X-RateLimit-*` and `Retry-After` headers, and the envelopes above. Outside development the UI and the JSON document require an authenticated session (ADR-012 F-13). A committed snapshot is compared with the generated spec in CI.
+
+### 31f. Deferred, so do not design around them
+
+Invitation / credential delivery (users created via `POST /users` still cannot sign in until the existing bootstrap mechanism activates them — D16), reseller CRUD and reseller suspension, WebSocket consumption and subscriptions, organization deletion, workspace/team deletion, cross-organization moves of workspaces or teams, and changing an organization's reseller.
+
+## 32. Related
 
 `API.md` (target architecture), `RBAC.md` (permission model), `TENANCY.md` (isolation),
 `SECURITY.md`, `EVENTS.md`, `ROADMAP.md` (path to the frontend-ready gate).

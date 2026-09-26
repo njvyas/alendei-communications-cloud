@@ -301,6 +301,23 @@ Proven over HTTP in `auth-abuse.sec-spec.ts` (each case ends on the `429` only t
 
 RLS binds a principal only while it is not a superuser, not `BYPASSRLS`, and not the owner (or a member of the owner) of a table — RLS is enabled but deliberately **not forced**, so an owner is exempt. Each of those is configuration that can drift without any application test noticing. `DatabaseModule` therefore calls `assertRlsBoundPrincipal` on both request-serving pools at start-up and **refuses to start** if either principal is a superuser, has `BYPASSRLS`, owns or can act as the owner of any `public` table, or is a member of any other role. The catalog itself is asserted in `principals.int-spec.ts`, including exact per-principal grant maps, no role memberships, no `SET ROLE` path, and negative controls proving that a weakened policy, `BYPASSRLS` or table ownership each re-open the boundary.
 
+### Phase 1C security controls — IN PHASE 1C / NOT IMPLEMENTED (ADR-012)
+
+Frozen targets; none of this exists yet. Each becomes a Gate C criterion (`ROADMAP.md` §4d).
+
+| Control | Target behaviour | Increment |
+|---|---|---|
+| Organization status as authorization | Non-platform principals of a `suspended`/`closed` organization are refused on the next request via session, API key and selection; platform principals can still read; no tenant-data mutation in a closed organization. **Not** an RLS predicate (OD-3) — RLS keeps deciding *which* organization; status decides *whether it is usable* | 1C.1a |
+| Organization creation authority | Platform, or a reseller administrator beneath its own reseller only; seeding and default workspace in the same transaction | 1C.1a |
+| Reseller immutability | `organizations.reseller_id` not changeable through the API, and refused by a database guard for any non-platform writer | 1C.1a / 1C.6 |
+| Maximum sessions | At `AUTH_MAX_SESSIONS_PER_USER`, the oldest eligible session is revoked inside the login transaction, serialized per user, audited | 1C.2 |
+| Revoke-all and scoped administrator revocation | Self revoke-all keeps the current session; an administrator revokes another user's sessions only with `sessions.revoke` covering **every** grant the target holds — sessions are per identity, so anything less would reach organizations the administrator does not administer | 1C.2 |
+| Logout with an expired access token | Accepted via the refresh cookie **plus** `X-Acc-Refresh` (the CSRF control is unchanged); unknown cookies answer `204` (no oracle) | 1C.2 |
+| Referential integrity | Composite `(workspace_id, org_id)` FKs on `api_keys`/`ws_tickets`; `allowed_scope_types` enforced by `fn_validate_user_role_scope`; each proven with the service bypassed | 1C.6 |
+| OpenAPI UI | Served in development; requires an authenticated session elsewhere; the current production refusal of `OPENAPI_UI_ENABLED` is replaced by that requirement | 1C.3 |
+
+**Unchanged by Phase 1C:** the validated-claim model (migration `0010`), organization-level RLS with workspace/team enforced by authorization (ADR-011 D-4), the `acc_app` trust assumption (§4b), and the unauthenticated-path throttles. WebSocket consumption (D15) and credential delivery (D16) remain DEFERRED.
+
 ### 4a. Append-only enforcement, and its threat model
 
 Append-only is enforced in three layers, each covering something the others cannot:
