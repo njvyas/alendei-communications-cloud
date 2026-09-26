@@ -57,8 +57,10 @@ type TeamRow = typeof schema.teams.$inferSelect;
  * composite foreign key `teams_workspace_org_fk` makes a team whose organization
  * disagrees with its workspace unrepresentable.
  *
- * **Visibility is `teams.read` covering the team**; anything else is a `404`.
- * There is no hard delete (OD-5).
+ * **Visibility and coverage are decided separately**, as for workspaces: a team
+ * not visible to the request's tenant is a `404`; a visible team the caller is
+ * not covered for is an audited `403 AUTHZ_SCOPE_DENIED`. There is no hard
+ * delete (OD-5).
  */
 @Injectable()
 export class TeamAdministrationService {
@@ -85,8 +87,9 @@ export class TeamAdministrationService {
   /**
    * Teams of the selected organization, or of one workspace in it. With
    * `workspaceId` the list is authorized at that workspace — which must be
-   * visible to the caller (`404` otherwise) — so a workspace-scoped principal can
-   * list its own workspace's teams; without it, at the organization.
+   * visible to the request's tenant (`404` otherwise) — so a workspace-scoped
+   * principal can list its own workspace's teams; without it, at the
+   * organization.
    */
   async list(
     principal: AuthPrincipal,
@@ -330,9 +333,9 @@ export class TeamAdministrationService {
   // --- internals ---------------------------------------------------------------------
 
   /**
-   * The team `id` as the caller may see it: in the selected organization,
-   * visible under RLS, and covered by a grant carrying `teams.read`. Anything
-   * else is the same `404`.
+   * The team `id` if it is visible to this request's tenant: in the selected
+   * organization and admitted by RLS. Anything else is the same `404`.
+   * Coverage is the caller's `AuthorizationService.assert` (`403`).
    */
   private async loadVisible(
     tx: Transaction,
@@ -344,14 +347,7 @@ export class TeamAdministrationService {
       .select()
       .from(schema.teams)
       .where(and(eq(schema.teams.id, id), eq(schema.teams.orgId, orgId)));
-    const visible =
-      row !== undefined &&
-      (await this.authorization.allows(tx, {
-        principal,
-        permission: PERMISSIONS.TEAMS_READ,
-        target: { scopeType: 'team', scopeId: id },
-      }));
-    if (!visible) throw teamNotFound(id);
+    if (!row) throw teamNotFound(id);
     return row;
   }
 

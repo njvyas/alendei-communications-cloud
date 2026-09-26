@@ -173,8 +173,8 @@ Administering a scope means creating, updating or deleting the resources at that
 | Create an organization | `platform.tenants.manage` at `platform`, **or** `organizations.create` at the target `reseller` | a reseller administrator creates only beneath its own reseller (F-3) |
 | Update an organization | `organizations.update` covering it | billing fields require `platform.tenants.manage`; `slug`, `resellerId` immutable (F-8) |
 | Suspend / reactivate / close an organization | `platform.tenants.manage` at `platform` | organization and reseller principals cannot change organization status in Phase 1C (F-2, OD-2) |
-| Create / archive / restore a workspace | `workspaces.create` / `workspaces.update` at the organization | update of a workspace's own fields may be done at the workspace; reading one needs `workspaces.read` covering it, and a workspace the caller cannot read is `404` |
-| Create / archive / restore a team | `teams.create` / `teams.update` at the workspace | update of a team's own fields may be done at the team; reading one needs `teams.read` covering it, and a team the caller cannot read is `404` |
+| Create / archive / restore a workspace | `workspaces.create` / `workspaces.update` at the organization | update of a workspace's own fields may be done at the workspace; reading one needs `workspaces.read` covering it; a visible workspace not covered is an audited `403`, one outside the tenant is `404` |
+| Create / archive / restore a team | `teams.create` / `teams.update` at the workspace | update of a team's own fields may be done at the team; reading one needs `teams.read` covering it; a visible team not covered is an audited `403`, one outside the tenant is `404` |
 | List or revoke **another** user's sessions | `sessions.read` / `sessions.revoke` covering the organization **and** every grant the target holds | sessions are per identity; covering all the target's grants is what keeps this within the administrator's scope (F-9, OD-7) |
 
 No new permission key is introduced: every operation uses a key already in the catalogue (`packages/contracts/src/permissions.ts`) and already attached to the seeded roles as today.

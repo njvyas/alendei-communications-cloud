@@ -49,12 +49,14 @@ type WorkspaceRow = typeof schema.workspaces.$inferSelect;
  * several (a reseller administrator), and its ancestry for authorization comes
  * from the database via `AuthorizationService`, never from the request.
  *
- * **Visibility is `workspaces.read` covering the workspace.** Workspace
- * isolation inside an organization is application authorization, not RLS
- * (ADR-011 D-4): a workspace-scoped principal's RLS view admits its sibling
- * workspaces. So a workspace the caller cannot read is a `404` — never a `403`
- * that would confirm the id — and only a caller that can read it but not change
- * it is refused with an audited `403`.
+ * **Visibility and coverage are decided separately** (`SECURITY.md`,
+ * `FRONTEND_API_CONTRACT.md` §31 common rules). A workspace that is not visible
+ * to the request's tenant — unknown, in another organization, or hidden by RLS
+ * — is a `404` that never echoes the id. A workspace that is visible but not
+ * covered by a coherent grant carrying the route's permission is `403
+ * AUTHZ_SCOPE_DENIED` with an `authorization.denied` audit row, decided by
+ * `AuthorizationService`. Inside one organization that is the whole of
+ * workspace isolation — application authorization, not RLS (ADR-011 D-4).
  */
 @Injectable()
 export class WorkspaceAdministrationService {
@@ -315,9 +317,11 @@ export class WorkspaceAdministrationService {
   // --- shared with teams ---------------------------------------------------------------
 
   /**
-   * The workspace `id` as the caller may see it: in the selected organization,
-   * visible under RLS, and covered by a grant carrying `workspaces.read`.
-   * Anything else is the same `404`, which never echoes the id.
+   * The workspace `id` if it is visible to this request's tenant: in the
+   * selected organization and admitted by RLS. Anything else is the same `404`,
+   * which never echoes the id. Whether the caller may act on it is not decided
+   * here — that is the caller's `AuthorizationService.assert`, whose refusal is
+   * a `403`.
    */
   async loadVisible(tx: Transaction, principal: AuthPrincipal, id: string): Promise<WorkspaceRow> {
     const orgId = requireOrganization(principal);
@@ -325,14 +329,7 @@ export class WorkspaceAdministrationService {
       .select()
       .from(schema.workspaces)
       .where(and(eq(schema.workspaces.id, id), eq(schema.workspaces.orgId, orgId)));
-    const visible =
-      row !== undefined &&
-      (await this.authorization.allows(tx, {
-        principal,
-        permission: PERMISSIONS.WORKSPACES_READ,
-        target: { scopeType: 'workspace', scopeId: id },
-      }));
-    if (!visible) throw workspaceNotFound(id);
+    if (!row) throw workspaceNotFound(id);
     return row;
   }
 

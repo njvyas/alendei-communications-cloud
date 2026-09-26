@@ -91,6 +91,15 @@ describe('workspace and team administration boundary', () => {
       'workspaceId',
     );
     expect(await errorsFor(ListTeamsDto, { teamId: 'x' })).toContain('teamId');
+    // §31c declares no orgId on the team routes: an unknown field there.
+    expect(
+      await errorsFor(CreateTeamDto, {
+        name: 'n',
+        workspaceId: '0190f5c5-0000-7000-8000-000000000000',
+        orgId: '0190f5c5-0000-7000-8000-000000000001',
+      }),
+    ).toEqual(['orgId']);
+    expect(await errorsFor(ListTeamsDto, { orgId: 'x' })).toContain('orgId');
     expect(await errorsFor(ListTeamsDto, { status: 'deleted' })).toContain('status');
   });
 

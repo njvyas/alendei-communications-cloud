@@ -16,7 +16,6 @@ import type { Response } from 'express';
 
 import { RequiresPermission } from '../auth/requires-permission.decorator';
 import { IdempotencyKey } from '../idempotency/idempotency.decorator';
-import { AdvisoryTenantIds } from '../tenancy/advisory-identifier';
 import { CreateTeamDto, ListTeamsDto, UpdateTeamDto } from './workspace.dto';
 import { TeamAdministrationService } from './team-administration.service';
 import { requestPrincipal } from './workspaces.controller';
@@ -29,7 +28,8 @@ const AT_TEAM_WORKSPACE =
 /**
  * Team administration and lifecycle (Phase 1C.1b, `FRONTEND_API_CONTRACT.md`
  * §31c, ADR-012 F-6, OD-5). Every route acts in the selected organization;
- * `orgId` is advisory; `workspaceId` is a target, authorized, never a context.
+ * §31c declares no `orgId`, so it is an unknown field (`400`); `workspaceId` is
+ * a target, authorized, never a context.
  * There is no `DELETE`.
  */
 @Controller('teams')
@@ -41,7 +41,6 @@ export class TeamsController {
     target: 'deferred',
     because: 'the target is the workspace named by workspaceId when given, else the organization',
   })
-  @AdvisoryTenantIds({ level: 'organization', source: 'query', key: 'orgId' })
   async list(@Query() query: ListTeamsDto) {
     const { items, page } = await this.teams.list(requestPrincipal(), {
       cursor: query.cursor,
@@ -64,7 +63,6 @@ export class TeamsController {
     target: 'deferred',
     because: 'the target is the workspace named in the body, resolved from the database',
   })
-  @AdvisoryTenantIds({ level: 'organization', source: 'body', key: 'orgId' })
   @HttpCode(HttpStatus.CREATED)
   async create(
     @Body() dto: CreateTeamDto,

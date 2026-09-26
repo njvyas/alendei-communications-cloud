@@ -597,41 +597,73 @@ describe('workspace and team administration (1C.1b)', () => {
       expect(cross.body.error.code).toBe(ERROR_CODES.TENANCY_CONTEXT_MISMATCH);
     });
 
-    it('Workspace A → Workspace B: a workspace-scoped principal gets 404 for the sibling workspace and its teams', async () => {
-      const unknown = await call('get', tokens.wsManager!, `/workspaces/${uuidv7()}`).expect(404);
-      for (const [m, p, body] of [
-        ['get', `/workspaces/${ws.w2}`],
-        ['patch', `/workspaces/${ws.w2}`, { name: 'x' }],
-        ['get', `/teams/${tm.t3}`],
-        ['patch', `/teams/${tm.t3}`, { name: 'x' }],
-        ['post', `/teams/${tm.t3}/archive`],
-        ['get', `/teams?workspaceId=${ws.w2}`],
-      ] as [Method, string, object?][]) {
+    it('Workspace A → Workspace B: the sibling workspace and its teams are visible in the organization but not covered — an audited 403 that echoes nothing', async () => {
+      // `SECURITY.md`: visible (RLS, the request's tenant) but not covered by a
+      // coherent grant is `403 AUTHZ_SCOPE_DENIED` with an audit row; `404` is
+      // reserved for what the tenant cannot see.
+      for (const [m, p, body, attempted] of [
+        ['get', `/workspaces/${ws.w2}`, undefined, ws.w2],
+        ['patch', `/workspaces/${ws.w2}`, { name: 'x' }, ws.w2],
+        ['get', `/teams/${tm.t3}`, undefined, tm.t3],
+        ['patch', `/teams/${tm.t3}`, { name: 'x' }, tm.t3],
+        ['post', `/teams/${tm.t3}/archive`, undefined, ws.w2],
+        ['get', `/teams?workspaceId=${ws.w2}`, undefined, ws.w2],
+        ['post', '/teams', { workspaceId: ws.w2, name: 'x' }, ws.w2],
+      ] as [Method, string, object | undefined, string][]) {
+        const before = (await deniedAudit(people.wsManager!.userId, attempted)).length;
         const res = await call(m, tokens.wsManager!, p).send(body ?? {});
-        expect(`${m} ${p} ${res.status}`).toBe(`${m} ${p} 404`);
-        if (p.startsWith('/workspaces')) expect(strip(res.body)).toEqual(strip(unknown.body));
+        expect(`${m} ${p} ${res.status} ${res.body.error?.code}`).toBe(
+          `${m} ${p} 403 ${ERROR_CODES.AUTHZ_SCOPE_DENIED}`,
+        );
+        for (const secret of [ws.w2, tm.t3, 'WS two', 'two', 'T3'])
+          expect(JSON.stringify(res.body)).not.toContain(secret);
+        expect((await deniedAudit(people.wsManager!.userId, attempted)).length).toBe(before + 1);
       }
-      const team = await call('post', tokens.wsManager!, '/teams').send({
-        workspaceId: ws.w2,
-        name: 'x',
-      });
-      expect(team.status).toBe(404);
       expect((await wsRow(ws.w2))!.name).toBe('WS two');
+      expect((await teamRow(tm.t3))!).toMatchObject({ name: 'T3', status: 'active' });
+      expect(
+        await h.admin
+          .select()
+          .from(schema.teams)
+          .where(and(eq(schema.teams.workspaceId, ws.w2), eq(schema.teams.name, 'x'))),
+      ).toHaveLength(0);
     });
 
-    it('Team A → Team B: team-scoped principals get 404 for sibling teams, in the same workspace or another', async () => {
+    it('Workspace A → another organization’s workspace: not visible to the tenant — 404 byte-identical to an unknown id', async () => {
+      const unknown = await call('get', tokens.wsManager!, `/workspaces/${uuidv7()}`).expect(404);
+      const unknownTeam = await call('get', tokens.wsManager!, `/teams/${uuidv7()}`).expect(404);
+      for (const [p, ref] of [
+        [`/workspaces/${ws.wb}`, unknown],
+        [`/teams/${tm.tb}`, unknownTeam],
+      ] as const) {
+        const res = await call('get', tokens.wsManager!, p).expect(404);
+        expect(strip(res.body)).toEqual(strip(ref.body));
+      }
+      expect((await call('get', tokens.wsManager!, `/teams?workspaceId=${ws.wb}`)).status).toBe(
+        404,
+      );
+    });
+
+    it('Team A → Team B: sibling teams are visible but not covered — 403; teams of another organization are 404', async () => {
       for (const who of ['teamLead', 'teamReader']) {
         for (const t of [tm.t2, tm.t3]) {
-          expect(`${who}:${(await call('get', tokens[who]!, `/teams/${t}`)).status}`).toBe(
-            `${who}:404`,
+          const res = await call('get', tokens[who]!, `/teams/${t}`);
+          expect(`${who}:${res.status}:${res.body.error?.code}`).toBe(
+            `${who}:403:${ERROR_CODES.AUTHZ_SCOPE_DENIED}`,
           );
+          expect(JSON.stringify(res.body)).not.toContain(t);
         }
+        expect(`${who}:${(await call('get', tokens[who]!, `/teams/${tm.tb}`)).status}`).toBe(
+          `${who}:404`,
+        );
       }
       for (const t of [tm.t2, tm.t3]) {
         const res = await call('patch', tokens.teamLead!, `/teams/${t}`).send({ name: 'hijack' });
-        expect(res.status).toBe(404);
+        expect(res.status).toBe(403);
+        expect(await deniedAudit(people.teamLead!.userId, t)).not.toHaveLength(0);
       }
       expect((await teamRow(tm.t2))!.name).toBe('T2');
+      expect((await teamRow(tm.t3))!.name).toBe('T3');
     });
   });
 
@@ -643,18 +675,21 @@ describe('workspace and team administration (1C.1b)', () => {
       expect(archive.body.error.code).toBe(ERROR_CODES.AUTHZ_SCOPE_DENIED);
       expect(await deniedAudit(people.teamLead!.userId, ws.w1)).not.toHaveLength(0);
       expect((await teamRow(tm.t1))!.status).toBe('active');
-      expect((await call('get', tokens.teamLead!, `/workspaces/${ws.w1}`)).status).toBe(404);
+      // Its workspace is visible in the organization, and a team-level grant
+      // never covers the level above it: 403, audited.
+      expect((await call('get', tokens.teamLead!, `/workspaces/${ws.w1}`)).status).toBe(403);
       expect(
         (await call('patch', tokens.teamLead!, `/workspaces/${ws.w1}`).send({ name: 'x' })).status,
-      ).toBe(404);
+      ).toBe(403);
       expect((await call('get', tokens.teamLead!, '/teams')).status).toBe(403);
-      expect((await call('get', tokens.teamLead!, `/teams?workspaceId=${ws.w1}`)).status).toBe(404);
+      expect((await call('get', tokens.teamLead!, `/teams?workspaceId=${ws.w1}`)).status).toBe(403);
       // A team-scoped grant carrying teams.create still cannot create in the workspace.
       const create = await call('post', tokens.teamLead!, '/teams').send({
         workspaceId: ws.w1,
         name: 'x',
       });
-      expect(create.status).toBe(404);
+      expect(create.status).toBe(403);
+      expect(create.body.error.code).toBe(ERROR_CODES.AUTHZ_SCOPE_DENIED);
     });
 
     it('Workspace → Organization: a workspace manager cannot archive or restore its workspace, list or create workspaces', async () => {
@@ -745,12 +780,10 @@ describe('workspace and team administration (1C.1b)', () => {
 
   // ===========================================================================
   describe('C. scope substitution', () => {
-    it('another org_id in a query or body is 403 TENANCY_CONTEXT_MISMATCH, never substituted', async () => {
+    it('workspaces: another org_id in a query or body is 403 TENANCY_CONTEXT_MISMATCH, never substituted (§31b: orgId is advisory)', async () => {
       for (const [m, p, body] of [
         ['get', `/workspaces?orgId=${b1.orgId}`],
-        ['get', `/teams?orgId=${b1.orgId}`],
         ['post', '/workspaces', { name: 'x', slug: `x-${suffix()}`, orgId: b1.orgId }],
-        ['post', '/teams', { workspaceId: ws.w1, name: 'x', orgId: b1.orgId }],
         ['post', '/workspaces', { name: 'x', slug: `x-${suffix()}`, orgId: a2.orgId }],
       ] as [Method, string, object?][]) {
         const res = await call(m, tokens.a1!, p).send(body ?? {});
@@ -763,10 +796,32 @@ describe('workspace and team administration (1C.1b)', () => {
         .send({ name: 'x', slug: `x-${suffix()}`, orgId: a1.orgId })
         .expect(201);
       expect(ok.body.data.orgId).toBe(a1.orgId);
+      await call('get', tokens.a1!, `/workspaces?orgId=${a1.orgId}`).expect(200);
       // Repeated identifiers are refused, never resolved by order.
       expect(
         (await call('get', tokens.a1!, `/workspaces?orgId=${a1.orgId}&orgId=${b1.orgId}`)).status,
       ).toBe(400);
+    });
+
+    it('teams: orgId is not part of the §31c contract — an unknown field, 400 VALIDATION_FAILED, matching or not', async () => {
+      for (const [m, p, body] of [
+        ['get', `/teams?orgId=${b1.orgId}`],
+        ['get', `/teams?orgId=${a1.orgId}`],
+        ['post', '/teams', { workspaceId: ws.w1, name: `org-${suffix()}`, orgId: b1.orgId }],
+        ['post', '/teams', { workspaceId: ws.w1, name: `org-${suffix()}`, orgId: a1.orgId }],
+      ] as [Method, string, object?][]) {
+        const res = await call(m, tokens.a1!, p).send(body ?? {});
+        expect(`${m} ${p} ${res.status} ${res.body.error?.code}`).toBe(
+          `${m} ${p} 400 ${ERROR_CODES.VALIDATION_FAILED}`,
+        );
+        expect(JSON.stringify(res.body)).not.toContain(b1.orgId);
+      }
+      expect(
+        await h.admin
+          .select()
+          .from(schema.teams)
+          .where(and(eq(schema.teams.workspaceId, ws.w1), sql`${schema.teams.name} LIKE 'org-%'`)),
+      ).toHaveLength(0);
     });
 
     it('another workspace_id or team_id is a 404 target, and immutable parents cannot be rewritten', async () => {
@@ -776,7 +831,6 @@ describe('workspace and team administration (1C.1b)', () => {
           await call('post', tokens.a1!, '/teams').send({
             workspaceId: ws.wb,
             name: 'x',
-            orgId: a1.orgId,
           })
         ).status,
       ).toBe(404);
@@ -920,17 +974,30 @@ describe('workspace and team administration (1C.1b)', () => {
       expect(scoped.seen).not.toContain(tm.t3);
     });
 
-    it('errors never echo the requested id and never distinguish foreign from nonexistent', async () => {
-      for (const [who, p] of [
-        ['a1', `/workspaces/${ws.wb}`],
-        ['a1', `/teams/${tm.tb}`],
-        ['wsManager', `/workspaces/${ws.w2}`],
-        ['teamReader', `/teams/${tm.t2}`],
-      ]) {
-        const res = await call('get', tokens[who!]!, p!);
+    it('errors never echo the requested id, name or slug; foreign is indistinguishable from nonexistent', async () => {
+      // Not visible to the tenant: 404, identical to an unknown id.
+      for (const [who, p, secrets] of [
+        ['a1', `/workspaces/${ws.wb}`, [ws.wb, 'WS b-one', 'b-one']],
+        ['a1', `/teams/${tm.tb}`, [tm.tb, '"TB"']],
+        ['wsManager', `/workspaces/${ws.wa2}`, [ws.wa2, 'a2-one']],
+      ] as [string, string, string[]][]) {
+        const res = await call('get', tokens[who]!, p);
         expect(res.status).toBe(404);
-        const id = p!.split('/').pop()!;
-        expect(JSON.stringify(res.body)).not.toContain(id);
+        const kind = p.startsWith('/workspaces') ? 'workspaces' : 'teams';
+        const unknown = await call('get', tokens[who]!, `/${kind}/${uuidv7()}`);
+        expect(strip(res.body)).toEqual(strip(unknown.body));
+        for (const secret of secrets) expect(JSON.stringify(res.body)).not.toContain(secret);
+        expect(res.body.error.details).toBeUndefined();
+      }
+      // Visible but not covered: 403, and still nothing of the target echoed.
+      for (const [who, p, secrets] of [
+        ['wsManager', `/workspaces/${ws.w2}`, [ws.w2, 'WS two', 'two']],
+        ['teamReader', `/teams/${tm.t2}`, [tm.t2, '"T2"']],
+      ] as [string, string, string[]][]) {
+        const res = await call('get', tokens[who]!, p);
+        expect(res.status).toBe(403);
+        expect(res.body.error.code).toBe(ERROR_CODES.AUTHZ_SCOPE_DENIED);
+        for (const secret of secrets) expect(JSON.stringify(res.body)).not.toContain(secret);
         expect(res.body.error.details).toBeUndefined();
       }
     });
