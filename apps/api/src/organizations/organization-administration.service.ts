@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import {
   AUDIT_ACTIONS,
   ERROR_CODES,
@@ -82,6 +82,8 @@ const DEFAULT_WORKSPACE = { name: 'Default', slug: 'default' } as const;
  */
 @Injectable()
 export class OrganizationAdministrationService {
+  private readonly logger = new Logger(OrganizationAdministrationService.name);
+
   constructor(
     private readonly db: TenantDatabase,
     private readonly authorization: AuthorizationService,
@@ -109,13 +111,25 @@ export class OrganizationAdministrationService {
    * `organizations.read` at; and, for any other grant carrying it, that grant's
    * organization while it is `active`.
    *
-   * **This list reads through the identity principal (`acc_auth`), bounded by
-   * that grant-derived reach.** A single RLS context expresses one organization
-   * and one reseller claim, and a support principal is deliberately not an RLS
-   * platform administrator (ADR-011 D-2), so no one `acc_app` context can show a
-   * principal every organization it is entitled to list. The reach is computed
-   * from the caller's own grants and nothing on the request widens it; `status`
-   * and `resellerId` only narrow it. Detail and every mutation run under RLS.
+   * **Two stages, so RLS remains a backstop.** A single RLS context expresses
+   * one organization and one reseller claim, and a support principal is
+   * deliberately not an RLS platform administrator (ADR-011 D-2), so no one
+   * `acc_app` context can show a principal every organization it may list.
+   *
+   *   1. *Candidates* — the identity principal (`acc_auth`) evaluates the
+   *      grant-derived reach, the `status`/`resellerId` narrowing and the signed
+   *      cursor, and returns only ids and sort keys. Pagination (`limit + 1`,
+   *      `hasMore`, `nextCursor`) is decided here, exactly as before.
+   *   2. *Rows* — the page's rows are read as `acc_app` under RLS, under contexts
+   *      the caller legitimately holds and that do not come from stage 1 (see
+   *      `fetchUnderRls`).
+   *
+   * A candidate RLS withholds means the reach admitted an organization the
+   * caller holds no context for — an authorization defect. The request fails
+   * closed rather than returning a partial page: the cursor carries the last
+   * row's sort key and id, so a page anchored on a withheld row would disclose
+   * it, and a page silently shorter than its candidates would change `hasMore`
+   * semantics.
    */
   async list(
     principal: ResolvedPrincipal,
@@ -147,20 +161,34 @@ export class OrganizationAdministrationService {
     if (filter.resellerId) predicates.push(eq(schema.organizations.resellerId, filter.resellerId));
     if (resolved.after) predicates.push(resolved.after);
 
-    const rows = await this.db.auth
-      .select()
+    // Stage 1: ids and sort keys only — no tenant row content leaves `acc_auth`.
+    const candidates = await this.db.auth
+      .select({ id: schema.organizations.id, name: schema.organizations.name })
       .from(schema.organizations)
       .where(predicates.length > 0 ? and(...predicates) : undefined)
       .orderBy(...resolved.orderBy)
       .limit(this.lists.fetchSize(resolved));
 
-    const { items, page } = this.lists.paginate(
-      rows as unknown as Record<string, unknown>[],
-      resolved,
-      this.listSpec,
-      (row) => String(row.id),
+    const { items, page } = this.lists.paginate(candidates, resolved, this.listSpec, (row) =>
+      String(row.id),
     );
-    return { items: items.map((row) => this.view(row as never)), page };
+
+    // Stage 2: the rows themselves, under RLS.
+    const ids = items.map((row) => row.id);
+    const rows = await this.fetchUnderRls(principal, ids);
+    const withheld = ids.filter((id) => !rows.has(id));
+    if (withheld.length > 0) {
+      this.logger.error(
+        `organization list: RLS withheld ${withheld.length} of ${ids.length} candidate(s) the authorization reach admitted`,
+      );
+      throw new AppException({
+        status: HttpStatus.INTERNAL_SERVER_ERROR,
+        code: ERROR_CODES.INTERNAL_ERROR,
+        message: 'The organization list could not be produced',
+        logContext: { withheldOrganizationIds: withheld },
+      });
+    }
+    return { items: ids.map((id) => this.view(rows.get(id)!)), page };
   }
 
   async get(principal: ResolvedPrincipal, id: string): Promise<OrganizationView> {
@@ -572,6 +600,70 @@ export class OrganizationAdministrationService {
       ),
     ];
     return { everything: false, resellerIds, activeOrganizationIds };
+  }
+
+  /**
+   * Stage 2 of `list`: reads organizations `ids` as `acc_app`, under each RLS
+   * context the caller legitimately holds, in one transaction. Every context is
+   * derived from the principal's own grants — never from the stage-1 reach, the
+   * request, or the organizations being read — and every claim is one the
+   * database itself validates (migration `0010`):
+   *
+   *   - the platform-administrator claim, for a validated super admin;
+   *   - a reseller claim per reseller-scope grant the user holds;
+   *   - an organization context per id in `authorizedOrganizationIds` — the set
+   *     `ScopeResolver` lets this caller select with `X-Acc-Organization`, which
+   *     for a support principal is every organization (its selection right).
+   *
+   * Each context is applied only to the ids not yet read, so a caller with
+   * broader authority pays for one query. Returns what RLS admitted.
+   */
+  private async fetchUnderRls(
+    principal: ResolvedPrincipal,
+    ids: readonly string[],
+  ): Promise<Map<string, typeof schema.organizations.$inferSelect>> {
+    const found = new Map<string, typeof schema.organizations.$inferSelect>();
+    if (ids.length === 0) return found;
+
+    const base: TenantSession = {
+      orgId: null,
+      workspaceId: null,
+      resellerId: null,
+      userId: principal.userId,
+      isPlatformAdmin: false,
+    };
+    const pending = () => ids.filter((id) => !found.has(id));
+    const heldResellers = [
+      ...new Set(
+        principal.roles
+          .filter((g) => g.scopeType === 'reseller' && g.scopeId)
+          .map((g) => g.scopeId!),
+      ),
+    ];
+
+    await this.db.withTenant(base, async (tx) => {
+      const read = async (session: TenantSession, wanted: readonly string[]) => {
+        for (const statement of tenantContextStatements(session)) await tx.execute(statement);
+        const rows = await tx
+          .select()
+          .from(schema.organizations)
+          .where(inArray(schema.organizations.id, [...wanted]));
+        for (const row of rows) found.set(row.id, row);
+      };
+
+      if (principal.tenant.isPlatformAdmin) await read({ ...base, isPlatformAdmin: true }, ids);
+      for (const resellerId of heldResellers) {
+        const wanted = pending();
+        if (wanted.length === 0) break;
+        await read({ ...base, resellerId }, wanted);
+      }
+      for (const orgId of pending()) {
+        if (principal.authorizedOrganizationIds.includes(orgId)) {
+          await read({ ...base, orgId }, [orgId]);
+        }
+      }
+    });
+    return found;
   }
 
   private holdsAtPlatform(principal: AuthPrincipal, permission: string): boolean {

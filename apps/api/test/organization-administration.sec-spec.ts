@@ -686,6 +686,116 @@ describe('organization administration and lifecycle (1C.1a)', () => {
       expect(header.body.error.code).toBe(ERROR_CODES.TENANCY_CONTEXT_MISMATCH);
     });
 
+    // --- RLS backstop for the list (1C.1a remediation) --------------------------
+    //
+    // The list's candidates come from `acc_auth`, whose read policy admits every
+    // organization; the rows come from `acc_app` under RLS. These reintroduce the
+    // Gate B defect class into the reach calculation and require that PostgreSQL,
+    // not the application, keeps the other tenants' rows out of the response.
+    // Moving the row fetch back to `acc_auth` makes both return A2 (and B1) — a
+    // `200` carrying another tenant's organization — and fail.
+
+    type Reach = { everything: boolean; resellerIds: string[]; activeOrganizationIds: string[] };
+    const mutateReach = (reach: (principal: { roles: { orgId: string | null }[] }) => Reach) =>
+      jest
+        .spyOn(OrganizationAdministrationService.prototype as never, 'readReach' as never)
+        .mockImplementation(reach as never);
+    const leaks = (body: unknown, orgs: Org[]) => {
+      const text = JSON.stringify(body);
+      return orgs.filter((o) => text.includes(o.orgId));
+    };
+
+    it('RLS backstop: a reseller wrongly derived from the caller’s organization cannot return a sibling’s row', async () => {
+      // The pre-Gate-B defect: A1's administrator is given reseller reach over
+      // A1's own reseller. The reach now admits A2 (and L1).
+      const spy = mutateReach((principal) => ({
+        everything: false,
+        resellerIds: [resellerA],
+        activeOrganizationIds: principal.roles.map((g) => g.orgId!).filter(Boolean),
+      }));
+      try {
+        // The mutation took effect: under this reach the identity plane admits A2.
+        const candidates = await h.app
+          .get(TenantDatabase)
+          .auth.select({ id: schema.organizations.id })
+          .from(schema.organizations)
+          .where(eq(schema.organizations.resellerId, resellerA));
+        expect(candidates.map((c) => c.id)).toEqual(expect.arrayContaining([a1.orgId, a2.orgId]));
+
+        const res = await call('get', tokens.a1!, '/organizations?limit=100');
+        expect(leaks(res.body, [a2, b1, l1])).toEqual([]);
+        expect(JSON.stringify(res.body)).not.toContain('O a2');
+        // Fail closed: RLS withheld a candidate, so no partial page and no cursor.
+        expect(res.status).toBe(500);
+        expect(res.body.error.code).toBe(ERROR_CODES.INTERNAL_ERROR);
+        expect(spy).toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('RLS backstop: an organization administrator wrongly given platform-wide reach sees no other tenant, on any page', async () => {
+      const spy = mutateReach(() => ({
+        everything: true,
+        resellerIds: [],
+        activeOrganizationIds: [],
+      }));
+      try {
+        const res = await call('get', tokens.a1!, '/organizations?limit=100');
+        expect(leaks(res.body, [a2, b1, l1, l2])).toEqual([]);
+        expect(res.status).toBe(500);
+
+        // Page by page: every page RLS fully admits is returned, a page holding
+        // a withheld row fails closed, and no page or cursor carries a foreign row.
+        let cursor: string | null = null;
+        let failed = false;
+        for (let i = 0; i < 200 && !failed; i++) {
+          const page = await call(
+            'get',
+            tokens.a1!,
+            `/organizations?limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+          );
+          expect(leaks(page.body, [a2, b1, l1, l2])).toEqual([]);
+          if (page.status !== 200) {
+            expect(page.status).toBe(500);
+            failed = true;
+            break;
+          }
+          for (const o of page.body.data) expect(o.id).toBe(a1.orgId);
+          cursor = page.body.page.nextCursor;
+          if (!cursor) break;
+          const decoded = Buffer.from(cursor.split('.')[0]!, 'base64url').toString('utf8');
+          expect(leaks(decoded, [a2, b1, l1, l2])).toEqual([]);
+        }
+        expect(failed).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('two-stage list: every legitimate reach pages identically at limit=1 and limit=100', async () => {
+      for (const who of ['a1', 'resellerA', 'resellerB', 'platform', 'support']) {
+        const whole = await call('get', tokens[who]!, '/organizations?limit=100').expect(200);
+        const expected = whole.body.data.map((o: { id: string }) => o.id);
+        expect(whole.body.page.hasMore).toBe(false);
+
+        const walked: string[] = [];
+        let cursor: string | null = null;
+        do {
+          const page = await call(
+            'get',
+            tokens[who]!,
+            `/organizations?limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+          ).expect(200);
+          walked.push(...page.body.data.map((o: { id: string }) => o.id));
+          expect(page.body.page.hasMore).toBe(page.body.page.nextCursor !== null);
+          cursor = page.body.page.nextCursor;
+        } while (cursor && walked.length <= expected.length);
+        expect(walked).toEqual(expected);
+        for (const o of whole.body.data) expect(Object.keys(o).sort()).toEqual(ORG_KEYS);
+      }
+    });
+
     it('24. an unconnected principal never learns a suspended organization’s status', async () => {
       // L2 (beneath reseller B) is suspended; nobody in reseller A is connected to it.
       const selected = await call('get', tokens.a1!, '/users', l2.orgId).expect(403);
