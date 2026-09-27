@@ -20,7 +20,7 @@ import { RequestContext } from '../common/context/request-context';
 import { AuthService, type AuthTokens, type RequestMeta } from './auth.service';
 import { AuthRateLimitService } from './auth-rate-limit.service';
 import { LoginDto } from './auth.dto';
-import { NoTenantContext, Public } from './public.decorator';
+import { NoTenantContext, OptionalAuthentication, Public } from './public.decorator';
 import { AuthorizationExempt } from './requires-permission.decorator';
 import { RequireCsrfHeader, RequireJsonBody } from './csrf.guard';
 import type { ResolvedPrincipal } from './auth.guard';
@@ -180,13 +180,56 @@ export class AuthController {
     }
   }
 
+  /**
+   * Ends the caller's session (ADR-012 F-12).
+   *
+   * With a valid bearer token, the session it belongs to. Without one — the
+   * usual case being an expired access token — the session the refresh cookie
+   * belongs to; `X-Acc-Refresh` is required on both paths (`RequireCsrfHeader`).
+   * The cookie path is unauthenticated, so it is throttled per source address
+   * with the refresh bucket, like `/auth/refresh` itself. An unknown or
+   * already-revoked cookie is answered exactly like a valid one: `204`, cookie
+   * cleared.
+   */
+  @OptionalAuthentication()
   @NoTenantContext()
-  @AuthorizationExempt('identity: ends the caller’s own session')
+  @AuthorizationExempt(
+    'identity: ends the caller’s own session — by bearer, or by the refresh cookie when no valid bearer is presented',
+  )
   @RequireCsrfHeader()
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   async logout(@Req() request: Request, @Res({ passthrough: true }) response: Response) {
-    await this.auth.logout(this.principal(), this.meta(request));
+    const meta = this.meta(request);
+    const principal = RequestContext.get()?.principal ?? null;
+    if (principal) {
+      await this.auth.logout(principal, meta);
+      this.clearRefreshCookie(response);
+      return;
+    }
+
+    const presented = (request.cookies as Record<string, string> | undefined)?.[REFRESH_COOKIE];
+    if (!presented) {
+      throw new AppException({
+        status: HttpStatus.UNAUTHORIZED,
+        code: ERROR_CODES.AUTH_CREDENTIAL_REQUIRED,
+        message: 'Authentication is required',
+      });
+    }
+
+    const verdict = await this.rateLimit.consumeRefresh(meta.ip);
+    response.setHeader('X-RateLimit-Limit', verdict.limit);
+    response.setHeader('X-RateLimit-Remaining', verdict.remaining);
+    if (!verdict.allowed) {
+      response.setHeader('Retry-After', verdict.resetSeconds);
+      throw new AppException({
+        status: HttpStatus.TOO_MANY_REQUESTS,
+        code: ERROR_CODES.RATE_LIMIT_EXCEEDED,
+        message: 'Too many attempts; try again shortly',
+      });
+    }
+
+    await this.auth.logoutWithRefreshToken(presented, meta);
     this.clearRefreshCookie(response);
   }
 
@@ -293,6 +336,21 @@ export class AuthController {
         current: s.current,
       })),
     };
+  }
+
+  /**
+   * Revokes every other live session of the caller, keeping the current one
+   * (ADR-012 F-10). `200 {data:{revoked}}`, the count of live sessions revoked.
+   */
+  @NoTenantContext()
+  @AuthorizationExempt(
+    'identity: revokes the caller’s own other sessions; the subject is the principal itself',
+  )
+  @Post('sessions/revoke-all')
+  @HttpCode(HttpStatus.OK)
+  async revokeAllSessions(@Req() request: Request) {
+    const revoked = await this.auth.revokeAllOwnSessions(this.principal(), this.meta(request));
+    return { data: { revoked } };
   }
 
   @NoTenantContext()

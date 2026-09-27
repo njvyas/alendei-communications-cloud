@@ -39,6 +39,13 @@ export interface AuthorizationCheck {
   readonly resourceType?: string;
 }
 
+/** What an `authorization.denied` row records as the attempted resource. */
+interface DenialSubject {
+  readonly resourceType: string;
+  readonly resourceId: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
 /**
  * The reusable authorization boundary (ADR-003 D-5, ADR-005 D-1/D-5).
  *
@@ -149,7 +156,17 @@ export class AuthorizationService {
    * proceed, and the operator sees why. Reporting a plain refusal while
    * silently losing its record is the one outcome this must never produce.
    */
-  private async recordDenial(request: AuthorizationCheck): Promise<void> {
+  private async recordDenial(
+    request: AuthorizationCheck,
+    attempted: DenialSubject = {
+      resourceType: request.resourceType ?? request.target.scopeType,
+      resourceId: request.target.scopeId,
+      metadata: {
+        attemptedScopeType: request.target.scopeType,
+        attemptedScopeId: request.target.scopeId,
+      },
+    },
+  ): Promise<void> {
     const { principal } = request;
     const actorScope = this.actorScope(principal);
 
@@ -174,8 +191,8 @@ export class AuthorizationService {
               ...actorFromPrincipal(principal),
               action: AUDIT_ACTIONS.AUTHORIZATION_DENIED,
               // The attempted target, kept separate from the actor's scope.
-              resourceType: request.resourceType ?? request.target.scopeType,
-              resourceId: request.target.scopeId,
+              resourceType: attempted.resourceType,
+              resourceId: attempted.resourceId,
               outcome: 'denied',
               before: null,
               after: null,
@@ -185,8 +202,7 @@ export class AuthorizationService {
               // an append-only row should ever carry.
               metadata: {
                 permission: request.permission,
-                attemptedScopeType: request.target.scopeType,
-                attemptedScopeId: request.target.scopeId,
+                ...attempted.metadata,
                 denialReason: ERROR_CODES.AUTHZ_SCOPE_DENIED,
               },
             },
@@ -229,6 +245,82 @@ export class AuthorizationService {
     throw new Error(
       'audit: cannot record authorization.denied — the principal has no resolved scope to attribute it to',
     );
+  }
+
+  /**
+   * ADR-012 F-9: does the principal hold `permission`, through coherent grants,
+   * over **every** one of `scopes` — the complete grant set of another identity,
+   * whose sessions it wants to read or revoke? Throwing form; one audited
+   * `403 AUTHZ_SCOPE_DENIED` if any scope is not covered.
+   *
+   * Sessions belong to the identity, not to an organization, so acting on them
+   * affects every organization the subject is in; covering only the selected
+   * organization would be cross-scope. The caller supplies the subject's scopes
+   * from **authoritative identity state** (read by `ScopeResolver` through
+   * `acc_auth`, not through the caller's RLS view, which would hide exactly the
+   * grants that must refuse).
+   *
+   * Each scope's ancestry is resolved on the same identity plane (`acc_auth`),
+   * not under the caller's tenant context, and the decision is the evaluator's
+   * alone. Resolving under the caller's RLS would make an invisible scope look
+   * "uncovered" for a principal whose grant genuinely covers it — a support
+   * principal holds `sessions.read` at platform scope, yet is deliberately not
+   * an RLS platform administrator (ADR-011 D-2). Nothing about the scopes leaves
+   * this method but a yes or no, and whether the *subject* is visible to the
+   * caller at all (`404`) is decided beforehand, under RLS, by the caller. A
+   * scope whose ancestry does not resolve (deleted meanwhile) is not covered.
+   *
+   * The refusal names the subject, never the uncovered scope. The audit row is
+   * filed under the actor's own scope, and the uncovered grant may be another
+   * tenant's — recording its id there would disclose it.
+   */
+  async assertCoversEveryScope(request: {
+    readonly principal: AuthPrincipal;
+    readonly permission: PermissionKey | string;
+    readonly scopes: readonly ScopeRef[];
+    readonly subject: { readonly resourceType: string; readonly resourceId: string };
+  }): Promise<void> {
+    RequestContext.recordAuthorizationCheck(String(request.permission));
+
+    const resolved = await this.db.auth.transaction(async (identityTx) => {
+      const out: { scope: ScopeRef; chain: Awaited<ReturnType<ScopeChainResolver['resolve']>> }[] =
+        [];
+      for (const scope of request.scopes) {
+        out.push({ scope, chain: await this.chains.resolve(identityTx as Transaction, scope) });
+      }
+      return out;
+    });
+
+    for (const { scope, chain } of resolved) {
+      const covered =
+        chain !== null &&
+        this.evaluator.allows({
+          principal: request.principal,
+          permission: request.permission,
+          target: { scope, chain },
+        });
+      if (covered) continue;
+
+      await this.recordDenial(
+        {
+          principal: request.principal,
+          permission: request.permission,
+          target: scope,
+          resourceType: request.subject.resourceType,
+        },
+        {
+          resourceType: request.subject.resourceType,
+          resourceId: request.subject.resourceId,
+          metadata: { denialDetail: 'subject_holds_uncovered_grant' },
+        },
+      );
+      throw new AppException({
+        status: HttpStatus.FORBIDDEN,
+        code: ERROR_CODES.AUTHZ_SCOPE_DENIED,
+        message: 'You do not have permission to perform this action',
+        logContext: { permission: request.permission, subjectId: request.subject.resourceId },
+      });
+    }
   }
 
   /**

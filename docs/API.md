@@ -113,7 +113,7 @@ An error never echoes the supplied identifier back.
 | `SameSite` | `Lax` | Not attached to cross-site subrequests |
 | `Path` | `/api/v1/auth` | Not sent on ordinary API calls; sent only to the `/auth/*` routes (login, refresh, logout, me, sessions) |
 
-`POST /auth/login` sets the cookie, and accepts **only** `Content-Type: application/json` (`415` otherwise) so a cross-site HTML form cannot sign a browser in (login-CSRF, ADR-011 D-6). `POST /auth/refresh` consumes it. **The refresh token is never returned as ordinary JSON to browser JavaScript.** Non-browser clients (server-to-server) authenticate with API keys and never use this flow at all.
+`POST /auth/login` sets the cookie, and accepts **only** `Content-Type: application/json` (`415` otherwise) so a cross-site HTML form cannot sign a browser in (login-CSRF, ADR-011 D-6). `POST /auth/refresh` consumes it, and since Phase 1C.2 `POST /auth/logout` accepts it when no valid bearer token is presented (ADR-012 F-12). **The refresh token is never returned as ordinary JSON to browser JavaScript.** Non-browser clients (server-to-server) authenticate with API keys and never use this flow at all.
 
 **CORS.** Because the refresh call must send a cookie, it is a credentialed cross-origin request: the console sends `credentials: 'include'`, and the API must answer with an explicit `Access-Control-Allow-Origin` drawn from the configured `CORS_ORIGINS` allow-list plus `Access-Control-Allow-Credentials: true`. A wildcard origin is invalid on a credentialed request and must never be configured.
 
@@ -394,16 +394,25 @@ Sorting is `occurredAt` only, default `-occurredAt`. An audit trail is read chro
 
 **Query cost**: list is 2 queries (the authorization chain resolve, then one page), detail is 1–2 (the row, then a chain resolve that is free for `platform` scope). No `COUNT(*)`, no N+1. `EXPLAIN` confirms the default ordering is served by `Index Scan Backward using audit_logs_pkey`, so **no index was added** — none would be used by the current predicate shape, since the RLS disjunction is not sargable. At scale the cost characteristic is filter selectivity rather than a missing index; the fix would be a sargable tenant predicate, which is deferred because it conflicts with the reseller view.
 
-### 3g. Phase 1C resources (ADR-012) — organizations IMPLEMENTED (1C.1a); workspaces and teams IMPLEMENTED (1C.1b); the rest IN PHASE 1C
+### 3g. Phase 1C resources (ADR-012) — organizations IMPLEMENTED (1C.1a); workspaces and teams IMPLEMENTED (1C.1b); sessions IMPLEMENTED (1C.2, awaiting review)
 
-**Implementation status:** the organization routes are **implemented (Phase 1C.1a)**; the workspace and team routes are **implemented (Phase 1C.1b)**; the session routes are **not yet implemented**. The field-level contract — schemas, request bodies, success and error responses, idempotency and audit — is frozen in **`FRONTEND_API_CONTRACT.md` §31**, which is the single authority for these routes. This section indexes it and states the server-side rules; it deliberately does not restate fields, so the two cannot drift. The OpenAPI document generated in 1C.3 is asserted against §31.
+**Implementation status:** the organization routes are **implemented (Phase 1C.1a)**; the workspace and team routes are **implemented (Phase 1C.1b)**; the session routes are **implemented (Phase 1C.2, awaiting review)**. The field-level contract — schemas, request bodies, success and error responses, idempotency and audit — is frozen in **`FRONTEND_API_CONTRACT.md` §31**, which is the single authority for these routes. This section indexes it and states the server-side rules; it deliberately does not restate fields, so the two cannot drift. The OpenAPI document generated in 1C.3 is asserted against §31.
 
 | Area | Routes | Increment | Target scope rule |
 |---|---|---|---|
 | Organizations — **IMPLEMENTED** | `GET/POST /organizations`, `GET/PATCH /organizations/:id`, `POST /organizations/:id/suspend` · `/reactivate` · `/close` | 1C.1a ✅ | read/update at the organization; create at platform or at the creator's reseller; lifecycle at platform only (ADR-012 F-2, F-3) |
 | Workspaces — **IMPLEMENTED** | `GET/POST /workspaces`, `GET/PATCH /workspaces/:id`, `POST /workspaces/:id/archive` · `/restore` | 1C.1b ✅ | list/create/archive/restore at the organization; read/update at the workspace |
 | Teams — **IMPLEMENTED** | `GET/POST /teams`, `GET/PATCH /teams/:id`, `POST /teams/:id/archive` · `/restore` | 1C.1b ✅ | create/archive/restore at the workspace; read/update at the team; list at the workspace named by `workspaceId`, else the organization |
-| Sessions | `POST /auth/sessions/revoke-all`; `GET /users/:id/sessions`; `POST /users/:id/sessions/revoke-all`; `DELETE /users/:id/sessions/:sessionId`; changed `POST /auth/login` (eviction) and `POST /auth/logout` (expired-token path) | 1C.2 | self, or `sessions.read`/`sessions.revoke` covering the organization **and** every grant the target holds (ADR-012 F-9) |
+| Sessions — **IMPLEMENTED** | `POST /auth/sessions/revoke-all`; `GET /users/:id/sessions`; `POST /users/:id/sessions/revoke-all`; `DELETE /users/:id/sessions/:sessionId`; changed `POST /auth/login` (eviction), `POST /auth/logout` (expired-token path), `GET /auth/sessions` (live sessions only) and `DELETE /auth/sessions/:id` (rotation chain) | 1C.2 ✅ | self, or `sessions.read`/`sessions.revoke` covering the organization **and** every grant the target holds (ADR-012 F-9) |
+
+**Session rules (1C.2), in addition:**
+
+- **Live** means not revoked, not rotated and not expired (database clock). Session lists and every `revoked` count contain live sessions only; rotated, expired and revoked rows are kept as history and never listed.
+- **The revocation unit is the rotation chain.** `DELETE /auth/sessions/:id`, `DELETE /users/:id/sessions/:sessionId` and both logout paths revoke every unrevoked row of the chain the id belongs to, so an id listed before a refresh still signs that device out; a chain with nothing live left is `404`. Revoke-all keeps only the current chain (self) or none (administrator).
+- **Serialization:** login, refresh, every revocation, revoke-all, logout and user disable take a per-user `pg_advisory_xact_lock`; a refresh racing a revocation cannot leave a usable successor, and concurrent logins cannot exceed `AUTH_MAX_SESSIONS_PER_USER`. Eviction revokes the oldest live chains (`created_at`, then `id`) inside the login transaction and writes `session.revoked` (reason `session_limit_exceeded`) for each.
+- **Audit:** self-service revocation, revoke-all and eviction are written through `acc_auth` at platform scope in the same transaction as the change (`session.revoked`, `session.revoked_all`; migration `0013`, which corrected the Phase 1B defect that made every successful `DELETE /auth/sessions/:id` a `500`); administrator revocation through `acc_app` at the administrator's organization.
+- **F-9:** the target's complete grant set is read from authoritative identity state and every grant must be covered, through coherent grants, for the route's permission; otherwise an audited `403 AUTHZ_SCOPE_DENIED` that names only the target. The two revoke routes require a signed-in user session (`403` for an API key).
+- **Logout** with no valid bearer uses the refresh cookie (with `X-Acc-Refresh`), is throttled with the refresh bucket, answers an unknown or already-revoked cookie with the same `204`, and is `401` when neither credential is presented.
 
 **Server-side rules that apply to all of them:**
 
@@ -440,7 +449,7 @@ Idempotency is **execution/replay coordination**: it records that a request ran 
 |---|---|
 | `GET`, `HEAD`, `OPTIONS` | Safe. There is nothing to execute twice |
 | `PATCH /roles/:id` | The permission set is a **complete replacement**, so the endpoint is already naturally idempotent — re-applying it converges on the same state |
-| `DELETE /roles/:id`, `DELETE /role-assignments/:id`, `DELETE /auth/sessions/:id` | `204`, and already naturally idempotent: a repeat is `404` because the row is gone, which is the honest answer and needs no stored response |
+| `DELETE /roles/:id`, `DELETE /role-assignments/:id`, `DELETE /auth/sessions/:id`, `DELETE /users/:id/sessions/:sessionId` | `204`, and already naturally idempotent: a repeat is `404` because the row is gone (for a session, because its chain has nothing live left), which is the honest answer and needs no stored response |
 | `POST /auth/login` | Replaying a login would replay a **token**, turning a stored response into a credential. Sessions are deliberately per-attempt |
 | `POST /auth/refresh` | Rotation is single-use **by design** (ADR-003): replay-detection there revokes the token family. Idempotency would directly contradict it |
 | `POST /auth/logout` | `204`, naturally idempotent |
@@ -523,7 +532,7 @@ On exhaustion: **`429`** with `Retry-After` (seconds) and the standard error env
 - `POST /auth/login` carries its own stricter limit (`RATE_LIMIT_AUTH_*`), and applies **two independent buckets** — one keyed by source IP and one by the target account — so that neither address rotation nor a spray across many accounts defeats the control on its own. A refusal from *either* refuses the attempt.
 - The account bucket is keyed by a truncated SHA-256 of the identifier (unsalted — a namespacing device), not the identifier itself.
 - **A successful login clears the account bucket only**, never the IP bucket (ADR-011 D-5).
-- `POST /auth/refresh` is throttled per source address (`RATE_LIMIT_REFRESH_MAX`, default 30 per window).
+- `POST /auth/refresh` is throttled per source address (`RATE_LIMIT_REFRESH_MAX`, default 30 per window). The refresh-cookie path of `POST /auth/logout` (Phase 1C.2) spends the same per-address bucket.
 - Failed API-key presentations are throttled per source address **before** Argon2 verification (`RATE_LIMIT_API_KEY_FAILURE_MAX`, default 20 per window); a successful key presentation never spends the allowance. Once exhausted, every API key from that address is refused with `429` for the rest of the window.
 - `TRUSTED_PROXY_HOPS` defaults to `0` and must be set explicitly in production (ADR-011 D-6).
 - The IP key depends on `req.ip`, which depends in turn on how many proxy hops are trusted (`TRUSTED_PROXY_HOPS`). Trusting more hops than the deployment actually has lets a client forge `X-Forwarded-For` and choose its own bucket, so the value is configuration rather than a constant and `0` disables the trust entirely. **The general limiter does not key on IP at all**, so a forwarded-for value cannot influence it.

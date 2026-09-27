@@ -2,6 +2,7 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   AUDIT_ACTIONS,
   ERROR_CODES,
+  PERMISSIONS,
   PLATFORM_ROLE_KEYS,
   type AuthPrincipal,
   type PageInfo,
@@ -17,6 +18,8 @@ import { AuditWriter } from '../audit/audit-writer.service';
 import { AuthorizationService } from '../auth/authorization.service';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
 import { SessionService } from '../iam/session.service';
+import { ScopeResolver } from '../auth/scope-resolver.service';
+import { TenantDatabase } from '../database/tenant-database.service';
 import { RoleAssignmentService } from '../rbac/role-assignment.service';
 import type { UserStatus } from './user.dto';
 
@@ -43,6 +46,17 @@ export interface UserView {
   readonly lastLoginAt: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+/** One of another user's live sessions — the same shape as `GET /auth/sessions`. */
+export interface AdminSessionView {
+  readonly id: string;
+  readonly createdAt: Date;
+  readonly lastUsedAt: Date | null;
+  readonly expiresAt: Date;
+  readonly ip: string | null;
+  readonly userAgent: string | null;
+  readonly current: boolean;
 }
 
 export interface CreateUserInput {
@@ -129,6 +143,8 @@ export class UserAdministrationService {
     private readonly sessions: SessionService,
     private readonly audit: AuditWriter,
     private readonly lists: ListQuery,
+    private readonly db: TenantDatabase,
+    private readonly scopes: ScopeResolver,
   ) {}
 
   /**
@@ -516,6 +532,146 @@ export class UserAdministrationService {
     );
 
     return this.view(after);
+  }
+
+  // --- administrator session management (Phase 1C.2, ADR-012 F-9) ------------
+
+  /**
+   * Another user's live sessions. `sessions.read` covering the selected
+   * organization **and** every grant the target holds.
+   */
+  async listSessions(
+    tx: Transaction,
+    principal: AuthPrincipal,
+    id: string,
+  ): Promise<AdminSessionView[]> {
+    await this.assertSessionAuthority(tx, principal, id, PERMISSIONS.SESSIONS_READ);
+    const rows = await this.sessions.listLive(tx, id);
+    return rows.map((r) => ({ ...r, current: r.id === principal.sessionId }));
+  }
+
+  /**
+   * Revokes every session of another user (ADR-012 F-9): `sessions.revoke`
+   * covering the organization and every grant the target holds; a signed-in
+   * administrator only. Returns the number of live sessions revoked.
+   */
+  async revokeAllSessions(tx: Transaction, principal: AuthPrincipal, id: string): Promise<number> {
+    this.requireSessionActor(principal);
+    const orgId = await this.assertSessionAuthority(tx, principal, id, PERMISSIONS.SESSIONS_REVOKE);
+
+    const revoked = await this.sessions.revokeAllForUser(tx, id, 'admin_revoked');
+    await this.audit.record(
+      {
+        // The administrator's own scope, never the target's (ADR-005 D-6).
+        scopeType: 'organization',
+        scopeId: orgId,
+        ...actorFromPrincipal(principal),
+        action: AUDIT_ACTIONS.SESSION_REVOKED_ALL,
+        resourceType: 'User',
+        resourceId: id,
+        outcome: 'success',
+        before: null,
+        after: { revoked },
+        metadata: { revokedBy: 'administrator' },
+      },
+      tx,
+    );
+    return revoked;
+  }
+
+  /**
+   * Revokes one logical session (rotation chain) of another user. `404` when the
+   * session is not the target's or has nothing live left.
+   */
+  async revokeSession(
+    tx: Transaction,
+    principal: AuthPrincipal,
+    id: string,
+    sessionId: string,
+  ): Promise<void> {
+    this.requireSessionActor(principal);
+    const orgId = await this.assertSessionAuthority(tx, principal, id, PERMISSIONS.SESSIONS_REVOKE);
+
+    const target = await this.sessions.findById(tx, sessionId);
+    if (!target || target.userId !== id) throw this.sessionNotFound(sessionId);
+    const outcome = await this.sessions.revokeChain(tx, sessionId, 'admin_revoked');
+    if (!outcome || outcome.liveRevoked === 0) throw this.sessionNotFound(sessionId);
+
+    await this.audit.record(
+      {
+        scopeType: 'organization',
+        scopeId: orgId,
+        ...actorFromPrincipal(principal),
+        action: AUDIT_ACTIONS.SESSION_REVOKED,
+        resourceType: 'Session',
+        resourceId: sessionId,
+        outcome: 'success',
+        before: null,
+        after: { revoked: true },
+        metadata: { userId: id, revokedBy: 'administrator' },
+      },
+      tx,
+    );
+  }
+
+  /**
+   * The F-9 decision, in order: the permission at the selected organization
+   * (audited `403`); the target is a member of it (`404` otherwise, no echo);
+   * then every grant the target holds — read from authoritative identity state,
+   * not through this caller's RLS view — must be covered (audited `403`).
+   *
+   * **Accepted race.** The target's grants are read, through `acc_auth`, inside
+   * this transaction but on a separate connection. A grant created concurrently
+   * and committed after that read is not seen. The effect is bounded: the
+   * decision stands on the grant set as of the read, and the most it can do is
+   * sign out a user whose new grant was created a moment too late to refuse —
+   * it can never confer authority on the administrator or reach another
+   * resource.
+   */
+  private async assertSessionAuthority(
+    tx: Transaction,
+    principal: AuthPrincipal,
+    id: string,
+    permission: string,
+  ): Promise<string> {
+    const orgId = this.requireOrg(principal);
+    await this.authorization.assert(tx, {
+      principal,
+      permission,
+      target: { scopeType: 'organization', scopeId: orgId },
+      resourceType: 'User',
+    });
+    await this.loadMember(tx, orgId, id);
+
+    const subject = await this.db.auth.transaction((authTx) =>
+      this.scopes.forUser(authTx as Transaction, id),
+    );
+    await this.authorization.assertCoversEveryScope({
+      principal,
+      permission,
+      scopes: subject.grants.map((g) => ({ scopeType: g.scopeType, scopeId: g.scopeId })),
+      subject: { resourceType: 'User', resourceId: id },
+    });
+    return orgId;
+  }
+
+  /** Revoking another user's sessions is for a signed-in administrator, never an API key. */
+  private requireSessionActor(principal: AuthPrincipal): void {
+    if (principal.actorType === 'user' && principal.userId && principal.sessionId) return;
+    throw new AppException({
+      status: HttpStatus.FORBIDDEN,
+      code: ERROR_CODES.AUTHZ_SCOPE_DENIED,
+      message: 'Revoking sessions requires a signed-in user session',
+    });
+  }
+
+  private sessionNotFound(sessionId: string): AppException {
+    return new AppException({
+      status: HttpStatus.NOT_FOUND,
+      code: ERROR_CODES.RESOURCE_NOT_FOUND,
+      message: 'Session not found',
+      logContext: { sessionId },
+    });
   }
 
   // --- guards and helpers -------------------------------------------------------

@@ -35,3 +35,18 @@ export const OPTIONAL_TENANT = 'acc:auth:optional-tenant';
  * (ADR-012 F-5) does not apply to it.
  */
 export const OptionalTenantContext = () => SetMetadata(OPTIONAL_TENANT, true);
+
+export const OPTIONAL_AUTH = 'acc:auth:optional-authentication';
+
+/**
+ * Marks a route that authenticates a presented bearer credential as usual, but
+ * proceeds **without** a principal when that credential is missing, expired or
+ * revoked (a `401`) instead of refusing (Phase 1C.2, ADR-012 F-12).
+ *
+ * Used by `POST /auth/logout` only: a caller whose access token has expired can
+ * still end its session with the refresh cookie. Only a `401` is absorbed; any
+ * other refusal (a `429`, for instance) still propagates. A handler behind this
+ * decorator must treat "no principal" as unauthenticated and act only on a
+ * credential it verifies itself.
+ */
+export const OptionalAuthentication = () => SetMetadata(OPTIONAL_AUTH, true);

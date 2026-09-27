@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -174,6 +175,57 @@ export class UsersController {
     const principal = this.principal();
     const data = await this.db.withRequestTenant((tx) => this.users.disable(tx, principal, id));
     return { data };
+  }
+
+  // --- another user's sessions (Phase 1C.2, `FRONTEND_API_CONTRACT.md` §31d) --
+
+  /**
+   * Another user's live sessions: `sessions.read` covering the organization and
+   * every grant the target holds (ADR-012 F-9). Same shape as
+   * `GET /auth/sessions`, no `page` — bounded by `AUTH_MAX_SESSIONS_PER_USER`.
+   */
+  @Get(':id/sessions')
+  @RequiresPermission(PERMISSIONS.SESSIONS_READ)
+  async sessions(@Param('id', new ParseUUIDPipe()) id: string) {
+    const principal = this.principal();
+    const rows = await this.db.withRequestTenant((tx) =>
+      this.users.listSessions(tx, principal, id),
+    );
+    return {
+      data: rows.map((s) => ({
+        id: s.id,
+        createdAt: s.createdAt.toISOString(),
+        lastUsedAt: s.lastUsedAt?.toISOString() ?? null,
+        expiresAt: s.expiresAt.toISOString(),
+        ip: s.ip,
+        userAgent: s.userAgent,
+        current: s.current,
+      })),
+    };
+  }
+
+  /** Revokes every session of another user (F-9). Not keyed: the count is its own answer. */
+  @Post(':id/sessions/revoke-all')
+  @RequiresPermission(PERMISSIONS.SESSIONS_REVOKE)
+  @HttpCode(HttpStatus.OK)
+  async revokeAllSessions(@Param('id', new ParseUUIDPipe()) id: string) {
+    const principal = this.principal();
+    const revoked = await this.db.withRequestTenant((tx) =>
+      this.users.revokeAllSessions(tx, principal, id),
+    );
+    return { data: { revoked } };
+  }
+
+  /** Revokes one of another user's sessions (F-9). Naturally idempotent: a repeat is `404`. */
+  @Delete(':id/sessions/:sessionId')
+  @RequiresPermission(PERMISSIONS.SESSIONS_REVOKE)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async revokeSession(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('sessionId', new ParseUUIDPipe({ version: undefined })) sessionId: string,
+  ) {
+    const principal = this.principal();
+    await this.db.withRequestTenant((tx) => this.users.revokeSession(tx, principal, id, sessionId));
   }
 
   /** Restores a disabled user. Same reasoning on idempotency as `disable`. */

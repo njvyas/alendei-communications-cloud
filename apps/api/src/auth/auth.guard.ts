@@ -28,7 +28,7 @@ import {
   type InactiveOrganizationStatus,
   type OrganizationStatus,
 } from './scope-resolver.service';
-import { IS_PUBLIC, OPTIONAL_TENANT, SKIP_TENANT } from './public.decorator';
+import { IS_PUBLIC, OPTIONAL_AUTH, OPTIONAL_TENANT, SKIP_TENANT } from './public.decorator';
 
 /** How the principal proved who it is. Normalized across both mechanisms. */
 export type AuthMethod = 'session' | 'api_key';
@@ -104,6 +104,27 @@ export class AuthGuard implements CanActivate {
     ]);
     if (isPublic) return true;
 
+    const optionalAuth =
+      this.reflector.getAllAndOverride<boolean>(OPTIONAL_AUTH, [
+        context.getHandler(),
+        context.getClass(),
+      ]) ?? false;
+    if (!optionalAuth) return this.authenticate(context);
+
+    // `@OptionalAuthentication()` (logout, ADR-012 F-12): a bearer that does not
+    // authenticate leaves the request without a principal rather than refusing
+    // it. Anything other than a `401` — a `429` above all — still propagates.
+    try {
+      return await this.authenticate(context);
+    } catch (error) {
+      if (error instanceof AppException && error.getStatus() === HttpStatus.UNAUTHORIZED) {
+        return true;
+      }
+      throw error;
+    }
+  }
+
+  private async authenticate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request>();
     const skipTenant =
       this.reflector.getAllAndOverride<boolean>(SKIP_TENANT, [

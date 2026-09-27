@@ -58,7 +58,10 @@ describe('user administration boundary', () => {
     // `DELETE` written against a table the role cannot delete from would fail at
     // runtime rather than in review, and only for whoever tried it.
     expect(service).not.toMatch(/delete\(\s*schema\.users/);
-    expect(controller).not.toMatch(/@Delete/);
+    // The only `DELETE` route under `/users` revokes one of a user's sessions
+    // (Phase 1C.2, §31d); nothing deletes the user itself.
+    const deletes = controller.match(/@Delete\([^)]*\)/g) ?? [];
+    expect(deletes).toEqual(["@Delete(':id/sessions/:sessionId')"]);
   });
 
   it('never reads the whole users row', () => {
@@ -175,8 +178,9 @@ describe('user administration boundary', () => {
     // `record(input, tx)`, never `record(input)`. The second form would commit
     // separately and could survive a rolled-back mutation.
     const writes = service.match(/this\.audit\.record\(/g) ?? [];
-    // create, update, disable, reactivate.
-    expect(writes).toHaveLength(4);
+    // create, update, disable, reactivate; and (Phase 1C.2) an administrator's
+    // revoke-all and single-session revocation of another user's sessions.
+    expect(writes).toHaveLength(6);
     // Each one closes with the caller's transaction as its second argument.
     const transactional = service.match(/\n {6}tx,\n {4}\);/g) ?? [];
     expect(transactional).toHaveLength(writes.length);

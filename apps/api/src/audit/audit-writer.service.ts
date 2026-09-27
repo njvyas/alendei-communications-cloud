@@ -78,6 +78,18 @@ export class AuditWriter {
       // succeeded, or a failed audit leave a session with no record at all.
       // Only `auth.login.failed` has no mutation to join, and that is the case
       // that legitimately passes no transaction.
+      //
+      // `session.revoked` and `session.revoked_all` (Phase 1C.2) are in this
+      // vocabulary *and* security-sensitive. For those a transaction is not
+      // merely honoured but required: falling back to an independently
+      // committing connection would let the record outlive a rolled-back
+      // revocation, which is the one outcome the sensitive classification
+      // exists to prevent.
+      if (!tx && isSecuritySensitiveAction(input.action)) {
+        throw new Error(
+          `audit: ${input.action} is security-sensitive and must be recorded inside the transaction that performs it`,
+        );
+      }
       await (tx ?? this.db.auth).insert(auditLogs).values(values);
       return;
     }

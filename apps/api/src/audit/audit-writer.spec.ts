@@ -13,6 +13,7 @@ import {
   AUDIT_ACTIONS,
   ANONYMOUS_LOGIN_ACTOR_LABEL,
   AUTH_ROLE_AUDIT_ACTIONS,
+  AUTH_ROLE_TRANSACTIONAL_AUDIT_ACTIONS,
   SECURITY_SENSITIVE_AUDIT_ACTIONS,
   isAuthRoleAuditAction,
 } from '@acc/contracts';
@@ -320,14 +321,42 @@ describe('AuditWriter transaction ownership', () => {
 });
 
 describe('audit action classification', () => {
-  it('shares no action between the acc_auth vocabulary and the sensitive set', () => {
-    // If a security-sensitive action were ever added to AUTH_ROLE_AUDIT_ACTIONS,
-    // it would route through acc_auth, where a caller that passed no transaction
-    // would get an independently-committing audit row for a privileged mutation.
+  it('overlaps the acc_auth vocabulary and the sensitive set in exactly the two approved session actions', () => {
+    // Phase 1C.2 (Option A) refined the Gate B invariant rather than dropping
+    // it: the overlap is an explicit, pinned allowlist — not "whatever happens
+    // to be in both lists" — and every member must be written transactionally.
     const authRole = new Set<string>(AUTH_ROLE_AUDIT_ACTIONS);
     const overlap = SECURITY_SENSITIVE_AUDIT_ACTIONS.filter((action) => authRole.has(action));
-    expect(overlap).toEqual([]);
+    expect([...overlap].sort()).toEqual([...AUTH_ROLE_TRANSACTIONAL_AUDIT_ACTIONS].sort());
+    expect([...AUTH_ROLE_TRANSACTIONAL_AUDIT_ACTIONS].sort()).toEqual(
+      [AUDIT_ACTIONS.SESSION_REVOKED, AUDIT_ACTIONS.SESSION_REVOKED_ALL].sort(),
+    );
   });
+
+  it.each([...AUTH_ROLE_TRANSACTIONAL_AUDIT_ACTIONS])(
+    'refuses to write %s without the caller transaction — it can never commit on its own',
+    async (action) => {
+      const { captured, target } = captor();
+      await expect(
+        writerWith(target).record({ ...base, scopeType: 'platform', scopeId: null, action }),
+      ).rejects.toThrow(/must be recorded inside the transaction/);
+      expect(captured).toHaveLength(0);
+    },
+  );
+
+  it.each([...AUTH_ROLE_TRANSACTIONAL_AUDIT_ACTIONS])(
+    'writes %s through the caller transaction when one is supplied',
+    async (action) => {
+      const standalone = captor();
+      const caller = captor();
+      await writerWith(standalone.target).record(
+        { ...base, scopeType: 'platform', scopeId: null, action },
+        caller.target as never,
+      );
+      expect(caller.captured).toHaveLength(1);
+      expect(standalone.captured).toHaveLength(0);
+    },
+  );
 
   it('routes every role and credential mutation through acc_app, not acc_auth', () => {
     for (const action of [
@@ -339,8 +368,8 @@ describe('audit action classification', () => {
       AUDIT_ACTIONS.API_KEY_CREATED,
       AUDIT_ACTIONS.API_KEY_REVOKED,
       AUDIT_ACTIONS.USER_DISABLED,
-      AUDIT_ACTIONS.SESSION_REVOKED,
-      AUDIT_ACTIONS.SESSION_REVOKED_ALL,
+      AUDIT_ACTIONS.ORGANIZATION_SUSPENDED,
+      AUDIT_ACTIONS.AUTHORIZATION_DENIED,
     ]) {
       expect(isAuthRoleAuditAction(action)).toBe(false);
     }

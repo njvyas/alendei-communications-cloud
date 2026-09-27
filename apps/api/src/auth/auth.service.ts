@@ -6,7 +6,7 @@ import {
   type AuthPrincipal,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 
 import { AppException } from '../common/errors/app.exception';
@@ -121,16 +121,20 @@ export class AuthService {
         return null;
       }
 
-      const { session, refresh } = await this.sessions.create(tx as Transaction, {
-        userId: user.id,
-        ip: meta.ip,
-        userAgent: meta.userAgent,
-      });
-
-      await tx
+      // The `users` row is written *before* the per-user session lock is taken
+      // (`createWithinCap`), the same order the disable path uses, so the two
+      // can never wait on each other in a cycle (`SessionService`, Phase 1C.2).
+      //
+      // Conditional on `status = 'active'`: the status read above is not locked,
+      // and a disable committing in between would otherwise let this login mint a
+      // session for a disabled account. The `UPDATE` re-evaluates the predicate
+      // after waiting on the disable's row lock, so it refuses instead.
+      const stillActive = await tx
         .update(schema.users)
         .set({ lastLoginAt: new Date() })
-        .where(eq(schema.users.id, user.id));
+        .where(and(eq(schema.users.id, user.id), eq(schema.users.status, 'active')))
+        .returning({ id: schema.users.id });
+      if (stillActive.length === 0) return null;
 
       // Transparent upgrade when the configured cost has since increased.
       if (digest && this.credentials.needsRehash(digest)) {
@@ -139,6 +143,33 @@ export class AuthService {
           .update(schema.users)
           .set({ passwordHash: rehashed, passwordUpdatedAt: new Date() })
           .where(eq(schema.users.id, user.id));
+      }
+
+      // ADR-012 F-11: at `AUTH_MAX_SESSIONS_PER_USER` live sessions the oldest
+      // are evicted so the new one fits — serialized per user, in this
+      // transaction, each eviction audited in it too.
+      const { session, refresh, evicted } = await this.sessions.createWithinCap(tx as Transaction, {
+        userId: user.id,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+      });
+      for (const evictedId of evicted) {
+        await this.audit.record(
+          {
+            ...this.selfActor(user.id),
+            action: AUDIT_ACTIONS.SESSION_REVOKED,
+            resourceType: 'session',
+            resourceId: evictedId,
+            outcome: 'success',
+            before: null,
+            after: { revoked: true },
+            metadata: { reason: 'session_limit_exceeded', evictedBy: session.id },
+            correlationId: meta.correlationId,
+            ip: meta.ip,
+            userAgent: meta.userAgent,
+          },
+          tx as Transaction,
+        );
       }
 
       await this.audit.record(
@@ -318,21 +349,22 @@ export class AuthService {
    * everywhere". Conflating them would mean a user closing one browser tab
    * silently killing their other devices.
    *
-   * There is no bulk "sign out everywhere" route. What exists is
-   * `DELETE /auth/sessions/:id`, which revokes **one** of the caller's own
-   * sessions after checking ownership against the authenticated user id — so a
-   * console offering "sign out my other devices" drives it from
-   * `GET /auth/sessions` one session at a time, and each revocation gets its own
-   * audit row.
+   * "Sign out my other devices" is `POST /auth/sessions/revoke-all`
+   * (`revokeAllOwnSessions`, Phase 1C.2), which keeps this session; one other
+   * device is `DELETE /auth/sessions/:id`. A caller whose access token has
+   * expired logs out with the refresh cookie instead (`logoutWithRefreshToken`).
    */
   async logout(principal: AuthPrincipal, meta: RequestMeta): Promise<void> {
     if (!principal.sessionId || !principal.userId) return;
     await this.db.auth.transaction(async (tx) => {
-      const revoked = await this.sessions.revoke(
+      // The whole rotation chain: this device, including a successor a
+      // concurrent refresh may just have minted (Phase 1C.2).
+      const outcome = await this.sessions.revokeChain(
         tx as Transaction,
         principal.sessionId!,
         'user_logout',
       );
+      const revoked = outcome?.liveRevoked ?? 0;
       await this.audit.record(
         {
           scopeType: 'platform',
@@ -357,24 +389,108 @@ export class AuthService {
     });
   }
 
-  /** The caller's own live sessions. Never another user's. */
+  /**
+   * Logout by refresh cookie, for a caller presenting no valid bearer token —
+   * typically because the access token has expired (ADR-012 F-12).
+   *
+   * The session the cookie belongs to is found by the token's hash and its whole
+   * rotation chain is revoked. An unknown, rotated-away or already-revoked cookie
+   * does nothing, and the caller is answered identically either way (`204`, the
+   * cookie cleared): the route is not an oracle for whether a token exists.
+   * `auth.logout` is written only when a live session was actually revoked.
+   */
+  async logoutWithRefreshToken(presentedToken: string, meta: RequestMeta): Promise<void> {
+    await this.db.auth.transaction(async (tx) => {
+      const session = await this.sessions.findByRefreshTokenHash(
+        tx as Transaction,
+        hashRefreshToken(presentedToken),
+      );
+      if (!session) return;
+      const outcome = await this.sessions.revokeChain(tx as Transaction, session.id, 'user_logout');
+      if (!outcome || outcome.liveRevoked === 0) return;
+      await this.audit.record(
+        {
+          ...this.selfActor(outcome.userId),
+          action: AUDIT_ACTIONS.AUTH_LOGOUT,
+          resourceType: 'session',
+          resourceId: session.id,
+          outcome: 'success',
+          before: null,
+          after: { revoked: true },
+          metadata: { via: 'refresh_cookie' },
+          correlationId: meta.correlationId,
+          ip: meta.ip,
+          userAgent: meta.userAgent,
+        },
+        tx as Transaction,
+      );
+    });
+  }
+
+  /**
+   * Revokes every other live session of the caller and keeps the current one
+   * (ADR-012 F-10). A session principal only: an API key has no session to keep.
+   */
+  async revokeAllOwnSessions(principal: AuthPrincipal, meta: RequestMeta): Promise<number> {
+    const userId = principal.userId;
+    const sessionId = principal.sessionId;
+    if (principal.actorType !== 'user' || !userId || !sessionId) {
+      throw new AppException({
+        status: HttpStatus.FORBIDDEN,
+        code: ERROR_CODES.AUTHZ_SCOPE_DENIED,
+        message: 'Revoking your sessions requires a signed-in user session',
+      });
+    }
+
+    return this.db.auth.transaction(async (tx) => {
+      const revoked = await this.sessions.revokeOtherChains(
+        tx as Transaction,
+        userId,
+        sessionId,
+        'user_revoked_all',
+      );
+      await this.audit.record(
+        {
+          ...this.selfActor(userId),
+          action: AUDIT_ACTIONS.SESSION_REVOKED_ALL,
+          resourceType: 'session',
+          resourceId: sessionId,
+          outcome: 'success',
+          before: null,
+          after: { revoked },
+          metadata: { keptCurrent: true },
+          correlationId: meta.correlationId,
+          ip: meta.ip,
+          userAgent: meta.userAgent,
+        },
+        tx as Transaction,
+      );
+      return revoked;
+    });
+  }
+
+  /**
+   * The caller's own **live** sessions (ADR-012 F-11): rotated, expired and
+   * revoked rows are history, not sessions, and are never listed. Never another
+   * user's.
+   */
   async listSessions(userId: string, currentSessionId: string | null): Promise<SessionSummary[]> {
     const rows = await this.db.auth.transaction((tx) =>
-      tx
-        .select({
-          id: schema.sessions.id,
-          createdAt: schema.sessions.createdAt,
-          lastUsedAt: schema.sessions.lastUsedAt,
-          expiresAt: schema.sessions.expiresAt,
-          ip: schema.sessions.ip,
-          userAgent: schema.sessions.userAgent,
-        })
-        .from(schema.sessions)
-        .where(and(eq(schema.sessions.userId, userId), isNull(schema.sessions.revokedAt)))
-        .orderBy(desc(schema.sessions.createdAt)),
+      this.sessions.listLive(tx as Transaction, userId),
     );
-
     return rows.map((r) => ({ ...r, current: r.id === currentSessionId }));
+  }
+
+  /** A self-attributed `acc_auth` audit actor: the user, at platform scope. */
+  private selfActor(userId: string) {
+    return {
+      scopeType: 'platform' as const,
+      scopeId: null,
+      actorType: 'user' as const,
+      actorUserId: userId,
+      actorApiKeyId: null,
+      actorLabel: null,
+    };
   }
 
   /**
@@ -398,33 +514,41 @@ export class AuthService {
         message: 'Authentication is required',
       });
 
+    const notFound = () =>
+      new AppException({
+        status: HttpStatus.NOT_FOUND,
+        code: ERROR_CODES.RESOURCE_NOT_FOUND,
+        message: 'Session not found',
+        logContext: { sessionId, requestedBy: userId },
+      });
+
     await this.db.auth.transaction(async (tx) => {
       const target = await this.sessions.findById(tx as Transaction, sessionId);
-      if (!target || target.userId !== userId) {
-        throw new AppException({
-          status: HttpStatus.NOT_FOUND,
-          code: ERROR_CODES.RESOURCE_NOT_FOUND,
-          message: 'Session not found',
-          logContext: { sessionId, requestedBy: userId },
-        });
-      }
+      if (!target || target.userId !== userId) throw notFound();
 
-      await this.sessions.revoke(tx as Transaction, sessionId, 'user_revoked');
+      // The rotation chain, not the row: the listed id may already have been
+      // rotated into a successor (Phase 1C.2). A chain with nothing live left is
+      // `404`, as a repeat of this call is (`API.md` §4).
+      const outcome = await this.sessions.revokeChain(tx as Transaction, sessionId, 'user_revoked');
+      if (!outcome || outcome.liveRevoked === 0) throw notFound();
+
+      const current = principal.sessionId
+        ? await this.sessions.findById(tx as Transaction, principal.sessionId)
+        : null;
+
+      // `acc_auth`, in this transaction: `session.revoked` is in its vocabulary
+      // since migration 0013 — before which this write was refused and every
+      // successful self-revocation rolled back with a 500 (a Phase 1B defect).
       await this.audit.record(
         {
-          scopeType: 'platform',
-          scopeId: null,
-          actorType: 'user',
-          actorUserId: userId,
-          actorApiKeyId: null,
-          actorLabel: null,
+          ...this.selfActor(userId),
           action: AUDIT_ACTIONS.SESSION_REVOKED,
           resourceType: 'session',
           resourceId: sessionId,
           outcome: 'success',
           before: null,
           after: { revoked: true },
-          metadata: { self: sessionId === principal.sessionId },
+          metadata: { self: current?.familyId === outcome.familyId },
           correlationId: meta.correlationId,
           ip: meta.ip,
           userAgent: meta.userAgent,

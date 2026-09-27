@@ -63,6 +63,13 @@ export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
  * they cannot be RLS-filtered by organization and must instead be bounded by
  * vocabulary. The database enforces this list in `app_is_auth_audit_action()`;
  * `audit.int-spec.ts` asserts the two lists have not drifted apart.
+ *
+ * `session.revoked` and `session.revoked_all` joined in Phase 1C.2 (migration
+ * `0013`), correcting a Phase 1B defect: self-service revocation and login-time
+ * eviction change `sessions` as `acc_auth`, and their audit rows must commit in
+ * that same transaction. They are the only entries that are also
+ * security-sensitive, and `AUTH_ROLE_TRANSACTIONAL_AUDIT_ACTIONS` names them so
+ * `AuditWriter` can refuse to write them outside the caller's transaction.
  */
 export const AUTH_ROLE_AUDIT_ACTIONS: readonly AuditAction[] = Object.freeze([
   AUDIT_ACTIONS.AUTH_LOGIN_SUCCEEDED,
@@ -70,6 +77,18 @@ export const AUTH_ROLE_AUDIT_ACTIONS: readonly AuditAction[] = Object.freeze([
   AUDIT_ACTIONS.AUTH_LOGOUT,
   AUDIT_ACTIONS.AUTH_TOKEN_REFRESHED,
   AUDIT_ACTIONS.API_KEY_AUTHENTICATED,
+  AUDIT_ACTIONS.SESSION_REVOKED,
+  AUDIT_ACTIONS.SESSION_REVOKED_ALL,
+]);
+
+/**
+ * The `acc_auth` actions that are also security-sensitive. Each describes a
+ * `sessions` mutation, and must be recorded inside the transaction that performs
+ * it — never on an independently committing connection (Phase 1C.2).
+ */
+export const AUTH_ROLE_TRANSACTIONAL_AUDIT_ACTIONS: readonly AuditAction[] = Object.freeze([
+  AUDIT_ACTIONS.SESSION_REVOKED,
+  AUDIT_ACTIONS.SESSION_REVOKED_ALL,
 ]);
 
 export function isAuthRoleAuditAction(action: string): boolean {

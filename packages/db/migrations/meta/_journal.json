@@ -92,6 +92,13 @@
       "when": 1790437919138,
       "tag": "0012_phase1c1b_team_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1790492168561,
+      "tag": "0013_phase1c2_session_audit_vocabulary",
+      "breakpoints": true
     }
   ]
 }

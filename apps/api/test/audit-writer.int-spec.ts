@@ -9,6 +9,7 @@ import {
   ANONYMOUS_LOGIN_ACTOR_LABEL,
   AUDIT_ACTIONS,
   AUTH_ROLE_AUDIT_ACTIONS,
+  AUTH_ROLE_TRANSACTIONAL_AUDIT_ACTIONS,
   anonymousLoginFailureActor,
   isSecuritySensitiveAction,
   type AuditRecordInput,
@@ -101,9 +102,18 @@ describe('AuditWriter', () => {
   // Action routing
   // ---------------------------------------------------------------------------
   describe('action routing', () => {
-    afterEach(() => purgeAudit(admin.db, sql`action LIKE 'auth.%' OR action LIKE 'api_key.%'`));
+    afterEach(() =>
+      purgeAudit(
+        admin.db,
+        sql`action LIKE 'auth.%' OR action LIKE 'api_key.%' OR (action LIKE 'session.%' AND actor_user_id = ${orgA.userId})`,
+      ),
+    );
 
-    it.each([...AUTH_ROLE_AUDIT_ACTIONS])('routes %s through acc_auth', async (action) => {
+    const standalone = AUTH_ROLE_AUDIT_ACTIONS.filter(
+      (action) => !(AUTH_ROLE_TRANSACTIONAL_AUDIT_ACTIONS as readonly string[]).includes(action),
+    );
+
+    it.each([...standalone])('routes %s through acc_auth', async (action) => {
       const correlationId = uuidv7();
       // No tenant transaction is opened: acc_auth runs before one exists. A
       // write that succeeded here through acc_app would need a principal.
@@ -124,6 +134,47 @@ describe('AuditWriter', () => {
       expect(rows[0]!.scope_type).toBe('platform');
       expect(rows[0]!.org_id).toBeNull();
     });
+
+    it.each([...AUTH_ROLE_TRANSACTIONAL_AUDIT_ACTIONS])(
+      'routes %s through acc_auth only inside the caller transaction (Phase 1C.2)',
+      async (action) => {
+        const input = record({
+          action,
+          actorType: 'user',
+          actorUserId: orgA.userId,
+          actorLabel: null,
+          resourceType: 'session',
+          outcome: 'success',
+        });
+
+        // Without a transaction: refused before anything is written.
+        const refusedId = uuidv7();
+        await expect(writer.record({ ...input, correlationId: refusedId })).rejects.toThrow(
+          /must be recorded inside the transaction/,
+        );
+        expect(await rowsFor(refusedId)).toHaveLength(0);
+
+        // Inside an acc_auth transaction that rolls back: the row goes with it.
+        const rolledBackId = uuidv7();
+        await expect(
+          authDb.transaction(async (tx) => {
+            await writer.record({ ...input, correlationId: rolledBackId }, tx as never);
+            throw new Error('mutation failed after the audit write');
+          }),
+        ).rejects.toThrow('mutation failed after the audit write');
+        expect(await rowsFor(rolledBackId)).toHaveLength(0);
+
+        // Inside an acc_auth transaction that commits: exactly one platform row.
+        const committedId = uuidv7();
+        await authDb.transaction(async (tx) => {
+          await writer.record({ ...input, correlationId: committedId }, tx as never);
+        });
+        const rows = await rowsFor(committedId);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.scope_type).toBe('platform');
+        expect(rows[0]!.org_id).toBeNull();
+      },
+    );
 
     it('routes an ordinary tenant action through acc_app inside the caller transaction', async () => {
       const correlationId = uuidv7();

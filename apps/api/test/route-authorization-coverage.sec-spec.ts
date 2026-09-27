@@ -260,9 +260,13 @@ describe('§6n case 30 — route authorization coverage', () => {
     // workspace and team routes, all scoped: the workspace list, create,
     // archive and restore target the selected organization; the two workspace
     // `:id` routes and all six team routes target a workspace or team resolved
-    // from the database: 31 → 43 scoped, 13 → 21 deferred.
-    expect(scoped.length).toBe(43);
-    expect(exempt.length).toBe(6);
+    // from the database: 31 → 43 scoped, 13 → 21 deferred. Phase 1C.2 added
+    // the three administrator session routes under `/users/:id/sessions`, all
+    // scoped at the selected organization (the per-grant F-9 coverage is an
+    // additional check, not a different target): 43 → 46 scoped; and the
+    // identity route `POST /auth/sessions/revoke-all`: 6 → 7 exempt.
+    expect(scoped.length).toBe(46);
+    expect(exempt.length).toBe(7);
     expect(open.length).toBe(6);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
 

@@ -1117,9 +1117,9 @@ POST /api/v1/ws/ticket        // no request body
 - **Requires an organization context.** Without one, `400 TENANCY_CONTEXT_REQUIRED`; send `X-Acc-Organization` if you belong to several (§5).
 - Subject to the general rate limiter as an ordinary `write` (§23).
 
-## 31. Phase 1C contracts (ADR-012) — §31a–§31c IMPLEMENTED; §31d–§31e IN PHASE 1C
+## 31. Phase 1C contracts (ADR-012) — §31a–§31c IMPLEMENTED; §31d IMPLEMENTED (awaiting review); §31e IN PHASE 1C
 
-> **Build only against subsections marked IMPLEMENTED** (§31a–§31c); the rest are not yet implemented.
+> **Build only against subsections marked IMPLEMENTED** (§31a–§31d); the rest are not yet implemented.
 > It is the authoritative *target* contract for Phase 1C, frozen before implementation
 > so the backend and the console agree in advance. 1C.3 generates OpenAPI from the
 > implementation and asserts it against this section; any disagreement is resolved
@@ -1260,7 +1260,11 @@ Every route acts in the organization selected by `X-Acc-Organization` (or implic
 - **Audit:** `workspace.created` / `.updated` / `.archived` / `.restored` at the workspace, `team.created` / `.updated` / `.archived` / `.restored` at the team; each in the mutation's transaction. Archive and restore are security-sensitive actions.
 - **`/tenants/workspaces` aliases:** unchanged in behaviour and shape; successful responses carry `Deprecation: true` and `Link: </api/v1/workspaces>; rel="successor-version"`.
 
-### 31d. Session lifecycle — IN PHASE 1C (1C.2)
+### 31d. Session lifecycle — IMPLEMENTED (Phase 1C.2, awaiting review)
+
+> **Implemented** in `apps/api/src/auth/`, `apps/api/src/iam/session.service.ts` and
+> `apps/api/src/users/` (migration `0013`). The table below is what ships; the notes
+> after it record the details the freeze left implicit.
 
 | Method | Path | Auth | Permission | Scope | Request | Success | Errors | Idempotency | Audit |
 |---|---|---|---|---|---|---|---|---|---|
@@ -1270,6 +1274,16 @@ Every route acts in the organization selected by `X-Acc-Organization` (or implic
 | `GET` | `/api/v1/users/:id/sessions` | session or key | `sessions.read` | organization, **and** every grant the target holds must be covered by the caller (ADR-012 F-9) | — | `200 {data:[session]}` (same shape as `GET /auth/sessions`, no `page`) | `404` user not a member; `403 AUTHZ_SCOPE_DENIED` target holds a grant outside the caller's scope | safe | — |
 | `POST` | `/api/v1/users/:id/sessions/revoke-all` | session | `sessions.revoke` | as above | — | `200 {data:{revoked: number}}` | `404`; `403` | not keyed | `session.revoked_all` (actor = administrator) |
 | `DELETE` | `/api/v1/users/:id/sessions/:sessionId` | session | `sessions.revoke` | as above | — | `204` | `404` user or session; `403` | naturally idempotent (repeat → `404`) | `session.revoked` |
+
+**Implementation notes (1C.2):**
+
+- **Live sessions only.** `GET /auth/sessions` and `GET /users/:id/sessions` list sessions that are not revoked, not rotated and not expired; every `revoked` count counts live sessions. A refresh replaces the listed id with a successor.
+- **A session is its rotation chain.** Revoking an id (`DELETE /auth/sessions/:id`, `DELETE /users/:id/sessions/:sessionId`, logout) revokes the whole chain, so an id listed before a refresh still signs that device out; if the chain has nothing live left the answer is `404`. Revocation takes effect on the next request even for an already-issued access token.
+- **`DELETE /auth/sessions/:id`** now succeeds (`204`) for the caller's own session. Before 1C.2 its audit write was refused by the database and it returned `500`, revoking nothing (a Phase 1B defect).
+- **`POST /auth/sessions/revoke-all`** and the two administrator revoke routes are for a signed-in user session: an API key gets `403 AUTHZ_SCOPE_DENIED`. `GET /users/:id/sessions` accepts an API key within its coverage.
+- **F-9 refusal** is `403 AUTHZ_SCOPE_DENIED` for the list and both revoke routes, audited as `authorization.denied`; it never names the grant that was not covered. `reseller_admin` and `workspace_manager` hold no session permission (`403`).
+- **Logout:** no valid bearer and no refresh cookie → `401 AUTH_CREDENTIAL_REQUIRED`; the cookie path counts against the refresh throttle (`429 RATE_LIMIT_EXCEEDED` with `Retry-After`).
+- **Suspended or closed organization** (behaviour preserved, not new policy): a member keeps self-service session control (login, refresh, logout, list, revoke, revoke-all); administrator routes follow the §31 organization-status rules — a member cannot select the organization (`403 TENANCY_ORGANIZATION_*`), and a platform principal may list but every revocation there is `409 ORGANIZATION_LIFECYCLE_CONFLICT`.
 
 **Note for the console:** sessions belong to the identity, not the organization. Revoking a user's sessions signs them out everywhere, which is why the administrator must cover **all** of the target's grants (ADR-012 F-9).
 
