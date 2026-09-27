@@ -74,7 +74,7 @@ Role assignment administration is integrated directly into the User Detail view 
 - **Assign Role Flow**: Authorised users (`role_assignments.grant`) can grant custom tenant roles to users via the `AssignRoleDialog`.
   - Roles are selected from tenant custom roles (`rolesApi.list`); platform and system roles are protected from tenant assignment.
   - Admitted scope levels are derived from `role.allowedScopeTypes`.
-  - Scope targets are pinned to authoritative metadata: `organization` targets the active organization ID, and `workspace` targets workspaces loaded via `GET /workspaces`. Team-scope assignment is not wired into this dialog: it fails closed with an explanatory message (whose wording still cites the retired "Phase 1B.8" label). The backend accepts team-scope grants through `POST /role-assignments`; the console does not yet offer them.
+  - Scope targets are pinned to authoritative metadata: `organization` targets the active organization ID, and `workspace` targets workspaces loaded via `GET /workspaces`. Team-scope assignment is not wired into this dialog: it fails closed with an explanatory message. The backend accepts team-scope grants through `POST /role-assignments`; the console does not yet offer them.
   - Mutating operations attach a persistent `Idempotency-Key` across retries.
   - Structured backend error handling surfaces unheld permission rejections (`AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION`), inadmissible scope types (`AUTHZ_SCOPE_TYPE_NOT_ADMITTED`), and disabled user conflicts.
 - **Revoke Role Flow**: Authorised operators (`role_assignments.revoke`) can revoke grants via `RevokeAssignmentDialog` with explicit confirmation (`DELETE /role-assignments/:id`).

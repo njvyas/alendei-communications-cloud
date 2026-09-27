@@ -368,7 +368,7 @@ export function AssignRoleDialog({
                     <div>
                       <p className="font-medium text-[var(--color-ink-muted)]">Team Scope (Unavailable)</p>
                       <p className="text-[11px] text-[var(--color-ink-muted)] mt-0.5">
-                        Team assignment is not available because authoritative team management endpoints arrive in Phase 1B.8+ per roadmap.
+                        Team-scope assignment is not yet available in this dialog.
                       </p>
                     </div>
                   </div>

@@ -25,6 +25,9 @@ junit.xml
 *.pfx
 secrets/
 .secrets/
+# ...except the SecretsPort source module, which holds code and no secret values
+# (a reference resolver, never the secrets themselves — SECURITY.md §3).
+!apps/api/src/secrets/
 
 # local data volumes
 .data/

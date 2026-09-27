@@ -207,7 +207,7 @@ Objectively testable; each is pass/fail.
 
 ### 4c. Phase 1C — tenant administration, session lifecycle, integrity and contract (ADR-012)
 
-**Status: SCOPE FROZEN; 1C.1a IMPLEMENTED (approved); 1C.1b IMPLEMENTED (awaiting review); 1C.2, 1C.6, 1C.3, 1C.4a/b NOT STARTED.** Gate C is not passed. Phase 1C is the successor to the previously unscheduled 1B.8 (tenant administration), 1B.9 (OpenAPI) and 1B.10 (development bootstrap), plus the Gate-B items ADR-011 D-8 scheduled for it. It builds on the Phase 1B architecture unchanged.
+**Status: SCOPE FROZEN; 1C.1a and 1C.1b IMPLEMENTED and REVIEWED; 1C.2, 1C.6, 1C.3, 1C.4a/b NOT STARTED.** The Gate C review of the 1C.1a/1C.1b backend and the Phase 1C console (27-Sep-2026) returned PASS on security, contract and regression, after the target-organization lifecycle, session-cache and documentation remediation and the repository-integrity cleanup were committed. Gate C as defined in §4d also covers 1C.2 (session policy), 1C.6 (database integrity) and 1C.3 (OpenAPI); those criteria are evaluated when those increments are built. Phase 1C is the successor to the previously unscheduled 1B.8 (tenant administration), 1B.9 (OpenAPI) and 1B.10 (development bootstrap), plus the Gate-B items ADR-011 D-8 scheduled for it. It builds on the Phase 1B architecture unchanged.
 
 | Step | Objective | Schema (planned — not yet written) | Exit criterion |
 |---|---|---|---|
