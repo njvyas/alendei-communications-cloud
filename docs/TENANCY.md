@@ -110,7 +110,7 @@ This is enforced, not merely intended. Foreign keys into tenancy rows are `ON DE
 
 Hard deletion of tenancy rows remains available to the schema owner for development fixtures and for a genuine erasure request (`DECISIONS.md` D8), and in both cases it is an explicit, owner-level operation rather than something the application can do.
 
-**Teams gain the same lifecycle in Phase 1C** (ADR-012 OD-5, F-6): `teams.status` with the existing `workspace_status` values `active | archived`. There is no team `DELETE`. *(IN PHASE 1C — not yet implemented; today `teams` has no status column.)*
+**Teams gain the same lifecycle in Phase 1C** (ADR-012 OD-5, F-6): `teams.status` with the existing `workspace_status` values `active | archived`. There is no team `DELETE`. *(Implemented in Phase 1C.1b, migration `0012`.)*
 
 ## 1c. Organization, workspace and team lifecycle (ADR-012) — organizations IMPLEMENTED (1C.1a); workspaces/teams IMPLEMENTED (1C.1b)
 

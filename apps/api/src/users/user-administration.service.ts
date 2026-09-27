@@ -445,6 +445,15 @@ export class UserAdministrationService {
     });
 
     const before = await this.loadMember(tx, orgId, id);
+
+    // ADR-012 F-9, applied to disable (Phase 1C.2 remediation M-2). Disabling
+    // an identity signs it out, and blocks its sign-in, in every organization it
+    // belongs to — so, exactly as for revoking its sessions, the administrator
+    // must cover **every** grant the target holds, not merely the selected
+    // organization. Same evaluator, same authoritative grant set; checked
+    // before the status is disclosed or anything is written.
+    await this.assertCoversSubjectGrants(principal, id, PERMISSIONS.USERS_DISABLE);
+
     if (before.status === 'disabled') {
       throw this.lifecycleConflict('This user is already disabled', before.status);
     }
@@ -642,7 +651,28 @@ export class UserAdministrationService {
       resourceType: 'User',
     });
     await this.loadMember(tx, orgId, id);
+    await this.assertCoversSubjectGrants(principal, id, permission);
+    return orgId;
+  }
 
+  /**
+   * ADR-012 F-9 complete-grant coverage — the one implementation, shared by
+   * session administration and `disable`. The target identity's complete grant
+   * set is read from authoritative identity state (`ScopeResolver` through
+   * `acc_auth`), never through the caller's RLS-visible subset, and each grant
+   * must be covered for `permission` by the caller's coherent grants
+   * (`AuthorizationService.assertCoversEveryScope`: audited `403` otherwise,
+   * recorded before the refusal is raised).
+   *
+   * Every grant row counts, including one in a suspended or closed
+   * organization: grants have no inactive state, and counting them can only
+   * refuse more often.
+   */
+  private async assertCoversSubjectGrants(
+    principal: AuthPrincipal,
+    id: string,
+    permission: string,
+  ): Promise<void> {
     const subject = await this.db.auth.transaction((authTx) =>
       this.scopes.forUser(authTx as Transaction, id),
     );
@@ -652,7 +682,6 @@ export class UserAdministrationService {
       scopes: subject.grants.map((g) => ({ scopeType: g.scopeType, scopeId: g.scopeId })),
       subject: { resourceType: 'User', resourceId: id },
     });
-    return orgId;
   }
 
   /** Revoking another user's sessions is for a signed-in administrator, never an API key. */

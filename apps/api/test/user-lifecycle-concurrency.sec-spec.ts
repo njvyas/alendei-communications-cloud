@@ -277,12 +277,6 @@ describe('user lifecycle under concurrency', () => {
     });
   };
 
-  const revokeGrant = (assignmentId: string) =>
-    request(h.app.getHttpServer())
-      .delete(url(`/role-assignments/${assignmentId}`))
-      .set('authorization', `Bearer ${adminToken}`)
-      .set('x-acc-organization', orgA.orgId);
-
   async function platformAssignmentFor(userId: string): Promise<string> {
     const [row] = await h.admin
       .select({ id: schema.userRoles.id })
@@ -296,12 +290,37 @@ describe('user lifecycle under concurrency', () => {
   // ===========================================================================
   // The last platform administrator
   // ===========================================================================
+  /*
+   * Phase 1C.2 remediation M-2: `disable` now requires the actor to cover every
+   * grant the target holds (ADR-012 F-9). A platform administrator's platform
+   * grant can only be covered by another platform grant, so an organization
+   * administrator can no longer disable one — which is what these cases used to
+   * do. The invariant they prove is unchanged; the actor is now a platform
+   * administrator (another one, or the target itself), which is the only
+   * principal that can reach it. The organization-administrator refusal is
+   * asserted explicitly below.
+   */
   describe('last platform administrator', () => {
+    it('F-9: an organization administrator cannot disable a platform administrator', async () => {
+      const target = await plantAdminMember('f9-target');
+      await plantAdminMember('f9-other');
+      expect(await admins()).toBe(2);
+
+      const res = await disable(target.userId).expect(403);
+      expect(res.body.error.code).toBe(ERROR_CODES.AUTHZ_SCOPE_DENIED);
+      expect(await statusOf(target.userId)).toBe('active');
+      expect(await admins()).toBe(2);
+      const { rows } = await h.admin.execute(
+        sql`SELECT 1 FROM audit_logs WHERE action = 'authorization.denied' AND resource_id = ${target.userId}`,
+      );
+      expect(rows).toHaveLength(1);
+    });
+
     it('case L — disabling the only active administrator is refused', async () => {
       const only = await plantAdminMember('only');
       expect(await admins()).toBe(1);
 
-      const res = await disable(only.userId).expect(409);
+      const res = await disable(only.userId, await tokenFor(only.email)).expect(409);
       expect(res.body.error.code).toBe(ERROR_CODES.AUTHZ_LAST_PLATFORM_ADMIN);
       // 409 rather than 403: the actor held the authority; the platform may not
       // enter that state.
@@ -313,17 +332,17 @@ describe('user lifecycle under concurrency', () => {
 
     it('disabling one of two administrators succeeds', async () => {
       const first = await plantAdminMember('first');
-      await plantAdminMember('second');
+      const second = await plantAdminMember('second');
       expect(await admins()).toBe(2);
 
-      await disable(first.userId).expect(200);
+      await disable(first.userId, await tokenFor(second.email)).expect(200);
       expect(await statusOf(first.userId)).toBe('disabled');
       expect(await admins()).toBe(1);
     });
 
     it('the refusal leaves no audit record of a disable that did not happen', async () => {
       const only = await plantAdminMember('audit-none');
-      await disable(only.userId).expect(409);
+      await disable(only.userId, await tokenFor(only.email)).expect(409);
       const { rows } = await h.admin.execute(
         sql`SELECT 1 FROM audit_logs WHERE action = 'user.disabled'`,
       );
@@ -348,8 +367,7 @@ describe('user lifecycle under concurrency', () => {
      */
     it('a refused disable never reaches session revocation', async () => {
       const only = await plantAdminMember('sessions-intact');
-      await tokenFor(only.email);
-      await disable(only.userId).expect(409);
+      await disable(only.userId, await tokenFor(only.email)).expect(409);
 
       expect(await statusOf(only.userId)).toBe('active');
 
@@ -456,17 +474,17 @@ describe('user lifecycle under concurrency', () => {
 
     it('once another administrator exists the same disable succeeds', async () => {
       const only = await plantAdminMember('blocked');
-      await disable(only.userId).expect(409);
+      await disable(only.userId, await tokenFor(only.email)).expect(409);
 
-      await plantAdminMember('reinforcement');
-      await disable(only.userId).expect(200);
+      const reinforcement = await plantAdminMember('reinforcement');
+      await disable(only.userId, await tokenFor(reinforcement.email)).expect(200);
       expect(await admins()).toBe(1);
     });
 
     it('a reactivated administrator counts again', async () => {
       const first = await plantAdminMember('cycle-a');
-      await plantAdminMember('cycle-b');
-      await disable(first.userId).expect(200);
+      const second = await plantAdminMember('cycle-b');
+      await disable(first.userId, await tokenFor(second.email)).expect(200);
       expect(await admins()).toBe(1);
 
       await reactivate(first.userId).expect(200);
@@ -557,14 +575,17 @@ describe('user lifecycle under concurrency', () => {
       // The textbook write skew: each transaction counts two administrators,
       // each decides its own removal is safe, each removes a *different* one.
       // Nothing about the rows they write overlaps, so only the advisory lock
-      // serialises them.
+      // serialises them. Each administrator removes itself (Phase 1C.2 M-2:
+      // only a platform administrator may disable one), so neither request can
+      // be refused at authentication by the other's success.
       const first = await plantAdminMember('skew-a');
       const second = await plantAdminMember('skew-b');
       expect(await admins()).toBe(2);
+      const [firstToken, secondToken] = [await tokenFor(first.email), await tokenFor(second.email)];
 
       const [a, b] = await Promise.all([
-        disable(first.userId).then((r) => r.status),
-        disable(second.userId).then((r) => r.status),
+        disable(first.userId, firstToken).then((r) => r.status),
+        disable(second.userId, secondToken).then((r) => r.status),
       ]);
 
       expect([a, b].filter((s) => s === 200)).toHaveLength(1);
@@ -577,10 +598,20 @@ describe('user lifecycle under concurrency', () => {
       const first = await plantAdminMember('mixed-a');
       const second = await plantAdminMember('mixed-b');
       const secondAssignment = await platformAssignmentFor(second.userId);
+      const [firstToken, secondToken] = [await tokenFor(first.email), await tokenFor(second.email)];
 
+      // Both removals by principals entitled to make them (Phase 1C.2 M-2): the
+      // first administrator disables itself; the second revokes its own
+      // platform grant. Previously the revocation came from an organization
+      // administrator, which could never cover a platform grant, so only one of
+      // the two removals was ever a real contender.
       const [disabled, revoked] = await Promise.all([
-        disable(first.userId).then((r) => r.status),
-        revokeGrant(secondAssignment).then((r) => r.status),
+        disable(first.userId, firstToken).then((r) => r.status),
+        request(h.app.getHttpServer())
+          .delete(url(`/role-assignments/${secondAssignment}`))
+          .set('authorization', `Bearer ${secondToken}`)
+          .set('x-acc-organization', orgA.orgId)
+          .then((r) => r.status),
       ]);
 
       // Whichever order they land in, exactly one of the two removals may
@@ -595,8 +626,10 @@ describe('user lifecycle under concurrency', () => {
       const c = await plantAdminMember('three-c');
       expect(await admins()).toBe(3);
 
+      // Each administrator disables itself (Phase 1C.2 M-2).
+      const tokens = [await tokenFor(a.email), await tokenFor(b.email), await tokenFor(c.email)];
       const results = await Promise.all(
-        [a, b, c].map((u) => disable(u.userId).then((r) => r.status)),
+        [a, b, c].map((u, i) => disable(u.userId, tokens[i]).then((r) => r.status)),
       );
       expect(results.filter((s) => s === 200)).toHaveLength(2);
       expect(results.filter((s) => s === 409)).toHaveLength(1);

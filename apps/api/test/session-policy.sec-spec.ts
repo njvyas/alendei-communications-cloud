@@ -58,6 +58,8 @@ describe('Phase 1C.2 session policy', () => {
   let h: Harness;
   let credentials: CredentialService;
   let authPool: Pool;
+  /** Owner connections used only to hold a user's session lock deterministically. */
+  let holderPool: Pool;
   let resellerA: string;
   let resellerB: string;
   let a1: Org;
@@ -288,6 +290,7 @@ describe('Phase 1C.2 session policy', () => {
     h = await startHarness();
     credentials = h.app.get(CredentialService);
     authPool = new Pool({ connectionString: process.env.DATABASE_AUTH_URL!, max: 2 });
+    holderPool = new Pool({ connectionString: process.env.DATABASE_ADMIN_URL!, max: 2 });
 
     resellerA = await createReseller('sp-a');
     resellerB = await createReseller('sp-b');
@@ -308,6 +311,24 @@ describe('Phase 1C.2 session policy', () => {
       p[name] = await createUser(`sp-${name}`);
       await grant(p[name]!.userId, a1.roles[RO]!, 'organization', a1.orgId);
     }
+    // M-2 (users.disable under F-9) targets.
+    p.dA1 = await createUser('sp-d-a1');
+    await grant(p.dA1.userId, a1.roles[RO]!, 'organization', a1.orgId);
+    p.dTwoOrgs = await createUser('sp-d-two-orgs');
+    await grant(p.dTwoOrgs.userId, a1.roles[RO]!, 'organization', a1.orgId);
+    await grant(p.dTwoOrgs.userId, a2.roles[RO]!, 'organization', a2.orgId);
+    p.dForeignWs = await createUser('sp-d-foreign-ws');
+    await grant(p.dForeignWs.userId, a1.roles[RO]!, 'organization', a1.orgId);
+    await grant(p.dForeignWs.userId, a2.roles[RO]!, 'workspace', a2.workspaceId);
+    p.dForeignTeam = await createUser('sp-d-foreign-team');
+    await grant(p.dForeignTeam.userId, a1.roles[RO]!, 'organization', a1.orgId);
+    await grant(p.dForeignTeam.userId, a2.roles[RO]!, 'team', a2.teamId);
+    p.dPlatformTarget = await createUser('sp-d-platform-target');
+    await grant(p.dPlatformTarget.userId, a1.roles[RO]!, 'organization', a1.orgId);
+    await grant(p.dPlatformTarget.userId, a2.roles[RO]!, 'organization', a2.orgId);
+    p.dAtomic = await createUser('sp-d-atomic');
+    await grant(p.dAtomic.userId, a1.roles[RO]!, 'organization', a1.orgId);
+
     p.tWs = await createUser('sp-t-ws');
     await grant(p.tWs.userId, a1.roles[RO]!, 'workspace', a1.workspaceId);
     p.tTeam = await createUser('sp-t-team');
@@ -392,6 +413,7 @@ describe('Phase 1C.2 session policy', () => {
     jest.restoreAllMocks();
     await h.clearRateLimits();
     await authPool.end();
+    await holderPool.end();
     const orgs = [...new Set(createdOrgs)];
     const list = (ids: string[]) =>
       sql.join(
@@ -1244,6 +1266,292 @@ describe('Phase 1C.2 session policy', () => {
   });
 
   // ===========================================================================
+  describe('M-2. users.disable requires F-9 complete-grant coverage', () => {
+    let admin: Login;
+    let platform: Login;
+    beforeAll(async () => {
+      admin = await login(p.adminA1!);
+      platform = await login(p.platform!);
+    });
+
+    const disable = (token: string, userId: string, org?: string) =>
+      call('post', token, `/users/${userId}/disable`, org);
+    const statusOf = async (userId: string) =>
+      (
+        await h.admin
+          .select({ status: schema.users.status })
+          .from(schema.users)
+          .where(eq(schema.users.id, userId))
+      )[0]!.status;
+    const sessionState = async (userId: string) =>
+      (
+        await h.admin.execute<{ id: string; revoked_at: Date | null }>(
+          sql`SELECT id, revoked_at FROM sessions WHERE user_id = ${userId} ORDER BY id`,
+        )
+      ).rows;
+
+    it('an organization administrator disables a user holding only that organization’s grants', async () => {
+      await login(p.dA1!);
+      await disable(admin.token, p.dA1!.userId).expect(200);
+      expect(await statusOf(p.dA1!.userId)).toBe('disabled');
+      expect(await liveSessions(p.dA1!.userId)).toHaveLength(0);
+      const [audit] = await auditRows(
+        sql`action = ${AUDIT_ACTIONS.USER_DISABLED} AND resource_id = ${p.dA1!.userId}`,
+      );
+      expect(audit).toMatchObject({ org_id: a1.orgId, actor_user_id: p.adminA1!.userId });
+    });
+
+    it('a target holding another organization’s grant — organization, workspace or team — is refused: audited 403, status and every session untouched', async () => {
+      for (const target of [p.dTwoOrgs!, p.dForeignWs!, p.dForeignTeam!]) {
+        await login(target);
+        await login(target);
+        const sessionsBefore = await sessionState(target.userId);
+        expect(sessionsBefore.length).toBeGreaterThanOrEqual(2);
+
+        const res = await disable(admin.token, target.userId);
+        expect(res.status).toBe(403);
+        expect(res.body.error.code).toBe(ERROR_CODES.AUTHZ_SCOPE_DENIED);
+
+        // The denial is committed before the refusal is returned (synchronous).
+        const denials = await auditRows(
+          sql`action = ${AUDIT_ACTIONS.AUTHORIZATION_DENIED} AND resource_id = ${target.userId}
+              AND actor_user_id = ${p.adminA1!.userId}`,
+        );
+        expect(denials).toHaveLength(1);
+        expect(denials[0]).toMatchObject({ org_id: a1.orgId });
+        expect(denials[0]!.metadata).toMatchObject({
+          permission: 'users.disable',
+          denialDetail: 'subject_holds_uncovered_grant',
+        });
+        const text = JSON.stringify(denials[0]);
+        for (const foreign of [a2.orgId, a2.workspaceId, a2.teamId])
+          expect(text).not.toContain(foreign);
+
+        expect(await statusOf(target.userId)).toBe('active');
+        expect(await sessionState(target.userId)).toEqual(sessionsBefore);
+        expect(
+          await auditRows(
+            sql`action = ${AUDIT_ACTIONS.USER_DISABLED} AND resource_id = ${target.userId}`,
+          ),
+        ).toHaveLength(0);
+      }
+    });
+
+    it('a platform administrator disables a multi-organization user', async () => {
+      await login(p.dPlatformTarget!);
+      await disable(platform.token, p.dPlatformTarget!.userId, a1.orgId).expect(200);
+      expect(await statusOf(p.dPlatformTarget!.userId)).toBe('disabled');
+      expect(await liveSessions(p.dPlatformTarget!.userId)).toHaveLength(0);
+    });
+
+    it('if the audit write fails, nothing is disabled and no session is revoked', async () => {
+      await login(p.dAtomic!);
+      const before = await sessionState(p.dAtomic!.userId);
+      jest.spyOn(AuditWriter.prototype, 'record').mockImplementation(async (input) => {
+        if (input.action === AUDIT_ACTIONS.USER_DISABLED) throw new Error('injected audit failure');
+      });
+      const res = await disable(admin.token, p.dAtomic!.userId);
+      expect(res.status).toBe(500);
+      jest.restoreAllMocks();
+      expect(await statusOf(p.dAtomic!.userId)).toBe('active');
+      expect(await sessionState(p.dAtomic!.userId)).toEqual(before);
+    });
+  });
+
+  // ===========================================================================
+  describe('G2. deterministic serialization: an explicitly held per-user lock', () => {
+    /**
+     * Each case holds the target user's session lock on a separate owner
+     * connection and, inside that transaction, stages the half of a race that
+     * would otherwise be timing-dependent (a rotation, or a chain revocation, in
+     * flight). The real HTTP request is then started, and the test proves from
+     * `pg_locks` that it is waiting on **that** advisory lock and has not
+     * completed; the lock is released and the final state asserted. Without the
+     * lock the request would not wait there, and would commit a wrong state.
+     */
+    async function holdLock(
+      userId: string,
+      stage: (
+        q: (text: string, values?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>,
+      ) => Promise<void>,
+    ) {
+      const client = await holderPool.connect();
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `acc:sessions:user:${userId}`,
+      ]);
+      const pid = (await client.query('SELECT pg_backend_pid() AS pid')).rows[0].pid as number;
+      await stage((text, values) => client.query(text, values as unknown[]));
+      return {
+        pid,
+        release: async () => {
+          await client.query('COMMIT');
+          client.release();
+        },
+      };
+    }
+
+    /** True once another backend is queued behind the advisory lock `holderPid` holds. */
+    async function waiterQueuedBehind(holderPid: number, timeoutMs = 10_000): Promise<boolean> {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const { rows } = await h.admin.execute<{ n: number }>(sql`
+          SELECT count(*)::int AS n
+            FROM pg_locks w
+            JOIN pg_locks held
+              ON held.locktype = 'advisory' AND held.granted AND held.pid = ${holderPid}
+             AND held.database = w.database AND held.classid = w.classid
+             AND held.objid = w.objid AND held.objsubid = w.objsubid
+           WHERE w.locktype = 'advisory' AND NOT w.granted AND w.pid <> ${holderPid}`);
+        if (rows[0]!.n > 0) return true;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return false;
+    }
+
+    /**
+     * Observes the request while the lock is held, then **always** commits the
+     * holder and waits for the request, and only then lets the caller assert.
+     * A regression therefore fails on an assertion instead of leaving a request
+     * blocked behind a transaction the test abandoned.
+     */
+    async function observeThenRelease(
+      lock: { pid: number; release: () => Promise<void> },
+      tracked: { state: { settled: boolean }; promise: Promise<request.Response> },
+    ) {
+      let queued = false;
+      let settledEarly = true;
+      try {
+        queued = await waiterQueuedBehind(lock.pid);
+        settledEarly = tracked.state.settled;
+      } finally {
+        await lock.release();
+      }
+      const res = await tracked.promise;
+      return { queued, settledEarly, res };
+    }
+
+    function track(test: request.Test) {
+      const state = { settled: false };
+      const promise = test.then((res) => {
+        state.settled = true;
+        return res;
+      });
+      return { state, promise };
+    }
+
+    const stageRotation =
+      (familyId: string, predecessorId: string, userId: string) =>
+      async (
+        q: (text: string, values?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>,
+      ) => {
+        const { rows } = await q(
+          `INSERT INTO sessions (user_id, refresh_token_hash, expires_at, family_id)
+           VALUES ($1, md5(random()::text) || md5(random()::text), now() + interval '1 day', $2)
+           RETURNING id`,
+          [userId, familyId],
+        );
+        await q(
+          'UPDATE sessions SET rotated_at = now(), replaced_by_session_id = $1 WHERE id = $2',
+          [rows[0]!.id, predecessorId],
+        );
+        stagedSuccessor = rows[0]!.id as string;
+      };
+    let stagedSuccessor = '';
+
+    it('A1. administrator revoke-all waits for an in-flight rotation, then revokes its successor too', async () => {
+      await resetSessions(p.race!.userId);
+      const admin = await login(p.adminA1!);
+      const device = await login(p.race!);
+      const family = (await sessionRow(device.sessionId))!.family_id;
+
+      const lock = await holdLock(
+        p.race!.userId,
+        stageRotation(family, device.sessionId, p.race!.userId),
+      );
+      const { queued, settledEarly, res } = await observeThenRelease(
+        lock,
+        track(call('post', admin.token, `/users/${p.race!.userId}/sessions/revoke-all`)),
+      );
+      expect(queued).toBe(true);
+      expect(settledEarly).toBe(false);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ data: { revoked: 1 } });
+      // The successor committed by the rotation is revoked, not left live.
+      expect((await sessionRow(stagedSuccessor))!.revoked_at).not.toBeNull();
+      expect(await liveSessions(p.race!.userId)).toHaveLength(0);
+    });
+
+    it('A2. a refresh waits for an in-flight chain revocation, then is refused and mints nothing', async () => {
+      await resetSessions(p.race!.userId);
+      const device = await login(p.race!);
+      const family = (await sessionRow(device.sessionId))!.family_id;
+
+      const lock = await holdLock(p.race!.userId, async (q) => {
+        await q(
+          `UPDATE sessions SET revoked_at = now(), revoked_reason = 'test_revocation'
+            WHERE family_id = $1 AND revoked_at IS NULL`,
+          [family],
+        );
+      });
+      await h.clearRateLimits();
+      const { queued, settledEarly, res } = await observeThenRelease(
+        lock,
+        track(
+          request(server())
+            .post(url('/auth/refresh'))
+            .set('Cookie', `acc_refresh=${device.cookie}`)
+            .set('X-Acc-Refresh', '1'),
+        ),
+      );
+      expect(queued).toBe(true);
+      expect(settledEarly).toBe(false);
+      expect(res.status).toBe(401);
+      const { rows } = await h.admin.execute<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM sessions WHERE family_id = ${family}`,
+      );
+      expect(rows[0]!.n).toBe(1);
+      expect(await liveInFamily(family)).toBe(0);
+    });
+
+    it('B. at the cap, a login waits for an in-flight rotation and the live count never exceeds the cap', async () => {
+      await resetSessions(p.cap!.userId);
+      const logins = [await login(p.cap!), await login(p.cap!), await login(p.cap!)];
+      expect(await liveSessions(p.cap!.userId)).toHaveLength(CAP);
+      const oldest = logins[0]!;
+      const family = (await sessionRow(oldest.sessionId))!.family_id;
+
+      // Rotation holds only the advisory lock — never the users row — so this is
+      // the race only the advisory lock serializes. (Two logins are additionally
+      // serialized by login's conditional users-row update.)
+      const lock = await holdLock(
+        p.cap!.userId,
+        stageRotation(family, oldest.sessionId, p.cap!.userId),
+      );
+      await h.clearRateLimits();
+      const { queued, settledEarly, res } = await observeThenRelease(
+        lock,
+        track(
+          request(server())
+            .post(url('/auth/login'))
+            .send({ email: p.cap!.email, password: PASSWORD }),
+        ),
+      );
+      expect(queued).toBe(true);
+      expect(settledEarly).toBe(false);
+      expect(res.status).toBe(200);
+      secrets.push(res.body.data.accessToken, cookieFrom(res));
+      const live = await liveSessions(p.cap!.userId);
+      expect(live).toHaveLength(CAP);
+      // The rotation's successor is live (it is newer than the others); the
+      // oldest *live* session — the second login — was evicted instead.
+      expect(live.map((r) => r.id)).toContain(stagedSuccessor);
+      expect((await sessionRow(logins[1]!.sessionId))!.revoked_reason).toBe(
+        'session_limit_exceeded',
+      );
+    });
+  });
+
   describe('L. organization lifecycle (documented behaviour for 1C.2, not new product policy)', () => {
     it('a member of a suspended organization keeps identity-level session control', async () => {
       await resetSessions(p.sMember!.userId);

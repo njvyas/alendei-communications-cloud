@@ -411,7 +411,7 @@ A user's *identity* and a user's *authority* are administered separately, and th
 
 **Disable reaches the identity, not the membership — an accepted consequence of §1's model.** `users.status` is a column on a platform-level table, and this document has said since §5a.1 that a user is one identity with grants in possibly several organizations. The consequences follow directly and are accepted rather than worked around:
 
-- an administrator holding `users.disable` in **one** organization the user belongs to can disable them, which ends their access to **every** organization they belong to, including under other resellers;
+- disabling a user ends their access to **every** organization they belong to, including under other resellers — so since the Phase 1C.2 remediation the administrator must hold `users.disable` covering **every** grant the user holds (ADR-012 F-9 applied to disable; audited `403` otherwise). An administrator of one organization can no longer disable a user who also belongs to another; a platform administrator can;
 - `SessionService.revokeAllForUser` carries no organization predicate, so every session goes, not only those used against the acting organization;
 - the `user.disabled` audit row is filed at the acting organization's scope (§8, ADR-005 D-6), so an affected organization has no local record of it.
 
