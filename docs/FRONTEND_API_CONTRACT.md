@@ -602,7 +602,7 @@ Every list endpoint above is paginated (§13) except `/auth/sessions` and `/perm
 
 **Correction.** An earlier version of this section was pinned to commit `6e84d7c` and listed `/users`, `/api-keys` and `/audit` as "PLANNED / NOT IMPLEMENTED" — contradicting §§30d–30f, which document all three as implemented. All three shipped in 1B.6.1, 1B.6.2 and 1B.6.3 respectively. The audit route is `/audit-logs`, not `/audit`.
 
-**Still PLANNED / NOT IMPLEMENTED**, and listed in `API.md` §2 as a target map rather than an inventory: `/workspaces`, `/teams` (**IN PHASE 1C**, §31b–§31c), `/resellers` (Phase 9), `/messages`, `/providers`, `/channels`, `/routing`, `/campaigns`, `/contacts`, `/templates`, `/billing`, `/wallets`, `/reports`, `/webhook-endpoints`, and the WebSocket gateway itself.
+**Still PLANNED / NOT IMPLEMENTED**, and listed in `API.md` §2 as a target map rather than an inventory: `/resellers` (Phase 9), `/messages`, `/providers`, `/channels`, `/routing`, `/campaigns`, `/contacts`, `/templates`, `/billing`, `/wallets`, `/reports`, `/webhook-endpoints`, and the WebSocket gateway itself.
 
 ### OpenAPI
 
@@ -1117,9 +1117,9 @@ POST /api/v1/ws/ticket        // no request body
 - **Requires an organization context.** Without one, `400 TENANCY_CONTEXT_REQUIRED`; send `X-Acc-Organization` if you belong to several (§5).
 - Subject to the general rate limiter as an ordinary `write` (§23).
 
-## 31. Phase 1C contracts — IN PHASE 1C / NOT IMPLEMENTED (ADR-012)
+## 31. Phase 1C contracts (ADR-012) — §31a–§31c IMPLEMENTED; §31d–§31e IN PHASE 1C
 
-> **Do not build against this section until each subsection is re-marked IMPLEMENTED.**
+> **Build only against subsections marked IMPLEMENTED** (§31a–§31c); the rest are not yet implemented.
 > It is the authoritative *target* contract for Phase 1C, frozen before implementation
 > so the backend and the console agree in advance. 1C.3 generates OpenAPI from the
 > implementation and asserts it against this section; any disagreement is resolved
@@ -1182,6 +1182,7 @@ POST /api/v1/ws/ticket        // no request body
 - **Who is refused on `POST`:** an organization administrator or `alendei_support` → `403 AUTHZ_SCOPE_DENIED` (audited at the caller's own organization); a reseller administrator naming another reseller → `404` (that reseller is invisible to it); a reseller administrator holding several reseller grants and naming none → `400 TENANCY_CONTEXT_REQUIRED`; an API key → `403`. A caller with several organizations, no platform or reseller authority and no `X-Acc-Organization` is refused with `403` before any target is evaluated, because there is no scope to attribute the refusal to.
 - **`Idempotency-Key` on `POST` is scoped to the caller:** the same key from another principal is a different request. A replay re-checks current authority first, so a caller who has lost it is refused (`403`/`404`), not replayed. After the stored record expires (24 hours), reusing the key runs a new creation — which normally ends in `409 RESOURCE_CONFLICT` on the slug.
 - **Status enforcement on every other route:** a principal without a platform grant cannot select a suspended or closed organization (explicitly or implicitly) and its API keys stop working, all on the next request. A platform principal can select it and read; any mutating request (`POST`/`PUT`/`PATCH`/`DELETE`) in its context is `409 ORGANIZATION_LIFECYCLE_CONFLICT` with `details.status`. Sign-in is unaffected.
+- **The target's organization is judged, not only the selected one:** routes that name their target scope explicitly — `POST /role-assignments`, `DELETE /role-assignments/:id` (the grant's stored scope), `POST /api-keys` (the binding) and `POST /api-keys/:id/revoke` (the key's stored binding) — also refuse with `409 ORGANIZATION_LIFECYCLE_CONFLICT` (`details.status`) when the organization owning that target, read from the database, is suspended or closed, even if the selected organization is active. This applies after authorization, so a caller who cannot see the target still gets `404` and never learns its status.
 - **`/auth/me`** lists only `active` organizations in `authorizedOrganizationIds` for principals without a platform grant.
 
 ### 31b. Workspaces — IMPLEMENTED (Phase 1C.1b)

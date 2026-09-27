@@ -13,6 +13,7 @@ import {
   type EffectiveGrant,
   type UserIdentity,
 } from './api-client';
+import { clearAuthenticatedQueryCache } from './query-client';
 
 /**
  * Authentication and organization-context state.
@@ -65,6 +66,11 @@ export const useSession = create<SessionState>((set, get) => ({
   errorMessage: null,
 
   setSession: ({ accessToken, user, authorization, selectedOrgId = null }) => {
+    // A different identity must never render the previous one's cached data,
+    // even if its session was not explicitly cleared first. A refresh of the
+    // same identity keeps its cache.
+    if (get().user?.userId !== user.userId) clearAuthenticatedQueryCache();
+
     setAccessToken(accessToken);
 
     const authorizedOrgs = user.authorizedOrganizationIds ?? [];
@@ -149,6 +155,8 @@ export const useSession = create<SessionState>((set, get) => ({
     invalidateSessionEpoch();
     setAccessToken(null);
     setSelectedOrganization(null);
+    // Gate C M-2: the next identity must not render this one's tenant data.
+    clearAuthenticatedQueryCache();
     set({
       status: 'unauthenticated',
       accessToken: null,

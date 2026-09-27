@@ -16,7 +16,10 @@ import { AuthorizationService } from '../auth/authorization.service';
 import { AppConfigService } from '../config/app-config.service';
 import { CredentialService } from '../iam/credential.service';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
-import { assertScopeAcceptsNewMembers } from '../tenancy/scope-lifecycle';
+import {
+  assertScopeAcceptsNewMembers,
+  assertTargetOrganizationActive,
+} from '../tenancy/scope-lifecycle';
 import { mintApiKey } from './api-key-secret';
 import type { ApiKeyScopeType, ApiKeyStatus } from './api-key.dto';
 
@@ -294,7 +297,10 @@ export class ApiKeyAdministrationService {
     // 3 — the binding, read from the database rather than from the request.
     const binding = await this.resolveBinding(tx, input.scopeType, input.scopeId);
 
-    // An archived workspace receives no new API keys (ADR-012 F-6).
+    // The organization owning the binding must be active (ADR-012 F-5) — judged
+    // from the binding's own row, not the selected organization, which may be a
+    // different one. Then an archived workspace receives no new API keys (F-6).
+    await assertTargetOrganizationActive(tx, target);
     await assertScopeAcceptsNewMembers(tx, target);
 
     // 4 — the key may not ask for more than its creator holds at the binding
@@ -395,6 +401,10 @@ export class ApiKeyAdministrationService {
       target: this.bindingScopeOf(before),
       resourceType: 'API key',
     });
+
+    // The key's organization must be active (ADR-012 F-5), whichever
+    // organization the request selected.
+    await assertTargetOrganizationActive(tx, this.bindingScopeOf(before));
 
     const beforeView = this.view(before);
     if (beforeView.status === 'revoked') {

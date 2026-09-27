@@ -71,6 +71,68 @@ export async function assertOrganizationActive(tx: Transaction, orgId: string): 
 }
 
 /**
+ * The organization owning `target`, read from the database: the scope itself for
+ * an organization, the row's own `org_id` for a workspace or team, and `null`
+ * for `platform` and `reseller`, which belong to no organization. A workspace or
+ * team that does not resolve is a `404` — callers have already authorized the
+ * target, so this is defensive, and it fails closed rather than skipping the
+ * lifecycle check.
+ */
+async function organizationOfScope(tx: Transaction, target: ScopeRef): Promise<string | null> {
+  if (!target.scopeId) return null;
+  if (target.scopeType === 'organization') return target.scopeId;
+
+  let row: { orgId: string } | undefined;
+  if (target.scopeType === 'workspace') {
+    [row] = await tx
+      .select({ orgId: schema.workspaces.orgId })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, target.scopeId));
+  } else if (target.scopeType === 'team') {
+    [row] = await tx
+      .select({ orgId: schema.teams.orgId })
+      .from(schema.teams)
+      .where(eq(schema.teams.id, target.scopeId));
+  } else {
+    return null;
+  }
+  if (!row) {
+    throw new AppException({
+      status: HttpStatus.NOT_FOUND,
+      code: ERROR_CODES.RESOURCE_NOT_FOUND,
+      message: 'Scope not found',
+    });
+  }
+  return row.orgId;
+}
+
+/**
+ * The organization owning the *target* of a mutation must be `active`
+ * (ADR-012 F-5) — not merely the selected one.
+ *
+ * Role grants, role revocations and API keys name their target scope
+ * explicitly, and a principal whose authority spans several organizations (a
+ * reseller administrator, a platform administrator) can name a scope in an
+ * organization other than the one it selected. `AuthGuard` only judges the
+ * selected organization, so without this a suspended or closed organization
+ * could be changed from an active one's context. The owning organization is
+ * derived from the target's database row, never from the request, and is read
+ * `FOR SHARE` as in `assertOrganizationActive`, so a concurrent transition
+ * serializes against the write.
+ *
+ * Call it after `AuthorizationService.assert`, so only a principal that may act
+ * on the target learns its organization's state, and before any workspace or
+ * team lock, to keep the lock order organization → workspace → team.
+ */
+export async function assertTargetOrganizationActive(
+  tx: Transaction,
+  target: ScopeRef,
+): Promise<void> {
+  const orgId = await organizationOfScope(tx, target);
+  if (orgId) await assertOrganizationActive(tx, orgId);
+}
+
+/**
  * An archived workspace or team cannot receive new teams, grants or API keys
  * (ADR-012 F-6). Organization and higher scopes have no archived state here —
  * organization status is F-5's concern — so they pass unchanged.

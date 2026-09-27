@@ -16,7 +16,10 @@ import { actorFromPrincipal } from '../audit/audit-actor';
 import { AuditWriter } from '../audit/audit-writer.service';
 import { AuthorizationService } from '../auth/authorization.service';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
-import { assertScopeAcceptsNewMembers } from '../tenancy/scope-lifecycle';
+import {
+  assertScopeAcceptsNewMembers,
+  assertTargetOrganizationActive,
+} from '../tenancy/scope-lifecycle';
 
 export interface AssignmentView {
   readonly id: string;
@@ -276,8 +279,12 @@ export class RoleAssignmentService {
       resourceType: 'Scope',
     });
 
-    // An archived workspace or team receives no new grants (ADR-012 F-6).
-    // After guard 1, so only an actor who may grant here learns the state.
+    // The organization owning the target must be active (ADR-012 F-5) — judged
+    // from the target's own row, not the selected organization, which may be a
+    // different one. Then an archived workspace or team receives no new grants
+    // (F-6). Both after guard 1, so only an actor who may grant here learns the
+    // state.
+    await assertTargetOrganizationActive(tx, target);
     await assertScopeAcceptsNewMembers(tx, target);
 
     // Guard 2 — a real, visible, assignable role.
@@ -343,6 +350,13 @@ export class RoleAssignmentService {
       permission: 'role_assignments.revoke',
       target: { scopeType: assignment.scopeType, scopeId: assignment.scopeId },
       resourceType: 'Role assignment',
+    });
+
+    // The organization owning the grant's scope must be active (ADR-012 F-5),
+    // whichever organization the request selected.
+    await assertTargetOrganizationActive(tx, {
+      scopeType: assignment.scopeType,
+      scopeId: assignment.scopeId,
     });
 
     // The last-platform-admin invariant (ADR-005 D-7). Only for a platform

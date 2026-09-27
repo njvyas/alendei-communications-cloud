@@ -28,6 +28,7 @@ Next.js App Router web console for Alendei Communications Cloud (ACC).
    - The frontend maintains client-side in-memory selected organization state validated against `authorizedOrganizationIds`.
    - Tenant-scoped requests supply `X-Acc-Organization: <selectedOrganizationId>`.
    - Arbitrary, unverified, or client-forged organization identifiers are rejected.
+   - Signing out, or any change of identity, clears every authenticated React Query entry and pending mutation (`lib/query-client.ts`), cancelling in-flight fetches first; only the public `health` probe survives. A new identity therefore never renders the previous identity's cached tenant data, independent of query keys or `staleTime` (`lib/session-cache.sec.test.ts`).
 5. **Controlled 401 Silent Refresh**:
    - Simultaneous 401 responses deduplicate into a single in-flight `POST /auth/refresh` request.
    - Retried original requests execute once; failing refresh terminates cleanly without loops.
@@ -63,7 +64,7 @@ The Roles module (`/roles`, `/roles/[id]`) implements role management and permis
 - **Custom Role Editing**: `PATCH /roles/:id` updates mutable custom roles. Permissions are submitted as a **complete replacement set**, never a delta. System and platform roles are protected as immutable.
 - **Custom Role Deletion**: `DELETE /roles/:id` requires explicit confirmation. In case of active grant references, surfaces `409 RESOURCE_CONFLICT` with actionable guidance to revoke assignments first.
 - **Downward-Only Inheritance**: Role composition is bounded by the creator's authority covering organization scope (`RBAC.md` §7). Workspace- and team-level grants do not confer authority to compose permissions into an organization-scoped role.
-- **Scope Model & Team Administration**: Adheres to the canonical 5-scope hierarchy (`PLATFORM → RESELLER → ORGANIZATION → WORKSPACE → TEAM`). `team` is selectable as an allowed scope type for custom roles per backend contract; tenant administration (including teams) is planned for Phase 1B.8 / later phases.
+- **Scope Model & Team Administration**: Adheres to the canonical 5-scope hierarchy (`PLATFORM → RESELLER → ORGANIZATION → WORKSPACE → TEAM`). `team` is selectable as an allowed scope type for custom roles per backend contract. Organization, workspace and team administration is implemented in Phase 1C (see below).
 
 ## Role Assignment Administration (Gate B — Track 3C)
 
@@ -73,7 +74,7 @@ Role assignment administration is integrated directly into the User Detail view 
 - **Assign Role Flow**: Authorised users (`role_assignments.grant`) can grant custom tenant roles to users via the `AssignRoleDialog`.
   - Roles are selected from tenant custom roles (`rolesApi.list`); platform and system roles are protected from tenant assignment.
   - Admitted scope levels are derived from `role.allowedScopeTypes`.
-  - Scope targets are pinned to authoritative metadata: `organization` targets the active organization ID, and `workspace` targets workspaces loaded via `GET /tenants/workspaces`. Team scope fails closed with an explanatory message noting roadmap scheduling (Phase 1B.8+).
+  - Scope targets are pinned to authoritative metadata: `organization` targets the active organization ID, and `workspace` targets workspaces loaded via `GET /workspaces`. Team-scope assignment is not wired into this dialog: it fails closed with an explanatory message (whose wording still cites the retired "Phase 1B.8" label). The backend accepts team-scope grants through `POST /role-assignments`; the console does not yet offer them.
   - Mutating operations attach a persistent `Idempotency-Key` across retries.
   - Structured backend error handling surfaces unheld permission rejections (`AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION`), inadmissible scope types (`AUTHZ_SCOPE_TYPE_NOT_ADMITTED`), and disabled user conflicts.
 - **Revoke Role Flow**: Authorised operators (`role_assignments.revoke`) can revoke grants via `RevokeAssignmentDialog` with explicit confirmation (`DELETE /role-assignments/:id`).
@@ -216,6 +217,6 @@ The Playwright browser E2E test suite (`apps/web/e2e/**`) proves security and se
 
 ### Known Limitations in Current Development Environment
 
-- **Tenant Provisioning**: The current development database contains 0 provisioned tenant organizations (`SELECT count(*) FROM organizations` = 0) because full organization/tenant provisioning belongs to Phase 1B.8 scope.
-- **Post-Login State**: Upon login, the bootstrapped platform administrator legitimately transitions to the `zero_organizations` state (`ZeroOrgView`), rendering "No Organization Access".
-- **Graceful Test Skipping**: In accordance with the contract, tests requiring an active tenant organization context (E2E-08) or multiple provisioned organizations (E2E-06) or a low-privilege tenant role (E2E-11) are gracefully skipped without fabricating client-side IDs or altering backend seed data.
+- **Scope of the browser suite**: E2E-01 to E2E-12 were written for Gate B (Phase 1B) console routes. **Phase 1C organization, workspace and team administration (`/organizations`, `/workspaces`, `/teams`) has no Playwright browser coverage yet.** None of the E2E cases above exercises those routes, and none of them should be read as covering Phase 1C. Phase 1C frontend behaviour is covered by the `node:test` suites (`lib/tenancy-administration.test.ts`, `lib/tenancy-security.sec.test.ts`, `lib/session-cache.sec.test.ts`) against a mocked `fetch`; backend isolation is proven by the API security suites, not by these frontend tests. Browser fixtures for Phase 1C are scheduled with Phase 1C.4.
+- **Tenant data**: Organizations are now provisioned through `POST /api/v1/organizations` (Phase 1C.1a); the development database is no longer expected to be empty. A platform-grant holder may select any existing organization; `zero_organizations` (`ZeroOrgView`) applies only while a principal genuinely has no authorized organization, and a principal holding `organizations.read` can still open `/organizations` from that state.
+- **Graceful Test Skipping**: Cases that need an active tenant organization context (E2E-08), several provisioned organizations (E2E-06) or a low-privilege tenant role (E2E-11) skip when the environment does not supply them (see the optional `E2E_*` variables above). They do not fabricate client-side IDs or alter backend seed data, and a skip is not a pass.
