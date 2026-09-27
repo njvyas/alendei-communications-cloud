@@ -1118,7 +1118,7 @@ POST /api/v1/ws/ticket        // no request body
 - **Requires an organization context.** Without one, `400 TENANCY_CONTEXT_REQUIRED`; send `X-Acc-Organization` if you belong to several (§5).
 - Subject to the general rate limiter as an ordinary `write` (§23).
 
-## 31. Phase 1C contracts (ADR-012) — §31a–§31c IMPLEMENTED; §31d IMPLEMENTED (awaiting review); §31e IN PHASE 1C
+## 31. Phase 1C contracts (ADR-012) — §31a–§31c IMPLEMENTED; §31d IMPLEMENTED; §31e IN PHASE 1C
 
 > **Build only against subsections marked IMPLEMENTED** (§31a–§31d); the rest are not yet implemented.
 > It is the authoritative *target* contract for Phase 1C, frozen before implementation
@@ -1261,7 +1261,7 @@ Every route acts in the organization selected by `X-Acc-Organization` (or implic
 - **Audit:** `workspace.created` / `.updated` / `.archived` / `.restored` at the workspace, `team.created` / `.updated` / `.archived` / `.restored` at the team; each in the mutation's transaction. Archive and restore are security-sensitive actions.
 - **`/tenants/workspaces` aliases:** unchanged in behaviour and shape; successful responses carry `Deprecation: true` and `Link: </api/v1/workspaces>; rel="successor-version"`.
 
-### 31d. Session lifecycle — IMPLEMENTED (Phase 1C.2, awaiting review)
+### 31d. Session lifecycle — IMPLEMENTED (Phase 1C.2, closed)
 
 > **Implemented** in `apps/api/src/auth/`, `apps/api/src/iam/session.service.ts` and
 > `apps/api/src/users/` (migration `0013`). The table below is what ships; the notes

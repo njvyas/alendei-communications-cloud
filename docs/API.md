@@ -394,9 +394,9 @@ Sorting is `occurredAt` only, default `-occurredAt`. An audit trail is read chro
 
 **Query cost**: list is 2 queries (the authorization chain resolve, then one page), detail is 1–2 (the row, then a chain resolve that is free for `platform` scope). No `COUNT(*)`, no N+1. `EXPLAIN` confirms the default ordering is served by `Index Scan Backward using audit_logs_pkey`, so **no index was added** — none would be used by the current predicate shape, since the RLS disjunction is not sargable. At scale the cost characteristic is filter selectivity rather than a missing index; the fix would be a sargable tenant predicate, which is deferred because it conflicts with the reseller view.
 
-### 3g. Phase 1C resources (ADR-012) — organizations IMPLEMENTED (1C.1a); workspaces and teams IMPLEMENTED (1C.1b); sessions IMPLEMENTED (1C.2, awaiting review)
+### 3g. Phase 1C resources (ADR-012) — organizations IMPLEMENTED (1C.1a); workspaces and teams IMPLEMENTED (1C.1b); sessions IMPLEMENTED (1C.2, CLOSED)
 
-**Implementation status:** the organization routes are **implemented (Phase 1C.1a)**; the workspace and team routes are **implemented (Phase 1C.1b)**; the session routes are **implemented (Phase 1C.2, awaiting review)**. The field-level contract — schemas, request bodies, success and error responses, idempotency and audit — is frozen in **`FRONTEND_API_CONTRACT.md` §31**, which is the single authority for these routes. This section indexes it and states the server-side rules; it deliberately does not restate fields, so the two cannot drift. The OpenAPI document generated in 1C.3 is asserted against §31.
+**Implementation status:** the organization routes are **implemented (Phase 1C.1a)**; the workspace and team routes are **implemented (Phase 1C.1b)**; the session routes are **implemented (Phase 1C.2, closed)**. The field-level contract — schemas, request bodies, success and error responses, idempotency and audit — is frozen in **`FRONTEND_API_CONTRACT.md` §31**, which is the single authority for these routes. This section indexes it and states the server-side rules; it deliberately does not restate fields, so the two cannot drift. The OpenAPI document generated in 1C.3 is asserted against §31.
 
 | Area | Routes | Increment | Target scope rule |
 |---|---|---|---|
