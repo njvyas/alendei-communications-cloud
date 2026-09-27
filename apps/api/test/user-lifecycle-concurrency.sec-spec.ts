@@ -484,10 +484,15 @@ describe('user lifecycle under concurrency', () => {
     it('a reactivated administrator counts again', async () => {
       const first = await plantAdminMember('cycle-a');
       const second = await plantAdminMember('cycle-b');
-      await disable(first.userId, await tokenFor(second.email)).expect(200);
+      const secondToken = await tokenFor(second.email);
+      await disable(first.userId, secondToken).expect(200);
       expect(await admins()).toBe(1);
 
-      await reactivate(first.userId).expect(200);
+      // Reactivation also requires covering every grant the target holds
+      // (ADR-012 F-9, Phase 1C security remediation): a platform grant can only
+      // be covered by a platform administrator, never by the organization
+      // administrator this case used before.
+      await reactivate(first.userId, secondToken).expect(200);
       expect(await admins()).toBe(2);
     });
   });

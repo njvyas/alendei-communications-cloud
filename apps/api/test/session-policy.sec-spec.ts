@@ -329,6 +329,23 @@ describe('Phase 1C.2 session policy', () => {
     p.dAtomic = await createUser('sp-d-atomic');
     await grant(p.dAtomic.userId, a1.roles[RO]!, 'organization', a1.orgId);
 
+    // users.reactivate under F-9 targets (created active, disabled below).
+    p.rTwoOrgs = await createUser('sp-r-two-orgs');
+    await grant(p.rTwoOrgs.userId, a1.roles[RO]!, 'organization', a1.orgId);
+    await grant(p.rTwoOrgs.userId, a2.roles[RO]!, 'organization', a2.orgId);
+    p.rPlatformAdmin = await createUser('sp-r-platform-admin');
+    await grant(p.rPlatformAdmin.userId, a1.roles[RO]!, 'organization', a1.orgId);
+    await grant(
+      p.rPlatformAdmin.userId,
+      await platformRole(PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN),
+      'platform',
+      null,
+    );
+    p.rA1 = await createUser('sp-r-a1');
+    await grant(p.rA1.userId, a1.roles[RO]!, 'organization', a1.orgId);
+    p.rA1NoPerm = await createUser('sp-r-a1-noperm');
+    await grant(p.rA1NoPerm.userId, a1.roles[RO]!, 'organization', a1.orgId);
+
     p.tWs = await createUser('sp-t-ws');
     await grant(p.tWs.userId, a1.roles[RO]!, 'workspace', a1.workspaceId);
     p.tTeam = await createUser('sp-t-team');
@@ -1355,6 +1372,160 @@ describe('Phase 1C.2 session policy', () => {
       jest.restoreAllMocks();
       expect(await statusOf(p.dAtomic!.userId)).toBe('active');
       expect(await sessionState(p.dAtomic!.userId)).toEqual(before);
+    });
+  });
+
+  // ===========================================================================
+  describe('R. users.reactivate requires F-9 complete-grant coverage', () => {
+    let admin: Login;
+    let platform: Login;
+    /** An API key created by the multi-organization target, bound to A2. */
+    let targetKey: string;
+
+    const reactivate = (token: string, userId: string, org?: string) =>
+      call('post', token, `/users/${userId}/reactivate`, org);
+    const statusOf = async (userId: string) =>
+      (
+        await h.admin
+          .select({ status: schema.users.status })
+          .from(schema.users)
+          .where(eq(schema.users.id, userId))
+      )[0]!.status;
+    const sessionState = async (userId: string) =>
+      (
+        await h.admin.execute<{ id: string; revoked_at: Date | null }>(
+          sql`SELECT id, revoked_at FROM sessions WHERE user_id = ${userId} ORDER BY id`,
+        )
+      ).rows;
+    const credentialOf = async (userId: string) =>
+      (
+        await h.admin
+          .select({ hash: schema.users.passwordHash, mfa: schema.users.mfaSecretRef })
+          .from(schema.users)
+          .where(eq(schema.users.id, userId))
+      )[0]!;
+    const setStatus = (userId: string, status: 'active' | 'disabled') =>
+      h.admin.update(schema.users).set({ status }).where(eq(schema.users.id, userId));
+    /** Does the key have any authority in A2? `GET /workspaces` needs `workspaces.read`. */
+    const keyWorks = async () => (await call('get', targetKey, '/workspaces')).status;
+
+    beforeAll(async () => {
+      admin = await login(p.adminA1!);
+      platform = await login(p.platform!);
+
+      // The target's key works while it is active — a positive control.
+      const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+      const secret = `s${uuidv7().replace(/-/g, '')}${uuidv7().replace(/-/g, '')}`;
+      await h.admin.insert(schema.apiKeys).values({
+        orgId: a2.orgId,
+        name: `sp-r-${prefix}`,
+        keyPrefix: prefix,
+        keyHash: await credentials.hash(secret),
+        scopes: ['workspaces.read'],
+        createdBy: p.rTwoOrgs!.userId,
+      });
+      targetKey = `${prefix}.${secret}`;
+      secrets.push(targetKey, secret);
+      expect(await keyWorks()).toBe(200);
+
+      // Disabled by a principal entitled to do so (a platform administrator).
+      await login(p.rTwoOrgs!);
+      await call('post', platform.token, `/users/${p.rTwoOrgs!.userId}/disable`, a1.orgId).expect(
+        200,
+      );
+      await setStatus(p.rPlatformAdmin!.userId, 'disabled');
+      await setStatus(p.rA1NoPerm!.userId, 'disabled');
+    });
+
+    it('an organization administrator cannot reactivate a disabled user who also holds another organization’s grant — audited 403, nothing restored', async () => {
+      const sessionsBefore = await sessionState(p.rTwoOrgs!.userId);
+      const credentialBefore = await credentialOf(p.rTwoOrgs!.userId);
+      expect(await keyWorks()).toBe(403);
+
+      const res = await reactivate(admin.token, p.rTwoOrgs!.userId);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe(ERROR_CODES.AUTHZ_SCOPE_DENIED);
+      // Generic: no grant, organization or scope is named.
+      const body = JSON.stringify(res.body);
+      for (const foreign of [a2.orgId, a2.workspaceId, a2.teamId, resellerA]) {
+        expect(body).not.toContain(foreign);
+      }
+
+      // Status, credential and sessions are untouched.
+      expect(await statusOf(p.rTwoOrgs!.userId)).toBe('disabled');
+      expect(await credentialOf(p.rTwoOrgs!.userId)).toEqual(credentialBefore);
+      expect(await sessionState(p.rTwoOrgs!.userId)).toEqual(sessionsBefore);
+      // Organization B authority is not restored: no sign-in, and the key the
+      // target created in A2 stays without authority.
+      expect((await loginRaw(p.rTwoOrgs!.email)).status).toBe(401);
+      expect(await keyWorks()).toBe(403);
+
+      // The denial is audited, at the administrator's organization, generically.
+      const denials = await auditRows(
+        sql`action = ${AUDIT_ACTIONS.AUTHORIZATION_DENIED} AND resource_id = ${p.rTwoOrgs!.userId}
+            AND actor_user_id = ${p.adminA1!.userId}`,
+      );
+      expect(denials).toHaveLength(1);
+      expect(denials[0]).toMatchObject({ org_id: a1.orgId });
+      expect(denials[0]!.metadata).toMatchObject({
+        permission: 'users.reactivate',
+        denialDetail: 'subject_holds_uncovered_grant',
+      });
+      const denialText = JSON.stringify(denials[0]);
+      for (const foreign of [a2.orgId, a2.workspaceId, a2.teamId]) {
+        expect(denialText).not.toContain(foreign);
+      }
+      expect(
+        await auditRows(
+          sql`action = ${AUDIT_ACTIONS.USER_REACTIVATED} AND resource_id = ${p.rTwoOrgs!.userId}`,
+        ),
+      ).toHaveLength(0);
+    });
+
+    it('an organization administrator cannot reactivate a disabled platform administrator because it holds a grant in the caller’s organization', async () => {
+      const res = await reactivate(admin.token, p.rPlatformAdmin!.userId);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe(ERROR_CODES.AUTHZ_SCOPE_DENIED);
+      expect(await statusOf(p.rPlatformAdmin!.userId)).toBe('disabled');
+      expect((await loginRaw(p.rPlatformAdmin!.email)).status).toBe(401);
+    });
+
+    it('missing users.reactivate is still refused at the organization, exactly as before', async () => {
+      const reader = await login(p.tOrg!);
+      const res = await reactivate(reader.token, p.rA1NoPerm!.userId);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe(ERROR_CODES.AUTHZ_SCOPE_DENIED);
+      expect(await statusOf(p.rA1NoPerm!.userId)).toBe('disabled');
+      const [denial] = await auditRows(
+        sql`action = ${AUDIT_ACTIONS.AUTHORIZATION_DENIED} AND actor_user_id = ${p.tOrg!.userId}
+            AND metadata->>'permission' = 'users.reactivate'`,
+      );
+      expect(denial).toBeDefined();
+    });
+
+    it('an organization administrator still reactivates a user it fully covers; revoked sessions stay revoked', async () => {
+      const before = await login(p.rA1!);
+      await call('post', admin.token, `/users/${p.rA1!.userId}/disable`).expect(200);
+      expect((await me(before.token)).status).toBe(401);
+
+      const res = await reactivate(admin.token, p.rA1!.userId).expect(200);
+      expect(res.body.data.status).toBe('active');
+      expect(await statusOf(p.rA1!.userId)).toBe('active');
+      // Reactivation does not resurrect the sessions the disable revoked.
+      expect((await me(before.token)).status).toBe(401);
+      expect((await refreshRaw(before.cookie)).status).toBe(401);
+      await me((await login(p.rA1!)).token).expect(200);
+      const [audit] = await auditRows(
+        sql`action = ${AUDIT_ACTIONS.USER_REACTIVATED} AND resource_id = ${p.rA1!.userId}`,
+      );
+      expect(audit).toMatchObject({ org_id: a1.orgId, actor_user_id: p.adminA1!.userId });
+    });
+
+    it('a platform administrator covers every grant and reactivates the multi-organization user — its authority and key are restored', async () => {
+      const res = await reactivate(platform.token, p.rTwoOrgs!.userId, a1.orgId).expect(200);
+      expect(res.body.data.status).toBe('active');
+      expect(await keyWorks()).toBe(200);
+      await me((await login(p.rTwoOrgs!)).token).expect(200);
     });
   });
 

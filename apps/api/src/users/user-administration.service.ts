@@ -509,6 +509,17 @@ export class UserAdministrationService {
     });
 
     const before = await this.loadMember(tx, orgId, id);
+
+    // ADR-012 F-9, applied to reactivate (Phase 1C security remediation). Like
+    // disable, reactivation is global to the identity: it restores sign-in in
+    // every organization the user belongs to, its authority at every scope it
+    // holds a grant, and the effectiveness of every API key it created. So the
+    // administrator must cover **every** grant the target holds — same helper,
+    // same evaluator, same authoritative grant set as disable — checked before
+    // the status is disclosed or anything is written. The refusal is a generic
+    // audited `403` that names no grant.
+    await this.assertCoversSubjectGrants(principal, id, PERMISSIONS.USERS_REACTIVATE);
+
     if (before.status !== 'disabled') {
       throw this.lifecycleConflict('This user is not disabled', before.status);
     }
