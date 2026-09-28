@@ -304,7 +304,18 @@ export class RoleAssignmentService {
       await this.assertAssignableUser(tx, input.userId);
     }
 
-    const inserted = await this.insertGrant(tx, principal, input);
+    // `fn_validate_user_role_scope` re-checks the role's assignability with the
+    // role row locked (Phase 1C.6). It can refuse what guard 3 admitted only
+    // when the role was narrowed concurrently; that refusal is the same `422`.
+    const inserted = await this.insertGrant(tx, principal, input).catch((error: unknown) => {
+      const cause = (error as { cause?: { code?: string; constraint?: string } }).cause;
+      if (cause?.code === '23514' && cause.constraint === 'user_roles_scope_type_admitted') {
+        // The role's current value is not re-read (the transaction has
+        // failed), so it is not reported.
+        throw this.scopeTypeNotAdmitted(role.key, input.scopeType, null);
+      }
+      throw error;
+    });
 
     await this.audit.record(
       {
@@ -478,8 +489,16 @@ export class RoleAssignmentService {
   ): void {
     const admitted = role.allowedScopeTypes as readonly ScopeType[];
     if (admitted.includes(scopeType)) return;
+    throw this.scopeTypeNotAdmitted(role.key, scopeType, admitted);
+  }
 
-    throw new AppException({
+  /** The one definition of the refusal, for guard 3 and its database backstop. */
+  private scopeTypeNotAdmitted(
+    roleKey: string,
+    scopeType: ScopeType,
+    admitted: readonly ScopeType[] | null,
+  ): AppException {
+    return new AppException({
       // `422`, not `403` (`API.md` §3c): the actor was entitled and the request
       // well-formed — the role simply does not exist at this level. Collapsing
       // it into `403` would tell an administrator it lacked authority it
@@ -488,7 +507,11 @@ export class RoleAssignmentService {
       code: ERROR_CODES.AUTHZ_SCOPE_TYPE_NOT_ADMITTED,
       message: `This role cannot be granted at ${scopeType} scope`,
       // The role's own design, which the caller can already read from `/roles`.
-      details: { roleKey: role.key, allowedScopeTypes: admitted, requested: scopeType },
+      details: {
+        roleKey,
+        ...(admitted ? { allowedScopeTypes: admitted } : {}),
+        requested: scopeType,
+      },
     });
   }
 

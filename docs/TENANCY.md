@@ -128,7 +128,7 @@ Hard deletion of tenancy rows remains available to the schema owner for developm
 
 - Transitions are performed only by a principal holding `platform.tenants.manage` at platform scope (F-2). Reseller-initiated suspension, and any cascade from a suspended reseller, are **DEFERRED** with reseller lifecycle (OD-2).
 - Creation: by `platform.tenants.manage` (any reseller) or by `organizations.create` at `reseller` scope beneath that reseller only (F-3). The organization's tenant system roles (`TenantRoleProvisioner`) and **one default workspace** (`is_default = true`) are created in the same transaction. This is what makes `DECISIONS.md` D3's "every organization gets a seeded default workspace" true for API-created organizations.
-- `resellerId` and `slug` are immutable (F-8); moving an organization between resellers is not a Phase 1C operation, and 1C.6 adds a database guard so a direct write cannot do it either.
+- `resellerId` and `slug` are immutable (F-8); moving an organization between resellers is not a Phase 1C operation, and the Phase 1C.6 database guard (`trg_organizations_guard_reseller_id`, migration `0014`) refuses a direct write too, unless the writer is a validated platform administrator or a principal that bypasses RLS.
 - **Closing deletes nothing** (OD-12). Data is retained, inaccessible to organization principals, readable by platform principals, and no mutation of tenant data is accepted in a closed organization. Physical deletion and retention automation are out of scope.
 
 **How status is enforced — application authorization, not RLS** (OD-3, F-4, F-5):

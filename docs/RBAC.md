@@ -133,7 +133,7 @@ Organizations may define additional custom roles by composing existing `permissi
 
 ### 4a. Which roles may be assigned at which scopes
 
-The complete assignability matrix. A blank cell is refused. **Which layer refuses it differs:** the platform/tenant split (rules 1–2 below) is enforced by `fn_validate_user_role_scope` as well as by the service; the per-role column (`roles.allowed_scope_types`, e.g. `org_admin` only at `organization`) is enforced by `RoleAssignmentService` only (§6n case 28). Database enforcement of `allowed_scope_types` is **DEFERRED** — the column exists and is constrained to its level (migration `0004`), but the trigger does not consult it at grant time.
+The complete assignability matrix. A blank cell is refused. **Which layer refuses it differs:** the platform/tenant split (rules 1–2 below) is enforced by `fn_validate_user_role_scope` as well as by the service; the per-role column (`roles.allowed_scope_types`, e.g. `org_admin` only at `organization`) is enforced by `RoleAssignmentService` first (§6n case 28, `422 AUTHZ_SCOPE_TYPE_NOT_ADMITTED`) and, **since Phase 1C.6 (migration `0014`), by the database for every writer**: `fn_validate_user_role_scope` refuses a grant at a scope type its role does not admit — platform and tenant roles alike — and `trg_roles_guard_allowed_scope_types` refuses narrowing a role's `allowed_scope_types` while a grant exists at a type it would stop admitting (`PATCH /roles/:id` answers that with `409 RESOURCE_CONFLICT`). No `user_roles` row can exist at a scope type its role does not admit.
 
 | Role | `platform` | `reseller` | `organization` | `workspace` | `team` |
 |---|:---:|:---:|:---:|:---:|:---:|
@@ -147,7 +147,7 @@ The complete assignability matrix. A blank cell is refused. **Which layer refuse
 | `read_only` | | | ✓ | ✓ | ✓ |
 | custom tenant role | | | ✓ | ✓ | ✓ |
 
-*Phase 1C (1C.6, IN PHASE 1C) moves the per-role column into `fn_validate_user_role_scope` as well, so the database will refuse a grant at a scope type the role does not admit even with the service bypassed; until then the service is the only enforcement of the column.*
+*Phase 1C.6 (migration `0014`) moved the per-role column into `fn_validate_user_role_scope`, so the database refuses a grant at a scope type the role does not admit even with the service bypassed, and it refuses narrowing a role's `allowed_scope_types` while a grant would be stranded.*
 
 Two structural rules generate the level split of this table, and the database enforces both independently of the service:
 

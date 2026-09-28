@@ -166,6 +166,15 @@ export const apiKeys = pgTable(
     // never be recorded against an organization the key does not belong to
     // (`TENANCY.md` §1a.3, ADR-002).
     unique('api_keys_id_org_id_key').on(table.id, table.orgId),
+    // Phase 1C.6 (ADR-011 D-8, ADR-012): a workspace-bound key's organization
+    // must be its workspace's organization — unrepresentable otherwise, not
+    // merely unwritten. A key bound to its organization only has a NULL
+    // `workspace_id`, which a MATCH SIMPLE key does not check.
+    foreignKey({
+      name: 'api_keys_workspace_org_fk',
+      columns: [table.workspaceId, table.orgId],
+      foreignColumns: [workspaces.id, workspaces.orgId],
+    }).onDelete('restrict'),
     check('api_keys_scopes_is_array', sql`jsonb_typeof(${table.scopes}) = 'array'`),
     check('api_keys_prefix_shape', sql`${table.keyPrefix} ~ '^ak_(live|test)_[A-Za-z0-9]{16}$'`),
   ],
@@ -205,6 +214,13 @@ export const wsTickets = pgTable(
     uniqueIndex('ws_tickets_ticket_hash_key').on(table.ticketHash),
     index('ws_tickets_org_id_idx').on(table.orgId),
     index('ws_tickets_expires_at_idx').on(table.expiresAt),
+    // Phase 1C.6: as for `api_keys` — a ticket's workspace belongs to the
+    // ticket's organization, or the row cannot exist.
+    foreignKey({
+      name: 'ws_tickets_workspace_org_fk',
+      columns: [table.workspaceId, table.orgId],
+      foreignColumns: [workspaces.id, workspaces.orgId],
+    }).onDelete('restrict'),
     check('ws_tickets_scope_is_array', sql`jsonb_typeof(${table.scope}) = 'array'`),
     check('ws_tickets_ttl_positive', sql`${table.expiresAt} > ${table.issuedAt}`),
   ],

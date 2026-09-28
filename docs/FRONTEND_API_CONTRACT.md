@@ -663,6 +663,16 @@ Five behaviours the frontend must build against:
 Deletion returns `409` `RESOURCE_CONFLICT` while any user still holds the role —
 revoke the grants first, through `DELETE /role-assignments/:id` (§30b).
 
+**Narrowing `allowedScopeTypes` (Phase 1C.6).** `PATCH /roles/:id` answers `409`
+`RESOURCE_CONFLICT` when the new `allowedScopeTypes` would stop admitting a scope
+type the role is still granted at; `error.details.scopeTypesInUse` lists those
+types (sorted). Nothing is changed and no grant is revoked for you — revoke the
+affected grants first, then narrow. Widening, renaming and narrowing that strands
+no grant succeed as before. The database enforces the same rule for every writer,
+so a console cannot reach a state where a grant sits at a scope its role does not
+admit. *(Console handling of this `409` is a frontend increment; no console change
+is part of 1C.6.)*
+
 ## 30b. Role assignments — IMPLEMENTED (Phase 1B.5.5)
 
 An assignment, as returned by every `/role-assignments` endpoint:

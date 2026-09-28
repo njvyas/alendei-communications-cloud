@@ -832,7 +832,12 @@ describe('last-platform-admin invariant', () => {
             .set({ scopeType: 'reseller', scopeId: orgA.resellerId })
             .where(eq(schema.userRoles.id, id));
         }),
-        /no active administrator/,
+        // Since migration 0014 (Phase 1C.6, decision §14.2) the move is refused
+        // earlier and unconditionally: `alendei_super_admin` admits only
+        // `platform`, so no super-admin grant can be moved to reseller scope at
+        // all, last or not. The liveness trigger remains the guard for the
+        // user and role reassignment paths below.
+        /role alendei_super_admin does not admit scope_type reseller/,
       );
       expect(await admins()).toBe(1);
     });

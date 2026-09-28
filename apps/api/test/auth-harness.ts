@@ -156,7 +156,14 @@ export async function createTenant(
         key: TENANT_ROLE_KEYS.ORG_ADMIN,
         name: 'Organization Admin',
         isSystemRole: true,
-        allowedScopeTypes: ['organization'],
+        // TEST INFRASTRUCTURE ONLY (Phase 1C.6, decision §14.3). This is the
+        // harness's stand-in role, not the seeded production `org_admin`
+        // (which admits `organization` only, `TENANT_ROLE_DEFINITIONS`).
+        // `createScopedUser` grants it at workspace and team scope for many
+        // Gate B fixtures; since migration 0014 the database refuses a grant at
+        // a scope its role does not admit, so the stand-in admits all three.
+        // Its permissions are unchanged.
+        allowedScopeTypes: ['organization', 'workspace', 'team'],
       })
       .returning({ id: schema.roles.id });
 

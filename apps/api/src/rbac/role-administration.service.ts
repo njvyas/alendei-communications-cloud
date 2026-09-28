@@ -7,7 +7,7 @@ import {
   type ScopeType,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
-import { and, eq, inArray, isNull, or, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, isNull, notInArray, or, type SQL } from 'drizzle-orm';
 
 import { AppException } from '../common/errors/app.exception';
 import { actorFromPrincipal } from '../audit/audit-actor';
@@ -277,7 +277,10 @@ export class RoleAdministrationService {
 
     const role = await this.loadVisible(tx, orgId, roleId);
     this.assertMutable(role);
-    if (input.allowedScopeTypes) this.assertTenantScopeTypes(input.allowedScopeTypes);
+    if (input.allowedScopeTypes) {
+      this.assertTenantScopeTypes(input.allowedScopeTypes);
+      await this.assertNarrowingLeavesNoGrantStranded(tx, roleId, input.allowedScopeTypes);
+    }
     if (input.permissions) {
       await this.assertComposable(tx, principal, orgId, input.permissions);
     }
@@ -293,7 +296,17 @@ export class RoleAdministrationService {
         updatedAt: new Date(),
       })
       .where(eq(schema.roles.id, roleId))
-      .returning();
+      .returning()
+      .catch((error: unknown) => {
+        // `trg_roles_guard_allowed_scope_types` (migration 0014) is the
+        // backstop for the check above; with the role row locked it should not
+        // fire, but if it does the answer is the same `409`.
+        const cause = (error as { cause?: { code?: string; constraint?: string } }).cause;
+        if (cause?.code === '23514' && cause.constraint === 'roles_allowed_scope_types_in_use') {
+          throw this.narrowingConflict(null);
+        }
+        throw error;
+      });
 
     if (input.permissions) {
       await this.replacePermissions(tx, roleId, input.permissions);
@@ -307,6 +320,52 @@ export class RoleAdministrationService {
     });
 
     return after!;
+  }
+
+  /**
+   * Phase 1C.6 (decision §14.1, Option A): `allowedScopeTypes` may not be
+   * narrowed while the role is granted at a scope type it would stop admitting.
+   * Nothing is revoked on the caller's behalf; it is refused (`409`, as for
+   * deleting a role that is still granted), naming only the scope types in use.
+   *
+   * The role row is locked `FOR UPDATE` first. Every grant of this role takes
+   * `FOR SHARE` on the same row (`fn_validate_user_role_scope`), so a concurrent
+   * grant either committed before this read — and is seen — or waits for this
+   * update and is then judged against the narrowed value. The database guard
+   * `trg_roles_guard_allowed_scope_types` enforces the same rule for any writer.
+   */
+  private async assertNarrowingLeavesNoGrantStranded(
+    tx: Transaction,
+    roleId: string,
+    allowed: readonly ScopeType[],
+  ): Promise<void> {
+    await tx
+      .select({ id: schema.roles.id })
+      .from(schema.roles)
+      .where(eq(schema.roles.id, roleId))
+      .for('update');
+    const inUse = await tx
+      .selectDistinct({ scopeType: schema.userRoles.scopeType })
+      .from(schema.userRoles)
+      .where(
+        and(
+          eq(schema.userRoles.roleId, roleId),
+          notInArray(schema.userRoles.scopeType, [...allowed]),
+        ),
+      );
+    if (inUse.length > 0) {
+      throw this.narrowingConflict(inUse.map((r) => r.scopeType as ScopeType).sort());
+    }
+  }
+
+  private narrowingConflict(scopeTypesInUse: readonly ScopeType[] | null): AppException {
+    return new AppException({
+      status: HttpStatus.CONFLICT,
+      code: ERROR_CODES.RESOURCE_CONFLICT,
+      message:
+        'This role is still granted at a scope type it would no longer admit; revoke those grants first',
+      ...(scopeTypesInUse ? { details: { scopeTypesInUse } } : {}),
+    });
   }
 
   async remove(tx: Transaction, principal: AuthPrincipal, roleId: string): Promise<void> {
