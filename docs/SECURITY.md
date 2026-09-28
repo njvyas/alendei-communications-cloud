@@ -329,7 +329,10 @@ The first two rows and the API half of the third are **implemented (Phase 1C.1a)
 4. `family_id` / session rotation-chain integrity is enforced by the application rather than by a database constraint. This is a documented residual.
 5. Coupling between session audit rows and the corresponding session mutation is enforced by the application transaction model rather than by a database trigger/constraint. The accepted trust model and its limits are documented in the session audit routing paragraph above and in `DECISIONS.md`.
 6. The F-9 complete-grant check has a concurrency race: a grant created after the grant set is read can be missed. This is permissive rather than conservative: the operation may proceed based on the earlier grant set, potentially disabling/revoking the target slightly earlier than ideal, but it does not grant the administrator additional authority over the newly-created grant.
-7. **Added with the `users.reactivate` remediation:** `PATCH /users/:id` (`users.update`) is **not** changed and remains a separate deferred residual: it authorizes at the selected organization but writes `users.phone`, a field of the global identity. It is profile data today and is not used for authentication.
+
+**Phase 1C security residual identified after the 1C.2 closure** (by the `users.reactivate` remediation; not part of the 1C.2 closure record; `DECISIONS.md` ADR-012, "Phase 1C security remediation — `users.reactivate` under F-9"):
+
+- `PATCH /users/:id` (`users.update`) is **not** changed and remains a separate deferred residual: it authorizes at the selected organization but writes `users.phone`, a field of the global identity. It is profile data today and is not used for authentication.
 
 **Unchanged by Phase 1C:** the validated-claim model (migration `0010`), organization-level RLS with workspace/team enforced by authorization (ADR-011 D-4), the `acc_app` trust assumption (§4b), and the unauthenticated-path throttles. WebSocket consumption (D15) and credential delivery (D16) remain DEFERRED.
 
