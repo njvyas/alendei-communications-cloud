@@ -842,9 +842,9 @@ Login success clears only the account bucket; `/auth/refresh` is throttled per a
 | Logout after access-token expiry | Accepted Gate-B residual risk → **implemented in 1C.2 (ADR-012 F-12)**: `POST /auth/logout` accepts the refresh cookie with `X-Acc-Refresh` when no valid bearer is presented | Backend side done. Before 1C.2 the session stayed revocable (`DELETE /auth/sessions/:id`, user disable) and expired with its refresh TTL. Whether the console already reaches the cookie path when its access token has expired is a frontend matter, not changed here. |
 | WebSocket tickets surviving session revocation | Deferred (with the gateway, D15) | Nothing consumes a ticket, so a surviving ticket confers nothing until the gateway exists, which must check the session at consumption. |
 | WebSocket ticket issuance without a permission check | Deferred (with the gateway, D15) | The topic scope only matters when a gateway admits subscriptions; the ticket is still bound to the caller's own organization and session. |
-| No composite `(workspace_id, org_id)` FK on `api_keys`/`ws_tickets` | Accepted Gate-B residual risk → **implemented in 1C.6 (migration `0014`)**, awaiting review | Both writers derive the binding from the database, and RLS keeps a row inside its organization; a mismatched row needs an owner-level writer. |
+| No composite `(workspace_id, org_id)` FK on `api_keys`/`ws_tickets` | Accepted Gate-B residual risk → **implemented in 1C.6 (migration `0014`); CLOSED (Gate C.6 PASS)** | Both writers derive the binding from the database, and RLS keeps a row inside its organization; a mismatched row needs an owner-level writer. |
 | READ COMMITTED dependency for the last-admin race | Accepted Gate-B residual risk | No code path changes the isolation level, and the concurrency tests prove the invariant under the level actually used. |
-| `allowed_scope_types` application-only | Accepted Gate-B residual risk → **implemented in 1C.6 (migration `0014`)**, awaiting review; the database enforces it for every role and refuses narrowing that would strand a grant | Enforced on the only grant path (`RoleAssignmentService`, case 28); a bypassing writer is still confined to one organization by the trigger. |
+| `allowed_scope_types` application-only | Accepted Gate-B residual risk → **implemented in 1C.6 (migration `0014`); CLOSED (Gate C.6 PASS)**; the database enforces it for every role and refuses narrowing that would strand a grant | Enforced on the only grant path (`RoleAssignmentService`, case 28); a bypassing writer is still confined to one organization by the trigger. |
 | `acc_app` context trust | Accepted Gate-B residual risk | A threat-model assumption (`SECURITY.md` §4b): the process holding `acc_app` also holds `acc_auth` and the JWT key, so its compromise is platform compromise. |
 | Outbox/SIEM absence | Deferred (Phase 2+) | No event producer exists in Phase 1B; audit tamper-evidence currently rests on infrastructure controls, which is documented. |
 | OpenAPI contract drift | Deferred (Phase 1C) → **IN PHASE 1C (1C.3)** | A documentation and contract-tooling gap with no authorization effect; the UI is off by default and refused in production. |
@@ -977,7 +977,7 @@ Decided after the pre-1C.3 read-only review, which found that `POST /users/:id/r
 - **Tests:** `session-policy.sec-spec.ts` group R (organization administrator refused for a user also in another organization — status, credential and sessions untouched, no sign-in, the target's API key in the other organization still without authority, denial audited generically; refused for a disabled platform administrator; missing permission refused as before; a fully covered user still reactivated, sessions not resurrected; a platform administrator reactivates the multi-organization user and its key works again). The Gate B lifecycle case "a reactivated administrator counts again" now uses a platform administrator as the actor.
 - **Residual recorded, not changed:** `PATCH /users/:id` (`users.update`) is **not** changed and remains a separate deferred residual: it authorizes at the selected organization but writes `users.phone`, a field of the global identity. It is profile data today and is not used for authentication.
 
-### 1C.6 implementation notes (implemented; awaiting review — Gate C.6 not passed)
+### 1C.6 implementation notes (implemented; Gate C.6 PASS / CLOSED)
 
 Migration `0014` (`DATABASE.md`). Decisions approved before implementation:
 
@@ -989,27 +989,79 @@ Migration `0014` (`DATABASE.md`). Decisions approved before implementation:
 - **Concurrency.** The grant trigger's `FOR SHARE` on the role row conflicts with the narrowing's row lock. Both orders are proven deterministically with a held transaction and `pg_blocking_pids`: narrowing waits for an in-flight grant and then gets `409`; a grant waits for an in-flight narrowing and then gets `422`; a narrowing waits for an in-flight direct grant mutation and then gets `409`; with direct SQL on both sides at READ COMMITTED, the database refuses whichever write would break the invariant. Outside READ COMMITTED a narrowing is refused outright (migration `0015`, below). The composite FK serializes parent and child writes on the parent row's key lock, so the later writer is refused.
 - **Residuals.** The FKs are MATCH SIMPLE by design, so an organization-bound key or ticket (`workspace_id IS NULL`) is checked only by its `org_id` FK. `family_id` integrity, suspended-organization session semantics and `users.update` remain carried-forward residuals, outside 1C.6.
 
-### 1C.6 security review remediation — H-1 and H-2 (implemented; awaiting review)
+### 1C.6 security review remediation — H-1 and H-2 (implemented; closed)
 
 The read-only security review of `7ab1b88` returned HOLD with two findings, both accepted and fixed in migration `0015` (`DATABASE.md`). Migration `0014` is not edited.
 
 - **H-1 — SECURITY DEFINER trigger functions executable by PUBLIC.** Decision: the three 1C.6 functions (`fn_validate_user_role_scope`, `fn_roles_guard_allowed_scope_types`, `fn_organizations_guard_reseller_id`) are trigger-only: `REVOKE ALL … FROM PUBLIC`, so no RLS-bound principal holds `EXECUTE`. PostgreSQL checks `EXECUTE` when a trigger is created, not when it fires, so the real triggers are unaffected and the function bodies are not weakened. **Correction of the 1C.6 implementation report:** the `REVOKE` originally planned for two of these functions was dropped because `tenant-context-trust` D pinned the exact trigger-only error message. That test was over-specific; it did not express an architectural need for `EXECUTE`. It now accepts either refusal (`42501` or `0A000`) and asserts the real invariant: no application principal holds `EXECUTE`, and none can attach one of these functions to a temporary table.
 - **H-1, pre-existing functions — deferred at first, then fixed as H-3.** The six older SECURITY DEFINER trigger functions had the same attachment path. The first remediation (migration `0015`) recorded them as a separate residual; the remediation review then decided to fix them before Gate C.6 closure (H-3, below).
-- **H-2 — narrowing invariant at REPEATABLE READ/SERIALIZABLE.** Decision (review Option A): the business invariant stays that every `user_roles.scope_type` is admitted by its role's `allowed_scope_types`. Role narrowing is supported only at READ COMMITTED, because the guard's locking and snapshot design can establish the invariant only there. A narrowing at REPEATABLE READ or SERIALIZABLE is deliberately refused, not supported: SQLSTATE `25000`, constraint `roles_allowed_scope_types_narrowing_isolation`. No isolation setting is changed and nothing retries. The API runs at READ COMMITTED and is unaffected. This path has no API mapping, because no API transaction reaches it.
+- **H-2 — narrowing invariant at REPEATABLE READ/SERIALIZABLE.** Decision (review Option A): the business invariant stays that every `user_roles.scope_type` is admitted by its role's `allowed_scope_types`. Narrowing is supported at READ COMMITTED. REPEATABLE READ and SERIALIZABLE narrowing attempts are deliberately refused with SQLSTATE `25000` (constraint `roles_allowed_scope_types_narrowing_isolation`), because the current locking/snapshot design does not safely establish the invariant at those isolation levels. Widening remains supported. No isolation setting is changed and nothing retries. The API runs at READ COMMITTED and is unaffected. This path has no API mapping, because no API transaction reaches it.
 - **Correction — M4b.** The 1C.6 report described M4b (API narrowing pre-check removed) as proof of API-only protection. It is not. With the pre-check removed the database guard still refuses, and the service maps that refusal to the same `409`; the tests fail only because `details.scopeTypesInUse` is then absent. M4b shows the pre-check is exercised; the security property is the database guard, shown by M4a and M4c.
 - **Mutation isolation.** The 1C.6 M4c run committed a stranded grant into the canonical test database for the duration of one run, cleaned up by fixture teardown. From this remediation on, every destructive mutant runs on a throwaway `CREATE DATABASE … TEMPLATE` clone that is dropped after the run. The canonical database's catalog-and-data fingerprint is compared before and after (`TESTING.md`).
 
-### 1C.6 security review remediation — H-3 (implemented; awaiting review)
+### 1C.6 security review remediation — H-3 (implemented; closed)
 
 - **Finding.** The six pre-existing SECURITY DEFINER trigger functions (`fn_validate_audit_scope`, `fn_validate_role_permission`, `fn_protect_system_role_permissions`, `fn_protect_system_roles`, `fn_user_roles_platform_admin_guard`, `fn_users_platform_admin_guard`) were executable by PUBLIC, so they had the same temporary-table attachment path as H-1. Two of them disclosed whether supplied cross-tenant ids exist, and which organization owns them.
 - **Decision.** Fix now, at the privilege layer only: migration `0016`, `REVOKE ALL … FROM PUBLIC` on exactly those six. Function bodies, ownership, triggers, RLS policies, tables and application authorization are unchanged. The seven triggers that use them keep firing, because `EXECUTE` is checked only at `CREATE TRIGGER`. This is proven for each trigger through `acc_app` (and `acc_auth` for audit rows) in `database-integrity.sec-spec.ts` group I. Every SECURITY DEFINER trigger function is now trigger-only, and `tenant-context-trust.int-spec.ts` pins the complete list.
 - **Not expanded.** The SECURITY DEFINER functions outside the nine trigger functions are reported, not changed (`SECURITY.md`): `app_is_platform_admin`, `app_current_reseller_id`, `app_session_bypasses_rls`, `app_org_reseller` and `fn_assert_platform_admin_remains`. The last was still PUBLIC-executable; the H-3 review decided to revoke it (H-4, below).
 
-### 1C.6 security review remediation — H-4 (implemented; awaiting final Gate C.6 review)
+### 1C.6 security review remediation — H-4 (implemented; closed)
 
 - **Finding.** `fn_assert_platform_admin_remains()` (SECURITY DEFINER, the last-platform-admin liveness check) kept PUBLIC `EXECUTE`. Any principal could call it directly, taking the platform-admin advisory lock and learning whether an active administrator exists, or reach it through an invoker trigger function of its own.
 - **Decision.** Migration `0017` contains only `REVOKE ALL ON FUNCTION fn_assert_platform_admin_remains() FROM PUBLIC`. Its body, owner, SECURITY DEFINER status, triggers, tables, RLS, application code and authorization logic are unchanged. Its only callers are the two SECURITY DEFINER liveness trigger functions, which run as the owner, so the invariant is enforced exactly as before (proven in `database-integrity.sec-spec.ts` group J, alongside the unchanged Gate B liveness suites).
 - **Scope boundary.** `app_is_platform_admin()`, `app_current_reseller_id()`, `app_session_bypasses_rls()` and `app_org_reseller(uuid)` are not changed. They are recorded in `SECURITY.md` as separately reviewed security primitives. The first two must stay executable by the RLS-bound principals, because every policy calls them.
+
+### 1C.6 closure — PASS / CLOSED
+
+**Phase 1C.6 — Database Integrity: IMPLEMENTED AND CLOSED (PASS)** (Gate C.6, 28-Sep-2026). Implementation `7ab1b88`; security-review remediation `8f0c8c4` (H-1, H-2), `4f3e4cc` (H-3), `f49ce0f` (H-4). Nothing pushed.
+
+**Objective.** Database integrity and security closure: composite workspace/organization foreign keys for `api_keys` and `ws_tickets`; database enforcement of `roles.allowed_scope_types`; `organizations.reseller_id` immutability; migration backfill verification; role-narrowing concurrency and isolation behaviour; and SECURITY DEFINER trigger-function privilege hardening.
+
+**Final implementation (migrations).**
+
+| Migration | Content |
+|---|---|
+| `0014` | Database integrity controls: the verifying backfill (aborts on existing bad data); `api_keys_workspace_org_fk` and `ws_tickets_workspace_org_fk`; `fn_validate_user_role_scope` enforcing `allowed_scope_types` for every role; `trg_roles_guard_allowed_scope_types`, which refuses narrowing that would strand a grant; `trg_organizations_guard_reseller_id` |
+| `0015` | The three new 1C.6 SECURITY DEFINER trigger functions made owner-only (H-1), and the narrowing isolation guard (H-2) |
+| `0016` | The six pre-existing SECURITY DEFINER trigger functions made owner-only (H-3) |
+| `0017` | The platform-admin liveness helper `fn_assert_platform_admin_remains()` made owner-only (H-4) |
+
+**Final hardened set: owner-only `EXECUTE`** (`{postgres=X/postgres}`; no `EXECUTE` for PUBLIC, `acc_app`, `acc_auth` or `acc_relay`):
+- The nine SECURITY DEFINER trigger functions: `fn_validate_user_role_scope`, `fn_roles_guard_allowed_scope_types`, `fn_organizations_guard_reseller_id`, `fn_validate_audit_scope`, `fn_validate_role_permission`, `fn_protect_system_role_permissions`, `fn_protect_system_roles`, `fn_user_roles_platform_admin_guard`, `fn_users_platform_admin_guard`.
+- The liveness helper `fn_assert_platform_admin_remains`.
+
+Every trigger using them still fires for every writer, because PostgreSQL checks `EXECUTE` only when a trigger is created.
+
+**Where each guarantee lives.**
+- *Database-level* (holds with the service bypassed, proven as the owner and as `acc_app`): the composite FKs; `allowed_scope_types` at grant time for every role; refusal of a narrowing that would strand a grant; refusal of narrowing outside READ COMMITTED; `reseller_id` immutability, except for a validated platform administrator or an RLS-bypassing principal; the aborting backfill; the owner-only function ACLs.
+- *Application-level* (the API's own behaviour, backed by the database): the `422 AUTHZ_SCOPE_TYPE_NOT_ADMITTED` pre-check; the `409 RESOURCE_CONFLICT` narrowing pre-check with `details.scopeTypesInUse`, under a `FOR UPDATE` role lock; `400` for `resellerId` on `PATCH /organizations/:id`.
+
+**Role narrowing.** Every `user_roles.scope_type` must be admitted by its role's `allowed_scope_types`. Narrowing is supported at READ COMMITTED. REPEATABLE READ and SERIALIZABLE narrowing attempts are deliberately refused with SQLSTATE `25000`, because the current locking/snapshot design does not safely establish the invariant at those isolation levels. Widening remains supported.
+
+**Verification evidence (final regression at `f49ce0f`).**
+- API unit 300/300; API integration 124/124; API security 855/855.
+- DB unit 4/4; DB integration 136/136.
+- Web unit 161/161; web security 87/87.
+- No skipped tests. Typecheck, lint and build pass.
+- Dependency audit acceptable: no unaccepted high or critical advisories.
+- Schema drift clean.
+- Empty bootstrap 18/18 migration hashes, and migration reruns are idempotent (the migrator re-run is a no-op).
+- Last-platform-admin liveness 55/55.
+- Mutation tests ran only on disposable database clones, and the canonical test database was not left mutated (its catalog matches a fresh `0000`–`0017` bootstrap), with 0 stranded grants.
+- Details: `TESTING.md` §6q.
+
+**Carried-forward residuals** (not Phase 1C.6 blockers):
+1. `family_id` / rotation-chain integrity is enforced by the application, not by a database constraint.
+2. Session behaviour for members of suspended or closed organizations.
+3. `users.update` authorizes at the selected organization but writes a field of the global identity (`users.phone`).
+4. API-key principals refused on administrator session-revocation routes produce no `authorization.denied` audit event.
+5. The F-9 complete-grant check race is permissive: a grant created after the grant set is read can be missed.
+6. The coupling of `acc_auth` session audit rows to their session mutation is enforced by the application transaction.
+7. `audit-read.sec-spec.ts` case 14 has a UUIDv7 ordering flake (a test-quality residual).
+8. The composite FKs are MATCH SIMPLE, so an organization-only row (`workspace_id IS NULL`) is checked only by its `org_id` FK.
+9. The separately reviewed SECURITY DEFINER/RLS primitives `app_is_platform_admin()`, `app_current_reseller_id()`, `app_session_bypasses_rls()` and `app_org_reseller(uuid)` are unchanged by 1C.6 (`SECURITY.md`).
+
+**Gate status.** Phase 1C.6 is closed. **Overall Phase 1C remains open**: Gate C (`ROADMAP.md` §4d) is not passed. The next frozen increment is **Phase 1C.3**.
 
 ### Explicitly out of scope
 
