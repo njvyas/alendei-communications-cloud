@@ -13,6 +13,8 @@
  *   H  narrowing refused outside READ COMMITTED (migration `0015`, review H-2)
  *   I  the six pre-existing SECURITY DEFINER trigger functions made trigger-only
  *      (migration `0016`, review H-3), and every trigger using them still fires
+ *   J  `fn_assert_platform_admin_remains()` owner-only (migration `0017`, review
+ *      H-4); the last-platform-admin invariant unchanged through its triggers
  *
  * Every database guarantee is proven **directly** — as the schema owner and as
  * `acc_app` with an explicit tenant context — never inferred from the service.
@@ -205,6 +207,9 @@ describe('Phase 1C.6 database integrity', () => {
       c.release();
     }
   }
+
+  /** The validated platform-administrator context (a real `alendei_super_admin`). */
+  const platformCtx = (): AppSession => ({ userId: p.platform!.userId, isPlatformAdmin: true });
 
   /** Runs `work` as the schema owner, then rolls back. */
   async function asOwner<T>(
@@ -1339,7 +1344,6 @@ describe('Phase 1C.6 database integrity', () => {
         )
       ).rows[0]!.any as boolean;
     const ctxA1 = () => ({ orgId: a1.orgId, userId: p.adminA1!.userId });
-    const platformCtx = () => ({ userId: p.platform!.userId, isPlatformAdmin: true });
 
     it('PUBLIC, acc_app, acc_auth and acc_relay hold no EXECUTE on any of the six; owner and SECURITY DEFINER unchanged', async () => {
       const { rows } = await h.admin.execute<{
@@ -1618,6 +1622,141 @@ describe('Phase 1C.6 database integrity', () => {
             'user_roles update',
             'UPDATE user_roles SET role_id = $1 WHERE id = $2',
             [support, lastGrant],
+          ],
+        ] as const) {
+          await c.query('SAVEPOINT s');
+          const err = await refusal(c.query(statement, [...params]));
+          expect(`${label}:${err.code}`).toBe(`${label}:23001`);
+          expect(err.message).toMatch(/no active administrator/);
+          await c.query('ROLLBACK TO SAVEPOINT s');
+        }
+      });
+    });
+  });
+  // ===========================================================================
+  describe('J. fn_assert_platform_admin_remains() is owner-only (migration 0017, review H-4)', () => {
+    const FN = 'fn_assert_platform_admin_remains';
+    const principals = () =>
+      [
+        ['acc_app', appPool],
+        ['acc_auth', authPool],
+        ['acc_relay', relayPool],
+      ] as const;
+    async function rolledBack<T>(pool: Pool, work: (c: PoolClient) => Promise<T>): Promise<T> {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        return await work(c);
+      } finally {
+        await c.query('ROLLBACK').catch(() => undefined);
+        c.release();
+      }
+    }
+
+    it('PUBLIC, acc_app, acc_auth and acc_relay hold no EXECUTE; owner, SECURITY DEFINER and return type unchanged', async () => {
+      const { rows } = await h.admin.execute<Record<string, unknown>>(sql`
+        SELECT pg_get_userbyid(p.proowner) AS owner, p.prosecdef AS definer,
+               p.prorettype::regtype::text AS returns,
+               has_function_privilege('public', p.oid, 'EXECUTE') AS pub,
+               has_function_privilege('acc_app', p.oid, 'EXECUTE') AS app,
+               has_function_privilege('acc_auth', p.oid, 'EXECUTE') AS auth,
+               has_function_privilege('acc_relay', p.oid, 'EXECUTE') AS relay
+        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname = ${FN}`);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toEqual({
+        owner: 'postgres',
+        definer: true,
+        returns: 'void',
+        pub: false,
+        app: false,
+        auth: false,
+        relay: false,
+      });
+    });
+
+    it('a direct call is refused for every application principal', async () => {
+      for (const [name, pool] of principals()) {
+        const err = await rolledBack(pool, (c) => refusal(c.query(`SELECT public.${FN}()`)));
+        expect(`${name}:${err.code}`).toBe(`${name}:42501`);
+      }
+    });
+
+    it('acc_app can neither attach it to a temporary table nor reach it through a trigger function of its own', async () => {
+      await asApp(platformCtx(), async (c) => {
+        await c.query('CREATE TEMP TABLE c6_h4 (id int) ON COMMIT DROP');
+        await c.query('SAVEPOINT s');
+        const named = await refusal(
+          c.query(
+            `CREATE TRIGGER c6_h4 AFTER INSERT ON c6_h4 FOR EACH ROW EXECUTE FUNCTION public.${FN}()`,
+          ),
+        );
+        expect(named.code).toBe('42501');
+        await c.query('ROLLBACK TO SAVEPOINT s');
+        // The realistic path for a void function: wrap it in an invoker
+        // trigger function in pg_temp. The wrapper runs as acc_app, which
+        // cannot execute the SECURITY DEFINER body.
+        await c.query(
+          `CREATE FUNCTION pg_temp.c6_h4_wrap() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN PERFORM public.${FN}(); RETURN NEW; END $$`,
+        );
+        await c.query(
+          'CREATE TRIGGER c6_h4_wrap AFTER INSERT ON c6_h4 FOR EACH ROW EXECUTE FUNCTION pg_temp.c6_h4_wrap()',
+        );
+        const fired = await refusal(c.query('INSERT INTO c6_h4 VALUES (1)'));
+        expect(fired.code).toBe('42501');
+        expect(fired.message).toMatch(new RegExp(`permission denied for function ${FN}`));
+      });
+    });
+
+    it('its triggers still invoke it: a non-last administrator may be removed and disabled; the last is refused on every path', async () => {
+      const superAdmin = await platformRole(PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN);
+      const support = await platformRole(PLATFORM_ROLE_KEYS.ALENDEI_SUPPORT);
+      const second = p.member3!.userId;
+      await asApp(platformCtx(), async (c) => {
+        const { rows: acl } = await c.query(
+          `SELECT has_function_privilege('${FN}()', 'EXECUTE') AS can`,
+        );
+        expect(acl[0]!.can).toBe(false);
+        // Leave exactly two administrators: p.platform and a second one.
+        await c.query(
+          "DELETE FROM user_roles WHERE scope_type = 'platform' AND role_id = $1 AND user_id <> $2",
+          [superAdmin, p.platform!.userId],
+        );
+        const addSecond = () =>
+          c.query(
+            "INSERT INTO user_roles (user_id, role_id, scope_type, scope_id) VALUES ($1, $2, 'platform', NULL) RETURNING id",
+            [second, superAdmin],
+          );
+        // Non-last removal: allowed (trg_user_roles_platform_admin_liveness).
+        const { rows } = await addSecond();
+        const removed = await c.query('DELETE FROM user_roles WHERE id = $1', [rows[0]!.id]);
+        expect(removed.rowCount).toBe(1);
+        // Non-last reassignment: allowed (trg_user_roles_platform_admin_liveness_update).
+        const again = await addSecond();
+        const moved = await c.query('UPDATE user_roles SET role_id = $1 WHERE id = $2', [
+          support,
+          again.rows[0]!.id,
+        ]);
+        expect(moved.rowCount).toBe(1);
+        // Non-last disable: allowed (trg_users_platform_admin_liveness).
+        await addSecond();
+        const disabled = await c.query("UPDATE users SET status = 'disabled' WHERE id = $1", [
+          second,
+        ]);
+        expect(disabled.rowCount).toBe(1);
+        // p.platform is now the last active administrator.
+        const last = await c.query(
+          "SELECT id FROM user_roles WHERE scope_type = 'platform' AND role_id = $1 AND user_id = $2",
+          [superAdmin, p.platform!.userId],
+        );
+        for (const [label, statement, params] of [
+          ['disable', "UPDATE users SET status = 'disabled' WHERE id = $1", [p.platform!.userId]],
+          ['delete', 'DELETE FROM user_roles WHERE id = $1', [last.rows[0]!.id]],
+          [
+            'reassign',
+            'UPDATE user_roles SET role_id = $1 WHERE id = $2',
+            [support, last.rows[0]!.id],
           ],
         ] as const) {
           await c.query('SAVEPOINT s');

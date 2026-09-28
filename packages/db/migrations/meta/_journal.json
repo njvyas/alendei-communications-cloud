@@ -120,6 +120,13 @@
       "when": 1790612054228,
       "tag": "0016_phase1c6_pre_existing_definer_acl",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1790613036443,
+      "tag": "0017_phase1c6_platform_admin_liveness_acl",
+      "breakpoints": true
     }
   ]
 }
