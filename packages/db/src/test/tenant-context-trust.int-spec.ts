@@ -13,8 +13,10 @@
  *         genuinely holds the grant (migration `0010`).
  *   CANNOT persist a variable as a role or database default, `SET ROLE` /
  *         `SET SESSION AUTHORIZATION` to any other principal, call a trigger
- *         function directly, or reach any SECURITY DEFINER function that sets a
- *         variable, runs dynamic SQL or grants anything.
+ *         function directly, attach a trigger-only SECURITY DEFINER function
+ *         (migration `0015`) to a temporary table of its own, or reach any
+ *         SECURITY DEFINER function that sets a variable, runs dynamic SQL or
+ *         grants anything.
  *
  * Every assertion here describes arbitrary-SQL capability as `acc_app` — a
  * compromised application process. The application itself never issues these
@@ -215,11 +217,85 @@ describe('tenant-context trust model — what acc_app can do with session variab
       SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
       WHERE n.nspname = 'public' AND p.prosecdef AND p.prorettype = 'trigger'::regtype`);
     expect(rows.length).toBeGreaterThan(0);
+    // Either refusal is the invariant: no EXECUTE at all (`42501`, migration
+    // 0015's trigger-only functions) or the PL/pgSQL trigger-only check
+    // (`0A000`). The exact message is not what is being protected.
     for (const { proname } of rows) {
-      await expect(pool.query(`SELECT ${proname}()`)).rejects.toThrow(
-        /trigger functions can only be called as triggers/,
+      const error = await pool.query(`SELECT ${proname}()`).then(
+        () => null,
+        (e: { code?: string }) => e,
       );
+      expect(`${proname}:${error?.code}`).toMatch(new RegExp(`^${proname}:(42501|0A000)$`));
     }
+  });
+
+  /** Migration 0015 (Phase 1C.6 review H-1): executable by the owner only. */
+  const TRIGGER_ONLY = [
+    'fn_organizations_guard_reseller_id',
+    'fn_roles_guard_allowed_scope_types',
+    'fn_validate_user_role_scope',
+  ];
+  /**
+   * Pre-1C.6 SECURITY DEFINER trigger functions still executable by PUBLIC — a
+   * recorded residual (`SECURITY.md`, "SECURITY DEFINER trigger functions
+   * attachable to a temporary table"), pinned so that no new function can join
+   * it unnoticed.
+   */
+  const PUBLIC_EXECUTABLE_RESIDUAL = [
+    'fn_protect_system_role_permissions',
+    'fn_protect_system_roles',
+    'fn_user_roles_platform_admin_guard',
+    'fn_users_platform_admin_guard',
+    'fn_validate_audit_scope',
+    'fn_validate_role_permission',
+  ];
+
+  it('D. no application principal, nor PUBLIC, holds EXECUTE on a trigger-only SECURITY DEFINER function', async () => {
+    const { rows } = await db.admin.execute<{ proname: string; grantee: string; can: boolean }>(sql`
+      SELECT p.proname, g.grantee, has_function_privilege(g.grantee, p.oid, 'EXECUTE') AS can
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      CROSS JOIN (VALUES ('public'), ('acc_app'), ('acc_auth'), ('acc_relay')) AS g(grantee)
+      WHERE n.nspname = 'public' AND p.prosecdef AND p.prorettype = 'trigger'::regtype
+        AND p.proname IN (${sql.join(
+          TRIGGER_ONLY.map((f) => sql`${f}`),
+          sql`, `,
+        )})`);
+    expect(new Set(rows.map((r) => r.proname))).toEqual(new Set(TRIGGER_ONLY));
+    expect(rows.filter((r) => r.can).map((r) => `${r.proname}:${r.grantee}`)).toEqual([]);
+  });
+
+  it('D. acc_app cannot attach a trigger-only SECURITY DEFINER function to a temporary table of its own', async () => {
+    // TEMP is a database privilege every principal holds; attaching the
+    // function to its own table would run the body as the owner on rows the
+    // caller chooses. CREATE TRIGGER needs EXECUTE, which is what 0015 revokes.
+    for (const fn of TRIGGER_ONLY) {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query('CREATE TEMP TABLE c6_attach (id uuid) ON COMMIT DROP');
+        const error = await c
+          .query(
+            `CREATE TRIGGER c6_attach BEFORE INSERT ON c6_attach FOR EACH ROW EXECUTE FUNCTION public.${fn}()`,
+          )
+          .then(
+            () => null,
+            (e: { code?: string }) => e,
+          );
+        expect(`${fn}:${error?.code}`).toBe(`${fn}:42501`);
+      } finally {
+        await c.query('ROLLBACK').catch(() => undefined);
+        c.release();
+      }
+    }
+  });
+
+  it('D. no other SECURITY DEFINER trigger function is executable by PUBLIC beyond the recorded residual', async () => {
+    const { rows } = await db.admin.execute<{ proname: string }>(sql`
+      SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.prosecdef AND p.prorettype = 'trigger'::regtype
+        AND has_function_privilege('public', p.oid, 'EXECUTE')
+      ORDER BY p.proname`);
+    expect(rows.map((r) => r.proname)).toEqual(PUBLIC_EXECUTABLE_RESIDUAL);
   });
 
   it('D. the callable helpers confer nothing: bypass check false, claims unbacked, and one read-only disclosure', async () => {

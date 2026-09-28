@@ -8,6 +8,9 @@
  *   D  role narrowing refused while grants would be stranded (decision §14.1, A)
  *   E  the migration's verifying backfill fails loudly on bad data
  *   F  deterministic concurrency (a held transaction, proven by `pg_blocking_pids`)
+ *   G  trigger-only SECURITY DEFINER functions (migration `0015`, review H-1):
+ *      no application principal holds EXECUTE or can attach one to a table
+ *   H  narrowing refused outside READ COMMITTED (migration `0015`, review H-2)
  *
  * Every database guarantee is proven **directly** — as the schema owner and as
  * `acc_app` with an explicit tenant context — never inferred from the service.
@@ -52,6 +55,8 @@ describe('Phase 1C.6 database integrity', () => {
   let credentials: CredentialService;
   let ownerPool: Pool;
   let appPool: Pool;
+  let authPool: Pool;
+  let relayPool: Pool;
   let resellerA: string;
   let resellerB: string;
   let a1: Org;
@@ -171,11 +176,17 @@ describe('Phase 1C.6 database integrity', () => {
     isPlatformAdmin?: boolean;
   }
 
+  type Isolation = 'READ COMMITTED' | 'REPEATABLE READ' | 'SERIALIZABLE';
+
   /** Runs `work` as `acc_app` with the given tenant context, then rolls back. */
-  async function asApp<T>(session: AppSession, work: (c: PoolClient) => Promise<T>): Promise<T> {
+  async function asApp<T>(
+    session: AppSession,
+    work: (c: PoolClient) => Promise<T>,
+    isolation: Isolation = 'READ COMMITTED',
+  ): Promise<T> {
     const c = await appPool.connect();
     try {
-      await c.query('BEGIN');
+      await c.query(`BEGIN ISOLATION LEVEL ${isolation}`);
       for (const [name, value] of [
         ['app.current_org_id', session.orgId ?? ''],
         ['app.current_workspace_id', ''],
@@ -194,10 +205,13 @@ describe('Phase 1C.6 database integrity', () => {
   }
 
   /** Runs `work` as the schema owner, then rolls back. */
-  async function asOwner<T>(work: (c: PoolClient) => Promise<T>): Promise<T> {
+  async function asOwner<T>(
+    work: (c: PoolClient) => Promise<T>,
+    isolation: Isolation = 'READ COMMITTED',
+  ): Promise<T> {
     const c = await ownerPool.connect();
     try {
-      await c.query('BEGIN');
+      await c.query(`BEGIN ISOLATION LEVEL ${isolation}`);
       return await work(c);
     } finally {
       await c.query('ROLLBACK').catch(() => undefined);
@@ -266,6 +280,14 @@ describe('Phase 1C.6 database integrity', () => {
         sql`SELECT id, scope_type, scope_id FROM user_roles WHERE role_id = ${roleId} ORDER BY id`,
       )
     ).rows;
+  /** Grants of `roleId` at a scope type the role does not admit — always 0. */
+  const strandedOf = async (roleId: string) =>
+    (
+      await h.admin.execute<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+            WHERE ur.role_id = ${roleId} AND NOT (ur.scope_type = ANY (r.allowed_scope_types))`,
+      )
+    ).rows[0]!.n;
   async function resetNarrowRole() {
     await h.admin.execute(sql`DELETE FROM user_roles WHERE role_id = ${narrowRole}`);
     await h.admin.execute(
@@ -280,6 +302,8 @@ describe('Phase 1C.6 database integrity', () => {
     credentials = h.app.get(CredentialService);
     ownerPool = new Pool({ connectionString: process.env.DATABASE_ADMIN_URL!, max: 3 });
     appPool = new Pool({ connectionString: process.env.DATABASE_URL!, max: 3 });
+    authPool = new Pool({ connectionString: process.env.DATABASE_AUTH_URL!, max: 1 });
+    relayPool = new Pool({ connectionString: process.env.DATABASE_RELAY_URL!, max: 1 });
 
     resellerA = await createReseller('c6-a');
     resellerB = await createReseller('c6-b');
@@ -334,6 +358,8 @@ describe('Phase 1C.6 database integrity', () => {
     await h.clearRateLimits();
     await ownerPool.end();
     await appPool.end();
+    await authPool.end();
+    await relayPool.end();
     const orgs = [...new Set(createdOrgs)];
     const list = (ids: string[]) =>
       sql.join(
@@ -915,5 +941,365 @@ describe('Phase 1C.6 database integrity', () => {
       expect(second.queued).toBe(true);
       expect((second.outcome as { e: PgError }).e.constraint).toBe('api_keys_workspace_org_fk');
     });
+  });
+  // ===========================================================================
+  describe('G. trigger-only SECURITY DEFINER functions (migration 0015, review H-1)', () => {
+    const TRIGGER_ONLY = [
+      'fn_validate_user_role_scope',
+      'fn_roles_guard_allowed_scope_types',
+      'fn_organizations_guard_reseller_id',
+    ] as const;
+    const principals = () =>
+      [
+        ['acc_app', appPool],
+        ['acc_auth', authPool],
+        ['acc_relay', relayPool],
+      ] as const;
+
+    /** Runs `work` on `pool` in a transaction that is always rolled back. */
+    async function rolledBack<T>(pool: Pool, work: (c: PoolClient) => Promise<T>): Promise<T> {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        return await work(c);
+      } finally {
+        await c.query('ROLLBACK').catch(() => undefined);
+        c.release();
+      }
+    }
+
+    it('PUBLIC, acc_app, acc_auth and acc_relay hold no EXECUTE on any of the three', async () => {
+      const { rows } = await h.admin.execute<{
+        proname: string;
+        definer: boolean;
+        pub: boolean;
+        app: boolean;
+        auth: boolean;
+        relay: boolean;
+      }>(sql`
+        SELECT p.proname, p.prosecdef AS definer,
+               has_function_privilege('public', p.oid, 'EXECUTE') AS pub,
+               has_function_privilege('acc_app', p.oid, 'EXECUTE') AS app,
+               has_function_privilege('acc_auth', p.oid, 'EXECUTE') AS auth,
+               has_function_privilege('acc_relay', p.oid, 'EXECUTE') AS relay
+        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname IN ('fn_validate_user_role_scope',
+          'fn_roles_guard_allowed_scope_types', 'fn_organizations_guard_reseller_id')
+        ORDER BY p.proname`);
+      expect(rows.map((r) => r.proname).sort()).toEqual([...TRIGGER_ONLY].sort());
+      for (const r of rows) {
+        expect({ ...r }).toEqual({
+          proname: r.proname,
+          definer: true,
+          pub: false,
+          app: false,
+          auth: false,
+          relay: false,
+        });
+      }
+    });
+
+    it('a direct call is refused for every application principal', async () => {
+      for (const [name, pool] of principals()) {
+        for (const fn of TRIGGER_ONLY) {
+          const err = await rolledBack(pool, (c) => refusal(c.query(`SELECT public.${fn}()`)));
+          expect(`${name}:${fn}:${err.code}`).toBe(`${name}:${fn}:42501`);
+        }
+      }
+    });
+
+    it('no application principal can attach any of the three to a temporary table of its own', async () => {
+      for (const [name, pool] of principals()) {
+        for (const fn of TRIGGER_ONLY) {
+          const err = await rolledBack(pool, async (c) => {
+            await c.query('CREATE TEMP TABLE c6_probe (id uuid) ON COMMIT DROP');
+            return refusal(
+              c.query(
+                `CREATE TRIGGER c6_probe BEFORE INSERT ON c6_probe FOR EACH ROW EXECUTE FUNCTION public.${fn}()`,
+              ),
+            );
+          });
+          expect(`${name}:${fn}:${err.code}`).toBe(`${name}:${fn}:42501`);
+        }
+      }
+    });
+
+    it('the temp-table attack discloses no other tenant data and takes no cross-tenant role lock', async () => {
+      // The victim: A2's role, granted at A2's workspace. The attacker: acc_app
+      // inside A1 — a legitimate tenant context of another organization.
+      const victimRole = a2.roles[TENANT_ROLE_KEYS.READ_ONLY]!;
+      await grant(p.member3!.userId, victimRole, 'workspace', a2.workspaceId);
+      const secrets = [a2.orgId, a2.workspaceId, victimRole, 'workspace'];
+      const attacker = { orgId: a1.orgId, userId: p.adminA1!.userId };
+
+      // P1 — the narrowing guard as a grant-topology oracle.
+      await asApp(attacker, async (c) => {
+        await c.query(
+          'CREATE TEMP TABLE p1 (id uuid, key text, allowed_scope_types role_scope_type[]) ON COMMIT DROP',
+        );
+        const err = await refusal(
+          c.query(
+            'CREATE TRIGGER p1 BEFORE INSERT ON p1 FOR EACH ROW EXECUTE FUNCTION public.fn_roles_guard_allowed_scope_types()',
+          ),
+        );
+        expect(err.code).toBe('42501');
+        for (const s of secrets) expect(err.message).not.toContain(s);
+      });
+
+      // P2 — the grant validator as an organization-id oracle.
+      await asApp(attacker, async (c) => {
+        await c.query(
+          'CREATE TEMP TABLE p2 (role_id uuid, scope_type role_scope_type, scope_id uuid, org_id uuid) ON COMMIT DROP',
+        );
+        const err = await refusal(
+          c.query(
+            'CREATE TRIGGER p2 BEFORE INSERT ON p2 FOR EACH ROW EXECUTE FUNCTION public.fn_validate_user_role_scope()',
+          ),
+        );
+        expect(err.code).toBe('42501');
+        for (const s of secrets) expect(err.message).not.toContain(s);
+        // With no trigger the row is the caller's own data: nothing is derived.
+        await c.query('ROLLBACK');
+        await c.query('BEGIN');
+        await c.query(
+          'CREATE TEMP TABLE p2b (role_id uuid, scope_type role_scope_type, scope_id uuid, org_id uuid) ON COMMIT DROP',
+        );
+        await c.query("INSERT INTO p2b VALUES ($1, 'workspace', $2, NULL)", [
+          a1.roles[TENANT_ROLE_KEYS.READ_ONLY],
+          a2.workspaceId,
+        ]);
+        const { rows } = await c.query('SELECT org_id FROM p2b');
+        expect(rows[0]!.org_id).toBeNull();
+      });
+
+      // P3 — the validator's FOR SHARE as a cross-tenant lock. The attacker's
+      // transaction stays open while the owner tries to lock the victim role.
+      const attackerClient = await appPool.connect();
+      try {
+        await attackerClient.query('BEGIN');
+        await attackerClient.query("SELECT set_config('app.current_org_id', $1, true)", [a1.orgId]);
+        await attackerClient.query(
+          'CREATE TEMP TABLE p3 (role_id uuid, scope_type role_scope_type, scope_id uuid, org_id uuid) ON COMMIT DROP',
+        );
+        await attackerClient.query('SAVEPOINT s');
+        const err = await refusal(
+          attackerClient.query(
+            'CREATE TRIGGER p3 BEFORE INSERT ON p3 FOR EACH ROW EXECUTE FUNCTION public.fn_validate_user_role_scope()',
+          ),
+        );
+        expect(err.code).toBe('42501');
+        await attackerClient.query('ROLLBACK TO SAVEPOINT s');
+        await attackerClient.query("INSERT INTO p3 VALUES ($1, 'organization', $2, NULL)", [
+          victimRole,
+          a2.orgId,
+        ]);
+        await asOwner(async (c) => {
+          const { rowCount } = await c.query(
+            'SELECT 1 FROM roles WHERE id = $1 FOR UPDATE NOWAIT',
+            [victimRole],
+          );
+          expect(rowCount).toBe(1);
+        });
+      } finally {
+        await attackerClient.query('ROLLBACK').catch(() => undefined);
+        attackerClient.release();
+      }
+    });
+
+    it('the real triggers still fire for acc_app, which holds no EXECUTE (checked at CREATE TRIGGER, never at firing)', async () => {
+      const ctx = { orgId: a1.orgId, userId: p.adminA1!.userId };
+      await resetNarrowRole();
+      await asApp(ctx, async (c) => {
+        const { rows } = await c.query(
+          `SELECT has_function_privilege('fn_validate_user_role_scope()', 'EXECUTE') AS v,
+                  has_function_privilege('fn_roles_guard_allowed_scope_types()', 'EXECUTE') AS g,
+                  has_function_privilege('fn_organizations_guard_reseller_id()', 'EXECUTE') AS o`,
+        );
+        expect(rows[0]).toEqual({ v: false, g: false, o: false });
+
+        // fn_validate_user_role_scope: admits, derives org_id, refuses.
+        const ok = await c.query(
+          `INSERT INTO user_roles (user_id, role_id, scope_type, scope_id)
+           VALUES ($1, $2, 'team', $3) RETURNING org_id`,
+          [p.member!.userId, narrowRole, a1.teamId],
+        );
+        expect(ok.rows[0]!.org_id).toBe(a1.orgId);
+        await c.query('SAVEPOINT s');
+        const denied = await refusal(
+          insertGrant(
+            c,
+            p.member!.userId,
+            a1.roles[TENANT_ROLE_KEYS.ORG_ADMIN]!,
+            'team',
+            a1.teamId,
+          ),
+        );
+        expect(denied.constraint).toBe('user_roles_scope_type_admitted');
+        await c.query('ROLLBACK TO SAVEPOINT s');
+
+        // fn_roles_guard_allowed_scope_types: refuses stranding, allows the rest.
+        const stranded = await refusal(
+          c.query("UPDATE roles SET allowed_scope_types = '{organization}' WHERE id = $1", [
+            narrowRole,
+          ]),
+        );
+        expect(stranded.constraint).toBe('roles_allowed_scope_types_in_use');
+        await c.query('ROLLBACK TO SAVEPOINT s');
+        const narrowed = await c.query(
+          "UPDATE roles SET allowed_scope_types = '{organization,team}' WHERE id = $1",
+          [narrowRole],
+        );
+        expect(narrowed.rowCount).toBe(1);
+
+        // fn_organizations_guard_reseller_id: refuses the move.
+        await c.query('SAVEPOINT r');
+        const moved = await refusal(
+          c.query('UPDATE organizations SET reseller_id = $1 WHERE id = $2', [resellerB, a1.orgId]),
+        );
+        expect(moved.constraint).toBe('organizations_reseller_id_immutable');
+      });
+      expect(await grantsOf(narrowRole)).toEqual([]);
+    });
+  });
+
+  // ===========================================================================
+  describe('H. narrowing is refused outside READ COMMITTED (migration 0015, review H-2)', () => {
+    beforeEach(() => resetNarrowRole());
+
+    const narrow = (c: PoolClient, to = '{organization}') =>
+      c.query('UPDATE roles SET allowed_scope_types = $1 WHERE id = $2', [to, narrowRole]);
+    const ctx = () => ({ orgId: a1.orgId, userId: p.adminA1!.userId });
+    const writers = () =>
+      [
+        ['owner', <T>(work: (c: PoolClient) => Promise<T>, iso: Isolation) => asOwner(work, iso)],
+        [
+          'acc_app',
+          <T>(work: (c: PoolClient) => Promise<T>, iso: Isolation) => asApp(ctx(), work, iso),
+        ],
+      ] as const;
+    const FULL = ['organization', 'workspace', 'team'];
+
+    it('READ COMMITTED: a narrowing that strands nothing succeeds for owner and acc_app; a stranding one is refused', async () => {
+      for (const [, as] of writers()) {
+        await as(async (c) => {
+          const { rows } = await c.query("SELECT current_setting('transaction_isolation') AS i");
+          expect(rows[0]!.i).toBe('read committed');
+          expect((await narrow(c)).rowCount).toBe(1);
+        }, 'READ COMMITTED');
+      }
+      await grant(p.member!.userId, narrowRole, 'team', a1.teamId);
+      for (const [, as] of writers()) {
+        await as(async (c) => {
+          expect((await refusal(narrow(c))).constraint).toBe('roles_allowed_scope_types_in_use');
+        }, 'READ COMMITTED');
+      }
+    });
+
+    it('READ COMMITTED: a grant committed after the narrowing transaction began is still seen, and the narrowing is refused', async () => {
+      for (const [name, as] of writers()) {
+        await resetNarrowRole();
+        await as(async (c) => {
+          await c.query('SELECT count(*) FROM roles'); // the transaction's first snapshot
+          await grant(p.member!.userId, narrowRole, 'team', a1.teamId);
+          const err = await refusal(narrow(c));
+          expect(`${name}:${err.constraint}`).toBe(`${name}:roles_allowed_scope_types_in_use`);
+        }, 'READ COMMITTED');
+        expect(await strandedOf(narrowRole)).toBe(0);
+      }
+    });
+
+    it('READ COMMITTED: a direct grant racing a direct narrowing that got there first waits, then is refused', async () => {
+      const holder = await ownerPool.connect();
+      await holder.query('BEGIN');
+      const pid = (await holder.query('SELECT pg_backend_pid() AS pid')).rows[0].pid as number;
+      await narrow(holder);
+      const contender = asApp(ctx(), (c) =>
+        insertGrant(c, p.member!.userId, narrowRole, 'team', a1.teamId),
+      ).then(
+        () => null,
+        (e: PgError) => e,
+      );
+      let queued = false;
+      try {
+        const deadline = Date.now() + 10_000;
+        while (!queued && Date.now() < deadline) {
+          const { rows } = await h.admin.execute<{ n: number }>(
+            sql`SELECT count(*)::int AS n FROM pg_stat_activity WHERE ${pid} = ANY (pg_blocking_pids(pid))`,
+          );
+          queued = rows[0]!.n > 0;
+          if (!queued) await new Promise((r) => setTimeout(r, 50));
+        }
+      } finally {
+        await holder.query('COMMIT');
+        holder.release();
+      }
+      expect(queued).toBe(true);
+      expect((await contender)?.constraint).toBe('user_roles_scope_type_admitted');
+      expect(await grantsOf(narrowRole)).toEqual([]);
+    });
+
+    for (const iso of ['REPEATABLE READ', 'SERIALIZABLE'] as const) {
+      it(`${iso}: any narrowing is refused by the database guard, for owner and acc_app, and nothing changes`, async () => {
+        const grantId = await grant(p.member!.userId, narrowRole, 'workspace', a1.workspaceId);
+        const before = await grantsOf(narrowRole);
+        for (const [name, as] of writers()) {
+          // Strands nothing (only 'team' is dropped) — refused all the same.
+          await as(async (c) => {
+            const err = await refusal(narrow(c, '{organization,workspace}'));
+            expect(`${name}:${err.code}:${err.constraint}`).toBe(
+              `${name}:25000:roles_allowed_scope_types_narrowing_isolation`,
+            );
+            expect(err.message).toMatch(/requires READ COMMITTED isolation/);
+          }, iso);
+        }
+        expect(await allowedOf(narrowRole)).toEqual(FULL);
+        expect(await grantsOf(narrowRole)).toEqual(before);
+        expect(before.map((g) => g.id)).toEqual([grantId]);
+        expect(await strandedOf(narrowRole)).toBe(0);
+      });
+
+      it(`${iso}: the review's attack — a grant committed after the snapshot, then a narrowing past it — is refused, and no grant is stranded`, async () => {
+        for (const [name, as] of writers()) {
+          await resetNarrowRole();
+          await as(async (c) => {
+            await c.query('SELECT count(*) FROM roles'); // the transaction snapshot
+            await grant(p.member!.userId, narrowRole, 'team', a1.teamId);
+            const err = await refusal(narrow(c));
+            expect(`${name}:${err.code}:${err.constraint}`).toBe(
+              `${name}:25000:roles_allowed_scope_types_narrowing_isolation`,
+            );
+          }, iso);
+          expect(await allowedOf(narrowRole)).toEqual(FULL);
+          expect((await grantsOf(narrowRole)).map((g) => g.scope_type)).toEqual(['team']);
+          expect(await strandedOf(narrowRole)).toBe(0);
+        }
+      });
+
+      it(`${iso}: widening is not narrowing and is still allowed; a grant after a committed narrowing fails to serialize`, async () => {
+        await h.admin.execute(
+          sql`UPDATE roles SET allowed_scope_types = '{organization}' WHERE id = ${narrowRole}`,
+        );
+        for (const [, as] of writers()) {
+          await as(async (c) => {
+            expect((await narrow(c, '{organization,workspace,team}')).rowCount).toBe(1);
+          }, iso);
+        }
+        await resetNarrowRole();
+        for (const [name, as] of writers()) {
+          await as(async (c) => {
+            await c.query('SELECT count(*) FROM roles'); // the transaction snapshot
+            await h.admin.execute(
+              sql`UPDATE roles SET allowed_scope_types = '{organization}' WHERE id = ${narrowRole}`,
+            );
+            const err = await refusal(
+              insertGrant(c, p.member!.userId, narrowRole, 'team', a1.teamId),
+            );
+            expect(`${name}:${err.code}`).toBe(`${name}:40001`);
+          }, iso);
+          await resetNarrowRole();
+        }
+        expect(await grantsOf(narrowRole)).toEqual([]);
+      });
+    }
   });
 });
