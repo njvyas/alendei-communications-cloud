@@ -11,6 +11,8 @@
  *   G  trigger-only SECURITY DEFINER functions (migration `0015`, review H-1):
  *      no application principal holds EXECUTE or can attach one to a table
  *   H  narrowing refused outside READ COMMITTED (migration `0015`, review H-2)
+ *   I  the six pre-existing SECURITY DEFINER trigger functions made trigger-only
+ *      (migration `0016`, review H-3), and every trigger using them still fires
  *
  * Every database guarantee is proven **directly** — as the schema owner and as
  * `acc_app` with an explicit tenant context — never inferred from the service.
@@ -1301,5 +1303,330 @@ describe('Phase 1C.6 database integrity', () => {
         expect(await grantsOf(narrowRole)).toEqual([]);
       });
     }
+  });
+  // ===========================================================================
+  describe('I. pre-existing SECURITY DEFINER trigger functions are trigger-only (migration 0016, review H-3)', () => {
+    const PRE_EXISTING = [
+      'fn_validate_audit_scope',
+      'fn_validate_role_permission',
+      'fn_protect_system_role_permissions',
+      'fn_protect_system_roles',
+      'fn_user_roles_platform_admin_guard',
+      'fn_users_platform_admin_guard',
+    ] as const;
+    const principals = () =>
+      [
+        ['acc_app', appPool],
+        ['acc_auth', authPool],
+        ['acc_relay', relayPool],
+      ] as const;
+    async function rolledBack<T>(pool: Pool, work: (c: PoolClient) => Promise<T>): Promise<T> {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        return await work(c);
+      } finally {
+        await c.query('ROLLBACK').catch(() => undefined);
+        c.release();
+      }
+    }
+    const noExecute = async (c: PoolClient) =>
+      (
+        await c.query(
+          `SELECT bool_or(has_function_privilege(f, 'EXECUTE')) AS any
+           FROM unnest($1::text[]) AS f`,
+          [PRE_EXISTING.map((f) => `${f}()`)],
+        )
+      ).rows[0]!.any as boolean;
+    const ctxA1 = () => ({ orgId: a1.orgId, userId: p.adminA1!.userId });
+    const platformCtx = () => ({ userId: p.platform!.userId, isPlatformAdmin: true });
+
+    it('PUBLIC, acc_app, acc_auth and acc_relay hold no EXECUTE on any of the six; owner and SECURITY DEFINER unchanged', async () => {
+      const { rows } = await h.admin.execute<{
+        proname: string;
+        owner: string;
+        definer: boolean;
+        pub: boolean;
+        app: boolean;
+        auth: boolean;
+        relay: boolean;
+      }>(sql`
+        SELECT p.proname, pg_get_userbyid(p.proowner) AS owner, p.prosecdef AS definer,
+               has_function_privilege('public', p.oid, 'EXECUTE') AS pub,
+               has_function_privilege('acc_app', p.oid, 'EXECUTE') AS app,
+               has_function_privilege('acc_auth', p.oid, 'EXECUTE') AS auth,
+               has_function_privilege('acc_relay', p.oid, 'EXECUTE') AS relay
+        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.prorettype = 'trigger'::regtype
+          AND p.proname = ANY (${`{${PRE_EXISTING.join(',')}}`}::text[])`);
+      expect(rows.map((r) => r.proname).sort()).toEqual([...PRE_EXISTING].sort());
+      const tableOwner = (
+        await h.admin.execute<{ o: string }>(
+          sql`SELECT pg_get_userbyid(relowner) AS o FROM pg_class WHERE oid = 'public.user_roles'::regclass`,
+        )
+      ).rows[0]!.o;
+      for (const r of rows) {
+        expect({ ...r }).toEqual({
+          proname: r.proname,
+          owner: tableOwner,
+          definer: true,
+          pub: false,
+          app: false,
+          auth: false,
+          relay: false,
+        });
+      }
+    });
+
+    it('a direct call is refused for every application principal', async () => {
+      for (const [name, pool] of principals()) {
+        for (const fn of PRE_EXISTING) {
+          const err = await rolledBack(pool, (c) => refusal(c.query(`SELECT public.${fn}()`)));
+          expect(`${name}:${fn}:${err.code}`).toBe(`${name}:${fn}:42501`);
+        }
+      }
+    });
+
+    it('no application principal can attach any of the six to a temporary table of its own', async () => {
+      for (const [name, pool] of principals()) {
+        for (const fn of PRE_EXISTING) {
+          const err = await rolledBack(pool, async (c) => {
+            await c.query('CREATE TEMP TABLE c6_probe (id uuid) ON COMMIT DROP');
+            return refusal(
+              c.query(
+                `CREATE TRIGGER c6_probe BEFORE INSERT ON c6_probe FOR EACH ROW EXECUTE FUNCTION public.${fn}()`,
+              ),
+            );
+          });
+          expect(`${name}:${fn}:${err.code}`).toBe(`${name}:${fn}:42501`);
+        }
+      }
+    });
+
+    it('the demonstrated temp-table disclosures and the advisory-lock path are no longer reachable', async () => {
+      // The attacker is acc_app inside A1; the victims are A2's team and role,
+      // and the platform role set.
+      const secrets = [a2.orgId, a2.workspaceId, a2.teamId, PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN];
+      const cases = [
+        {
+          fn: 'fn_validate_audit_scope',
+          ddl: 'CREATE TEMP TABLE x (scope_type text, scope_id uuid, reseller_id uuid, org_id uuid, workspace_id uuid, team_id uuid) ON COMMIT DROP',
+          dml: "INSERT INTO x (scope_type, scope_id) VALUES ('team', $1)",
+          params: [a2.teamId],
+          timing: 'BEFORE INSERT',
+        },
+        {
+          fn: 'fn_validate_role_permission',
+          ddl: 'CREATE TEMP TABLE x (role_id uuid, permission_id uuid, org_id uuid) ON COMMIT DROP',
+          dml: 'INSERT INTO x (role_id) VALUES ($1)',
+          params: [a2.roles[TENANT_ROLE_KEYS.READ_ONLY]],
+          timing: 'BEFORE INSERT',
+        },
+        {
+          fn: 'fn_protect_system_role_permissions',
+          ddl: 'CREATE TEMP TABLE x (role_id uuid, permission_id uuid, org_id uuid) ON COMMIT DROP',
+          dml: "INSERT INTO x (role_id) VALUES ((SELECT id FROM roles WHERE key = 'alendei_super_admin'))",
+          params: [],
+          timing: 'BEFORE INSERT',
+        },
+        {
+          fn: 'fn_protect_system_roles',
+          ddl: 'CREATE TEMP TABLE x (key text, is_system_role boolean) ON COMMIT DROP',
+          dml: "INSERT INTO x VALUES ('k', true)",
+          params: [],
+          timing: 'BEFORE INSERT',
+        },
+        {
+          fn: 'fn_users_platform_admin_guard',
+          ddl: 'CREATE TEMP TABLE x (id uuid) ON COMMIT DROP',
+          dml: 'INSERT INTO x VALUES ($1)',
+          params: [p.platform!.userId],
+          timing: 'AFTER INSERT',
+        },
+        {
+          fn: 'fn_user_roles_platform_admin_guard',
+          ddl: 'CREATE TEMP TABLE x (scope_type role_scope_type) ON COMMIT DROP',
+          dml: "INSERT INTO x VALUES ('platform')",
+          params: [],
+          timing: 'AFTER INSERT',
+        },
+      ];
+      for (const t of cases) {
+        await asApp(ctxA1(), async (c) => {
+          await c.query(t.ddl);
+          await c.query('SAVEPOINT s');
+          const err = await refusal(
+            c.query(
+              `CREATE TRIGGER x ${t.timing} ON x FOR EACH ROW EXECUTE FUNCTION public.${t.fn}()`,
+            ),
+          );
+          expect(`${t.fn}:${err.code}`).toBe(`${t.fn}:42501`);
+          for (const secret of secrets) expect(err.message).not.toContain(secret);
+          await c.query('ROLLBACK TO SAVEPOINT s');
+          // Without the trigger the row stays the caller's own data: nothing
+          // derived, nothing raised, no lock taken as the owner.
+          await c.query(t.dml, t.params);
+          const { rows } = await c.query('SELECT * FROM x');
+          const derivable = secrets.filter((secret) => !(t.params as unknown[]).includes(secret));
+          for (const secret of derivable) expect(JSON.stringify(rows)).not.toContain(secret);
+          const locks = await c.query(
+            "SELECT count(*)::int AS n FROM pg_locks WHERE pid = pg_backend_pid() AND locktype = 'advisory'",
+          );
+          expect(`${t.fn}:${locks.rows[0]!.n}`).toBe(`${t.fn}:0`);
+        });
+      }
+    });
+
+    it('trg_audit_logs_validate_scope still derives tenancy and refuses a bad scope, for acc_app and acc_auth', async () => {
+      const row = (scopeType: string, scopeId: string | null, action = 'c6.h3.probe') => [
+        scopeType,
+        scopeId,
+        action,
+        uuidv7(),
+      ];
+      const insert = `INSERT INTO audit_logs (scope_type, scope_id, actor_type, actor_user_id, action, resource_type, outcome, correlation_id)
+        VALUES ($1, $2, 'user', '${p.adminA1!.userId}', $3, 'probe', 'success', $4)`;
+      await asApp(ctxA1(), async (c) => {
+        expect(await noExecute(c)).toBe(false);
+        const ok = await c.query(`${insert} RETURNING org_id, workspace_id, team_id`, [
+          ...row('team', a1.teamId),
+        ]);
+        expect(ok.rows[0]).toEqual({
+          org_id: a1.orgId,
+          workspace_id: a1.workspaceId,
+          team_id: a1.teamId,
+        });
+        await c.query('SAVEPOINT s');
+        const missing = await refusal(c.query(insert, row('team', uuidv7())));
+        expect(missing.code).toBe('23503');
+        expect(missing.message).toMatch(/team scope .* does not exist/);
+        await c.query('ROLLBACK TO SAVEPOINT s');
+        // The trigger derives A2 from A2's team; RLS then refuses the row.
+        const foreign = await refusal(c.query(insert, row('team', a2.teamId)));
+        expect(foreign.code).toBe('42501');
+      });
+      await rolledBack(authPool, async (c) => {
+        expect(await noExecute(c)).toBe(false);
+        const ok = await c.query(insert, row('platform', null, 'auth.login.failed'));
+        expect(ok.rowCount).toBe(1);
+        await c.query('SAVEPOINT s');
+        const shape = await refusal(
+          c.query(insert, row('platform', a1.orgId, 'auth.login.failed')),
+        );
+        expect(shape.message).toMatch(/platform scope carries no scope_id/);
+      });
+    });
+
+    it('trg_role_permissions_validate and trg_role_permissions_protect_system still fire for acc_app', async () => {
+      const perm = async (platform: boolean) =>
+        (
+          await h.admin.execute<{ id: string }>(
+            platform
+              ? sql`SELECT id FROM permissions WHERE key LIKE 'platform.%' ORDER BY key LIMIT 1`
+              : sql`SELECT id FROM permissions WHERE key NOT LIKE 'platform.%' AND key <> 'workspaces.read' ORDER BY key LIMIT 1`,
+          )
+        ).rows[0]!.id;
+      const tenantPerm = await perm(false);
+      const platformPerm = await perm(true);
+      const systemRole = a1.roles[TENANT_ROLE_KEYS.ORG_ADMIN]!;
+      await asApp(ctxA1(), async (c) => {
+        expect(await noExecute(c)).toBe(false);
+        const ok = await c.query(
+          'INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) RETURNING org_id',
+          [narrowRole, tenantPerm],
+        );
+        expect(ok.rows[0]!.org_id).toBe(a1.orgId);
+        await c.query('SAVEPOINT s');
+        const platform = await refusal(
+          c.query('INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2)', [
+            narrowRole,
+            platformPerm,
+          ]),
+        );
+        expect(platform.code).toBe('42501');
+        expect(platform.message).toMatch(
+          /platform permission .* cannot be attached to tenant role/,
+        );
+        await c.query('ROLLBACK TO SAVEPOINT s');
+        const system = await refusal(
+          c.query('INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2)', [
+            systemRole,
+            tenantPerm,
+          ]),
+        );
+        expect(system.code).toBe('42501');
+        expect(system.message).toMatch(/has a fixed permission set/);
+        await c.query('ROLLBACK TO SAVEPOINT s');
+        const removal = await refusal(
+          c.query('DELETE FROM role_permissions WHERE role_id = $1', [systemRole]),
+        );
+        expect(removal.message).toMatch(/has a fixed permission set/);
+      });
+    });
+
+    it('trg_roles_protect_system still refuses modifying or deleting a system role for acc_app, and allows a custom role', async () => {
+      const systemRole = a1.roles[TENANT_ROLE_KEYS.ORG_ADMIN]!;
+      await asApp(ctxA1(), async (c) => {
+        expect(await noExecute(c)).toBe(false);
+        const renamed = await c.query("UPDATE roles SET name = name || ' ' WHERE id = $1", [
+          narrowRole,
+        ]);
+        expect(renamed.rowCount).toBe(1);
+        await c.query('SAVEPOINT s');
+        const modified = await refusal(
+          c.query("UPDATE roles SET name = 'x' WHERE id = $1", [systemRole]),
+        );
+        expect(modified.code).toBe('42501');
+        expect(modified.message).toMatch(/cannot be modified/);
+        await c.query('ROLLBACK TO SAVEPOINT s');
+        const deleted = await refusal(c.query('DELETE FROM roles WHERE id = $1', [systemRole]));
+        expect(deleted.code).toBe('42501');
+        expect(deleted.message).toMatch(/cannot be deleted/);
+      });
+    });
+
+    it('the platform-admin liveness triggers (user_roles delete and update, users status) still fire for acc_app', async () => {
+      const superAdmin = await platformRole(PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN);
+      const support = await platformRole(PLATFORM_ROLE_KEYS.ALENDEI_SUPPORT);
+      await asApp(platformCtx(), async (c) => {
+        expect(await noExecute(c)).toBe(false);
+        // A non-administrator's status change passes fn_users_platform_admin_guard.
+        const disabled = await c.query("UPDATE users SET status = 'disabled' WHERE id = $1", [
+          p.member!.userId,
+        ]);
+        expect(disabled.rowCount).toBe(1);
+        // Removing every other super-admin grant passes the liveness check
+        // (trg_user_roles_platform_admin_liveness fires and admits it) ...
+        await c.query(
+          "DELETE FROM user_roles WHERE scope_type = 'platform' AND role_id = $1 AND user_id <> $2",
+          [superAdmin, p.platform!.userId],
+        );
+        const { rows } = await c.query(
+          "SELECT id FROM user_roles WHERE scope_type = 'platform' AND role_id = $1 AND user_id = $2",
+          [superAdmin, p.platform!.userId],
+        );
+        const lastGrant = rows[0]!.id as string;
+        // ... and the last one is then protected on every path.
+        for (const [label, statement, params] of [
+          [
+            'users status',
+            "UPDATE users SET status = 'disabled' WHERE id = $1",
+            [p.platform!.userId],
+          ],
+          ['user_roles delete', 'DELETE FROM user_roles WHERE id = $1', [lastGrant]],
+          [
+            'user_roles update',
+            'UPDATE user_roles SET role_id = $1 WHERE id = $2',
+            [support, lastGrant],
+          ],
+        ] as const) {
+          await c.query('SAVEPOINT s');
+          const err = await refusal(c.query(statement, [...params]));
+          expect(`${label}:${err.code}`).toBe(`${label}:23001`);
+          expect(err.message).toMatch(/no active administrator/);
+          await c.query('ROLLBACK TO SAVEPOINT s');
+        }
+      });
+    });
   });
 });

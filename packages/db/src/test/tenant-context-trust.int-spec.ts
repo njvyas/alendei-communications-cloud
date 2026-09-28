@@ -13,8 +13,9 @@
  *         genuinely holds the grant (migration `0010`).
  *   CANNOT persist a variable as a role or database default, `SET ROLE` /
  *         `SET SESSION AUTHORIZATION` to any other principal, call a trigger
- *         function directly, attach a trigger-only SECURITY DEFINER function
- *         (migration `0015`) to a temporary table of its own, or reach any
+ *         function directly, attach any SECURITY DEFINER trigger function
+ *         (trigger-only since migrations `0015`/`0016`) to a temporary table of
+ *         its own, or reach any
  *         SECURITY DEFINER function that sets a variable, runs dynamic SQL or
  *         grants anything.
  *
@@ -229,25 +230,21 @@ describe('tenant-context trust model — what acc_app can do with session variab
     }
   });
 
-  /** Migration 0015 (Phase 1C.6 review H-1): executable by the owner only. */
+  /**
+   * Every SECURITY DEFINER trigger function is trigger-only — executable by the
+   * owner alone: the three Phase 1C.6 functions since migration 0015 (review
+   * H-1), the six older ones since migration 0016 (review H-3).
+   */
   const TRIGGER_ONLY = [
     'fn_organizations_guard_reseller_id',
-    'fn_roles_guard_allowed_scope_types',
-    'fn_validate_user_role_scope',
-  ];
-  /**
-   * Pre-1C.6 SECURITY DEFINER trigger functions still executable by PUBLIC — a
-   * recorded residual (`SECURITY.md`, "SECURITY DEFINER trigger functions
-   * attachable to a temporary table"), pinned so that no new function can join
-   * it unnoticed.
-   */
-  const PUBLIC_EXECUTABLE_RESIDUAL = [
     'fn_protect_system_role_permissions',
     'fn_protect_system_roles',
+    'fn_roles_guard_allowed_scope_types',
     'fn_user_roles_platform_admin_guard',
     'fn_users_platform_admin_guard',
     'fn_validate_audit_scope',
     'fn_validate_role_permission',
+    'fn_validate_user_role_scope',
   ];
 
   it('D. no application principal, nor PUBLIC, holds EXECUTE on a trigger-only SECURITY DEFINER function', async () => {
@@ -289,13 +286,16 @@ describe('tenant-context trust model — what acc_app can do with session variab
     }
   });
 
-  it('D. no other SECURITY DEFINER trigger function is executable by PUBLIC beyond the recorded residual', async () => {
-    const { rows } = await db.admin.execute<{ proname: string }>(sql`
-      SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  it('D. the trigger-only list is the complete set of SECURITY DEFINER trigger functions, and none is executable by PUBLIC', async () => {
+    // A new SECURITY DEFINER trigger function fails this until it is both
+    // listed above and revoked from PUBLIC in its creating migration.
+    const { rows } = await db.admin.execute<{ proname: string; pub: boolean }>(sql`
+      SELECT p.proname, has_function_privilege('public', p.oid, 'EXECUTE') AS pub
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
       WHERE n.nspname = 'public' AND p.prosecdef AND p.prorettype = 'trigger'::regtype
-        AND has_function_privilege('public', p.oid, 'EXECUTE')
       ORDER BY p.proname`);
-    expect(rows.map((r) => r.proname)).toEqual(PUBLIC_EXECUTABLE_RESIDUAL);
+    expect(rows.map((r) => r.proname)).toEqual(TRIGGER_ONLY);
+    expect(rows.filter((r) => r.pub).map((r) => r.proname)).toEqual([]);
   });
 
   it('D. the callable helpers confer nothing: bypass check false, claims unbacked, and one read-only disclosure', async () => {
