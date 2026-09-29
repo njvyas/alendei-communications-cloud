@@ -7,6 +7,10 @@ import { TenantDatabase } from '../database/tenant-database.service';
 import type { ResolvedPrincipal } from '../auth/auth.guard';
 import { AuthorizationExempt } from '../auth/requires-permission.decorator';
 import { WsTicketService } from './ws-ticket.service';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { AcceptedCredentials } from '../openapi/accepted-credentials.decorator';
+import { ApiData, ApiErrors } from '../openapi/openapi-responses';
+import { WsTicketSchema } from '../openapi/openapi-schemas';
 
 /**
  * WebSocket connection tickets (`API.md` §10, Phase 1B.7 preparation).
@@ -22,6 +26,7 @@ import { WsTicketService } from './ws-ticket.service';
  * organization or a workspace, so the ticket's recorded scope can only be the
  * one computed from the caller's own resolved context.
  */
+@ApiTags('websocket')
 @Controller('ws')
 export class WsTicketController {
   constructor(
@@ -54,6 +59,13 @@ export class WsTicketController {
       'resolved scope and confers nothing beyond it, so there is no target resource to authorize against',
   )
   @HttpCode(HttpStatus.CREATED)
+  @AcceptedCredentials('userSession')
+  @ApiOperation({
+    summary: 'Issue a WebSocket ticket',
+    description: 'Issuance only; consumption is deferred.',
+  })
+  @ApiData(WsTicketSchema, { status: 201 })
+  @ApiErrors(400, 401, 403, 409, 429)
   async issue() {
     const principal = RequestContext.get()?.principal as ResolvedPrincipal | null | undefined;
     if (!principal) {

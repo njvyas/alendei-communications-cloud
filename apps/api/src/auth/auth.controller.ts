@@ -24,10 +24,28 @@ import { NoTenantContext, OptionalAuthentication, Public } from './public.decora
 import { AuthorizationExempt } from './requires-permission.decorator';
 import { RequireCsrfHeader, RequireJsonBody } from './csrf.guard';
 import type { ResolvedPrincipal } from './auth.guard';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { AcceptedCredentials } from '../openapi/accepted-credentials.decorator';
+import {
+  ApiData,
+  ApiEmpty,
+  ApiErrors,
+  CLEARS_REFRESH_COOKIE,
+  SETS_REFRESH_COOKIE,
+} from '../openapi/openapi-responses';
+import {
+  AccessTokenSchema,
+  EffectiveAuthorizationSchema,
+  PrincipalSchema,
+  RevokedCountSchema,
+  SessionSchema,
+} from '../openapi/openapi-schemas';
+import { DocumentedRateLimitHeaders } from '../openapi/rate-limit-headers.decorator';
 
 /** The cookie carrying the refresh token. Never readable by JavaScript. */
 export const REFRESH_COOKIE = 'acc_refresh';
 
+@ApiTags('auth')
 @Controller('auth')
 export class AuthController {
   constructor(
@@ -101,6 +119,14 @@ export class AuthController {
   @RequireJsonBody()
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('none')
+  @DocumentedRateLimitHeaders('bucket')
+  @ApiOperation({ summary: 'Sign in' })
+  @ApiData(AccessTokenSchema, {
+    description: 'Signed in; sets the refresh cookie.',
+    headers: SETS_REFRESH_COOKIE,
+  })
+  @ApiErrors(400, 401, 415, 429)
   async login(
     @Body() dto: LoginDto,
     @Req() request: Request,
@@ -144,6 +170,14 @@ export class AuthController {
   @RequireCsrfHeader()
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('refreshCookie')
+  @DocumentedRateLimitHeaders('bucket')
+  @ApiOperation({ summary: 'Rotate the refresh token' })
+  @ApiData(AccessTokenSchema, {
+    description: 'Rotated; sets the new refresh cookie. A refused rotation clears the cookie.',
+    headers: SETS_REFRESH_COOKIE,
+  })
+  @ApiErrors(401, 403, 429)
   async refresh(@Req() request: Request, @Res({ passthrough: true }) response: Response) {
     // Public, so the general per-principal limiter never sees this route; it is
     // throttled per source address here instead (Gate-B audit, Blocker 4).
@@ -199,6 +233,15 @@ export class AuthController {
   @RequireCsrfHeader()
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
+  @AcceptedCredentials('userSession', 'apiKey', 'refreshCookie')
+  @DocumentedRateLimitHeaders('general-or-bucket')
+  @ApiOperation({
+    summary: 'Sign out',
+    description:
+      'Ends the bearer session, or, without a valid bearer, the refresh cookie’s session. An API key has no session: `204`, nothing revoked. An unknown or already-revoked cookie is answered like a valid one.',
+  })
+  @ApiEmpty('Signed out; the refresh cookie is cleared.', CLEARS_REFRESH_COOKIE)
+  @ApiErrors(401, 403, 429)
   async logout(@Req() request: Request, @Res({ passthrough: true }) response: Response) {
     const meta = this.meta(request);
     const principal = RequestContext.get()?.principal ?? null;
@@ -242,6 +285,10 @@ export class AuthController {
   @NoTenantContext()
   @AuthorizationExempt('identity: returns the caller’s own principal, which has no target scope')
   @Get('me')
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'The current principal' })
+  @ApiData(PrincipalSchema)
+  @ApiErrors(401, 429)
   me() {
     const principal = this.principal();
     return {
@@ -295,6 +342,10 @@ export class AuthController {
     'identity: returns the caller’s own grants; the subject is the principal itself',
   )
   @Get('me/authorization')
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'The current principal’s effective grants' })
+  @ApiData(EffectiveAuthorizationSchema)
+  @ApiErrors(401, 429)
   authorization() {
     const principal = this.principal();
     return {
@@ -321,6 +372,13 @@ export class AuthController {
     'identity: lists the caller’s own sessions, scoped by user id rather than by tenant',
   )
   @Get('sessions')
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({
+    summary: 'The caller’s live sessions',
+    description: 'Always empty for an API key, which has no sessions.',
+  })
+  @ApiData(SessionSchema, { isArray: true })
+  @ApiErrors(401, 429)
   async sessions() {
     const principal = this.principal();
     if (!principal.userId) return { data: [] };
@@ -348,6 +406,10 @@ export class AuthController {
   )
   @Post('sessions/revoke-all')
   @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession')
+  @ApiOperation({ summary: 'Revoke every other session of the caller' })
+  @ApiData(RevokedCountSchema)
+  @ApiErrors(401, 403, 429)
   async revokeAllSessions(@Req() request: Request) {
     const revoked = await this.auth.revokeAllOwnSessions(this.principal(), this.meta(request));
     return { data: { revoked } };
@@ -359,6 +421,13 @@ export class AuthController {
   )
   @Delete('sessions/:id')
   @HttpCode(HttpStatus.NO_CONTENT)
+  @AcceptedCredentials('userSession')
+  @ApiOperation({
+    summary: 'Revoke one of the caller’s sessions',
+    description: 'An API key has no user, so it is `401`.',
+  })
+  @ApiEmpty()
+  @ApiErrors(400, 401, 404, 429)
   async revokeSession(
     @Param('id', new ParseUUIDPipe({ version: undefined })) id: string,
     @Req() request: Request,

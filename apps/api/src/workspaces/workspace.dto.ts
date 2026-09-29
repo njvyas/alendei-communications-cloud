@@ -10,6 +10,7 @@ import {
 } from 'class-validator';
 
 import { ListQueryDto } from '../common/http/list-query.dto';
+import { ApiProperty } from '@nestjs/swagger';
 
 /** The `workspace_status` values; teams reuse them (ADR-012 F-6). */
 export const SCOPE_STATUSES = ['active', 'archived'] as const;
@@ -44,6 +45,7 @@ export class CreateWorkspaceDto {
   name!: string;
 
   @Matches(SLUG, { message: 'slug must be 2-63 lower-case letters, digits or hyphens' })
+  @ApiProperty({ pattern: SLUG.source })
   slug!: string;
 
   @Allow()

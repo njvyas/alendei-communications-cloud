@@ -15,6 +15,7 @@ import { REQUIRE_CSRF } from '../auth/csrf.guard';
 import metadata from '../metadata';
 import { ACCEPTED_CREDENTIALS, type Credential } from './accepted-credentials.decorator';
 import { SHARED_SCHEMAS } from './openapi-components';
+import { RESPONSE_SCHEMAS } from './openapi-schemas';
 import { normalizeOpenApiDocument } from './openapi-normalize';
 import { RATE_LIMIT_HEADERS, type RateLimitHeaders } from './rate-limit-headers.decorator';
 
@@ -92,10 +93,11 @@ export async function buildOpenApiDocument(app: INestApplication): Promise<OpenA
 
   const document = SwaggerModule.createDocument(app, config, {
     operationIdFactory: operationIdFor,
-    extraModels: [...SHARED_SCHEMAS],
+    extraModels: [...SHARED_SCHEMAS, ...RESPONSE_SCHEMAS],
   });
 
   applyCrossCuttingContract(document, collectRouteFacts(app));
+  closeObjectSchemas(document);
   return normalizeOpenApiDocument(document);
 }
 
@@ -153,31 +155,86 @@ const header = (description: string, required = false): HeaderObject => ({
   schema: { type: 'string' },
 });
 
-const CORRELATION_RESPONSE_HEADERS: Record<string, HeaderObject> = {
+/** Shared response headers, defined once (`components.headers`) and referenced. */
+const COMPONENT_HEADERS: Record<string, HeaderObject> = {
   'X-Correlation-Id': header(
     'The correlation id: the caller-supplied UUID when valid, otherwise a new one.',
     true,
   ),
   'X-Request-Id': header('A new id for this request.', true),
-};
-
-const GENERAL_LIMIT_HEADERS: Record<string, HeaderObject> = {
-  'X-RateLimit-Limit': header(
+  'X-RateLimit-Limit.general': header(
     'General per-principal limiter: requests allowed in the window. Sent once authentication has succeeded, so absent on a `401` and on refusals raised before the limiter runs.',
   ),
-  'X-RateLimit-Remaining': header('General limiter: requests left in the window.'),
-  'X-RateLimit-Reset': header('General limiter: seconds until the window resets.'),
-};
-
-const BUCKET_LIMIT_HEADERS: Record<string, HeaderObject> = {
-  'X-RateLimit-Limit': header(
+  'X-RateLimit-Remaining.general': header('General limiter: requests left in the window.'),
+  'X-RateLimit-Reset.general': header('General limiter: seconds until the window resets.'),
+  'X-RateLimit-Limit.bucket': header(
     'Per-address authentication bucket: attempts allowed. Sent once the bucket has been consumed (not on a request refused earlier, such as a validation or CSRF failure). This bucket sends no `X-RateLimit-Reset`.',
   ),
-  'X-RateLimit-Remaining': header('Per-address authentication bucket: attempts left.'),
+  'X-RateLimit-Remaining.bucket': header('Per-address authentication bucket: attempts left.'),
+  'X-RateLimit-Limit.either': header(
+    'The general limiter on the bearer path, the refresh bucket on the cookie path.',
+  ),
+  'X-RateLimit-Remaining.either': header(
+    'The general limiter on the bearer path, the refresh bucket on the cookie path.',
+  ),
+  'X-RateLimit-Reset.either': header('The general limiter only (bearer path).'),
+  'Retry-After': header('Seconds to wait before retrying.', true),
 };
 
-const RETRY_AFTER: Record<string, HeaderObject> = {
-  'Retry-After': header('Seconds to wait before retrying.', true),
+/** Shared request header parameters (`components.parameters`). */
+const COMPONENT_PARAMETERS: Record<string, ParameterObject> = {
+  'X-Correlation-Id': {
+    name: 'X-Correlation-Id',
+    in: 'header',
+    required: false,
+    description: 'Optional caller-supplied UUID; any other value is replaced by a new id.',
+    schema: { type: 'string', format: 'uuid' },
+  },
+  'X-Causation-Id': {
+    name: 'X-Causation-Id',
+    in: 'header',
+    required: false,
+    description:
+      'Optional UUID of the event or request that caused this one; any other value is ignored.',
+    schema: { type: 'string', format: 'uuid' },
+  },
+  'X-Acc-Organization': {
+    name: 'X-Acc-Organization',
+    in: 'header',
+    required: false,
+    description:
+      'Selects the organization to act in (`API.md` §3). Required when the principal can reach more than one; an organization outside the principal’s scope is refused.',
+    schema: { type: 'string', format: 'uuid' },
+  },
+  'X-Acc-Refresh': {
+    name: 'X-Acc-Refresh',
+    in: 'header',
+    required: true,
+    description:
+      'CSRF marker for the cookie-authenticated routes: any value; its absence is `403 AUTHZ_PERMISSION_DENIED`.',
+    schema: { type: 'string' },
+  },
+};
+
+const headerRef = (key: string) => ({ $ref: `#/components/headers/${key}` });
+const parameterRef = (key: string) => ({ $ref: `#/components/parameters/${key}` });
+
+const RATE_LIMIT_REFS: Readonly<Record<RateLimitHeaders, Record<string, string>>> = {
+  general: {
+    'X-RateLimit-Limit': 'X-RateLimit-Limit.general',
+    'X-RateLimit-Remaining': 'X-RateLimit-Remaining.general',
+    'X-RateLimit-Reset': 'X-RateLimit-Reset.general',
+  },
+  bucket: {
+    'X-RateLimit-Limit': 'X-RateLimit-Limit.bucket',
+    'X-RateLimit-Remaining': 'X-RateLimit-Remaining.bucket',
+  },
+  'general-or-bucket': {
+    'X-RateLimit-Limit': 'X-RateLimit-Limit.either',
+    'X-RateLimit-Remaining': 'X-RateLimit-Remaining.either',
+    'X-RateLimit-Reset': 'X-RateLimit-Reset.either',
+  },
+  none: {},
 };
 
 /**
@@ -189,6 +246,10 @@ const RETRY_AFTER: Record<string, HeaderObject> = {
  * on its success responses).
  */
 function applyCrossCuttingContract(document: OpenAPIObject, facts: Map<string, RouteFacts>): void {
+  const components = (document.components ??= {});
+  components.headers = { ...components.headers, ...COMPONENT_HEADERS };
+  components.parameters = { ...components.parameters, ...COMPONENT_PARAMETERS };
+
   for (const pathItem of Object.values(document.paths) as PathItemObject[]) {
     for (const method of ['get', 'put', 'post', 'delete', 'patch', 'head', 'options'] as const) {
       const operation = pathItem[method] as OperationObject | undefined;
@@ -196,73 +257,51 @@ function applyCrossCuttingContract(document: OpenAPIObject, facts: Map<string, R
       const fact = facts.get(operation.operationId);
       if (!fact) continue;
 
-      const parameters = (operation.parameters ?? []) as ParameterObject[];
-      parameters.push(
-        {
-          name: 'X-Correlation-Id',
-          in: 'header',
-          required: false,
-          description: 'Optional caller-supplied UUID; any other value is replaced by a new id.',
-          schema: { type: 'string', format: 'uuid' },
-        },
-        {
-          name: 'X-Causation-Id',
-          in: 'header',
-          required: false,
-          description:
-            'Optional UUID of the event or request that caused this one; any other value is ignored.',
-          schema: { type: 'string', format: 'uuid' },
-        },
-      );
-      if (!fact.isPublic && !fact.noTenant) {
-        parameters.push({
-          name: 'X-Acc-Organization',
-          in: 'header',
-          required: false,
-          description:
-            'Selects the organization to act in (`API.md` §3). Required when the principal can reach more than one; an organization outside the principal’s scope is refused.',
-          schema: { type: 'string', format: 'uuid' },
-        });
-      }
-      if (fact.csrf) {
-        parameters.push({
-          name: 'X-Acc-Refresh',
-          in: 'header',
-          required: true,
-          description:
-            'CSRF marker for the cookie-authenticated routes: any value; its absence is `403 AUTHZ_PERMISSION_DENIED`.',
-          schema: { type: 'string' },
-        });
-      }
+      const parameters = [...(operation.parameters ?? [])];
+      parameters.push(parameterRef('X-Correlation-Id'), parameterRef('X-Causation-Id'));
+      if (!fact.isPublic && !fact.noTenant) parameters.push(parameterRef('X-Acc-Organization'));
+      if (fact.csrf) parameters.push(parameterRef('X-Acc-Refresh'));
       operation.parameters = parameters;
 
       for (const [status, response] of Object.entries(operation.responses ?? {}) as Array<
         [string, ResponseObject]
       >) {
         const code = Number(status);
-        const headers: Record<string, HeaderObject> = {
-          ...(response.headers as Record<string, HeaderObject> | undefined),
-          ...CORRELATION_RESPONSE_HEADERS,
+        const headers: Record<string, unknown> = {
+          ...(response.headers as Record<string, unknown> | undefined),
+          'X-Correlation-Id': headerRef('X-Correlation-Id'),
+          'X-Request-Id': headerRef('X-Request-Id'),
         };
         const limit =
-          fact.rateLimitHeaders === 'general'
-            ? code === 401
-              ? {}
-              : GENERAL_LIMIT_HEADERS
-            : fact.rateLimitHeaders === 'bucket'
-              ? BUCKET_LIMIT_HEADERS
-              : fact.rateLimitHeaders === 'general-or-bucket'
-                ? { ...BUCKET_LIMIT_HEADERS, ...GENERAL_LIMIT_HEADERS }
-                : {};
-        Object.assign(headers, limit);
-        if (code === 429) Object.assign(headers, RETRY_AFTER);
+          fact.rateLimitHeaders === 'general' && code === 401
+            ? {}
+            : RATE_LIMIT_REFS[fact.rateLimitHeaders];
+        for (const [name, key] of Object.entries(limit)) headers[name] = headerRef(key);
+        if (code === 429) headers['Retry-After'] = headerRef('Retry-After');
         if (code >= 200 && code < 300) {
           for (const { name, value } of fact.staticHeaders) {
-            headers[name] = { ...header(`Always \`${value}\`.`, true) };
+            headers[name] = header(`Always \`${value}\`.`, true);
           }
         }
-        response.headers = headers;
+        response.headers = headers as ResponseObject['headers'];
       }
+    }
+  }
+}
+
+/**
+ * Every named object schema is closed (`additionalProperties: false`) unless it
+ * says otherwise. That is the runtime truth on both sides: the validation pipe
+ * rejects any unlisted request field (`forbidNonWhitelisted`), and every
+ * response is built from an explicit field list — so an undocumented response
+ * field is a contract failure, not something a client may quietly rely on.
+ */
+function closeObjectSchemas(document: OpenAPIObject): void {
+  for (const schema of Object.values(document.components?.schemas ?? {}) as Array<
+    Record<string, unknown>
+  >) {
+    if (schema.properties && schema.additionalProperties === undefined) {
+      schema.additionalProperties = false;
     }
   }
 }

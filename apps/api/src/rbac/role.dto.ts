@@ -15,6 +15,7 @@ import {
 import { ALL_PERMISSION_KEYS, type ScopeType } from '@acc/contracts';
 
 import { ListQueryDto } from '../common/http/list-query.dto';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 /** The scope levels a *tenant* role may admit. Platform and reseller are not a tenant's to claim. */
 const TENANT_SCOPE_TYPES: readonly ScopeType[] = ['organization', 'workspace', 'team'];
@@ -30,6 +31,7 @@ export class CreateRoleDto {
   @Matches(ROLE_KEY_PATTERN, {
     message: 'key must be lower snake_case, 3-64 characters, starting with a letter',
   })
+  @ApiProperty({ pattern: ROLE_KEY_PATTERN.source })
   key!: string;
 
   @IsString()
@@ -46,6 +48,7 @@ export class CreateRoleDto {
   @ArrayMinSize(1)
   @ArrayUnique()
   @IsIn(TENANT_SCOPE_TYPES, { each: true })
+  @ApiProperty({ enum: TENANT_SCOPE_TYPES, isArray: true })
   allowedScopeTypes!: ScopeType[];
 
   /**
@@ -57,6 +60,7 @@ export class CreateRoleDto {
   @ArrayMaxSize(200)
   @ArrayUnique()
   @IsIn(ALL_PERMISSION_KEYS, { each: true })
+  @ApiProperty({ enum: ALL_PERMISSION_KEYS, isArray: true })
   permissions!: string[];
 }
 
@@ -77,6 +81,7 @@ export class UpdateRoleDto {
   @ArrayMinSize(1)
   @ArrayUnique()
   @IsIn(TENANT_SCOPE_TYPES, { each: true })
+  @ApiPropertyOptional({ enum: TENANT_SCOPE_TYPES, isArray: true })
   allowedScopeTypes?: ScopeType[];
 
   @IsOptional()
@@ -84,6 +89,7 @@ export class UpdateRoleDto {
   @ArrayMaxSize(200)
   @ArrayUnique()
   @IsIn(ALL_PERMISSION_KEYS, { each: true })
+  @ApiPropertyOptional({ enum: ALL_PERMISSION_KEYS, isArray: true })
   permissions?: string[];
 }
 

@@ -1,6 +1,7 @@
 import { Transform } from 'class-transformer';
 import { IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
 import { PAGE_LIMITS } from '@acc/contracts';
+import { ApiPropertyOptional } from '@nestjs/swagger';
 
 /**
  * The pagination and ordering parameters every list endpoint accepts
@@ -21,6 +22,7 @@ export class ListQueryDto {
   @IsInt()
   @Min(PAGE_LIMITS.MIN)
   @Max(PAGE_LIMITS.MAX)
+  @ApiPropertyOptional({ type: 'integer', minimum: PAGE_LIMITS.MIN, maximum: PAGE_LIMITS.MAX })
   limit?: number;
 
   /**

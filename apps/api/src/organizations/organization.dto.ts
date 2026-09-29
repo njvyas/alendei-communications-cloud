@@ -10,6 +10,7 @@ import {
 } from 'class-validator';
 
 import { ListQueryDto } from '../common/http/list-query.dto';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export const ORGANIZATION_STATUSES = ['active', 'suspended', 'closed'] as const;
 export type OrganizationStatusValue = (typeof ORGANIZATION_STATUSES)[number];
@@ -29,6 +30,7 @@ export class CreateOrganizationDto {
   name!: string;
 
   @Matches(SLUG, { message: 'slug must be 2-63 lower-case letters, digits or hyphens' })
+  @ApiProperty({ pattern: SLUG.source })
   slug!: string;
 
   @IsOptional()
@@ -38,6 +40,7 @@ export class CreateOrganizationDto {
 
   @IsOptional()
   @Matches(GSTIN, { message: 'gstin must be a valid 15-character GSTIN' })
+  @ApiPropertyOptional({ pattern: GSTIN.source })
   gstin?: string;
 
   /**
@@ -82,6 +85,7 @@ export class UpdateOrganizationDto {
   @IsOptional()
   @ValidateIf((_, value) => value !== null)
   @Matches(GSTIN, { message: 'gstin must be a valid 15-character GSTIN' })
+  @ApiPropertyOptional({ pattern: GSTIN.source, nullable: true, type: String })
   gstin?: string | null;
 
   @IsOptional()

@@ -15,18 +15,53 @@ export function carriesDocument(body: string): boolean {
 
 export interface Booted {
   readonly app: INestApplication;
-  /** A class from the isolated module registry the app was built from. */
+  /** A provider, by its class in the isolated module registry the app was built from. */
   resolve<T>(path: string, exportName: string): T;
+  /** A module's exports from that same isolated registry. */
+  load<T = Record<string, unknown>>(path: string): T;
   clearRateLimits(): Promise<void>;
   close(): Promise<void>;
 }
+
+const REGISTRY_MODULES = [
+  '../src/redis/redis.module',
+  '../src/auth/jwt.service',
+  '../src/iam/credential.service',
+  '../src/openapi/openapi-document.service',
+  '../src/rbac/tenant-role-provisioner.service',
+  '../src/openapi/openapi-document',
+  '../src/openapi/openapi-normalize',
+  'class-validator',
+  '@nestjs/common/constants',
+];
 
 /**
  * Builds the application through the real `createApp()` (`main.ts`'s path)
  * under `env`, in an isolated module registry so each configuration gets its
  * own module graph — including which OpenAPI module is registered.
+ *
+ * For exposure checks only: the committed plugin metadata loads DTO modules
+ * through `import()`, which resolves after the isolation scope has closed, so a
+ * document built here lacks DTO schemas. A suite that inspects document
+ * *content* uses {@link bootAppInFileRegistry} instead.
  */
 export async function bootApp(env: Record<string, string | undefined>): Promise<Booted> {
+  return boot(env, true);
+}
+
+/**
+ * The same, in the test file's own module registry (every Jest test file has a
+ * fresh one), so the document is built exactly as in production. The
+ * configuration is applied before the application is first required; call it
+ * once per test file.
+ */
+export async function bootAppInFileRegistry(
+  env: Record<string, string | undefined>,
+): Promise<Booted> {
+  return boot(env, false);
+}
+
+async function boot(env: Record<string, string | undefined>, isolated: boolean): Promise<Booted> {
   const saved: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(env)) {
     saved[key] = process.env[key];
@@ -36,18 +71,16 @@ export async function bootApp(env: Record<string, string | undefined>): Promise<
   const registry = new Map<string, Record<string, unknown>>();
   try {
     let createApp!: () => Promise<INestApplication>;
-    jest.isolateModules(() => {
+    const load = () => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       createApp = require('../src/app.factory').createApp;
-      for (const path of [
-        '../src/redis/redis.module',
-        '../src/auth/jwt.service',
-        '../src/iam/credential.service',
-      ]) {
+      for (const path of REGISTRY_MODULES) {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         registry.set(path, require(path) as Record<string, unknown>);
       }
-    });
+    };
+    if (isolated) jest.isolateModules(load);
+    else load();
     const app = await createApp();
     try {
       await app.init();
@@ -65,6 +98,11 @@ export async function bootApp(env: Record<string, string | undefined>): Promise<
         const mod = registry.get(path);
         if (!mod) throw new Error(`module ${path} was not loaded into the registry`);
         return app.get(mod[exportName] as never) as T;
+      },
+      load<T>(path: string): T {
+        const mod = registry.get(path);
+        if (!mod) throw new Error(`module ${path} was not loaded into the registry`);
+        return mod as T;
       },
       async clearRateLimits() {
         const keys = await redis.keys('*ratelimit:*');

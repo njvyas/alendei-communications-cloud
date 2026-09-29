@@ -27,6 +27,10 @@ import {
   UpdateOrganizationDto,
 } from './organization.dto';
 import { OrganizationAdministrationService } from './organization-administration.service';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { AcceptedCredentials } from '../openapi/accepted-credentials.decorator';
+import { ApiData, ApiErrors, ApiIdempotencyKey, ApiPaged } from '../openapi/openapi-responses';
+import { OrganizationSchema } from '../openapi/openapi-schemas';
 
 const BY_PATH =
   'the organization is named in the path, not selected by X-Acc-Organization; the service resolves and authorizes it from grants';
@@ -40,6 +44,7 @@ const BY_PATH =
  * beneath a reseller) and resolve an organization only to attribute the actor;
  * the `:id` routes address one organization by path.
  */
+@ApiTags('organizations')
 @Controller('organizations')
 export class OrganizationsController {
   constructor(private readonly organizations: OrganizationAdministrationService) {}
@@ -62,6 +67,10 @@ export class OrganizationsController {
     target: 'deferred',
     because: "the list spans every organization within the caller's grant-derived reach",
   })
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'List organizations' })
+  @ApiPaged(OrganizationSchema)
+  @ApiErrors(400, 401, 403, 429)
   async list(@Query() query: ListOrganizationsQueryDto) {
     const { items, page } = await this.organizations.list(this.principal(), query);
     return { data: items, page };
@@ -70,6 +79,10 @@ export class OrganizationsController {
   @Get(':id')
   @NoTenantContext()
   @RequiresPermission(PERMISSIONS.ORGANIZATIONS_READ, { target: 'deferred', because: BY_PATH })
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Get an organization' })
+  @ApiData(OrganizationSchema)
+  @ApiErrors(400, 401, 403, 404, 429)
   async get(@Param('id', new ParseUUIDPipe()) id: string) {
     return { data: await this.organizations.get(this.principal(), id) };
   }
@@ -82,6 +95,11 @@ export class OrganizationsController {
       'the target is the reseller the organization is created beneath, named in the body or implied by the caller’s grants',
   })
   @HttpCode(HttpStatus.CREATED)
+  @AcceptedCredentials('userSession')
+  @ApiIdempotencyKey()
+  @ApiOperation({ summary: 'Create an organization' })
+  @ApiData(OrganizationSchema, { status: 201 })
+  @ApiErrors(400, 401, 403, 404, 409, 422, 429)
   async create(
     @Body() dto: CreateOrganizationDto,
     @IdempotencyKey() idempotencyKey: string | null,
@@ -95,6 +113,10 @@ export class OrganizationsController {
   @Patch(':id')
   @NoTenantContext()
   @RequiresPermission(PERMISSIONS.ORGANIZATIONS_UPDATE, { target: 'deferred', because: BY_PATH })
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Update an organization' })
+  @ApiData(OrganizationSchema)
+  @ApiErrors(400, 401, 403, 404, 409, 429)
   async update(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: UpdateOrganizationDto) {
     return { data: await this.organizations.update(this.principal(), id, dto) };
   }
@@ -103,6 +125,10 @@ export class OrganizationsController {
   @NoTenantContext()
   @RequiresPermission(PERMISSIONS.PLATFORM_TENANTS_MANAGE, { target: 'deferred', because: BY_PATH })
   @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession')
+  @ApiOperation({ summary: 'Suspend an organization' })
+  @ApiData(OrganizationSchema)
+  @ApiErrors(400, 401, 403, 404, 409, 429)
   async suspend(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: OrganizationTransitionDto,
@@ -121,6 +147,10 @@ export class OrganizationsController {
   @NoTenantContext()
   @RequiresPermission(PERMISSIONS.PLATFORM_TENANTS_MANAGE, { target: 'deferred', because: BY_PATH })
   @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession')
+  @ApiOperation({ summary: 'Reactivate an organization' })
+  @ApiData(OrganizationSchema)
+  @ApiErrors(400, 401, 403, 404, 409, 429)
   async reactivate(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: OrganizationTransitionDto,
@@ -139,6 +169,10 @@ export class OrganizationsController {
   @NoTenantContext()
   @RequiresPermission(PERMISSIONS.PLATFORM_TENANTS_MANAGE, { target: 'deferred', because: BY_PATH })
   @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession')
+  @ApiOperation({ summary: 'Close an organization' })
+  @ApiData(OrganizationSchema)
+  @ApiErrors(400, 401, 403, 404, 409, 429)
   async close(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: OrganizationTransitionDto,

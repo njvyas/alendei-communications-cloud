@@ -12,6 +12,10 @@ import type { ResolvedPrincipal } from '../auth/auth.guard';
 import { ListQuery, type ListQuerySpec } from '../common/http/list-query';
 import { AdvisoryTenantIds } from './advisory-identifier';
 import { ListWorkspacesQueryDto } from './tenancy.dto';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { AcceptedCredentials } from '../openapi/accepted-credentials.decorator';
+import { ApiData, ApiErrors, ApiPaged } from '../openapi/openapi-responses';
+import { LegacyWorkspaceListItemSchema, LegacyWorkspaceSchema } from '../openapi/openapi-schemas';
 
 /**
  * `/tenants/workspaces` is a deprecated alias of `/workspaces` through Phase 1C
@@ -33,6 +37,7 @@ const SUCCESSOR = '</api/v1/workspaces>; rel="successor-version"';
  * Tenant administration proper (create/update/delete of organizations,
  * workspaces and teams) belongs to Phase 1B.6 and is deliberately absent.
  */
+@ApiTags('tenancy (deprecated)')
 @Controller('tenants')
 export class TenancyController {
   constructor(
@@ -92,6 +97,14 @@ export class TenancyController {
   @Header('Link', SUCCESSOR)
   @RequiresPermission(PERMISSIONS.WORKSPACES_READ)
   @AdvisoryTenantIds({ level: 'organization', source: 'query', key: 'orgId' })
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({
+    summary: 'List workspaces (deprecated alias)',
+    deprecated: true,
+    description: 'Deprecated: use `GET /api/v1/workspaces`.',
+  })
+  @ApiPaged(LegacyWorkspaceListItemSchema)
+  @ApiErrors(400, 401, 403, 429)
   async listWorkspaces(@Query() query: ListWorkspacesQueryDto) {
     const principal = this.principal();
     const orgId = principal.tenant.orgId;
@@ -165,6 +178,14 @@ export class TenancyController {
   @Header('Deprecation', DEPRECATION)
   @Header('Link', SUCCESSOR)
   @RequiresPermission(PERMISSIONS.WORKSPACES_READ)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({
+    summary: 'Get a workspace (deprecated alias)',
+    deprecated: true,
+    description: 'Deprecated: use `GET /api/v1/workspaces/{id}`.',
+  })
+  @ApiData(LegacyWorkspaceSchema)
+  @ApiErrors(400, 401, 403, 404, 429)
   async getWorkspace(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
     const orgId = principal.tenant.orgId;

@@ -1,11 +1,13 @@
 import { Controller, Get } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { HealthCheck, HealthCheckService } from '@nestjs/terminus';
 
 import { AppConfigService } from '../config/app-config.service';
 import { DatabaseHealthIndicator } from './database.health';
 import { RedisHealthIndicator } from './redis.health';
 import { Public } from '../auth/public.decorator';
+import { AcceptedCredentials } from '../openapi/accepted-credentials.decorator';
+import { LivenessSchema } from '../openapi/openapi-schemas';
 
 /**
  * Liveness and readiness (`API.md` §2). Unauthenticated and minimal by design:
@@ -26,6 +28,7 @@ export class HealthController {
   @Get()
   @ApiOperation({ summary: 'Aggregate health' })
   @HealthCheck()
+  @AcceptedCredentials('none')
   async check() {
     return this.health.check([() => this.database.check(), () => this.redis.check()]);
   }
@@ -37,6 +40,8 @@ export class HealthController {
    */
   @Get('live')
   @ApiOperation({ summary: 'Liveness probe' })
+  @AcceptedCredentials('none')
+  @ApiOkResponse({ type: LivenessSchema, description: 'Alive.' })
   live(): { status: 'ok'; service: string } {
     return { status: 'ok', service: this.config.serviceName };
   }
@@ -48,6 +53,7 @@ export class HealthController {
   @Get('ready')
   @ApiOperation({ summary: 'Readiness probe' })
   @HealthCheck()
+  @AcceptedCredentials('none')
   async ready() {
     return this.health.check([() => this.database.check(), () => this.redis.check()]);
   }

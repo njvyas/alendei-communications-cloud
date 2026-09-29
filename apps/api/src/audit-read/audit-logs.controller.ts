@@ -8,6 +8,10 @@ import type { ResolvedPrincipal } from '../auth/auth.guard';
 import { ListAuditLogsQueryDto } from './audit-log.dto';
 import { RequiresPermission } from '../auth/requires-permission.decorator';
 import { AuditReadService } from './audit-read.service';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { AcceptedCredentials } from '../openapi/accepted-credentials.decorator';
+import { ApiData, ApiErrors, ApiPaged } from '../openapi/openapi-responses';
+import { AuditLogSchema } from '../openapi/openapi-schemas';
 
 /**
  * Audit read (`API.md` §3f, Phase 1B.6.3).
@@ -21,6 +25,7 @@ import { AuditReadService } from './audit-read.service';
  * tenant transaction, delegate — so the authorization decision and the query run
  * under the same `SET LOCAL` context and RLS filters what the decision admitted.
  */
+@ApiTags('audit-logs')
 @Controller('audit-logs')
 export class AuditLogsController {
   constructor(
@@ -42,6 +47,10 @@ export class AuditLogsController {
 
   @Get()
   @RequiresPermission(PERMISSIONS.AUDIT_READ)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'List audit records' })
+  @ApiPaged(AuditLogSchema)
+  @ApiErrors(400, 401, 403, 429)
   async list(@Query() query: ListAuditLogsQueryDto) {
     const principal = this.principal();
     const { items, page } = await this.db.withRequestTenant((tx) =>
@@ -57,6 +66,10 @@ export class AuditLogsController {
       'the target is the scope the record was written at, knowable only once the row is loaded — ' +
       'a row recorded at a workspace is a workspace resource, not an organization one',
   })
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Get an audit record' })
+  @ApiData(AuditLogSchema)
+  @ApiErrors(400, 401, 403, 404, 429)
   async get(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
     const data = await this.db.withRequestTenant((tx) => this.audit.get(tx, principal, id));

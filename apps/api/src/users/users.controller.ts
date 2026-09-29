@@ -24,6 +24,16 @@ import { RequiresPermission } from '../auth/requires-permission.decorator';
 import { IdempotencyKey } from '../idempotency/idempotency.decorator';
 import { IdempotencyService } from '../idempotency/idempotency.service';
 import { UserAdministrationService } from './user-administration.service';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { AcceptedCredentials } from '../openapi/accepted-credentials.decorator';
+import {
+  ApiData,
+  ApiEmpty,
+  ApiErrors,
+  ApiIdempotencyKey,
+  ApiPaged,
+} from '../openapi/openapi-responses';
+import { RevokedCountSchema, SessionSchema, UserSchema } from '../openapi/openapi-schemas';
 
 /**
  * User administration (`API.md` §3d, Phase 1B.6.1).
@@ -46,6 +56,7 @@ import { UserAdministrationService } from './user-administration.service';
  * `DELETE` that answered `204` while disabling would be a lie in the route
  * table. Deactivation is the deletion semantics this system has.
  */
+@ApiTags('users')
 @Controller('users')
 export class UsersController {
   constructor(
@@ -68,6 +79,10 @@ export class UsersController {
 
   @Get()
   @RequiresPermission(PERMISSIONS.USERS_READ)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'List users' })
+  @ApiPaged(UserSchema)
+  @ApiErrors(400, 401, 403, 429)
   async list(@Query() query: ListUsersQueryDto) {
     const principal = this.principal();
     const { items, page } = await this.db.withRequestTenant((tx) =>
@@ -78,6 +93,10 @@ export class UsersController {
 
   @Get(':id')
   @RequiresPermission(PERMISSIONS.USERS_READ)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Get a user' })
+  @ApiData(UserSchema)
+  @ApiErrors(400, 401, 403, 404, 429)
   async get(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
     const data = await this.db.withRequestTenant((tx) => this.users.get(tx, principal, id));
@@ -102,6 +121,11 @@ export class UsersController {
   @Post()
   @RequiresPermission(PERMISSIONS.USERS_INVITE)
   @HttpCode(HttpStatus.CREATED)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiIdempotencyKey()
+  @ApiOperation({ summary: 'Create a user' })
+  @ApiData(UserSchema, { status: 201 })
+  @ApiErrors(400, 401, 403, 404, 409, 422, 429)
   async create(
     @Body() dto: CreateUserDto,
     @IdempotencyKey() idempotencyKey: string | null,
@@ -151,6 +175,10 @@ export class UsersController {
    */
   @Patch(':id')
   @RequiresPermission(PERMISSIONS.USERS_UPDATE)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Update a user' })
+  @ApiData(UserSchema)
+  @ApiErrors(400, 401, 403, 404, 409, 429)
   async update(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: UpdateUserDto) {
     const principal = this.principal();
     const data = await this.db.withRequestTenant((tx) =>
@@ -171,6 +199,10 @@ export class UsersController {
   @Post(':id/disable')
   @RequiresPermission(PERMISSIONS.USERS_DISABLE)
   @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Disable a user' })
+  @ApiData(UserSchema)
+  @ApiErrors(400, 401, 403, 404, 409, 429)
   async disable(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
     const data = await this.db.withRequestTenant((tx) => this.users.disable(tx, principal, id));
@@ -186,6 +218,10 @@ export class UsersController {
    */
   @Get(':id/sessions')
   @RequiresPermission(PERMISSIONS.SESSIONS_READ)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'List a user’s live sessions' })
+  @ApiData(SessionSchema, { isArray: true })
+  @ApiErrors(400, 401, 403, 404, 429)
   async sessions(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
     const rows = await this.db.withRequestTenant((tx) =>
@@ -208,6 +244,10 @@ export class UsersController {
   @Post(':id/sessions/revoke-all')
   @RequiresPermission(PERMISSIONS.SESSIONS_REVOKE)
   @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession')
+  @ApiOperation({ summary: 'Revoke all of a user’s sessions' })
+  @ApiData(RevokedCountSchema)
+  @ApiErrors(400, 401, 403, 404, 409, 429)
   async revokeAllSessions(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
     const revoked = await this.db.withRequestTenant((tx) =>
@@ -220,6 +260,10 @@ export class UsersController {
   @Delete(':id/sessions/:sessionId')
   @RequiresPermission(PERMISSIONS.SESSIONS_REVOKE)
   @HttpCode(HttpStatus.NO_CONTENT)
+  @AcceptedCredentials('userSession')
+  @ApiOperation({ summary: 'Revoke one of a user’s sessions' })
+  @ApiEmpty()
+  @ApiErrors(400, 401, 403, 404, 409, 429)
   async revokeSession(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Param('sessionId', new ParseUUIDPipe({ version: undefined })) sessionId: string,
@@ -232,6 +276,10 @@ export class UsersController {
   @Post(':id/reactivate')
   @RequiresPermission(PERMISSIONS.USERS_REACTIVATE)
   @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Reactivate a user' })
+  @ApiData(UserSchema)
+  @ApiErrors(400, 401, 403, 404, 409, 429)
   async reactivate(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
     const data = await this.db.withRequestTenant((tx) => this.users.reactivate(tx, principal, id));

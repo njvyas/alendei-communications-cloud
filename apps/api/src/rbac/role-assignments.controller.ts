@@ -23,6 +23,16 @@ import { RequiresPermission } from '../auth/requires-permission.decorator';
 import { IdempotencyKey } from '../idempotency/idempotency.decorator';
 import { IdempotencyService } from '../idempotency/idempotency.service';
 import { RoleAssignmentService } from './role-assignment.service';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { AcceptedCredentials } from '../openapi/accepted-credentials.decorator';
+import {
+  ApiData,
+  ApiEmpty,
+  ApiErrors,
+  ApiIdempotencyKey,
+  ApiPaged,
+} from '../openapi/openapi-responses';
+import { RoleAssignmentSchema } from '../openapi/openapi-schemas';
 
 /**
  * Role-assignment administration (`API.md` §3c, Phase 1B.5.5).
@@ -38,6 +48,7 @@ import { RoleAssignmentService } from './role-assignment.service';
  * `scopeType`, `scopeId` — plus the shared `limit`/`cursor`/`sort` parameters,
  * sorting on `createdAt` or `scopeType` with `-createdAt` as the default.
  */
+@ApiTags('role-assignments')
 @Controller('role-assignments')
 export class RoleAssignmentsController {
   constructor(
@@ -60,6 +71,10 @@ export class RoleAssignmentsController {
 
   @Get()
   @RequiresPermission(PERMISSIONS.ROLE_ASSIGNMENTS_READ)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'List role assignments' })
+  @ApiPaged(RoleAssignmentSchema)
+  @ApiErrors(400, 401, 403, 429)
   async list(@Query() query: ListAssignmentsQueryDto) {
     const principal = this.principal();
     const { items, page } = await this.db.withRequestTenant((tx) =>
@@ -70,6 +85,10 @@ export class RoleAssignmentsController {
 
   @Get(':id')
   @RequiresPermission(PERMISSIONS.ROLE_ASSIGNMENTS_READ)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Get a role assignment' })
+  @ApiData(RoleAssignmentSchema)
+  @ApiErrors(400, 401, 403, 404, 429)
   async get(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
     const data = await this.db.withRequestTenant((tx) => this.assignments.get(tx, principal, id));
@@ -84,6 +103,11 @@ export class RoleAssignmentsController {
       'guessing it would be the forged-target defect ADR-005 D-5 exists to prevent',
   })
   @HttpCode(HttpStatus.CREATED)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiIdempotencyKey()
+  @ApiOperation({ summary: 'Grant a role' })
+  @ApiData(RoleAssignmentSchema, { status: 201 })
+  @ApiErrors(400, 401, 403, 404, 409, 422, 429)
   async create(
     @Body() dto: CreateAssignmentDto,
     @IdempotencyKey() idempotencyKey: string | null,
@@ -130,6 +154,10 @@ export class RoleAssignmentsController {
     because: 'the target is the scope on the stored row, knowable only once it is loaded',
   })
   @HttpCode(HttpStatus.NO_CONTENT)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Revoke a role assignment' })
+  @ApiEmpty()
+  @ApiErrors(400, 401, 403, 404, 409, 429)
   async revoke(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
     await this.db.withRequestTenant((tx) => this.assignments.revoke(tx, principal, id));

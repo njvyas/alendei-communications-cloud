@@ -29,6 +29,16 @@ import { RequiresPermission } from '../auth/requires-permission.decorator';
 import { IdempotencyKey } from '../idempotency/idempotency.decorator';
 import { IdempotencyService } from '../idempotency/idempotency.service';
 import { RoleAdministrationService } from './role-administration.service';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { AcceptedCredentials } from '../openapi/accepted-credentials.decorator';
+import {
+  ApiData,
+  ApiEmpty,
+  ApiErrors,
+  ApiIdempotencyKey,
+  ApiPaged,
+} from '../openapi/openapi-responses';
+import { PermissionSchema, RoleSchema } from '../openapi/openapi-schemas';
 
 /**
  * Role administration (`API.md` §3c, Phase 1B.5.4).
@@ -46,6 +56,7 @@ import { RoleAdministrationService } from './role-administration.service';
  * precisely how the pre-1B.5.8 API ended up with a different collection shape
  * per endpoint.
  */
+@ApiTags('roles')
 @Controller('roles')
 export class RolesController {
   constructor(
@@ -68,6 +79,10 @@ export class RolesController {
 
   @Get()
   @RequiresPermission(PERMISSIONS.ROLES_READ)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'List roles' })
+  @ApiPaged(RoleSchema)
+  @ApiErrors(400, 401, 403, 429)
   async list(@Query() query: ListRolesQueryDto) {
     const principal = this.principal();
     const { items, page } = await this.db.withRequestTenant((tx) =>
@@ -78,6 +93,10 @@ export class RolesController {
 
   @Get(':id')
   @RequiresPermission(PERMISSIONS.ROLES_READ)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Get a role' })
+  @ApiData(RoleSchema)
+  @ApiErrors(400, 401, 403, 404, 429)
   async get(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
     const data = await this.db.withRequestTenant((tx) => this.roles.get(tx, principal, id));
@@ -99,6 +118,11 @@ export class RolesController {
   @Post()
   @RequiresPermission(PERMISSIONS.ROLES_CREATE)
   @HttpCode(HttpStatus.CREATED)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiIdempotencyKey()
+  @ApiOperation({ summary: 'Create a role' })
+  @ApiData(RoleSchema, { status: 201 })
+  @ApiErrors(400, 401, 403, 409, 422, 429)
   async create(
     @Body() dto: CreateRoleDto,
     @IdempotencyKey() idempotencyKey: string | null,
@@ -143,6 +167,10 @@ export class RolesController {
 
   @Patch(':id')
   @RequiresPermission(PERMISSIONS.ROLES_UPDATE)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Update a role' })
+  @ApiData(RoleSchema)
+  @ApiErrors(400, 401, 403, 404, 409, 429)
   async update(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: UpdateRoleDto) {
     const principal = this.principal();
     const data = await this.db.withRequestTenant((tx) => this.roles.update(tx, principal, id, dto));
@@ -152,6 +180,10 @@ export class RolesController {
   @Delete(':id')
   @RequiresPermission(PERMISSIONS.ROLES_DELETE)
   @HttpCode(HttpStatus.NO_CONTENT)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Delete a role' })
+  @ApiEmpty()
+  @ApiErrors(400, 401, 403, 404, 409, 429)
   async remove(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
     await this.db.withRequestTenant((tx) => this.roles.remove(tx, principal, id));
@@ -165,6 +197,7 @@ export class RolesController {
  * different resource with a different lifecycle — global, seeded, and not
  * tenant data — and nesting it under `/roles` would imply otherwise.
  */
+@ApiTags('permissions')
 @Controller('permissions')
 export class PermissionsController {
   constructor(
@@ -174,6 +207,10 @@ export class PermissionsController {
 
   @Get()
   @RequiresPermission(PERMISSIONS.PERMISSIONS_READ)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'List permissions' })
+  @ApiPaged(PermissionSchema)
+  @ApiErrors(400, 401, 403, 429)
   async list(@Query() query: ListPermissionsQueryDto) {
     const principal = RequestContext.get()?.principal as ResolvedPrincipal | null | undefined;
     if (!principal) {

@@ -22,6 +22,10 @@ import { RequiresPermission } from '../auth/requires-permission.decorator';
 import { IdempotencyKey } from '../idempotency/idempotency.decorator';
 import { IdempotencyService } from '../idempotency/idempotency.service';
 import { ApiKeyAdministrationService, type ApiKeyView } from './api-key-administration.service';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { AcceptedCredentials } from '../openapi/accepted-credentials.decorator';
+import { ApiData, ApiErrors, ApiIdempotencyKey, ApiPaged } from '../openapi/openapi-responses';
+import { ApiKeySchema, CreatedApiKeySchema } from '../openapi/openapi-schemas';
 
 /** The creation envelope. `secret` is always present, and null on a replay. */
 interface CreatedApiKeyBody {
@@ -41,6 +45,7 @@ interface CreatedApiKeyBody {
  * `audit_logs.actor_api_key_id` references this table. There is likewise no
  * un-revoke and no rotation in this phase.
  */
+@ApiTags('api-keys')
 @Controller('api-keys')
 export class ApiKeysController {
   constructor(
@@ -63,6 +68,10 @@ export class ApiKeysController {
 
   @Get()
   @RequiresPermission(PERMISSIONS.API_KEYS_READ)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'List API keys' })
+  @ApiPaged(ApiKeySchema)
+  @ApiErrors(400, 401, 403, 429)
   async list(@Query() query: ListApiKeysQueryDto) {
     const principal = this.principal();
     const { items, page } = await this.db.withRequestTenant((tx) =>
@@ -78,6 +87,10 @@ export class ApiKeysController {
       "the target is the key's own stored binding scope, knowable only once the row is loaded — " +
       'a key bound to a workspace is a workspace resource, not an organization one',
   })
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Get an API key' })
+  @ApiData(ApiKeySchema)
+  @ApiErrors(400, 401, 403, 404, 429)
   async get(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
     const data = await this.db.withRequestTenant((tx) => this.apiKeys.get(tx, principal, id));
@@ -127,6 +140,11 @@ export class ApiKeysController {
       'guessing it would be the forged-target defect ADR-005 D-5 exists to prevent',
   })
   @HttpCode(HttpStatus.CREATED)
+  @AcceptedCredentials('userSession')
+  @ApiIdempotencyKey()
+  @ApiOperation({ summary: 'Create an API key' })
+  @ApiData(CreatedApiKeySchema, { status: 201 })
+  @ApiErrors(400, 401, 403, 404, 409, 422, 429)
   async create(
     @Body() dto: CreateApiKeyDto,
     @IdempotencyKey() idempotencyKey: string | null,
@@ -200,6 +218,10 @@ export class ApiKeysController {
       'a caller-supplied scope would let an actor revoke a key it does not cover',
   })
   @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Revoke an API key' })
+  @ApiData(ApiKeySchema)
+  @ApiErrors(400, 401, 403, 404, 409, 429)
   async revoke(@Param('id', new ParseUUIDPipe()) id: string) {
     const principal = this.principal();
     const data = await this.db.withRequestTenant((tx) => this.apiKeys.revoke(tx, principal, id));

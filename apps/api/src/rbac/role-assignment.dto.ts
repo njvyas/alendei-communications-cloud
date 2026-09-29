@@ -2,6 +2,7 @@ import { IsIn, IsOptional, IsUUID } from 'class-validator';
 import type { ScopeType } from '@acc/contracts';
 
 import { ListQueryDto } from '../common/http/list-query.dto';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 /**
  * Scope levels a tenant grant may name.
@@ -26,6 +27,7 @@ export class CreateAssignmentDto {
   roleId!: string;
 
   @IsIn(GRANTABLE_SCOPE_TYPES)
+  @ApiProperty({ enum: GRANTABLE_SCOPE_TYPES })
   scopeType!: ScopeType;
 
   /**
@@ -50,6 +52,7 @@ export class ListAssignmentsQueryDto extends ListQueryDto {
 
   @IsOptional()
   @IsIn(GRANTABLE_SCOPE_TYPES)
+  @ApiPropertyOptional({ enum: GRANTABLE_SCOPE_TYPES })
   scopeType?: ScopeType;
 
   @IsOptional()

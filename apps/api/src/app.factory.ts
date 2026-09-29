@@ -23,6 +23,9 @@ import { mountDevelopmentSwaggerUi } from './openapi/openapi-dev-ui';
  *
  * It does not listen; `main.ts` does, after this returns.
  */
+/** The routes outside the versioned prefix (also used by the OpenAPI generator). */
+export const UNPREFIXED_ROUTES = ['metrics', 'health', 'health/live', 'health/ready'] as const;
+
 export async function createApp(): Promise<NestExpressApplication> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
@@ -88,9 +91,7 @@ export function configureApp(app: NestExpressApplication, config: AppConfigServi
 
   // `/metrics` and `/health` intentionally sit outside the versioned prefix so
   // scrape and probe configuration survives an API version bump.
-  app.setGlobalPrefix(config.http.globalPrefix, {
-    exclude: ['metrics', 'health', 'health/live', 'health/ready'],
-  });
+  app.setGlobalPrefix(config.http.globalPrefix, { exclude: [...UNPREFIXED_ROUTES] });
 
   // OpenAPI (Phase 1C.3 ADR, G1 option C). The document route is a Nest
   // controller registered by `OpenApiModule` according to the same mode; here

@@ -15,6 +15,7 @@ import {
 import { ALL_PERMISSION_KEYS, type ScopeType } from '@acc/contracts';
 
 import { ListQueryDto } from '../common/http/list-query.dto';
+import { ApiProperty } from '@nestjs/swagger';
 
 /**
  * The scope levels an API key may bind to.
@@ -76,6 +77,7 @@ export class CreateApiKeyDto {
   @ArrayMaxSize(64)
   @ArrayUnique()
   @IsIn(ALL_PERMISSION_KEYS as readonly string[], { each: true })
+  @ApiProperty({ enum: ALL_PERMISSION_KEYS, isArray: true })
   scopes!: string[];
 
   /**
