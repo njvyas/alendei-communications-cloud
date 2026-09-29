@@ -1136,7 +1136,8 @@ There is no change to authorization, `AuthGuard`, sessions, RBAC, RLS, the rate 
 4. Documented but not exercised by the behavioural suite: `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`, the guard's `409` for a mutation in a non-active organization (covered by the Phase 1C.1 suites), `503` from health, and `500`.
 5. Production cannot be booted in any suite (`SECRETS_BACKEND=env` is refused there by design), so its row of the exposure matrix is proven at the unit level.
 6. CODEOWNERS: no owner can be established from existing repository configuration, so it is a post-implementation repository-governance item.
-7. The repository-wide `format:check` in the CI static job still fails on 60 existing `apps/web` files. That is frontend-owned and predates 1C.3; the drift check runs in its own job so it is not masked.
+7. `packages/db` `audit.int-spec.ts` ("accepts a pre-tenant authentication record") counts every `resource_type='auth'` audit row in the database, so rows left by an earlier interrupted run (here, the 1C.3 mutation runs) can fail it until a later suite's audit purge removes them. It passed on a clean state; the 1C.3 suites leave no such rows. This is pre-existing test-isolation fragility, not changed.
+8. The repository-wide `format:check` in the CI static job still fails on 60 existing `apps/web` files. That is frontend-owned and predates 1C.3; the drift check runs in its own job so it is not masked.
 
 ### Explicitly out of scope
 
