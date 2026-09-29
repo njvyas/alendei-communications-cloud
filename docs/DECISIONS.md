@@ -915,7 +915,7 @@ Each is the narrowest reading consistent with the approved decisions and the exi
 - **F-10 — Revoke-all (self)** revokes every other live session and keeps the current one; returns the count.
 - **F-11 — Eviction** (OD-6): eligible sessions are the user's live sessions (not revoked, not rotated, not expired); the oldest by `created_at` is revoked with reason `session_limit_exceeded` until the new session fits, inside the login transaction, serialized per user so concurrent logins cannot both exceed the cap. Each eviction writes `session.revoked`.
 - **F-12 — Logout with an expired access token:** `POST /auth/logout` additionally accepts the refresh cookie **with** `X-Acc-Refresh` when no valid bearer token is presented, revoking the session that cookie belongs to; an unknown or already-revoked cookie still returns `204` and clears the cookie (no oracle).
-- **F-13 — OpenAPI UI** (OD-8): outside `APP_ENV=development`, `/api/v1/docs` and `/api/v1/openapi.json` require an authenticated user session; the production-hardening rule that refuses `OPENAPI_UI_ENABLED` is replaced by this requirement in 1C.3.
+- **F-13 — OpenAPI UI** (OD-8; **amended by the Phase 1C.3 ADR, G1 option C**): the Swagger UI is served only when `APP_ENV=development` and `OPENAPI_UI_ENABLED=true`. Outside development the UI is not served (`/api/v1/docs` is an unknown route, `404`), and the OpenAPI document, `/api/v1/openapi.json`, requires an authenticated user session. The production-hardening rule that refuses `OPENAPI_UI_ENABLED` is replaced by this requirement in 1C.3. *(Original wording: outside `APP_ENV=development`, `/api/v1/docs` and `/api/v1/openapi.json` require an authenticated user session.)*
 
 ### 1C.1a implementation notes (implemented; reviewable)
 
@@ -1062,6 +1062,46 @@ Every trigger using them still fires for every writer, because PostgreSQL checks
 9. The separately reviewed SECURITY DEFINER/RLS primitives `app_is_platform_admin()`, `app_current_reseller_id()`, `app_session_bypasses_rls()` and `app_org_reseller(uuid)` are unchanged by 1C.6 (`SECURITY.md`).
 
 **Gate status.** Phase 1C.6 is closed. **Overall Phase 1C remains open**: Gate C (`ROADMAP.md` §4d) is not passed. The next frozen increment is **Phase 1C.3**.
+
+### Phase 1C.3 Architecture Decision Record (APPROVED 28-Sep-2026; implementation authorized)
+
+**Objective.** Reconcile the existing API with a deterministic OpenAPI 3.0.3 contract, protect the generated document outside development with authenticated user-session access, provide Swagger UI only in development, and enforce contract and snapshot drift in CI.
+
+**Boundary.** Phase 1C.3 does not introduce new API capabilities, and does not change authorization, RBAC, RLS, sessions, business logic, response envelopes, WebSockets, billing, provider functionality or frontend behaviour. It documents the actual runtime contract. Where the runtime is inconsistent (headers, status codes, structures), the inconsistency is documented and, where appropriate, recorded as a residual; it is not normalized. A runtime defect found by the contract work is recorded, and work stops for a decision; it is not silently fixed.
+
+**G1 — exposure model (option C: UI development-only, JSON-only elsewhere).** `OPENAPI_UI_ENABLED` enables the OpenAPI capability; it does not mean a UI exists in every environment.
+
+| Environment | Flag | UI | JSON (`/api/v1/openapi.json`) |
+|---|---|---|---|
+| development | false | absent | absent |
+| development | true | public development UI | public |
+| test / staging / production | false | absent | absent |
+| test / staging / production | true | absent (`/api/v1/docs` is an unknown route, `404`) | authenticated user session only |
+
+Exactly one route produces the document: `GET /api/v1/openapi.json`. None of these may serve it: `/openapi.json/`, case or encoded variants, `-json`, `-yaml`, a Swagger init script embedding the document, a static copy or a downloadable artifact. The development UI obtains the document from that same route and never contains it. Outside development there are no UI routes, no Swagger UI assets and no init script.
+
+**Decisions G2–G10.**
+- **G2 — serving.** Nest controllers serve the document, so the existing `AuthGuard`, rate limiting, error envelope and correlation handling apply. There is no raw Express document route and no migration. The public development controller or the protected controller is registered at bootstrap according to the matrix, and neither when the flag is off.
+- **G3 — flag.** `OPENAPI_UI_ENABLED` is kept and stays off by default. The production refusal is removed.
+- **G4 — development exception.** Unauthenticated access only when `APP_ENV=development && OPENAPI_UI_ENABLED=true`, and tested.
+- **G5 — schemas.** Swagger CLI plugin output is generated into a committed metadata file (`apps/api/src/metadata.ts`). That file is the single source for the build, Jest, the generator and CI. The plugin is removed from `nest-cli.json`, and a test proves the document is identical on the build and test/generator paths. Documentation-only response classes are used where interfaces cannot be reflected. The runtime response architecture is unchanged, and no Zod or other contract framework is added.
+- **G6 — tooling.** `ajv` and `ajv-formats`, development dependencies of `@acc/api` only, used only by contract validation.
+- **G7 — version.** OpenAPI **3.0.3**. A move to 3.1 needs separate approval.
+- **G8 — schemes.** Two `http` bearer schemes model the wire protocol, `userSession` (JWT) and `apiKey` (`Authorization: Bearer ak_…`). `refreshCookie` is a cookie scheme on `acc_refresh`. `X-Acc-Refresh` is a required header parameter where `@RequireCsrfHeader` applies. The runtime credential format is unchanged.
+- **G9 — credential metadata.** `@AcceptedCredentials(...)` is documentation-only metadata: never a guard, never part of authorization. The existing user-session checks stay in the services. Behavioural contract tests prove metadata and runtime agree.
+- **G10 — contract validation.** A dedicated contract-validation suite, with an opt-in validator helper. There is no global hook and no change to the existing harness's semantics.
+
+**Authentication model (outside development).** `GET /api/v1/openapi.json` passes through the unchanged global pipeline (`CsrfGuard`, `AuthGuard`, `RateLimitGuard`, exception filter, interceptors, correlation middleware). The route is `@AuthorizationExempt` (documentation), `@NoTenantContext` and `Cache-Control: no-store`. The handler admits only a user principal with a live session: an API key gets `403 AUTHZ_PERMISSION_DENIED` (the `POST /ws/ticket` precedent), and a missing, invalid, expired or revoked credential or a disabled user gets `401` from `AuthGuard`. No refusal body contains the document.
+
+**Snapshot and CI.**
+- **Snapshot:** `apps/api/openapi/openapi.v1.json`.
+- **`openapi:generate`:** writes the normalized document (recursive key sort, sorted paths/methods/parameters/`required`, `enum` order kept, no environment values). It refuses to run in CI.
+- **`openapi:check`:** generates into a temporary location, compares with the committed snapshot and metadata, and fails on any difference. It never writes committed files.
+- **CI job:** a dedicated `openapi-contract` job runs the check.
+- **Route exclusions:** exactly one, `GET /metrics` (`@ApiExcludeController`). It is explicit, documented and tested; no route may disappear silently.
+- **CODEOWNERS:** created only if an owner can be established from existing repository configuration. None exists, so CODEOWNERS is a post-implementation repository-governance item.
+
+**Mutation proofs.** These run on disposable copies or clones or isolated fixtures only. Each records the mutation, the expected detection, the actual detection, the test name and the result.
 
 ### Explicitly out of scope
 
