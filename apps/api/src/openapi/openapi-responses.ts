@@ -122,7 +122,7 @@ export function ApiIdempotencyKey() {
     name: 'Idempotency-Key',
     required: false,
     description:
-      '16–255 characters of letters, digits, `-`, `_`, `.` or `:` (surrounding whitespace is trimmed; otherwise `400 IDEMPOTENCY_KEY_INVALID`). A repeat with the same key and payload replays the stored response; a different payload is `409 IDEMPOTENCY_KEY_PAYLOAD_MISMATCH`; a repeat while the first is still running is `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`.',
+      '16–255 characters of letters, digits, `-`, `_`, `.` or `:` (surrounding whitespace is trimmed; otherwise `400 IDEMPOTENCY_KEY_INVALID`). A repeat with the same key and payload replays the stored response; a different payload is `422 IDEMPOTENCY_KEY_PAYLOAD_MISMATCH`; a repeat while the first is still running is `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`.',
     schema: { type: 'string', pattern: '^[A-Za-z0-9_.:-]{16,255}$' },
   });
 }

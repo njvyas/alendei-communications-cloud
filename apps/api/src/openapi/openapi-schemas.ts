@@ -196,7 +196,11 @@ export class PrincipalSchema {
 
 @ApiSchema({ name: 'Grant' })
 export class GrantSchema {
-  @ApiProperty(uuid) roleId!: string;
+  @ApiProperty({
+    description:
+      'The role id — for an API key, the synthetic `api_key:<key id>` of its effective grant.',
+  })
+  roleId!: string;
   @ApiProperty() roleKey!: string;
   @ApiProperty({ enum: SCOPE_TYPES }) scopeType!: string;
   @ApiProperty(nullableUuid) scopeId!: string | null;
@@ -251,7 +255,7 @@ export class CreatedApiKeySchema extends ApiKeySchema {
     type: 'string',
     nullable: true,
     description:
-      'The full credential, `<prefix>.<secret>` — returned once, on the creating response only. An idempotent replay returns `null`.',
+      'The secret half of the credential — returned once, on the creating response only; the credential is `<prefix>.<secret>`. An idempotent replay returns `null`.',
   })
   secret!: string | null;
 }
