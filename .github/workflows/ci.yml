@@ -131,6 +131,27 @@ jobs:
 
   # Stage 3 — dependency vulnerability gate. Fails on any high/critical advisory
   # that is not an explicitly justified, dated exception (DEPLOYMENT.md §4).
+  # Phase 1C.3: the committed OpenAPI snapshot and plugin metadata must equal
+  # what the code generates. The check regenerates into a temporary directory
+  # and compares; it never writes a committed file, and the final step proves
+  # nothing in the tree was modified. Needs no services: the document is built
+  # in Nest's preview mode under a fixed configuration.
+  openapi-contract:
+    name: OpenAPI contract drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Check the snapshot and metadata against the code
+        run: npm run openapi:check
+      - name: Nothing was regenerated in place
+        run: git diff --exit-code -- apps/api/openapi apps/api/src/metadata.ts
+
   dependency-audit:
     name: dependency audit
     runs-on: ubuntu-latest
