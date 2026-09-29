@@ -847,7 +847,7 @@ Login success clears only the account bucket; `/auth/refresh` is throttled per a
 | `allowed_scope_types` application-only | Accepted Gate-B residual risk → **implemented in 1C.6 (migration `0014`); CLOSED (Gate C.6 PASS)**; the database enforces it for every role and refuses narrowing that would strand a grant | Enforced on the only grant path (`RoleAssignmentService`, case 28); a bypassing writer is still confined to one organization by the trigger. |
 | `acc_app` context trust | Accepted Gate-B residual risk | A threat-model assumption (`SECURITY.md` §4b): the process holding `acc_app` also holds `acc_auth` and the JWT key, so its compromise is platform compromise. |
 | Outbox/SIEM absence | Deferred (Phase 2+) | No event producer exists in Phase 1B; audit tamper-evidence currently rests on infrastructure controls, which is documented. |
-| OpenAPI contract drift | Deferred (Phase 1C) → **IN PHASE 1C (1C.3)** | A documentation and contract-tooling gap with no authorization effect; the UI is off by default and refused in production. |
+| OpenAPI contract drift | Deferred (Phase 1C) → **implemented in 1C.3** (awaiting Gate C.3 review) | The document is generated from the code, validated against real responses and snapshot-checked in CI; outside development only a signed-in user session can read it. |
 | Browser E2E fixture gaps | Deferred (Phase 1C) → **IN PHASE 1C, separately authorized (1C.4a backend, 1C.4b Gemini)** | Backend security properties are proven by API and database suites; the browser suite needs a seed and Gemini's corrections (`TESTING.md` §6p). |
 
 None of the twelve is a Gate-B blocker.
@@ -1102,6 +1102,41 @@ Exactly one route produces the document: `GET /api/v1/openapi.json`. None of the
 - **CODEOWNERS:** created only if an owner can be established from existing repository configuration. None exists, so CODEOWNERS is a post-implementation repository-governance item.
 
 **Mutation proofs.** These run on disposable copies or clones or isolated fixtures only. Each records the mutation, the expected detection, the actual detection, the test name and the result.
+
+### 1C.3 implementation notes (implemented; awaiting Gate C.3 review — Gate C.3 not passed)
+
+Implemented as the approved ADR above describes (`API.md` §9, `TESTING.md` §6q).
+
+**Deviations from the ADR's file plan** (none changes a decision):
+- The document generator is `apps/api/src/openapi/openapi-cli.ts`, compiled with the API, rather than a file under `apps/api/scripts/`. Nest and the Swagger scanner need decorator metadata, which `tsx` (esbuild) does not emit. The metadata generator does run under `tsx` (`scripts/openapi-metadata.ts`), because it only walks the AST.
+- The DTO-versus-schema check lives in `openapi-contract.sec-spec.ts`, not a unit spec, because it reads class-validator metadata from the booted module graph.
+- `test/setup-env.ts` pins `OPENAPI_UI_ENABLED=false`, so a developer's `.env` (which enables it) cannot change the route table under test. It is test-environment configuration; no test's semantics change.
+- A second documentation-only decorator, `@DocumentedRateLimitHeaders`, records which rate-limit headers a route actually sends. It is never read by a guard or the limiter.
+- `app.factory.ts` exports `UNPREFIXED_ROUTES` so the generator applies the same global-prefix exclusions.
+
+**Runtime changes, exactly:**
+- the OpenAPI module and its two controllers, and a canonical-path middleware that returns the ordinary unknown-route `404` for variant spellings of the document route;
+- the development-only UI mount;
+- `SwaggerModule.setup` removed;
+- the `OPENAPI_UI_ENABLED` production refusal removed;
+- `AppConfigService.openApiMode`.
+
+There is no change to authorization, `AuthGuard`, sessions, RBAC, RLS, the rate limiter, the envelopes, validation or idempotency; controllers and DTOs gained decorators only.
+
+**Contract corrections found by the behavioural suite** (documentation corrected; runtime unchanged):
+- an idempotency payload mismatch is `422`;
+- a created key's `secret` is the secret half;
+- an API key's grant `roleId` is `api_key:<id>`;
+- the plugin had documented `@IsIn` enums wider than validation admits (all scope types where only tenant or grantable ones are valid), omitted `@Matches` patterns, and typed the page `limit` as a number without bounds.
+
+**Residuals** (recorded, not fixed; outside 1C.3's scope):
+1. An unknown route **outside** the versioned prefix (for example `/openapi.json`) answers without `X-Correlation-Id`, and its error body carries `correlationId: "no-correlation-id"`, because the correlation middleware runs below the prefix only. This is pre-existing.
+2. The rate-limit headers differ by limiter (the per-address buckets send no `X-RateLimit-Reset`). This is documented as is, per the ADR, not normalized.
+3. The served document is built from the running module graph through a minimal application facade (`ModulesContainer`, `ApplicationConfig`, `HttpAdapterHost`). That relies on what the Swagger scanner reads. The contract suite fails if the served document ever diverges from the snapshot.
+4. Documented but not exercised by the behavioural suite: `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`, the guard's `409` for a mutation in a non-active organization (covered by the Phase 1C.1 suites), `503` from health, and `500`.
+5. Production cannot be booted in any suite (`SECRETS_BACKEND=env` is refused there by design), so its row of the exposure matrix is proven at the unit level.
+6. CODEOWNERS: no owner can be established from existing repository configuration, so it is a post-implementation repository-governance item.
+7. The repository-wide `format:check` in the CI static job still fails on 60 existing `apps/web` files. That is frontend-owned and predates 1C.3; the drift check runs in its own job so it is not masked.
 
 ### Explicitly out of scope
 

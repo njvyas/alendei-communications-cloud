@@ -24,7 +24,7 @@
 > | ~~**No API-key management**~~ — **CLOSED in 1B.6.2** (§30e). List, detail, create and revoke are live. Rotation and secret recovery are deliberately absent and are not coming: see §30e | 1B.6.2 ✅ |
 > | ~~**No audit read** endpoint~~ — **CLOSED in 1B.6.3** (§30f) | 1B.6.3 ✅ |
 > | **No way for an invited user to obtain a password**, so a user the console creates cannot sign in yet (`DECISIONS.md` D16) | D16 |
-> | **OpenAPI is effectively empty of business schemas** — 5 decorators, all on health. No typed client can be generated (§30, target §31e) | **Phase 1C (1C.3)** — was 1B.9 |
+> | ~~**OpenAPI is effectively empty of business schemas**~~ — **IMPLEMENTED in 1C.3** (§31e; awaiting Gate C.3 review): every operation is documented and validated against the runtime | 1C.3 ✅ |
 > | ~~**No general rate limiting**~~ — **CLOSED in 1B.6.4** (§23). Every authenticated endpoint is limited and returns `X-RateLimit-*` | 1B.6.4 ✅ |
 > | **No development bootstrap**: no one-command way to obtain a working tenant and credentials | **Phase 1C (1C.4a, authorized separately)** — was 1B.10 |
 > | **No WebSocket or webhook surface** — plan for polling (§§24-25) | later |
@@ -606,12 +606,7 @@ Every list endpoint above is paginated (§13) except `/auth/sessions` and `/perm
 
 ### OpenAPI
 
-`SwaggerModule` is wired (`/api/v1/docs`, `/api/v1/openapi.json`, gated by
-`config.http.openApiUiEnabled`), but **only the health controller carries decorators** —
-5 `@Api*` decorators exist in the whole application. The generated document is therefore
-effectively empty of business schemas. `API.md` §8's claim that "the spec cannot drift
-from the implementation" is **not true today**, because there is nothing in the spec to
-drift. Annotating controllers is a gate requirement.
+Superseded by §31e (Phase 1C.3): every operation is documented, and the document is generated, snapshot-checked in CI and validated against real responses.
 
 ## 30a. Role administration — IMPLEMENTED (Phase 1B.5.4)
 
@@ -1128,9 +1123,9 @@ POST /api/v1/ws/ticket        // no request body
 - **Requires an organization context.** Without one, `400 TENANCY_CONTEXT_REQUIRED`; send `X-Acc-Organization` if you belong to several (§5).
 - Subject to the general rate limiter as an ordinary `write` (§23).
 
-## 31. Phase 1C contracts (ADR-012) — §31a–§31c IMPLEMENTED; §31d IMPLEMENTED; §31e IN PHASE 1C
+## 31. Phase 1C contracts (ADR-012) — §31a–§31c IMPLEMENTED; §31d IMPLEMENTED; §31e IMPLEMENTED (awaiting Gate C.3 review)
 
-> **Build only against subsections marked IMPLEMENTED** (§31a–§31d); the rest are not yet implemented.
+> **Build only against subsections marked IMPLEMENTED** (§31a–§31e).
 > It is the authoritative *target* contract for Phase 1C, frozen before implementation
 > so the backend and the console agree in advance. 1C.3 generates OpenAPI from the
 > implementation and asserts it against this section; any disagreement is resolved
@@ -1298,9 +1293,20 @@ Every route acts in the organization selected by `X-Acc-Organization` (or implic
 
 **Note for the console:** sessions belong to the identity, not the organization. Revoking a user's sessions signs them out everywhere, which is why the administrator must cover **all** of the target's grants (ADR-012 F-9).
 
-### 31e. OpenAPI — IN PHASE 1C (1C.3)
+### 31e. OpenAPI — IMPLEMENTED (Phase 1C.3; awaiting Gate C.3 review)
 
-The generated document (`/api/v1/openapi.json`) will describe every route with request, response and error schemas, security schemes (`bearer`, `apiKey`, and the refresh-cookie-plus-`X-Acc-Refresh` scheme), the `X-Acc-Organization`, `Idempotency-Key`, `X-RateLimit-*` and `Retry-After` headers, and the envelopes above. Outside development the UI and the JSON document require an authenticated session (ADR-012 F-13). A committed snapshot is compared with the generated spec in CI.
+- **Where.** Outside development, `GET /api/v1/openapi.json` is available only with a signed-in user session (`Authorization: Bearer <access token>`); an API key gets `403`. No Swagger UI is served there, and `/api/v1/docs` is `404`. In development with `OPENAPI_UI_ENABLED=true`, the UI at `/api/v1/docs` and the document are public. With the flag off, neither exists. The committed copy is `apps/api/openapi/openapi.v1.json`: OpenAPI **3.0.3**, identical to what the server serves, and enforced in CI.
+- **Security schemes.**
+  - `userSession`: a bearer access token.
+  - `apiKey`: `Authorization: Bearer ak_(live|test)_…`, in the same header as a session token.
+  - `refreshCookie`: the `acc_refresh` cookie, always with the `X-Acc-Refresh` header.
+  - Each operation lists only the credentials that can succeed on it; for example, `POST /organizations`, the organization lifecycle routes, `POST /api-keys`, `POST /ws/ticket` and the session-revocation routes are `userSession` only.
+- **Headers.** Request: `X-Acc-Organization` (where an organization is resolved), `Idempotency-Key` (on the creating `POST`s), `X-Acc-Refresh`, and `X-Correlation-Id`/`X-Causation-Id`. Response: `X-Correlation-Id`/`X-Request-Id` always; `X-RateLimit-*` as each route actually sends them; `Retry-After` on `429`; `Deprecation`/`Link` on the deprecated aliases; `Set-Cookie` on login, refresh and logout.
+- **Envelopes and errors.** Envelopes are as in §9 and §10: `{data}`, `{data, page}`, `204`, `{error}`. Each operation lists the error statuses it can return, and `error.code` enumerates every code.
+- **Corrections to this document made by 1C.3** (the runtime is unchanged):
+  - an `Idempotency-Key` reused with a different payload is `422 IDEMPOTENCY_KEY_PAYLOAD_MISMATCH` (a repeat while the first is still running is `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`);
+  - `POST /api-keys` returns the **secret half** in `data.secret` (the credential is `<prefix>.<secret>`; a replay returns `null`);
+  - for an API key, `GET /auth/me/authorization` reports grant `roleId` as `api_key:<key id>`.
 
 ### 31f. Deferred, so do not design around them
 

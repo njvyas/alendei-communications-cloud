@@ -663,13 +663,31 @@ Filters and sort fields are **allow-listed per endpoint**. There is no generic f
 
 Nothing in these conventions conflicts with the idempotency mechanism §4 specifies; it is implemented (Phase 1B.5.9) as a **request header** on the creating endpoints listed in §4, replaying the original **status and body verbatim** — which is exactly `{ "data": … }` or `{ "error": … }` as defined above. The envelope is what gets stored and replayed; pagination is unaffected, being safe and unkeyed.
 
-## 9. API contract strategy (OpenAPI)
+## 9. API contract strategy (OpenAPI) — IMPLEMENTED (Phase 1C.3; awaiting Gate C.3 review)
 
-> **Implementation status.** `@nestjs/swagger` is wired in `createApp()`, but **no controller or DTO carries swagger decorators**, so the generated document lists routes without schemas. When `OPENAPI_UI_ENABLED=true` the UI (`/api/v1/docs`) and document (`/api/v1/openapi.json`) are served **unauthenticated**; production refuses to start with it enabled. There are **no** contract tests in CI. Everything below is **IN PHASE 1C (1C.3, ADR-012)** — not yet implemented. OD-8 changes the UI rule: available in development, **authenticated** elsewhere (replacing today's production refusal).
-
-- Every NestJS controller is annotated (`@nestjs/swagger` decorators) so the OpenAPI 3.1 document is generated from source, never hand-maintained separately.
-- The generated spec is published per environment and is the input to generated client SDKs (Phase-dependent, tracked in `ROADMAP.md`); the UI is gated behind authentication outside development.
-- Contract tests run in CI against the generated spec to catch undocumented or drifted fields before merge.
+- **Source.** The OpenAPI **3.0.3** document is generated from the controllers and DTOs, never hand-maintained. Request schemas come from the committed Swagger plugin metadata (`apps/api/src/metadata.ts`, `npm run openapi:metadata`). That file is the single source for the build, Jest, the generator and CI; the CLI plugin is not part of `nest build`. Response schemas are documentation-only classes (`apps/api/src/openapi/openapi-schemas.ts`) mirroring the runtime views. Every named object schema is closed (`additionalProperties: false`), matching `forbidNonWhitelisted` on requests and the explicit field lists on responses.
+- **Security schemes** (the wire protocol):
+  - `userSession`: `Authorization: Bearer <access token>`.
+  - `apiKey`: `Authorization: Bearer ak_(live|test)_…`. It is a bearer credential, not an OpenAPI `apiKey` header.
+  - `refreshCookie`: the `acc_refresh` cookie, always with the `X-Acc-Refresh` header (documented as a required header parameter where `@RequireCsrfHeader` applies).
+  - Each operation lists only the credentials that can succeed on it. `@AcceptedCredentials` is documentation-only metadata, and a behavioural suite proves it against the runtime.
+- **Headers**, documented where they actually apply:
+  - Request: `X-Correlation-Id` and `X-Causation-Id` (optional UUIDs) on every operation; `X-Acc-Organization` unless `@Public` or `@NoTenantContext`; `X-Acc-Refresh` on refresh and logout; `Idempotency-Key` on the seven creating `POST`s that read it.
+  - Response: `X-Correlation-Id` and `X-Request-Id` on every response. `X-RateLimit-Limit/-Remaining/-Reset` from the general limiter on authenticated operations (absent on a `401`). Only `-Limit/-Remaining` from the per-address buckets on login and refresh (either set for logout). `Retry-After` on `429`. `Deprecation`/`Link` on the `/tenants/workspaces` aliases. `Set-Cookie` on login, refresh and logout.
+  - The runtime differences between these headers are documented as they are, not normalized.
+- **Envelopes.** Success is `{data}`, `{data, page}` (`PageInfo`) or `204`. Errors are `{error}` (`ErrorEnvelope`, with `code` enumerating every `ERROR_CODES` value) for each status the operation can return.
+- **Exposure** (ADR-012 F-13 as amended; `DECISIONS.md` "Phase 1C.3 Architecture Decision Record").
+  - `OPENAPI_UI_ENABLED` enables the capability and is off by default.
+  - `APP_ENV=development` with the flag on: the Swagger UI at `/api/v1/docs` and the document at `/api/v1/openapi.json`, both unauthenticated. The UI fetches the document from that route and never embeds it.
+  - Any other environment with the flag on: **only** `GET /api/v1/openapi.json`, for a signed-in user session. An API key is `403`; a missing, invalid, expired or revoked credential or a disabled user is `401`. There is no UI, and `/api/v1/docs` is an unknown route.
+  - With the flag off, no documentation route exists.
+  - Exactly one route produces the document. Case, trailing-slash and encoded variants, `-json`/`-yaml` aliases and init scripts are all unknown routes.
+- **Snapshot and drift.** The normalized document is committed at `apps/api/openapi/openapi.v1.json`.
+  - `npm run openapi:generate` regenerates it; it refuses to run in CI.
+  - `npm run openapi:check` regenerates the metadata and the document into temporary locations and fails on any difference. It never writes a committed file.
+  - CI runs the check in the `openapi-contract` job and then asserts with `git diff --exit-code` that nothing was modified.
+- **Exclusion.** Exactly one route is excluded, `GET /metrics` (the Prometheus scrape endpoint, `@ApiExcludeController`), and the contract suite pins it.
+- **Tests.** `openapi-access.sec-spec.ts`, `openapi-contract.sec-spec.ts`, `openapi-responses.sec-spec.ts` and `src/openapi/openapi-mode.spec.ts` (`TESTING.md` §6q).
 
 ## 9a. Breaking changes introduced by Phase 1B.5.8
 

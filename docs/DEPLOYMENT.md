@@ -129,7 +129,7 @@ Horizontal Pod Autoscaling is applied to stateless services (API, workers) keyed
 
 ## 4. CI/CD
 
-**CURRENT**: `.github/workflows/ci.yml` runs lint/typecheck/build, integration + database + security tests, a dependency audit and a secret scan. It builds **no** deployable artifact and deploys nowhere.
+**CURRENT**: `.github/workflows/ci.yml` runs lint/typecheck/build, integration + database + security tests, the OpenAPI contract drift check (`openapi-contract`: the committed snapshot and plugin metadata must equal what the code generates; nothing is regenerated in place — Phase 1C.3), a dependency audit and a secret scan. It builds **no** deployable artifact and deploys nowhere.
 
 **PLANNED** pipeline stages, matching the development lifecycle (`ROADMAP.md` §2):
 
@@ -141,6 +141,8 @@ lint/typecheck → unit tests → integration tests (ephemeral infra) → contra
 ```
 
 Manual approval gates are required before staging→production regardless of automated test results, consistent with the "check before risky/hard-to-reverse actions" principle applied to production releases.
+
+**OpenAPI exposure (`OPENAPI_UI_ENABLED`, Phase 1C.3).** Off by default and permitted in every environment. With it on, development serves the Swagger UI and the document without authentication. Every other environment serves only `GET /api/v1/openapi.json`, to a signed-in user session, and no UI (`API.md` §9).
 
 ## 5. Git branching strategy
 
