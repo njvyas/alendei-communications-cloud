@@ -139,9 +139,66 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
 
   // ===========================================================================
   describe('B. routes and operations', () => {
-    it('discovers the application’s routes — the reconciliation is not vacuous', () => {
-      expect(routes.length).toBeGreaterThanOrEqual(59);
-      expect(routes.some((r) => r.path === `/${PREFIX}/openapi.json`)).toBe(true);
+    /**
+     * The reconciliation, stated exactly. "Routes" are the controller handlers
+     * in the module graph this configuration (test + flag) builds — one per
+     * method and path; no middleware, no framework route:
+     *
+     *   58 application operations (including the three health routes)
+     * +  1 OpenAPI document operation (`GET /api/v1/openapi.json`)
+     * = 59 documented operations
+     * +  1 intentional exclusion (`GET /metrics`, the only one)
+     * = 60 handler routes
+     *
+     * A route added or removed on purpose changes these numbers here, in the
+     * same change; the two tests below fail on any route or operation that
+     * exists on only one side.
+     */
+    const APPLICATION_OPERATIONS = 58;
+    const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
+    const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
+
+    it('reconciles exactly: 58 application operations + 1 document operation = 59; GET /metrics the sole exclusion', () => {
+      const all = routes.map(key);
+      expect(new Set(all).size).toBe(all.length);
+      const excluded = routes.filter(isExcluded).map(key);
+      const document = routes.filter((r) => key(r) === DOCUMENT_OPERATION).map(key);
+      const application = routes
+        .filter((r) => !isExcluded(r) && key(r) !== DOCUMENT_OPERATION)
+        .map(key);
+      expect(excluded).toEqual(['GET /metrics']);
+      expect(document).toEqual([DOCUMENT_OPERATION]);
+      expect(application).toHaveLength(APPLICATION_OPERATIONS);
+      expect(routes).toHaveLength(APPLICATION_OPERATIONS + 1 + 1);
+
+      const operations = Object.entries(paths()).flatMap(([path, item]) =>
+        Object.keys(item).map((method) => `${method.toUpperCase()} ${path}`),
+      );
+      expect(operations).toHaveLength(APPLICATION_OPERATIONS + 1);
+      expect([...operations].sort()).toEqual([...application, ...document].sort());
+    });
+
+    it('the Express route table holds exactly the discovered handlers — no route outside the controller graph', () => {
+      // Single-handler route layers are controller routes; Nest mounts
+      // middleware (correlation, the canonical-path check) as route layers
+      // carrying every method, which are not operations.
+      const http = booted.app.getHttpAdapter().getInstance() as {
+        router: {
+          stack: Array<{
+            route?: { path: string; methods: Record<string, boolean>; stack: unknown[] };
+          }>;
+        };
+      };
+      const mounted = http.router.stack
+        .flatMap((layer) => {
+          const route = layer.route;
+          const methods = route ? Object.keys(route.methods).filter((m) => m !== '_all') : [];
+          return route && route.stack.length === 1 && methods.length === 1
+            ? [`${methods[0]!.toUpperCase()} ${route.path.replace(/:([A-Za-z0-9_]+)/g, '{$1}')}`]
+            : [];
+        })
+        .sort();
+      expect(mounted).toEqual(routes.map(key).sort());
     });
 
     it('every route is documented, except exactly the approved exclusion', () => {

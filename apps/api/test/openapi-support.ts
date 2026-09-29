@@ -24,6 +24,7 @@ export interface Booted {
 }
 
 const REGISTRY_MODULES = [
+  '../src/config/app-config.service',
   '../src/redis/redis.module',
   '../src/auth/jwt.service',
   '../src/iam/credential.service',

@@ -3,8 +3,9 @@ import { openApiModeFromEnv, resolveOpenApiMode } from './openapi-mode';
 
 /**
  * The approved exposure matrix (Phase 1C.3 ADR, G1 option C, G3, G4) at the
- * unit level — including `production`, which no suite can boot because
- * `SECRETS_BACKEND=env` is refused there by design.
+ * unit level — including `production`. Its bootstrap-level proof is in
+ * `test/openapi-access.sec-spec.ts`, which boots production with a single
+ * validation substitution (`SECRETS_BACKEND=env` and `DATABASE_SSL` only).
  */
 describe('OpenAPI exposure mode', () => {
   const MATRIX: ReadonlyArray<[string, boolean, string]> = [

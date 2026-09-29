@@ -5,14 +5,20 @@
  * The approved matrix (ADR-012, "Phase 1C.3 Architecture Decision Record", G1
  * option C):
  *
- *   development + flag  → public development UI, public document
- *   test/staging + flag → no UI; the document for a signed-in user session only
- *   any env, flag off   → no documentation route at all
+ *   development + flag             → public development UI, public document
+ *   test/staging/production + flag → no UI; the document for a signed-in user
+ *                                    session only
+ *   any env, flag off              → no documentation route at all
  *
- * (`production` cannot be booted in any suite — `SECRETS_BACKEND=env` is refused
- * there by design — so its row is proven at the unit level in
- * `src/openapi/openapi-mode.spec.ts`: it resolves to exactly the same
- * `protected` mode as `test` and `staging`.)
+ * `production` is booted here too, through the same `createApp()`, with
+ * `APP_ENV=production` and `NODE_ENV=production`. It has exactly one test-only
+ * substitution, at configuration validation (the `jest.mock` below): the real
+ * `validateEnv` runs on the production environment and must refuse it for
+ * exactly the two requirements a test host cannot meet — `SECRETS_BACKEND=env`
+ * (no other backend is implemented yet) and `DATABASE_SSL=true` (the local
+ * PostgreSQL has no TLS). Every other production rule must pass. Any other
+ * problem, or a missing one, fails the boot. The configuration the
+ * application then runs on is the schema's own parse of that same environment.
  *
  * Exactly one route produces the document: `GET /api/v1/openapi.json`. Every
  * alternate spelling, alias, UI script and static artifact is proven absent,
@@ -32,6 +38,55 @@ import {
   type TenantFixture,
 } from './auth-harness';
 import { bootApp, carriesDocument, signIn, type Booted } from './openapi-support';
+
+/** What the production-mode validation below saw, one entry per production boot. */
+interface ProductionValidation {
+  problems: readonly string[];
+}
+const productionValidations = (): ProductionValidation[] =>
+  ((
+    globalThis as { __accProductionValidations?: ProductionValidation[] }
+  ).__accProductionValidations ??= []);
+
+/**
+ * The single production-mode substitution (see the header). Outside
+ * `APP_ENV=production` the real validator runs unchanged.
+ */
+jest.mock('../src/config/env.schema', () => {
+  const actual = jest.requireActual<typeof import('../src/config/env.schema')>(
+    '../src/config/env.schema',
+  );
+  const HOST_ONLY = [
+    /^SECRETS_BACKEND=env is not permitted when APP_ENV=production:/,
+    /^DATABASE_SSL must be true when APP_ENV=production /,
+  ];
+  return {
+    ...actual,
+    validateEnv(raw: Record<string, unknown>) {
+      if (raw.APP_ENV !== 'production') return actual.validateEnv(raw);
+      let problems: readonly string[] = [];
+      try {
+        actual.validateEnv(raw);
+      } catch (error) {
+        if (!(error instanceof actual.ConfigurationError)) throw error;
+        problems = error.problems;
+      }
+      const record = globalThis as {
+        __accProductionValidations?: { problems: readonly string[] }[];
+      };
+      (record.__accProductionValidations ??= []).push({ problems });
+      const matched = HOST_ONLY.every((pattern) => problems.some((p) => pattern.test(p)));
+      const unexpected = problems.filter((p) => !HOST_ONLY.some((pattern) => pattern.test(p)));
+      if (!matched || unexpected.length > 0 || problems.length !== HOST_ONLY.length) {
+        throw new actual.ConfigurationError([
+          'production-mode test substitution: expected exactly the two host-only problems',
+          ...problems,
+        ]);
+      }
+      return actual.envSchema.parse(raw);
+    },
+  };
+});
 
 const DOCUMENT = `/${PREFIX}/openapi.json`;
 
@@ -67,11 +122,42 @@ const UI = [
   `/${PREFIX}/docs/favicon-32x32.png`,
 ] as const;
 
-const envFor = (appEnv: string, enabled: boolean) => ({
+const envFor = (appEnv: string, enabled: boolean): Record<string, string> => ({
   APP_ENV: appEnv,
   OPENAPI_UI_ENABLED: enabled ? 'true' : 'false',
   // Staging has no production hardening of its own to satisfy; nothing else changes.
+  // Production states every hardening requirement a test host can meet.
+  ...(appEnv === 'production'
+    ? {
+        NODE_ENV: 'production',
+        CORS_ORIGINS: 'https://app.example.test',
+        LOG_PRETTY: 'false',
+        TRUSTED_PROXY_HOPS: '0',
+      }
+    : {}),
 });
+
+/** Every documentation path each mode mounts — the whole route table's worth. */
+const DOCUMENTATION_ROUTES: Readonly<Record<string, readonly string[]>> = {
+  off: [],
+  protected: [`/${PREFIX}/openapi.json`],
+  'public-development': [
+    `/${PREFIX}/docs`,
+    `/${PREFIX}/docs/favicon-32x32.png`,
+    `/${PREFIX}/docs/swagger-initializer.js`,
+    `/${PREFIX}/docs/swagger-ui-bundle.js`,
+    `/${PREFIX}/docs/swagger-ui-standalone-preset.js`,
+    `/${PREFIX}/docs/swagger-ui.css`,
+    `/${PREFIX}/openapi.json`,
+  ],
+};
+
+/** The configuration a booted application actually runs on. */
+const bootedConfig = (booted: Booted) =>
+  booted.resolve<{ appEnv: string; isProduction: boolean; openApiMode: string }>(
+    '../src/config/app-config.service',
+    'AppConfigService',
+  );
 
 interface Credentials {
   session: string;
@@ -185,6 +271,49 @@ describe('Phase 1C.3 — OpenAPI exposure and access (real bootstrap)', () => {
     };
   }
 
+  /**
+   * The booted configuration is the one intended. For production, also: the
+   * real validator ran on this boot and refused only the two host-only
+   * requirements, and the application reports itself as production.
+   */
+  const expectBootedAs = (
+    booted: Booted,
+    appEnv: string,
+    mode: string,
+    validationsBefore: number,
+  ) => {
+    const config = bootedConfig(booted);
+    expect(config.appEnv).toBe(appEnv);
+    expect(config.isProduction).toBe(appEnv === 'production');
+    expect(config.openApiMode).toBe(mode);
+    // The route table itself, not only the URLs probed: every distinct path a
+    // documentation route is mounted at. (The canonical-path middleware is
+    // mounted on the document path for every method; those methods are the
+    // unknown-route 404 proven by "no other method reaches the document route".)
+    const http = booted.app.getHttpAdapter().getInstance() as {
+      router: { stack: Array<{ route?: { path: string } }> };
+    };
+    const documentation = [
+      ...new Set(
+        http.router.stack
+          .flatMap((layer) => (layer.route ? [layer.route.path] : []))
+          .filter((path) => /openapi|swagger|docs|\.json|\.ya?ml/i.test(path)),
+      ),
+    ].sort();
+    expect(documentation).toEqual(DOCUMENTATION_ROUTES[mode]);
+    const seen = productionValidations().slice(validationsBefore);
+    if (appEnv === 'production') {
+      expect(seen.length).toBeGreaterThan(0);
+      for (const { problems } of seen) {
+        expect(problems).toHaveLength(2);
+        expect(problems[0]).toMatch(/^SECRETS_BACKEND=env is not permitted/);
+        expect(problems[1]).toMatch(/^DATABASE_SSL must be true/);
+      }
+    } else {
+      expect(seen).toHaveLength(0);
+    }
+  };
+
   const get = (booted: Booted, path: string, bearer?: string) => {
     const r = request(booted.app.getHttpServer()).get(path);
     return bearer ? r.set('authorization', `Bearer ${bearer}`) : r;
@@ -202,17 +331,23 @@ describe('Phase 1C.3 — OpenAPI exposure and access (real bootstrap)', () => {
   };
 
   // ===========================================================================
-  for (const appEnv of ['test', 'staging'] as const) {
+  for (const appEnv of ['test', 'staging', 'production'] as const) {
     describe(`${appEnv} + OPENAPI_UI_ENABLED=true — protected: the document for a user session only, no UI`, () => {
       let booted: Booted;
       let creds: Credentials;
+      const validationsBefore = { count: 0 };
 
       beforeAll(async () => {
+        validationsBefore.count = productionValidations().length;
         booted = await bootApp(envFor(appEnv, true));
         creds = await credentialsFor(booted, `oa-${appEnv}`);
       }, 120_000);
       afterAll(async () => {
         await booted?.close();
+      });
+
+      it(`the application runs in ${appEnv} mode, with the protected OpenAPI mode`, () => {
+        expectBootedAs(booted, appEnv, 'protected', validationsBefore.count);
       });
 
       it('a signed-in user session gets the OpenAPI 3.0.3 document through the ordinary pipeline', async () => {
@@ -294,6 +429,10 @@ describe('Phase 1C.3 — OpenAPI exposure and access (real bootstrap)', () => {
       await booted?.close();
     });
 
+    it('the application runs in development mode, with the public development OpenAPI mode', () => {
+      expectBootedAs(booted, 'development', 'public-development', productionValidations().length);
+    });
+
     it('the document is public, from the same single route', async () => {
       const res = await get(booted, DOCUMENT).expect(200);
       expect(res.body.openapi).toBe('3.0.3');
@@ -331,17 +470,23 @@ describe('Phase 1C.3 — OpenAPI exposure and access (real bootstrap)', () => {
   });
 
   // ===========================================================================
-  for (const appEnv of ['development', 'test', 'staging'] as const) {
+  for (const appEnv of ['development', 'test', 'staging', 'production'] as const) {
     describe(`${appEnv} + OPENAPI_UI_ENABLED=false — no documentation route exists`, () => {
       let booted: Booted;
       let creds: Credentials | undefined;
+      const validationsBefore = { count: 0 };
 
       beforeAll(async () => {
+        validationsBefore.count = productionValidations().length;
         booted = await bootApp(envFor(appEnv, false));
         if (appEnv !== 'development') creds = await credentialsFor(booted, `oa-off-${appEnv}`);
       }, 120_000);
       afterAll(async () => {
         await booted?.close();
+      });
+
+      it(`the application runs in ${appEnv} mode, with OpenAPI off`, () => {
+        expectBootedAs(booted, appEnv, 'off', validationsBefore.count);
       });
 
       it('the document route, the UI and every alternate are unknown routes, signed in or not', async () => {
