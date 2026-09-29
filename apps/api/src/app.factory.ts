@@ -2,18 +2,18 @@ import 'reflect-metadata';
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { Logger as PinoLogger } from 'nestjs-pino';
 
 import { AppModule } from './app.module';
 import { AppConfigService } from './config/app-config.service';
+import { mountDevelopmentSwaggerUi } from './openapi/openapi-dev-ui';
 
 /**
  * Builds the production application: the module graph plus every piece of
  * HTTP-edge security configuration (Helmet, CORS, proxy trust, cookie parsing,
- * the versioned prefix, the OpenAPI switch).
+ * the versioned prefix, the development-only OpenAPI UI).
  *
  * It exists as its own function for one reason: `main.ts` and the real-bootstrap
  * security suite (`test/real-bootstrap.sec-spec.ts`) must configure the
@@ -92,19 +92,18 @@ export function configureApp(app: NestExpressApplication, config: AppConfigServi
     exclude: ['metrics', 'health', 'health/live', 'health/ready'],
   });
 
-  if (config.http.openApiUiEnabled) {
-    const document = SwaggerModule.createDocument(
-      app,
-      new DocumentBuilder()
-        .setTitle('Alendei Communications Cloud API')
-        .setDescription('ACC control-plane API')
-        .setVersion('v1')
-        .addBearerAuth({ type: 'http', scheme: 'bearer' }, 'session')
-        .build(),
+  // OpenAPI (Phase 1C.3 ADR, G1 option C). The document route is a Nest
+  // controller registered by `OpenApiModule` according to the same mode; here
+  // only the development Swagger UI is mounted, and only in development. Every
+  // other environment has no UI route at all.
+  if (config.openApiMode === 'public-development') {
+    mountDevelopmentSwaggerUi(app, config.http.globalPrefix);
+    logger.log(
+      `OpenAPI (development): UI at /${config.http.globalPrefix}/docs, document at /${config.http.globalPrefix}/openapi.json — unauthenticated`,
     );
-    SwaggerModule.setup(`${config.http.globalPrefix}/docs`, app, document, {
-      jsonDocumentUrl: `${config.http.globalPrefix}/openapi.json`,
-    });
-    logger.log(`OpenAPI UI at /${config.http.globalPrefix}/docs (unauthenticated)`);
+  } else if (config.openApiMode === 'protected') {
+    logger.log(
+      `OpenAPI: document at /${config.http.globalPrefix}/openapi.json for signed-in user sessions; no UI outside development`,
+    );
   }
 }

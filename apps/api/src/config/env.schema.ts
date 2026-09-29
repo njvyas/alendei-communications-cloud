@@ -168,12 +168,9 @@ function productionHardening(env: Env): string[] {
   if (!env.DATABASE_SSL) {
     problems.push('DATABASE_SSL must be true when APP_ENV=production (SECURITY.md §2)');
   }
-  if (env.OPENAPI_UI_ENABLED) {
-    problems.push(
-      'OPENAPI_UI_ENABLED must be false when APP_ENV=production unless the UI is placed behind ' +
-        'authentication (API.md §8)',
-    );
-  }
+  // OPENAPI_UI_ENABLED is permitted in production (Phase 1C.3 ADR, G3): outside
+  // development the document requires a signed-in user session and no UI is
+  // served, so enabling it no longer publishes anything.
   return problems;
 }
 

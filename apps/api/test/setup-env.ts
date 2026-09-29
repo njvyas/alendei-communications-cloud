@@ -14,3 +14,6 @@ process.env.NODE_ENV = 'test';
 process.env.LOG_LEVEL = 'error';
 process.env.LOG_PRETTY = 'false';
 process.env.OTEL_ENABLED = 'false';
+// Off unless a suite turns it on, so a developer's `.env` cannot change which
+// routes exist under test (the OpenAPI document route, Phase 1C.3).
+process.env.OPENAPI_UI_ENABLED = 'false';

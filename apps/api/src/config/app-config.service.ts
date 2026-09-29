@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import type { AppEnvironment, Env } from './env.schema';
+import { resolveOpenApiMode, type OpenApiMode } from '../openapi/openapi-mode';
 
 /**
  * Typed accessor over validated configuration. Feature code injects this rather
@@ -25,6 +26,14 @@ export class AppConfigService {
 
   get isTest(): boolean {
     return this.appEnv === 'test';
+  }
+
+  /**
+   * The OpenAPI surface (Phase 1C.3 ADR, G1–G4): `off`, `public-development`
+   * (`APP_ENV=development` with `OPENAPI_UI_ENABLED`) or `protected`.
+   */
+  get openApiMode(): OpenApiMode {
+    return resolveOpenApiMode({ appEnv: this.appEnv, enabled: this.get('OPENAPI_UI_ENABLED') });
   }
 
   get serviceName(): string {
