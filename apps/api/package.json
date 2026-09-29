@@ -9,6 +9,7 @@
     "dev": "nest start --watch",
     "start": "node dist/main.js",
     "typecheck": "tsc -b tsconfig.json",
+    "openapi:metadata": "tsx scripts/openapi-metadata.ts",
     "clean": "rm -rf dist *.tsbuildinfo",
     "test": "npm run test:unit && npm run test:integration",
     "test:unit": "jest --selectProjects unit",
