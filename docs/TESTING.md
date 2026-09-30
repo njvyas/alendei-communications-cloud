@@ -187,7 +187,7 @@ The Gate-B audit found the following in `apps/web/e2e` at `df1ec74`. They are re
 | E2E-07, E2E-12 | Vacuous with zero organizations — only `ZeroOrgView` renders | Run against the fixture below |
 | Storage helper (`e2e/helpers/auth.ts`) | Value regex `[A-Za-z0-9_-]{32,}` cannot match a dotted JWT; IndexedDB/Cache Storage not swept | Match `^[\w-]+\.[\w-]+\.[\w-]+$` (JWT) and sweep IndexedDB/Cache Storage |
 
-**Backend fixture requirement for those corrections (provided by Phase 1C.4a, §6r — implemented, Gate C.4a review pending):** a deterministic E2E seed with (a) two organizations under one reseller and one under another (the §6o topology), (b) an `org_admin` in each, (c) a low-privilege user (`read_only` at a team), (d) a user holding grants in two organizations, (e) at least one planted audit row per organization. Owner: backend (1C.4a, §6r); until the 1C.4b corrections land, E2E-06/08/11 remain skipped and E2E-07/10/12 prove nothing about authorization. **Scheduled as Phase 1C.4a (backend fixture command) and 1C.4b (Gemini corrections), both authorized separately after the backend contract is stable (ADR-012).** The fixture must be development/test only, idempotent, deterministic, built on the real creation paths, and must not add any authentication or authorization bypass to production code.
+**Backend fixture requirement for those corrections (provided by Phase 1C.4a, §6r — IMPLEMENTED and CLOSED, Gate C.4a PASS):** a deterministic E2E seed with (a) two organizations under one reseller and one under another (the §6o topology), (b) an `org_admin` in each, (c) a low-privilege user (`read_only` at a team), (d) a user holding grants in two organizations, (e) at least one planted audit row per organization. Owner: backend (1C.4a, §6r); until the 1C.4b corrections land, E2E-06/08/11 remain skipped and E2E-07/10/12 prove nothing about authorization. **Scheduled as Phase 1C.4a (backend fixture command) and 1C.4b (Gemini corrections), both authorized separately after the backend contract is stable (ADR-012).** The fixture must be development/test only, idempotent, deterministic, built on the real creation paths, and must not add any authentication or authorization bypass to production code.
 
 ### 6q. Phase 1C test plan (ADR-012) — 1C.1a and 1C.1b IMPLEMENTED; 1C.2 IMPLEMENTED and CLOSED; 1C.6 IMPLEMENTED and CLOSED (PASS); 1C.3 IMPLEMENTED and CLOSED (PASS); the rest IN PHASE 1C
 
@@ -286,7 +286,7 @@ Re-executed after the remediation, each mutant on its own disposable clone (belo
 
 **Regression:** the 1,215 Gate-B tests stay green and unweakened (any changed expectation recorded with its reason), including `principals`, `shared-reseller`, `tenant-context-trust` and `workspace-team-boundary`.
 
-### 6r. Phase 1C.4a — development/test fixture (IMPLEMENTED; Gate C.4a review pending)
+### 6r. Phase 1C.4a — development/test fixture (IMPLEMENTED and CLOSED; Gate C.4a PASS, 30-Sep-2026, checkpoint `91607aa`)
 
 **Purpose.** One idempotent command that builds the §6p topology on a development or test database through the real application paths, so the browser suite (1C.4b) and manual testing have organizations, users and grants that exercise authorization rather than an empty console. The fixture is itself a security test asset: `apps/api/test/dev-fixture.sec-spec.ts` proves that what it builds is isolated. **It must never be run against staging or production; it refuses to.**
 

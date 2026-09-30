@@ -1174,7 +1174,7 @@ There is no change to authorization, `AuthGuard`, sessions, RBAC, RLS, the rate 
 
 **Gate status.** Phase 1C.3 is closed. **Overall Phase 1C remains open**: Gate C (`ROADMAP.md` §4d) is not passed. Phase 1C.4 is not started and requires explicit authorization.
 
-### 1C.4a implementation notes (implemented 30-Sep-2026; Gate C.4a review pending)
+### 1C.4a implementation notes (implemented 30-Sep-2026; Gate C.4a PASS / CLOSED — see "1C.4a closure")
 
 Authorized 30-Sep-2026 for **1C.4a only**; 1C.4b stays a separately authorized Gemini increment. The approved scope decisions, as implemented (full description in `TESTING.md` §6r):
 
@@ -1189,6 +1189,28 @@ Authorized 30-Sep-2026 for **1C.4a only**; 1C.4b stays a separately authorized G
 - **F-1 — bootstrap invocation: APPROVED, option (C) (30-Sep-2026).** The fixture keeps calling the unchanged `runBootstrap` when no platform administrator exists, so first-time setup stays one command. It is the existing ADR-003 D-1 owner exception (administrator creation/activation, the platform grant, two bootstrap audit rows), distinct from the two Phase 1C.4a fixture exceptions (Reseller B, fixture-user activation). The suite's write-set proof pins both groups: the fixture's own writes, its import closure, `runBootstrap`'s write set and the lifecycle primitives, with a runtime check of the bootstrap footprint.
 - **F-3 — declared environment vs database: ACCEPTED as a documented residual (30-Sep-2026).** The gate validates `APP_ENV`/`NODE_ENV`, not the database URL's provenance; credential separation is an operational requirement (`SECURITY.md`, "Phase 1C.4a development/test fixture"). No database-side marker, migration or schema change.
 - **Mutation proofs.** M6a (a byte-for-byte audit forgery) is intentionally a source/write-set proof, since database state cannot prove provenance against the owner; M6b is the runtime proof for the ordinary direct-insert bypass. The platform/reseller-scope invariant (M3) is asserted directly by natural key, independently of the run's outcome.
+
+### 1C.4a closure — PASS / CLOSED
+
+**Decision.** Gate C.4a PASS / CLOSED (user decision, 30-Sep-2026). Checkpoint commit `91607aa` on top of `f624846`; not pushed.
+
+**Delivered.** `npm run fixture:dev --workspace @acc/api` — a deterministic, idempotent development/test fixture and bootstrap command — and `apps/api/test/dev-fixture.sec-spec.ts` (57 cases). Full description in `TESTING.md` §6r.
+
+**Topology** (natural keys; five scopes unchanged, PLATFORM → RESELLER → ORGANIZATION → WORKSPACE → TEAM): Reseller A = the seeded `alendei-direct` → `acc-fixture-a1`, `acc-fixture-a2`; Reseller B = `acc-fixture-reseller-b` → `acc-fixture-b1`; a `default` workspace in each; team T (markup-bearing name) in A1's default workspace. Users: `a1-admin`, `a2-admin`, `b1-admin` (`org_admin` in their organization), `a1-team-reader` (`read_only` at team T), `multi-org` (`workspace_manager` in A1 and A2), all `@acc-fixture.test`. No fixture user holds platform or reseller scope.
+
+**Command and environment boundary.** Runs only with `APP_ENV` `development` or `test` (unset refused); `NODE_ENV=production` refused; no override, confirmation or force flag; decided before any connection or application module is loaded. Passwords only through `SecretsPort` references (`AUTH_BOOTSTRAP_PASSWORD_REF`, new `ACC_FIXTURE_USER_PASSWORD_REF`); no default; never printed, logged or stored. No HTTP route; not imported by the application.
+
+**Accepted owner-level exceptions.** *Existing bootstrap owner exception* (ADR-003 D-1, unchanged, only when no platform administrator exists): platform administrator creation and activation, the `alendei_super_admin` platform grant, two bootstrap audit records. *Phase 1C.4a fixture owner exceptions*: Reseller B creation (reseller CRUD is Phase 9); fixture-user activation through the unchanged `UserLifecycleService.activate` (the code sets `password_hash`, `password_updated_at`, `status`; `trg_users_updated_at` sets `updated_at`). Everything else — organizations, workspaces, system roles, the team, users, every fixture grant and every fixture audit row — goes through the real API. Pinned by a layered source write-set proof (fixture writes, import closure, `runBootstrap` and lifecycle write sets) and a runtime footprint check.
+
+**Activation / D16 boundary.** Fixture-user activation is a development/test fixture-only exception required solely because D16 has not defined an application credential-establishment path. It does not implement or decide D16: no route, no user-facing activation, no delivery or mail/token workflow, no production API change, no change to `UserLifecycleService`; only `invited`, credential-less `@acc-fixture.test` identities; conflicts refused.
+
+**Residual risk accepted (F-3).** The gate validates the declared `APP_ENV`/`NODE_ENV`, not the provenance of the database URL; an operator holding production owner credentials could point a process declaring development/test at a production database. This is an operational credential-management risk, not a fixture bypass of application authorization; separating credentials remains an operational requirement. No database marker, migration or schema change.
+
+**Evidence.** Fixture suite 57/57; 15/15 mutants caught (M1, M2a, M2b, M3, M3b, M4a, M4b, M4c, M5, M6a static by design, M6b runtime and static, M7, M8a, M8b, M8c; the initial round was 11 mutants, earlier misreported as 12 and corrected); API integration + security 1,105/1,105; `packages/db` integration 136/136; unit 312/312; migration hashes 18/18; `openapi:check`, lint, typecheck and format clean. Every DB-touching run used a disposable `scripts/with-db-clone.mjs` clone, dropped afterwards; the canonical test database's full-content hash was identical before and after.
+
+**Known limitations.** A byte-for-byte owner forgery is detectable only by the source write-set proof (`SECURITY.md` §4a); the RLS case constructs the `TenantSession` directly (ScopeResolver derivation is covered by the §6o suites); an interrupted run's completion is by construction, not simulated; each creating run leaves one revoked session row as a historical record, and a process killed between sign-in and sign-out may leave one live session until expiry; the full API regression still leaves 42 `users` rows from other suites (1C.3 residual 2).
+
+**Gate status.** Phase 1C.4a is closed. **1C.4b remains separately authorized and not started.** Overall Phase 1C remains open: Gate C (`ROADMAP.md` §4d) is not passed.
 
 ### Explicitly out of scope
 

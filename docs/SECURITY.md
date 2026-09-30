@@ -362,7 +362,7 @@ None of them could take a row lock on another tenant's data or perform a privile
 
 **Unchanged by Phase 1C:** the validated-claim model (migration `0010`), organization-level RLS with workspace/team enforced by authorization (ADR-011 D-4), the `acc_app` trust assumption (§4b), and the unauthenticated-path throttles. WebSocket consumption (D15) and credential delivery (D16) remain DEFERRED.
 
-### Phase 1C.4a development/test fixture — IMPLEMENTED (Gate C.4a review pending)
+### Phase 1C.4a development/test fixture — IMPLEMENTED and CLOSED (Gate C.4a PASS, 30-Sep-2026)
 
 `npm run fixture:dev --workspace @acc/api` is a development/test operator tool, not an authorization mechanism; full description in `TESTING.md` §6r. It creates tenant objects, users and grants only through the real API as the signed-in bootstrap administrator. Its owner-level writes are two distinct groups, both pinned by a source write-set proof in `dev-fixture.sec-spec.ts` because a schema owner's forgery is indistinguishable in database state (§4a):
 
