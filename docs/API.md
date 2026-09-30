@@ -663,7 +663,7 @@ Filters and sort fields are **allow-listed per endpoint**. There is no generic f
 
 Nothing in these conventions conflicts with the idempotency mechanism §4 specifies; it is implemented (Phase 1B.5.9) as a **request header** on the creating endpoints listed in §4, replaying the original **status and body verbatim** — which is exactly `{ "data": … }` or `{ "error": … }` as defined above. The envelope is what gets stored and replayed; pagination is unaffected, being safe and unkeyed.
 
-## 9. API contract strategy (OpenAPI) — IMPLEMENTED (Phase 1C.3; awaiting Gate C.3 review)
+## 9. API contract strategy (OpenAPI) — IMPLEMENTED and CLOSED (Phase 1C.3; Gate C.3 PASS)
 
 - **Source.** The OpenAPI **3.0.3** document is generated from the controllers and DTOs, never hand-maintained. Request schemas come from the committed Swagger plugin metadata (`apps/api/src/metadata.ts`, `npm run openapi:metadata`). That file is the single source for the build, Jest, the generator and CI; the CLI plugin is not part of `nest build`. Response schemas are documentation-only classes (`apps/api/src/openapi/openapi-schemas.ts`) mirroring the runtime views. Every named object schema is closed (`additionalProperties: false`), matching `forbidNonWhitelisted` on requests and the explicit field lists on responses.
 - **Security schemes** (the wire protocol):

@@ -24,7 +24,7 @@
 > | ~~**No API-key management**~~ — **CLOSED in 1B.6.2** (§30e). List, detail, create and revoke are live. Rotation and secret recovery are deliberately absent and are not coming: see §30e | 1B.6.2 ✅ |
 > | ~~**No audit read** endpoint~~ — **CLOSED in 1B.6.3** (§30f) | 1B.6.3 ✅ |
 > | **No way for an invited user to obtain a password**, so a user the console creates cannot sign in yet (`DECISIONS.md` D16) | D16 |
-> | ~~**OpenAPI is effectively empty of business schemas**~~ — **IMPLEMENTED in 1C.3** (§31e; awaiting Gate C.3 review): every operation is documented and validated against the runtime | 1C.3 ✅ |
+> | ~~**OpenAPI is effectively empty of business schemas**~~ — **IMPLEMENTED in 1C.3** (§31e; Gate C.3 PASS / CLOSED): every operation is documented and validated against the runtime | 1C.3 ✅ |
 > | ~~**No general rate limiting**~~ — **CLOSED in 1B.6.4** (§23). Every authenticated endpoint is limited and returns `X-RateLimit-*` | 1B.6.4 ✅ |
 > | **No development bootstrap**: no one-command way to obtain a working tenant and credentials | **Phase 1C (1C.4a, authorized separately)** — was 1B.10 |
 > | **No WebSocket or webhook surface** — plan for polling (§§24-25) | later |
@@ -1123,7 +1123,7 @@ POST /api/v1/ws/ticket        // no request body
 - **Requires an organization context.** Without one, `400 TENANCY_CONTEXT_REQUIRED`; send `X-Acc-Organization` if you belong to several (§5).
 - Subject to the general rate limiter as an ordinary `write` (§23).
 
-## 31. Phase 1C contracts (ADR-012) — §31a–§31c IMPLEMENTED; §31d IMPLEMENTED; §31e IMPLEMENTED (awaiting Gate C.3 review)
+## 31. Phase 1C contracts (ADR-012) — §31a–§31c IMPLEMENTED; §31d IMPLEMENTED; §31e IMPLEMENTED and CLOSED (Gate C.3 PASS)
 
 > **Build only against subsections marked IMPLEMENTED** (§31a–§31e).
 > It is the authoritative *target* contract for Phase 1C, frozen before implementation
@@ -1293,7 +1293,7 @@ Every route acts in the organization selected by `X-Acc-Organization` (or implic
 
 **Note for the console:** sessions belong to the identity, not the organization. Revoking a user's sessions signs them out everywhere, which is why the administrator must cover **all** of the target's grants (ADR-012 F-9).
 
-### 31e. OpenAPI — IMPLEMENTED (Phase 1C.3; awaiting Gate C.3 review)
+### 31e. OpenAPI — IMPLEMENTED and CLOSED (Phase 1C.3; Gate C.3 PASS)
 
 - **Where.** Outside development, `GET /api/v1/openapi.json` is available only with a signed-in user session (`Authorization: Bearer <access token>`); an API key gets `403`. No Swagger UI is served there, and `/api/v1/docs` is `404`. In development with `OPENAPI_UI_ENABLED=true`, the UI at `/api/v1/docs` and the document are public. With the flag off, neither exists. The committed copy is `apps/api/openapi/openapi.v1.json`: OpenAPI **3.0.3**, identical to what the server serves, and enforced in CI.
 - **Security schemes.**

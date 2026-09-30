@@ -847,7 +847,7 @@ Login success clears only the account bucket; `/auth/refresh` is throttled per a
 | `allowed_scope_types` application-only | Accepted Gate-B residual risk → **implemented in 1C.6 (migration `0014`); CLOSED (Gate C.6 PASS)**; the database enforces it for every role and refuses narrowing that would strand a grant | Enforced on the only grant path (`RoleAssignmentService`, case 28); a bypassing writer is still confined to one organization by the trigger. |
 | `acc_app` context trust | Accepted Gate-B residual risk | A threat-model assumption (`SECURITY.md` §4b): the process holding `acc_app` also holds `acc_auth` and the JWT key, so its compromise is platform compromise. |
 | Outbox/SIEM absence | Deferred (Phase 2+) | No event producer exists in Phase 1B; audit tamper-evidence currently rests on infrastructure controls, which is documented. |
-| OpenAPI contract drift | Deferred (Phase 1C) → **implemented in 1C.3** (awaiting Gate C.3 review) | The document is generated from the code, validated against real responses and snapshot-checked in CI; outside development only a signed-in user session can read it. |
+| OpenAPI contract drift | Deferred (Phase 1C) → **implemented in 1C.3** (Gate C.3 PASS / CLOSED) | The document is generated from the code, validated against real responses and snapshot-checked in CI; outside development only a signed-in user session can read it. |
 | Browser E2E fixture gaps | Deferred (Phase 1C) → **IN PHASE 1C, separately authorized (1C.4a backend, 1C.4b Gemini)** | Backend security properties are proven by API and database suites; the browser suite needs a seed and Gemini's corrections (`TESTING.md` §6p). |
 
 None of the twelve is a Gate-B blocker.
@@ -1103,7 +1103,7 @@ Exactly one route produces the document: `GET /api/v1/openapi.json`. None of the
 
 **Mutation proofs.** These run on disposable copies or clones or isolated fixtures only. Each records the mutation, the expected detection, the actual detection, the test name and the result.
 
-### 1C.3 implementation notes (implemented; awaiting Gate C.3 review — Gate C.3 not passed)
+### 1C.3 implementation notes (implemented; Gate C.3 PASS / CLOSED — see "1C.3 closure")
 
 Implemented as the approved ADR above describes (`API.md` §9, `TESTING.md` §6q).
 
@@ -1138,6 +1138,41 @@ There is no change to authorization, `AuthGuard`, sessions, RBAC, RLS, the rate 
 6. CODEOWNERS: no owner can be established from existing repository configuration, so it is a post-implementation repository-governance item.
 7. `packages/db` `audit.int-spec.ts` ("accepts a pre-tenant authentication record") counts every `resource_type='auth'` audit row in the database. Rows left by an interrupted run (the first 1C.3 mutation runs used the canonical test database and left 22) fail it until another suite's audit purge removes them. Mutation and other destructive runs now go through `scripts/with-db-clone.mjs` (TESTING.md §6q), so they cannot reach the canonical database. The test itself is unchanged, because 1C.3 does not touch `packages/db`; making it purge before each case is a one-line, separately reviewable change.
 8. The repository-wide `format:check` in the CI static job still fails on 60 existing `apps/web` files. That is frontend-owned and predates 1C.3; the drift check runs in its own job so it is not masked.
+
+### 1C.3 closure — PASS / CLOSED
+
+**Decision.** Gate C.3 **PASS / CLOSED** (user decision, 29-Sep-2026). The implementation is `03de8c0` … `3f9a77f`, and the review remediation is checkpoint `bbbc72c`. Nothing is pushed.
+
+**Accepted.**
+- The G1 option C exposure matrix: a public UI and document in development only; elsewhere only `GET /api/v1/openapi.json`, for a signed-in user session. An API key is refused, and the flag off means no route.
+- No alternate document-bearing route, and no document embedded in the UI initializer.
+- Exact route/specification reconciliation: 58 application operations + 1 document operation = 59, with `GET /metrics` the sole exclusion.
+- OpenAPI 3.0.3, deterministic metadata and snapshot generation, and CI drift enforcement.
+- Request, response, error and header contract coverage.
+- The production-mode exposure proof, booted through `createApp()` with the single validation substitution in residual 5.
+- Disposable database clones for destructive and mutation runs (`scripts/with-db-clone.mjs`).
+- The cosmetic section-name mismatch in that script's header comment, accepted as is.
+
+**Verification evidence (final regression of the checkpoint content).** Every database-touching suite ran on a disposable clone of the test database:
+- API unit 312/312.
+- API integration 124/124.
+- API security 924/924.
+- DB unit 4/4.
+- DB integration 136/136: before and after the API suites, in the same clone, twice.
+- Web unit 161/161 and web security 87/87.
+- Typecheck, lint and build pass.
+- `openapi:check`: the snapshot matches the generated document.
+- Schema drift clean, and migration hashes 18/18.
+- Dependency audit: no unaccepted high or critical advisories.
+- Mutations: 22/22 caught, each on its own clone, with every source file restored byte-identical and the template unchanged (`TESTING.md` §6q).
+- The rows an incorrectly invoked run left in the canonical test database (90 `@example.test` users and their 3 sessions) were removed by their recorded ids. The schema, the migration journal and every other table were unchanged.
+
+**Carried-forward residuals** (not Phase 1C.3 blockers):
+1. Residuals 1–8 above. For residual 7, making `audit.int-spec.ts` purge before each case is deferred to a separate `packages/db` review.
+2. A complete sequential run of the other suites leaves 42 `users` rows behind: the OpenAPI suites leave none. The clone runner absorbs them, but a run against the canonical database accumulates them. This is pre-existing test-isolation debt.
+3. The Phase 1C residuals recorded in "1C.6 closure" are unchanged by 1C.3.
+
+**Gate status.** Phase 1C.3 is closed. **Overall Phase 1C remains open**: Gate C (`ROADMAP.md` §4d) is not passed. Phase 1C.4 is not started and requires explicit authorization.
 
 ### Explicitly out of scope
 
