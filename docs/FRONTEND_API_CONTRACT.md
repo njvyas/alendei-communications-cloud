@@ -26,7 +26,7 @@
 > | **No way for an invited user to obtain a password**, so a user the console creates cannot sign in yet (`DECISIONS.md` D16) | D16 |
 > | ~~**OpenAPI is effectively empty of business schemas**~~ — **IMPLEMENTED in 1C.3** (§31e; Gate C.3 PASS / CLOSED): every operation is documented and validated against the runtime | 1C.3 ✅ |
 > | ~~**No general rate limiting**~~ — **CLOSED in 1B.6.4** (§23). Every authenticated endpoint is limited and returns `X-RateLimit-*` | 1B.6.4 ✅ |
-> | **No development bootstrap**: no one-command way to obtain a working tenant and credentials | **Phase 1C (1C.4a, authorized separately)** — was 1B.10 |
+> | **No development bootstrap**: no one-command way to obtain a working tenant and credentials — **implemented in 1C.4a** (`npm run fixture:dev --workspace @acc/api`, development/test only, `TESTING.md` §6r); Gate C.4a review pending | **Phase 1C (1C.4a)** — was 1B.10 |
 > | **No WebSocket or webhook surface** — plan for polling (§§24-25) | later |
 >
 > When those are closed this becomes FROZEN, and changes to it then follow §27's

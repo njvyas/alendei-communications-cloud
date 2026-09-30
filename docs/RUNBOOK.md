@@ -5,7 +5,7 @@ These are Phase 0 procedural placeholders describing the *shape* of each runbook
 ## 1. Development workflow
 
 1. Branch from `develop` (`DEPLOYMENT.md` §5).
-2. Bring up local stack via Docker Compose.
+2. Bring up local stack via Docker Compose. For a working tenant topology with sign-in-able users, run `npm run fixture:dev --workspace @acc/api` after `db:migrate` and `db:seed` (development/test only; inputs and reset in `TESTING.md` §6r).
 3. Implement against the module boundary owning the change (`ARCHITECTURE.md` §4); do not reach across module boundaries directly.
 4. Run unit + integration tests locally.
 5. Open PR into `develop`; CI runs the full pipeline (`DEPLOYMENT.md` §4).

@@ -18,7 +18,8 @@
     "test:integration": "jest --selectProjects integration --runInBand",
     "test:security": "jest --selectProjects security --runInBand --passWithNoTests",
     "test:cov": "jest --selectProjects unit --coverage",
-    "bootstrap": "tsx src/cli/bootstrap.ts"
+    "bootstrap": "tsx src/cli/bootstrap.ts",
+    "fixture:dev": "tsc -b tsconfig.json && node dist/cli/dev-fixture.js"
   },
   "dependencies": {
     "@acc/contracts": "*",

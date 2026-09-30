@@ -362,6 +362,15 @@ None of them could take a row lock on another tenant's data or perform a privile
 
 **Unchanged by Phase 1C:** the validated-claim model (migration `0010`), organization-level RLS with workspace/team enforced by authorization (ADR-011 D-4), the `acc_app` trust assumption (§4b), and the unauthenticated-path throttles. WebSocket consumption (D15) and credential delivery (D16) remain DEFERRED.
 
+### Phase 1C.4a development/test fixture — IMPLEMENTED (Gate C.4a review pending)
+
+`npm run fixture:dev --workspace @acc/api` is a development/test operator tool, not an authorization mechanism; full description in `TESTING.md` §6r. It creates tenant objects, users and grants only through the real API as the signed-in bootstrap administrator. Its owner-level writes are two distinct groups, both pinned by a source write-set proof in `dev-fixture.sec-spec.ts` because a schema owner's forgery is indistinguishable in database state (§4a):
+
+- **Existing bootstrap owner exception (ADR-003 D-1, unchanged)** — when no platform administrator exists: platform administrator creation and activation, the `alendei_super_admin` platform grant, and the two bootstrap audit records.
+- **Phase 1C.4a fixture owner exceptions (new)** — Reseller B creation (reseller CRUD is Phase 9), and fixture-user activation through the unchanged `UserLifecycleService.activate` for `invited`, credential-less `@acc-fixture.test` identities only. The activation exists solely because D16 has not defined an application credential-establishment path; it is not a D16 decision and adds no route, delivery mechanism or production behaviour.
+
+**Accepted residual (F-3).** The environment gate validates the declared `APP_ENV`/`NODE_ENV`, not the provenance of the database URL. An operator possessing production owner credentials could theoretically point a process declaring development/test at a production database. This is an operational credential/secret-management risk, not a fixture bypass in the application authorization model. There is no override or force flag, `NODE_ENV=production` is refused, the fixture has no HTTP route and is not imported by the application, production use is prohibited, and separating development, test and production database credentials remains an operational requirement.
+
 ### 4a. Append-only enforcement, and its threat model
 
 Append-only is enforced in three layers, each covering something the others cannot:

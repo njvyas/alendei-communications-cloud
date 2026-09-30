@@ -57,7 +57,7 @@ function requireEnv(name: string, why: string): string {
  * describes. The writer, redactor and column enumeration are the committed ones;
  * this is not a second audit path.
  */
-function ownerAuditWriter(): AuditWriter {
+export function ownerAuditWriter(): AuditWriter {
   const refuse = (): never => {
     throw new Error('bootstrap: audit must be written inside the bootstrap transaction');
   };
