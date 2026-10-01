@@ -187,7 +187,7 @@ The Gate-B audit found the following in `apps/web/e2e` at `df1ec74`. They are re
 | E2E-07, E2E-12 | Vacuous with zero organizations — only `ZeroOrgView` renders | Run against the fixture below |
 | Storage helper (`e2e/helpers/auth.ts`) | Value regex `[A-Za-z0-9_-]{32,}` cannot match a dotted JWT; IndexedDB/Cache Storage not swept | Match `^[\w-]+\.[\w-]+\.[\w-]+$` (JWT) and sweep IndexedDB/Cache Storage |
 
-**Backend fixture requirement for those corrections (provided by Phase 1C.4a, §6r — IMPLEMENTED and CLOSED, Gate C.4a PASS):** a deterministic E2E seed with (a) two organizations under one reseller and one under another (the §6o topology), (b) an `org_admin` in each, (c) a low-privilege user (`read_only` at a team), (d) a user holding grants in two organizations, (e) at least one planted audit row per organization. Owner: backend (1C.4a, §6r); until the 1C.4b corrections land, E2E-06/08/11 remain skipped and E2E-07/10/12 prove nothing about authorization. **Scheduled as Phase 1C.4a (backend fixture command) and 1C.4b (Gemini corrections), both authorized separately after the backend contract is stable (ADR-012).** The fixture must be development/test only, idempotent, deterministic, built on the real creation paths, and must not add any authentication or authorization bypass to production code.
+**Backend fixture requirement for those corrections (provided by Phase 1C.4a, §6r — IMPLEMENTED and CLOSED, Gate C.4a PASS; exercised by Phase 1C.4b, §6s — IMPLEMENTED and CLOSED, Gate C.4b PASS):** a deterministic E2E seed with (a) two organizations under one reseller and one under another (the §6o topology), (b) an `org_admin` in each, (c) a low-privilege user (`read_only` at a team), (d) a user holding grants in two organizations, (e) at least one planted audit row per organization. Corrected in Phase 1C.4b (checkpoint `4e7effd`): all 12 browser E2E tests pass with zero skips; exact-secret storage proof and classified mutations verified.
 
 ### 6q. Phase 1C test plan (ADR-012) — 1C.1a and 1C.1b IMPLEMENTED; 1C.2 IMPLEMENTED and CLOSED; 1C.6 IMPLEMENTED and CLOSED (PASS); 1C.3 IMPLEMENTED and CLOSED (PASS); the rest IN PHASE 1C
 
@@ -360,7 +360,7 @@ No fixture user holds a platform or reseller grant. The markup payload (`<img sr
 
 **Reset / removal.** There is deliberately no fixture reset command. On a development database: `npm run db:reset` (itself refused outside `development`/`test`; drops and rebuilds the schema, migrates and seeds), then `npm run fixture:dev --workspace @acc/api`, which also performs the platform bootstrap. On test databases, run through `node scripts/with-db-clone.mjs -- …` so the clone is dropped afterwards; `dev-fixture.sec-spec.ts` itself removes everything it created, by natural key, in `afterAll`, and refuses to start on a database that already holds any fixture object or a platform administrator, so it can never adopt or delete a developer's fixture.
 
-**Use by the browser suite (1C.4b, Gemini — not implemented here).** The corrected E2E-06/07/08/10/11/12 and E2E-09 run against this fixture: sign in as the manifest's users with the password behind `ACC_FIXTURE_USER_PASSWORD_REF`; E2E-09 renders `AuditLogDetailDialog` for the `team.created` row of team T and asserts `window.__accFixtureMarkup` stays unset; E2E-11 uses `a1-team-reader`; E2E-10 and the multi-organization cases use `multi-org`. The E2E helper and its fallback credentials are unchanged by 1C.4a.
+**Use by the browser suite (Phase 1C.4b — IMPLEMENTED and CLOSED, Gate C.4b PASS; checkpoint `4e7effd`).** The corrected E2E-06/07/08/10/11/12 and E2E-09 run against this fixture: sign in as the manifest's users with the password behind `ACC_FIXTURE_USER_PASSWORD_REF`; E2E-09 renders `AuditLogDetailDialog` for the `team.created` row of team T and asserts `window.__accFixtureMarkup` stays unset; E2E-11 uses `a1-team-reader`; E2E-10 and the multi-organization cases use `multi-org`. See §6s for full execution and mutation evidence.
 
 **Suite: `apps/api/test/dev-fixture.sec-spec.ts` (57 cases)** — **A** the real CLI refuses `APP_ENV` `production`, `staging`, `prod`, `Development` and `""` with nothing written and nothing on stdout; unset `APP_ENV` and `NODE_ENV=production` refused; a missing, empty, unresolvable, short or non-`env` password reference, a non-`env` `SECRETS_BACKEND`, a missing operator email or reference, and a fixture password equal to the operator's are all refused with every table unchanged, and no refusal prints a secret. **B** B1 pre-planted under Reseller A is refused before anything — including the bootstrap — is written. **C** the first run completes (a failed run is recorded rather than thrown, so every invariant below is still asserted against what it left behind); its per-table row deltas are exactly the documented set; the manifest's logical fingerprint equals the pinned constant; the natural-key topology, users and grants are exactly as tabled; parent/child and reseller ownership checked by id; every role granted belongs to the grant's organization; looked up by natural key (`@acc-fixture.test`) independently of the run's outcome and manifest, no fixture user holds a platform or reseller grant or any platform-level role, and the only platform-role grant in the database is the operator's `alendei_super_admin`; every fixture user signs in through the real login with the configured password, and none with any known default string in the repository or the operator's password; the operator's only session is revoked; no output contains a password or digest. **D** a second in-process run is `unchanged` with every table byte-identical; the real CLI's third run exits 0 with a parseable manifest and nothing changed. **E** the operator signed in once and out once; each organization, the team and each user has exactly one creation audit row with the operator as actor, the fixture user agent, `127.0.0.1` and the run's correlation id; each of the six grants has exactly one `user_role.granted` row from that chain at the grant's scope; every organization has audit rows at its own scope; the markup row is at team scope in A1 with exactly the `after` the team service writes, is readable by A1's administrator through `GET /audit-logs/:id` and `404` for A2 and B1; fixture-caused rows outside `auth.*` are all at organization/workspace/team scope in a fixture organization; the owner-level write-set proof above (fixture write set, pinned import closure, `runBootstrap` and lifecycle write sets, and the runtime bootstrap footprint). **F** for each of the three administrators: selecting either other organization is `403 TENANCY_CONTEXT_MISMATCH`; `GET /organizations`, `/workspaces`, `/teams`, `/users`, `/roles`, `/role-assignments` and `/audit-logs` (every page) enumerate none of the other organizations' objects while listing their own (positive control); detail reads of the other organizations' objects are `404` (same reseller and across resellers). **G** the team reader is refused nine administrative operations (`403`/`404`) with no tenant, identity or grant table changed and the denials audited; the multi-organization user must choose (`400 TENANCY_CONTEXT_REQUIRED`), can list and create teams in A1 and A2, and is `403` for B1; an organization administrator cannot grant itself a platform role (`400`, platform unrepresentable), a platform role at organization scope, or a role in A2, nor create a user with a platform grant — no grant row changes. **H** through the application's own `TenantDatabase.withTenant` — the `acc_app` pool (`APP_POOL`, checked at start-up by `assertRlsBoundPrincipal`) and the same transaction-local tenant context every request sets — plain SQL with no tenant predicate over `organizations`, `workspaces`, `teams`, `roles`, `user_roles` and `audit_logs` shows only that administrator's organization. The test constructs each administrator's `TenantSession` directly (the correct context for a single-organization administrator); `ScopeResolver`'s derivation of that context is covered by `shared-reseller-isolation.sec-spec.ts` and the other §6o suites, not duplicated here; the privilege map of `acc_app`/`acc_auth`/`acc_relay` (table grants, role attributes, memberships) is identical before and after; no route in the Express table matches `fixture|bootstrap|seed`, `POST` to such paths is `404`, and no module outside `src/cli` imports the CLI. **I** on the complete fixture, each of these is refused with every table unchanged, then restored: B1 moved under Reseller A, Reseller B renamed, a non-fixture organization under Reseller B, A2 suspended, an extra grant on A1's administrator, B1's administrator disabled, a different password reference, a different operator; afterwards a run is again a no-op.
 
@@ -380,6 +380,61 @@ No fixture user holds a platform or reseller grant. The markup payload (`<img sr
 - M8a, the fixture gains a direct `users` write: 1 — fixture write-set proof (static; the write is otherwise invisible in state).
 - M8b, the fixture imports a new service that could write: 1 — pinned import closure (static).
 - M8c, `runBootstrap` gains a `users` write: 1 — bootstrap write-set proof (static).
+
+### 6s. Phase 1C.4b — frontend E2E corrections and security verification (IMPLEMENTED and CLOSED; Gate C.4b PASS, 01-Oct-2026, checkpoint `4e7effd`)
+
+**Purpose.** Correct the `apps/web/e2e` browser test suite against the deterministic Phase 1C.4a fixture (`TESTING.md` §6r) to eliminate vacuous assertions, skips, and false positives, providing full browser-level security and authorization proofs (`apps/web/README.md`).
+
+**Files modified:** Strictly four frontend files:
+- `apps/web/e2e/helpers/auth.ts`: added `assertExactSecretNotInStorage(page, secret)` sweeping URL, `localStorage`, `sessionStorage`, `document.cookie`, `window.history.state`, `IndexedDB`, and `CacheStorage`; added `Set` snapshot comparator for React 18/19 `useSyncExternalStore`.
+- `apps/web/e2e/security-storage-payloads.spec.ts`: updated `E2E-08` with dual-stage exact-secret storage assertion (dialog open and post-dismissal); updated `E2E-09` to filter by `team.created` action key before inspecting planted XSS markup.
+- `apps/web/e2e/tenancy-navigation.spec.ts`: corrected `E2E-06` multi-org switching with `OrgSelectionView` client navigation; updated `E2E-07` navigation across all console routes; updated `E2E-10` with network observation of `X-Acc-Organization` and backend refusal (`403 TENANCY_CONTEXT_MISMATCH`) for unheld org header; updated `E2E-11` asserting network `403 AUTHZ_SCOPE_DENIED` and UI "Access Forbidden" boundary for team reader.
+- `apps/web/README.md`: updated documentation of Phase 1C.4b test suite and verification requirements.
+
+No backend, database, schema, migration, API contract, RBAC, RLS, or infrastructure files changed.
+
+**Suite: `npm run test:e2e -w @acc/web` (12 cases, 28.2s execution time)**:
+- **E2E-01**: Login establishes authenticated session through real UI form.
+- **E2E-02**: Protected routes redirect unauthenticated visitors to `/login`.
+- **E2E-03**: Authenticated identity does not expose tokens in URL or storage.
+- **E2E-04**: Session continuity on reload via HttpOnly cookie isolation (`document.cookie` empty).
+- **E2E-05**: Logout clears session and blocks console re-entry.
+- **E2E-06**: Multi-organization selection (`OrgSelectionView`), console entry, and dynamic organization switching via header selector re-pinning `X-Acc-Organization`.
+- **E2E-07**: Navigation across `/users`, `/roles`, `/workspaces`, `/teams`, `/api-keys`, `/audit-logs` confirming error-free boundary rendering, seeded resource visibility, and zero client-side crashes.
+- **E2E-08**: API-key creation one-time secret display, with exhaustive plaintext exact-secret non-persistence check across all browser storage vectors.
+- **E2E-09**: Safe audit payload text rendering inside `<pre>` for planted `team.created` markup-bearing row, proving zero `<script>` tag injection and `window.__accFixtureMarkup === undefined`.
+- **E2E-10**: Tenant header integrity verification: positive control verifies legitimate `X-Acc-Organization` header dispatch; negative control proves backend returns `403 TENANCY_CONTEXT_MISMATCH` when forged with an unheld organization ID (`acc-fixture-b1`).
+- **E2E-11**: Low-privilege authorization boundary proof: team-reader user receives network `403 AUTHZ_SCOPE_DENIED` on `/api/v1/audit-logs` and UI renders explicit "Access Forbidden" boundary with zero audit record disclosure.
+- **E2E-12**: Full browser storage security sweep across all 8 console routes with dotted JWT regex matching (`^[\w-]+\.[\w-]+\.[\w-]+$`).
+
+**Strengthened Exact-Secret Storage Proof (E2E-08).**
+`assertExactSecretNotInStorage(page, secret)` verifies that the exact extracted plaintext secret string does not appear in:
+1. URL pathname, search query parameters, or hash fragment.
+2. `localStorage` keys or values.
+3. `sessionStorage` keys or values.
+4. `document.cookie` string.
+5. `window.history.state` serialized structure.
+6. `IndexedDB` database names, object store names, or stored record payloads (`getAll()`).
+7. `CacheStorage` cache names, request URLs, or response body text payloads (`res.text()`).
+Run both while the creation modal is open and after acknowledging and closing the dialog.
+
+**Mutation Proofs (Explicitly Classified).**
+- *Application-Behavior Mutations* (injecting real leaks/payloads and observing detector refusal):
+  - **M1**: Injected dotted JWT into `localStorage` → caught by `assertNoTokensInStorage` (line 184).
+  - **M2**: Injected `token_store` in `IndexedDB` → caught by `assertNoTokensInStorage` (line 208).
+  - **M3**: Malicious script markup in audit payload → execution caught (`window.__accFixtureMarkup` set).
+  - **M6a**: Exact secret string injected into `localStorage` (`acc_leaked_secret_test`) → `assertExactSecretNotInStorage` caught `localStorage value for key "acc_leaked_secret_test"`.
+  - **M6b**: Exact secret string injected into `sessionStorage` (`acc_session_leak`) → `assertExactSecretNotInStorage` caught `sessionStorage value for key "acc_session_leak"`.
+  - **M6c**: Exact secret string injected into `IndexedDB` (`acc_leak_test_db.secrets`) → `assertExactSecretNotInStorage` caught `IndexedDB [acc_leak_test_db.secrets] record contains secret`.
+- *Assertion-Liveness Mutations* (mutating expected results to verify assertion sensitivity):
+  - **M4**: Mutated expected forged header status in E2E-10 from 403 to 200 → test runner caught mismatch.
+  - **M5**: Mutated expected low-privilege audit API status in E2E-11 from 403 to 200 → test runner caught mismatch.
+
+**Regression Evidence.**
+- Frontend unit tests: 161/161 passed.
+- Frontend security tests: 87/87 passed.
+- Typecheck: 0 errors (`tsc --noEmit`).
+- Production build: clean Next.js Turbopack build (all 15 routes).
 
 ### 6i. WebSocket authorization
 

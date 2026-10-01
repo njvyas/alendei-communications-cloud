@@ -848,7 +848,7 @@ Login success clears only the account bucket; `/auth/refresh` is throttled per a
 | `acc_app` context trust | Accepted Gate-B residual risk | A threat-model assumption (`SECURITY.md` §4b): the process holding `acc_app` also holds `acc_auth` and the JWT key, so its compromise is platform compromise. |
 | Outbox/SIEM absence | Deferred (Phase 2+) | No event producer exists in Phase 1B; audit tamper-evidence currently rests on infrastructure controls, which is documented. |
 | OpenAPI contract drift | Deferred (Phase 1C) → **implemented in 1C.3** (Gate C.3 PASS / CLOSED) | The document is generated from the code, validated against real responses and snapshot-checked in CI; outside development only a signed-in user session can read it. |
-| Browser E2E fixture gaps | Deferred (Phase 1C) → **IN PHASE 1C, separately authorized (1C.4a backend, 1C.4b Gemini)** | Backend security properties are proven by API and database suites; the browser suite needs a seed and Gemini's corrections (`TESTING.md` §6p). |
+| Browser E2E fixture gaps | Deferred (Phase 1C) → **IMPLEMENTED and CLOSED (PASS; 1C.4a backend, 1C.4b Gemini)** | Backend security properties are proven by API and database suites; the browser suite is backed by 1C.4a fixture and 1C.4b E2E corrections (`TESTING.md` §6p, §6r, §6s). |
 
 None of the twelve is a Gate-B blocker.
 
@@ -878,7 +878,7 @@ Phase 1B left three increments named but unscheduled — **1B.8** (organization,
 | **1C.6** | Database integrity: composite `(workspace_id, org_id)` foreign keys on `api_keys`/`ws_tickets`; DB enforcement of `roles.allowed_scope_types`; `organizations.reseller_id` immutability; backfill verification; service-bypass tests | — (ADR-011 D-8 items) |
 | **1C.3** | OpenAPI/API contract reconciliation: complete schemas, security schemes, headers, envelopes, idempotency and rate-limit documentation; generated spec; CI drift detection; authenticated UI outside development | 1B.9 |
 | **1C.4a** | Deterministic development/test fixture and bootstrap command | 1B.10 — **authorized separately**, after the backend contract is stable |
-| **1C.4b** | Gemini E2E corrections (`TESTING.md` §6p) | — **authorized separately; not backend work** |
+| **1C.4b** | Gemini E2E corrections (`TESTING.md` §6p) | — ✅ **IMPLEMENTED and CLOSED (PASS)** (Gate C.4b, checkpoint `4e7effd`) |
 
 **Execution order:** 1C.0 → 1C.1a → 1C.1b → 1C.6 → 1C.3, with 1C.2 in parallel after 1C.0. Backend implementation then stops and the finalized frontend contract is handed to Gemini; 1C.4a, 1C.4b and the Phase 1C console are authorized separately.
 
@@ -1210,7 +1210,56 @@ Authorized 30-Sep-2026 for **1C.4a only**; 1C.4b stays a separately authorized G
 
 **Known limitations.** A byte-for-byte owner forgery is detectable only by the source write-set proof (`SECURITY.md` §4a); the RLS case constructs the `TenantSession` directly (ScopeResolver derivation is covered by the §6o suites); an interrupted run's completion is by construction, not simulated; each creating run leaves one revoked session row as a historical record, and a process killed between sign-in and sign-out may leave one live session until expiry; the full API regression still leaves 42 `users` rows from other suites (1C.3 residual 2).
 
-**Gate status.** Phase 1C.4a is closed. **1C.4b remains separately authorized and not started.** Overall Phase 1C remains open: Gate C (`ROADMAP.md` §4d) is not passed.
+**Gate status.** Phase 1C.4a is closed. **Phase 1C.4b is closed (PASS / CLOSED, checkpoint `4e7effd`).** Overall Phase 1C remains open: Gate C (`ROADMAP.md` §4d) is not passed.
+
+### 1C.4b closure — PASS / CLOSED
+
+**Decision.** Gate C.4b PASS / CLOSED (user decision, 01-Oct-2026). Checkpoint commit `4e7effd` on top of `617eea8`; not pushed.
+
+**Delivered.** Browser E2E suite corrections in `apps/web/e2e` against the deterministic Phase 1C.4a fixture (`TESTING.md` §6p, §6r, §6s). All 12 browser E2E security proofs execute deterministically with zero skips, zero timeouts, and zero vacuous assertions.
+
+**Scope & Files.** Strictly four frontend files modified:
+- `apps/web/e2e/helpers/auth.ts`
+- `apps/web/e2e/security-storage-payloads.spec.ts`
+- `apps/web/e2e/tenancy-navigation.spec.ts`
+- `apps/web/README.md`
+No backend, database, schema, migration, API contract, RBAC, RLS, or infrastructure files changed.
+
+**E2E Suite Evidence (12/12 passed, 0 skipped, 0 failed; 28.2s execution time).**
+- **E2E-01**: Login establishes authenticated session through real UI form.
+- **E2E-02**: Protected routes redirect unauthenticated visitors to `/login`.
+- **E2E-03**: Authenticated identity does not expose tokens in URL or storage.
+- **E2E-04**: Session continuity on reload via HttpOnly cookie isolation (`document.cookie` empty).
+- **E2E-05**: Logout clears session and blocks console re-entry.
+- **E2E-06**: Multi-organization selection (`OrgSelectionView`), console entry, and dynamic organization switching via header selector re-pinning `X-Acc-Organization`.
+- **E2E-07**: Navigation across `/users`, `/roles`, `/workspaces`, `/teams`, `/api-keys`, `/audit-logs` confirming error-free boundary rendering, seeded resource visibility, and zero client-side crashes.
+- **E2E-08**: API-key creation one-time secret display, with exhaustive plaintext exact-secret non-persistence check across all browser storage vectors.
+- **E2E-09**: Safe audit payload text rendering inside `<pre>` for planted `team.created` markup-bearing row, proving zero `<script>` tag injection and `window.__accFixtureMarkup === undefined`.
+- **E2E-10**: Tenant header integrity verification: positive control verifies legitimate `X-Acc-Organization` header dispatch; negative control proves backend returns `403 TENANCY_CONTEXT_MISMATCH` when forged with an unheld organization ID (`acc-fixture-b1`).
+- **E2E-11**: Low-privilege authorization boundary proof: team-reader user receives network `403 AUTHZ_SCOPE_DENIED` on `/api/v1/audit-logs` and UI renders explicit "Access Forbidden" boundary with zero audit record disclosure.
+- **E2E-12**: Full browser storage security sweep across all 8 console routes with dotted JWT regex matching (`^[\w-]+\.[\w-]+\.[\w-]+$`).
+
+**Strengthened Exact-Secret Storage Proof (E2E-08).** `assertExactSecretNotInStorage(page, secret)` sweeps URL (pathname, search, hash), `localStorage` (keys and values), `sessionStorage` (keys and values), `document.cookie`, `window.history.state`, `IndexedDB` (database names, store names, record payloads), and `CacheStorage` (cache names, request URLs, response body text), searching for the exact extracted secret string both while the modal is open and after closing.
+
+**Mutation Proofs (Explicitly Classified).**
+- *Application-Behavior Mutations* (injecting real leaks/payloads and observing detector refusal):
+  - **M1**: Injected dotted JWT into `localStorage` → caught by `assertNoTokensInStorage` (line 184).
+  - **M2**: Injected `token_store` in `IndexedDB` → caught by `assertNoTokensInStorage` (line 208).
+  - **M3**: Malicious script markup in audit payload → execution caught (`window.__accFixtureMarkup` set).
+  - **M6a**: Exact secret string injected into `localStorage` → `assertExactSecretNotInStorage` caught `localStorage value for key "acc_leaked_secret_test"`.
+  - **M6b**: Exact secret string injected into `sessionStorage` → `assertExactSecretNotInStorage` caught `sessionStorage value for key "acc_session_leak"`.
+  - **M6c**: Exact secret string injected into `IndexedDB` → `assertExactSecretNotInStorage` caught `IndexedDB [acc_leak_test_db.secrets] record contains secret`.
+- *Assertion-Liveness Mutations* (mutating expected results to verify assertion sensitivity):
+  - **M4**: Mutated expected forged header status in E2E-10 from 403 to 200 → test runner caught mismatch.
+  - **M5**: Mutated expected low-privilege audit API status in E2E-11 from 403 to 200 → test runner caught mismatch.
+
+**Regression Evidence.**
+- Frontend unit tests: 161/161 passed.
+- Frontend security tests: 87/87 passed.
+- Typecheck: 0 errors (`tsc --noEmit`).
+- Production build: clean Next.js Turbopack build (all 15 routes).
+
+**Gate status.** Phase 1C.4b is closed (PASS / CLOSED). **Overall Phase 1C remains open**: Gate C (`ROADMAP.md` §4d) is not passed. Phase 1C.5, D16, and reseller CRUD are not started.
 
 ### Explicitly out of scope
 

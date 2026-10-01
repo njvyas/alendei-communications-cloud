@@ -371,6 +371,15 @@ None of them could take a row lock on another tenant's data or perform a privile
 
 **Accepted residual (F-3).** The environment gate validates the declared `APP_ENV`/`NODE_ENV`, not the provenance of the database URL. An operator possessing production owner credentials could theoretically point a process declaring development/test at a production database. This is an operational credential/secret-management risk, not a fixture bypass in the application authorization model. There is no override or force flag, `NODE_ENV=production` is refused, the fixture has no HTTP route and is not imported by the application, production use is prohibited, and separating development, test and production database credentials remains an operational requirement.
 
+### Phase 1C.4b frontend E2E corrections and browser security verification — IMPLEMENTED and CLOSED (Gate C.4b PASS, 01-Oct-2026)
+
+The `apps/web/e2e` browser test suite provides full client-side security proofs against the deterministic Phase 1C.4a fixture (`TESTING.md` §6p, §6s; checkpoint `4e7effd`):
+- **Exact-secret storage proof (E2E-08)**: Verifies that upon API key creation, the exact plaintext secret string is never persisted to `localStorage`, `sessionStorage`, `document.cookie`, `IndexedDB`, `CacheStorage`, `window.history.state`, or URL query/hash parameters, both during presentation and after modal dismissal.
+- **Tenant boundary & header integrity (E2E-10)**: Verifies legitimate dispatch of `X-Acc-Organization` and proves backend refusal (`403 TENANCY_CONTEXT_MISMATCH`) when forged with an unheld organization ID.
+- **Low-privilege route gating (E2E-11)**: Proves that low-privilege users (`a1-team-reader`) receive network `403 AUTHZ_SCOPE_DENIED` and explicit UI "Access Forbidden" boundaries with zero audit data disclosure.
+- **Safe audit rendering (E2E-09)**: Proves that markup-bearing audit payloads render inertly in `<pre>` blocks with zero executable `<script>` injection and `window.__accFixtureMarkup === undefined`.
+- **Exhaustive storage sweep (E2E-12)**: Proves zero token, secret, or dotted JWT leakage across all 8 console routes.
+
 ### 4a. Append-only enforcement, and its threat model
 
 Append-only is enforced in three layers, each covering something the others cannot:
