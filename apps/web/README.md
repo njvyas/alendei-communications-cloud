@@ -181,22 +181,22 @@ npm run test:security -w @acc/web
 npm run test:e2e -w @acc/web
 ```
 
-## Playwright / Browser E2E Security Suite (Gate B — Track 6)
+## Playwright / Browser E2E Security Suite (Phase 1C.4b)
 
-The Playwright browser E2E test suite (`apps/web/e2e/**`) proves security and session invariants through real Chromium browser automation against the live development control plane:
+The Playwright browser E2E test suite (`apps/web/e2e/**`) proves security, tenancy, and session invariants through real Chromium browser automation against the live development control plane seeded with the deterministic Phase 1C.4a fixture (`npm run fixture:dev --workspace @acc/api`, `TESTING.md` §6r):
 
 - **E2E-01 — Login Flow**: Submits valid credentials through the accessible `/login` UI, verifying successful session transition to the console shell without exposing credentials.
 - **E2E-02 — Protected Route Redirect**: Verifies unauthenticated visitors attempting direct navigation to `/users`, `/roles`, or `/audit-logs` are redirected to `/login` without leaking protected data.
 - **E2E-03 — Authenticated Identity & Token Absence**: Proves authenticated user identity renders correctly while ensuring zero access tokens, refresh tokens, or bearer credentials leak to URL search params, hash, `localStorage`, or `sessionStorage`.
 - **E2E-04 — Refresh Continuity & HttpOnly Cookie Isolation**: Validates session continuity on page reload via silent refresh, verifying that `acc_refresh` is marked `httpOnly: true` and that client JavaScript (`document.cookie`) has zero visibility into the refresh token.
 - **E2E-05 — Logout Lifecycle**: Tests user logout through the UI, ensuring session invalidation, immediate redirection to `/login`, blocked re-entry to protected routes, and complete absence of residual tokens in storage.
-- **E2E-06 — Multi-Organization Selection / Switching**: Validates tenant switching when multiple organizations are available.
-- **E2E-07 — Console Route Navigation**: Navigates across `/users`, `/roles`, `/api-keys`, and `/audit-logs`, confirming proper error-free boundary rendering under the current session context.
-- **E2E-08 — API Key Secret Non-Persistence**: Verifies that generated API key secrets exist strictly in ephemeral component memory and are never written to `localStorage`, `sessionStorage`, or cookies.
-- **E2E-09 — Audit Payload Safe Rendering (XSS Prevention)**: Verifies that arbitrary before/after state snapshots and event metadata containing script or image injection payloads render strictly as inert text nodes inside preformatted `<pre>` blocks, preventing DOM execution.
-- **E2E-10 — Tenant Header Override Protection**: Observes network requests to confirm that caller-forged `X-Acc-Organization` headers are stripped by `api-client.ts` and replaced with the authoritative in-memory organization context.
-- **E2E-11 — Unauthorized Access Gate**: Proves unauthorized users lacking required permissions fail closed at route boundaries without executing backend queries.
-- **E2E-12 — Browser Storage Security Sweep**: Sweeps `localStorage`, `sessionStorage`, `document.cookie`, URL query/hash, and history state across all console routes to verify complete absence of credential leakage.
+- **E2E-06 — Multi-Organization Selection / Switching**: Authenticates as `multi-org@acc-fixture.test` holding grants in both Organization A1 and Organization A2. Selects Organization A1 through `OrgSelectionView`, navigates into the console, and dynamically switches to Organization A2 via the header selector, confirming context re-pinning on outgoing requests and data views.
+- **E2E-07 — Console Route Navigation**: Navigates across `/users`, `/roles`, `/workspaces`, `/teams`, `/api-keys`, and `/audit-logs` as `a1-admin@acc-fixture.test`, confirming error-free boundary rendering, seeded resource visibility (Default workspace, ACC Fixture Team, planted audit logs), and absence of `ZeroOrgView` or client-side crashes.
+- **E2E-08 — API Key Secret Non-Persistence**: Authenticates as `a1-admin@acc-fixture.test`, creates a new API key through the UI dialog, confirms the one-time secret is displayed in the UI, and proves the exact plaintext secret string is strictly ephemeral and never written to `localStorage` (keys/values), `sessionStorage` (keys/values), `document.cookie`, `IndexedDB` (database names, store names, stored record values), `CacheStorage` (cache names, request URLs, response body payloads), `window.history.state`, or URL query/hash.
+- **E2E-09 — Audit Payload Safe Rendering (XSS Prevention)**: Inspects the real planted `team.created` audit record carrying malicious markup (`<img src=x onerror="window.__accFixtureMarkup=1"><script>window.__accFixtureMarkup=1</script>`) in `AuditLogDetailDialog`. Asserts preformatted text rendering inside `<pre>`, zero injected `<script>` tags, and browser-observable proof that `window.__accFixtureMarkup === undefined`.
+- **E2E-10 — Tenant Header Override Protection**: Positive control observes legitimate browser requests carrying `X-Acc-Organization: <orgA1Id>`. Negative control proves the backend strictly enforces tenant boundaries and returns HTTP `403 TENANCY_CONTEXT_MISMATCH` when presented with a forged unheld organization ID (`acc-fixture-b1`).
+- **E2E-11 — Unauthorized Access Gate**: Proves authorization boundaries for low-privilege user `a1-team-reader@acc-fixture.test` (holding only `read_only` at Team T). Direct API invocation against `/api/v1/audit-logs` returns network `403 AUTHZ_SCOPE_DENIED`, and console UI navigation renders an explicit "Access Forbidden" boundary while suppressing audit log table rendering.
+- **E2E-12 — Browser Storage Security Sweep**: Sweeps `localStorage`, `sessionStorage`, `document.cookie`, IndexedDB databases, Cache Storage, URL query/hash, and history state across all 8 console routes (`/`, `/users`, `/roles`, `/workspaces`, `/teams`, `/api-keys`, `/audit-logs`, `/organizations`) with dotted JWT pattern detection (`^[\w-]+\.[\w-]+\.[\w-]+$`).
 
 ### Requirements & Environment
 
@@ -204,19 +204,19 @@ The Playwright browser E2E test suite (`apps/web/e2e/**`) proves security and se
    ```bash
    npx playwright install chromium
    ```
-2. **Environment Variables**:
+2. **Deterministic Seed (Phase 1C.4a Fixture)**:
+   Ensure the database is migrated and the Phase 1C.4a fixture is applied:
+   ```bash
+   npm run db:migrate --workspace @acc/db
+   npm run bootstrap --workspace @acc/api
+   npm run fixture:dev --workspace @acc/api
+   ```
+3. **Environment Variables (`.env`)**:
    - `PLAYWRIGHT_BASE_URL`: Base URL for the web console (default: `http://localhost:3000`).
-   - `E2E_USER_EMAIL`: Test user email (default: `AUTH_BOOTSTRAP_EMAIL` or `platform-admin@alendei.test`).
-   - `E2E_USER_PASSWORD`: Test user password (default: `AUTH_BOOTSTRAP_PASSWORD` or `local-development-only-passphrase-not-a-secret`).
-   - `E2E_MULTI_ORG_EMAIL` / `E2E_MULTI_ORG_PASSWORD`: Optional credentials for multi-organization test account.
-   - `E2E_LOW_PRIV_EMAIL` / `E2E_LOW_PRIV_PASSWORD`: Optional credentials for low-privilege test account.
-3. **Execution**:
+   - `ACC_FIXTURE_USER_PASSWORD`: Passphrase referenced by `ACC_FIXTURE_USER_PASSWORD_REF` for fixture accounts.
+   - `AUTH_BOOTSTRAP_EMAIL` / `AUTH_BOOTSTRAP_PASSWORD`: Bootstrap platform operator credentials.
+4. **Execution**:
    ```bash
    npm run test:e2e -w @acc/web
    ```
-
-### Known Limitations in Current Development Environment
-
-- **Scope of the browser suite**: E2E-01 to E2E-12 were written for Gate B (Phase 1B) console routes. **Phase 1C organization, workspace and team administration (`/organizations`, `/workspaces`, `/teams`) has no Playwright browser coverage yet.** None of the E2E cases above exercises those routes, and none of them should be read as covering Phase 1C. Phase 1C frontend behaviour is covered by the `node:test` suites (`lib/tenancy-administration.test.ts`, `lib/tenancy-security.sec.test.ts`, `lib/session-cache.sec.test.ts`) against a mocked `fetch`; backend isolation is proven by the API security suites, not by these frontend tests. Browser fixtures for Phase 1C are scheduled with Phase 1C.4.
-- **Tenant data**: Organizations are now provisioned through `POST /api/v1/organizations` (Phase 1C.1a); the development database is no longer expected to be empty. A platform-grant holder may select any existing organization; `zero_organizations` (`ZeroOrgView`) applies only while a principal genuinely has no authorized organization, and a principal holding `organizations.read` can still open `/organizations` from that state.
-- **Graceful Test Skipping**: Cases that need an active tenant organization context (E2E-08), several provisioned organizations (E2E-06) or a low-privilege tenant role (E2E-11) skip when the environment does not supply them (see the optional `E2E_*` variables above). They do not fabricate client-side IDs or alter backend seed data, and a skip is not a pass.
+   All 12 browser E2E security proofs execute deterministically with zero skips and zero vacuous assertions.

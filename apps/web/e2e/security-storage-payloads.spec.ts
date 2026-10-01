@@ -1,93 +1,139 @@
 import { expect, test } from '@playwright/test';
-import { assertNoTokensInStorage, loginViaUi } from './helpers/auth';
+import {
+  assertExactSecretNotInStorage,
+  assertNoTokensInStorage,
+  loginViaUi,
+  TEST_CREDENTIALS,
+} from './helpers/auth';
 
 test.describe('Security & Browser Storage Sweep (E2E-08, E2E-09, E2E-12)', () => {
   test.describe.configure({ mode: 'serial' });
 
+  // ---------------------------------------------------------------------------
+  // E2E-08: API-key one-time secret browser persistence check
+  // ---------------------------------------------------------------------------
   test('E2E-08: API-key one-time secret browser persistence check', async ({ page }) => {
-    await loginViaUi(page);
+    // 1. Authenticate as Organization A1 administrator
+    await loginViaUi(page, TEST_CREDENTIALS.a1Admin.email, TEST_CREDENTIALS.a1Admin.password);
 
-    // In the current development environment with 0 tenant organizations, creating API keys
-    // is blocked because the console fails closed into ZeroOrgView (no active organization context).
-    const isZeroOrg = await page.locator('text=No Organization Access').isVisible();
-
-    if (isZeroOrg) {
-      // Perform security verification on the existing state
-      await assertNoTokensInStorage(page);
-
-      test.skip(
-        true,
-        'BLOCKED / NOT APPLICABLE: The development database currently has 0 tenant organizations provisioned. ' +
-          'API key creation requires an active organization context. Per contract, inventing a mock production flow is prohibited.',
-      );
-      return;
-    }
-
-    // If an active organization is provisioned in the environment:
+    // 2. Navigate to API keys administration
     await page.goto('/api-keys');
-    await expect(page.getByRole('button', { name: 'Create API Key' })).toBeVisible();
-    await page.getByRole('button', { name: 'Create API Key' }).click();
+    await expect(page.getByRole('heading', { name: 'API Keys' })).toBeVisible();
 
-    // Verify secret is not in storage during form or after creation
+    // 3. Open Create API Key dialog
+    await page.getByRole('button', { name: /\+? Create API Key|Create your first API key/i }).first().click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+
+    // 4. Fill in key attributes
+    const testKeyName = `E2E Secret Test Key ${Date.now()}`;
+    await dialog.locator('#api-key-name').fill(testKeyName);
+
+    // Select all held permissions or first available permission
+    await dialog.getByRole('button', { name: 'Select All Held' }).click();
+
+    // 5. Submit creation form
+    await dialog.getByRole('button', { name: 'Create API Key' }).click();
+
+    // 6. Verify creation succeeds and one-time secret is displayed in read-only input
+    await expect(page.getByText('Save Your API Key Secret')).toBeVisible({ timeout: 10_000 });
+    const credentialOutput = page.locator('#credential-output');
+    await expect(credentialOutput).toBeVisible();
+
+    const fullCredential = await credentialOutput.inputValue();
+    expect(fullCredential).toContain('.');
+    const [prefix, secret] = fullCredential.split('.');
+    expect(prefix).toBeTruthy();
+    expect(secret).toBeTruthy();
+    expect(secret!.length).toBeGreaterThanOrEqual(32);
+
+    // 7. CRITICAL SECURITY ASSERTION: Verify exact secret is NEVER persisted into any browser storage mechanism
+    // Sweeps: localStorage, sessionStorage, document.cookie, IndexedDB, Cache Storage, window.history.state, URL
+    await assertExactSecretNotInStorage(page, secret!);
+    await assertNoTokensInStorage(page);
+
+    // 8. Confirm save, acknowledge warning, and close dialog
+    await page.locator('input[type="checkbox"]').check();
+    await page.getByRole('button', { name: 'Done & Close' }).click();
+    await expect(page.getByRole('dialog')).not.toBeVisible();
+
+    // Verify exact secret and general storage remain pristine after closing dialog
+    await assertExactSecretNotInStorage(page, secret!);
     await assertNoTokensInStorage(page);
   });
 
+  // ---------------------------------------------------------------------------
+  // E2E-09: Audit payload safe text rendering (XSS prevention)
+  // ---------------------------------------------------------------------------
   test('E2E-09: Audit payload safe text rendering (XSS prevention)', async ({ page }) => {
-    await loginViaUi(page);
+    // 1. Authenticate as Organization A1 administrator
+    await loginViaUi(page, TEST_CREDENTIALS.a1Admin.email, TEST_CREDENTIALS.a1Admin.password);
 
-    // Verify that preformatted JSON rendering in the frontend neutralizes script injection
-    // Tests that hazardous payloads such as <script>alert(1)</script> and <img onerror=alert(1)>
-    // when evaluated by the client component render strictly as plain text nodes, NOT executable DOM.
-    const isXssNeutralized = await page.evaluate(() => {
-      const container = document.createElement('div');
-      container.id = 'test-audit-payload-container';
-      document.body.appendChild(container);
+    // 2. Navigate to Audit Logs view
+    await page.goto('/audit-logs');
+    await expect(page.getByRole('heading', { name: 'Audit Logs' })).toBeVisible();
+    await expect(page.locator('table')).toBeVisible();
 
-      // Simulate the exact renderSafeJson logic from AuditLogDetailDialog
-      const maliciousData = {
-        exploitScript: "<script>window.__xss_executed = true;</script>",
-        exploitImg: "<img src=invalid onerror='window.__xss_executed = true;'>",
-        exploitSvg: "<svg onload='window.__xss_executed = true;'>",
-        exploitUri: "javascript:window.__xss_executed = true;",
-      };
+    // 3. Locate the real team.created audit row planted by Phase 1C.4a fixture
+    // The planted Team T name carries: <img src=x onerror="window.__accFixtureMarkup=1"><script>window.__accFixtureMarkup=1</script>
+    // Filter by action 'team.created' to ensure row is retrieved regardless of newer test audit logs
+    const actionFilter = page.getByPlaceholder('Action key (e.g. user_role.granted)');
+    await actionFilter.fill('team.created');
+    await page.getByRole('button', { name: 'Apply Filters' }).click();
 
-      const pre = document.createElement('pre');
-      pre.className = 'font-mono text-xs select-all whitespace-pre-wrap';
-      pre.textContent = JSON.stringify(maliciousData, null, 2);
-      container.appendChild(pre);
+    const teamCreatedRow = page.locator('tr', { hasText: 'team.created' }).first();
+    await expect(teamCreatedRow).toBeVisible();
 
-      const hasExecutableScriptTag = container.querySelectorAll('script').length > 0;
-      const hasExecutableImgTag = container.querySelectorAll('img').length > 0;
-      const hasExecutableSvgTag = container.querySelectorAll('svg').length > 0;
-      const wasExecuted = (window as unknown as { __xss_executed?: boolean }).__xss_executed === true;
+    // 4. Open the real AuditLogDetailDialog component
+    await teamCreatedRow.getByRole('button', { name: 'Inspect' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
 
-      container.remove();
+    // 5. Verify the malicious markup is rendered strictly as preformatted text data in <pre>
+    const preBlock = dialog.locator('pre').first();
+    await expect(preBlock).toBeVisible();
+    const renderedContent = await preBlock.innerText();
+    expect(renderedContent).toContain('ACC Fixture Team');
+    expect(renderedContent).toContain('<script>window.__accFixtureMarkup=1</script>');
 
-      return {
-        hasExecutableScriptTag,
-        hasExecutableImgTag,
-        hasExecutableSvgTag,
-        wasExecuted,
-        renderedAsText: pre.textContent.includes('<script>'),
-      };
-    });
+    // 6. Assert no executable <script> or <img> tags are injected into DOM
+    const executableScriptCount = await dialog.locator('script').count();
+    expect(executableScriptCount).toBe(0);
 
-    expect(isXssNeutralized.hasExecutableScriptTag).toBe(false);
-    expect(isXssNeutralized.hasExecutableImgTag).toBe(false);
-    expect(isXssNeutralized.hasExecutableSvgTag).toBe(false);
-    expect(isXssNeutralized.wasExecuted).toBe(false);
-    expect(isXssNeutralized.renderedAsText).toBe(true);
+    // 7. BROWSER-OBSERVABLE XSS PROOF: window.__accFixtureMarkup MUST remain undefined
+    const wasExecuted = await page.evaluate(
+      () => (window as unknown as { __accFixtureMarkup?: unknown }).__accFixtureMarkup,
+    );
+    expect(wasExecuted).toBeUndefined();
+
+    // Close dialog
+    await dialog.getByRole('button', { name: 'Close' }).click();
+    await expect(dialog).not.toBeVisible();
   });
 
+  // ---------------------------------------------------------------------------
+  // E2E-12: Browser storage security sweep across all console routes
+  // ---------------------------------------------------------------------------
   test('E2E-12: Browser storage security sweep across all console routes', async ({ page }) => {
-    await loginViaUi(page);
+    // 1. Authenticate as Organization A1 administrator
+    await loginViaUi(page, TEST_CREDENTIALS.a1Admin.email, TEST_CREDENTIALS.a1Admin.password);
 
-    const routes = ['/', '/users', '/roles', '/api-keys', '/audit-logs'];
+    const routes = [
+      '/',
+      '/users',
+      '/roles',
+      '/workspaces',
+      '/teams',
+      '/api-keys',
+      '/audit-logs',
+      '/organizations',
+    ];
 
     for (const route of routes) {
       await page.goto(route);
+      await page.waitForLoadState('networkidle');
 
-      // Perform thorough storage & cookie security sweep on every route
+      // Comprehensive cryptographic & token storage sweep
       await assertNoTokensInStorage(page);
 
       // Inspect history state safely
