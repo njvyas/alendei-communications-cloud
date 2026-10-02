@@ -277,7 +277,7 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 | **2.2** | Adapter Contract & Simulator | none (permission `providers.test_send`) | Gate D.2 |
 | **2.3** | Health & Circuit Breaker | `provider_health` | Gate D.3 |
 | **2.4** | Hot Reload | none | Gate D.4 |
-| **2.5** | Credential Reference Contract — documentation and interface only | none | Gate D.5 |
+| **2.5** | Credential Reference Contract — documentation only | none | Gate D.5 |
 | **2.6** | Frontend console — separately authorized | none | Gate D.6 |
 
 **Execution order:** 2.1 → 2.2 → 2.3 → 2.4; 2.5 may run alongside 2.2; 2.6 after the 2.1–2.4 contract is stable.
@@ -289,10 +289,10 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 **2.1 — Channel & Provider Registry**
 - *Objective*: the global channel and provider catalogue, administered by platform administrators.
 - *In scope*: `provider-registry` module (`apps/api/src/providers/` — controller, service, DTOs); schema and migration in `packages/db`; contracts (permission keys, audit actions, channel codes, status enums) in `packages/contracts`.
-- *DB*: `channels` (`id, code, display_name, status`; seeded `whatsapp, rcs, sms, email, voice`; read-only), `providers` (`id, channel_id, name, adapter_key, status ∈ {active, disabled, draining}, health_state ∈ {healthy, degraded, critical, offline}` default `healthy`, `circuit_state ∈ {closed, open, half_open}` default `closed`, timestamps), `provider_capabilities` (`provider_id, capability_key, value JSONB`). RLS enabled in the creating migration with the global-catalogue posture (ADR-013 F-3); `principals.int-spec.ts` classification; permission rows attached to `alendei_super_admin` only.
+- *DB*: `channels` (`id, code, display_name, status`; seeded `whatsapp, rcs, sms, email, voice`; read-only), `providers` (`id, channel_id, name, adapter_key, status ∈ {active, disabled, draining}, health_state ∈ {healthy, degraded, critical, offline}` default `healthy`, `circuit_state ∈ {closed, open, half_open}` default `closed`, timestamps), `provider_capabilities` (`provider_id, capability_key, value JSONB`). RLS enabled in the creating migration with the global-catalogue posture (ADR-013 F-3); `principals.int-spec.ts` classification; permission rows attached to `alendei_super_admin` only (today's grant, not the boundary — ADR-013 F-3).
 - *API*: `GET /channels`, `GET /channels/:id`; `GET /providers`, `GET /providers/:id`, `POST /providers` (idempotent), `PATCH /providers/:id` (name only), `PUT /providers/:id/capabilities`, `POST /providers/:id/enable`, `/disable`, `/drain`. No `DELETE`.
 - *Permissions*: `providers.read` (reads), `providers.manage` (writes).
-- *Security*: platform-only at the application and RLS layers; tenant principals receive `403`/`404` per `API.md` §3a and see zero rows at the database; `adapter_key` validated against the code registry (ADR-013 F-9).
+- *Security*: the ADR-013 F-3 layering — authenticated principal → validated `providers.*` permission (`AuthorizationService`) → platform-scope target → RLS platform-scope eligibility. RLS names no role or permission; the role-name-bound `app_is_platform_admin()` is not used for these tables, and 2.1 introduces a reviewed role-name-independent platform-scope eligibility primitive. Tenant and API-key principals receive `403`/`404` per `API.md` §3a and see zero rows at the database; `alendei_support` is RLS-eligible and refused by authorization (`403`, audited); `adapter_key` validated against the code registry (ADR-013 F-9).
 - *Audit*: `provider.created`, `provider.updated`, `provider.capabilities_replaced`, `provider.enabled`, `provider.disabled`, `provider.drained`, with before/after.
 - *Tests*: CRUD and lifecycle transition matrix (illegal transition `409`, nothing changed); tenant/support/API-key refusal; RLS proof with the service bypassed; audit atomicity; idempotent create; OpenAPI.
 - *Mutation proofs*: `providers.manage` assertion removed (detected and contained, zero rows); RLS predicate widened to `true`; status-transition guard removed; audit write removed; `adapter_key` validation removed; OpenAPI drift.
@@ -327,23 +327,24 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 - *Exclusions*: router integration, routing eligibility, routing policies, per-provider threshold administration, event publication.
 
 **2.4 — Hot Reload**
-- *Objective*: provider configuration changes take effect without restart.
-- *In scope*: an in-process registry/adapter cache in `provider-registry`; Redis pub/sub invalidation published after commit; a bounded-TTL backstop.
+- *Objective*: provider configuration changes take effect without restart, as **best-effort configuration invalidation with bounded convergence** — not transactional configuration propagation.
+- *Semantics*: (1) the update commits first; (2) the invalidation is published to Redis **after** commit; (3) a subscriber evicts the entry as soon as it receives the publication, and its next read reloads from the database; (4) if a publication is lost, the cache TTL bounds how long a stale entry can be served, after which the entry refreshes on its own. Outbox-backed transactional propagation remains deferred (ADR-013 PD-1).
+- *In scope*: an in-process registry/adapter cache in `provider-registry`; the Redis pub/sub publisher and subscriber; the TTL (configurable, on an injectable clock).
 - *DB / API / permissions*: none new.
 - *Audit*: none new (the triggering change is already audited).
-- *Tests*: two application instances in one test — a change through one is observed by the other without restart; a lost publication is bounded by the TTL; a disabled provider is refused by the other instance's next test-send.
-- *Mutation proofs*: invalidation publish removed; TTL backstop removed; invalidation published before commit.
-- *Acceptance*: change, then observe, with no restart and no deploy.
-- *Exclusions*: outbox-backed invalidation (residual, ADR-013).
+- *Tests*: two application instances in one test, no restart. **(a) Immediate propagation:** with pub/sub working, a change through instance A is observed by instance B on its next read after the publication arrives, before the TTL has elapsed on the injected clock (e.g. a provider disabled through A is refused by B's next test-send). **(b) Bounded convergence:** with the publication suppressed, B may serve the stale entry until the TTL elapses on the injected clock and must observe the change on its first read after it — never later.
+- *Mutation proofs*: invalidation publish removed (caught by (a)); TTL removed or unbounded (caught by (b)); invalidation published before commit (a subscriber reloads the pre-commit value — caught by (a)).
+- *Acceptance*: change, then observe — immediately on publication, or within the TTL if it is lost — with no restart and no deploy.
+- *Exclusions*: transactional configuration propagation; outbox-backed invalidation (deferred, ADR-013 PD-1).
 
-**2.5 — Credential Reference Contract (documentation and interface only)**
-- *Objective*: freeze the shape an adapter uses to obtain a credential, without storing any.
-- *In scope*: a `ProviderCredentialResolver` port type in `packages/contracts` returning a resolved secret only through `SecretsPort`; documentation in `PROVIDER_ADAPTER.md` §4a and `SECURITY.md` §3b. `SimulatorAdapter` uses no credential; `INVALID_CREDENTIALS` is a simulated behaviour.
-- *DB / API / permissions / audit*: none.
-- *Tests*: a static test that no Phase 2 table, DTO, log field or audit action carries a credential or secret value.
-- *Mutation proofs*: a secret-bearing column or response field introduced is caught.
-- *Acceptance*: contract documented; nothing persisted.
-- *Exclusions*: `provider_credentials`, ownership model (ADR-013 F-1), rotation, management, any real credential.
+**2.5 — Credential Reference Contract (documentation only)**
+- *Objective*: record what any future credential design must satisfy, without deciding it. **Credential architecture requires a separate reviewed decision (its own ADR) before any implementation.**
+- *In scope (documentation only)*: in `PROVIDER_ADAPTER.md` §4a and `SECURITY.md` §3a/§3b — the future credential-reference contract requirements (a `<backend>:<locator>` reference resolved server-side at call time); the security invariants (the secret never enters PostgreSQL, logs, metrics, audit rows, API responses or any frontend; multi-owner coexistence in one shared deployment under database-enforced isolation); the unresolved ownership model, stated as unresolved (ADR-013 F-1); and the future `SecretsPort` integration boundary (resolution happens behind `SecretsPort`, never in adapter code).
+- *Must not*: add a runtime resolver port, type or interface; add credential-resolution code; add `provider_credentials` or any credential column; establish credential ownership or scope semantics; or define anything that could freeze the unresolved model by accident. `SimulatorAdapter` uses no credential; `INVALID_CREDENTIALS` is a simulated behaviour.
+- *DB / API / permissions / audit / code*: none.
+- *Tests / mutation proofs*: none of its own — 2.5 adds no code. The absence of credential persistence is proven by the Gate D cross-cutting check (§5c), implemented with 2.1 and extended by each backend increment.
+- *Acceptance*: the documentation review — requirements, invariants, the open ownership question and the `SecretsPort` boundary are recorded, and nothing in Phase 2 freezes an ownership or scope semantic.
+- *Exclusions*: `provider_credentials`, any ownership model, rotation, management, any real credential, any credential type in code.
 
 **2.6 — Frontend console (separately authorized and gated)**
 - Provider list/detail, enable/disable/drain, test-send, health/circuit display by polling, against the frozen 2.1–2.4 contract; follows the 1C.4b precedent. No backend change.
@@ -353,17 +354,17 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 Objectively testable; each is pass/fail. Evidence runs on disposable clones, never on the canonical test database. Sub-gates D.1–D.6 close their increments; Gate D closes Phase 2.
 
 - **Registry correctness** — every 2.1 route behaves as specified; the lifecycle transition matrix is exact; illegal transitions `409` and change nothing; the seeded channel catalogue is read-only.
-- **Authorization and global-catalogue security** — only `providers.*` holders at platform scope succeed; organization, workspace, team, reseller, `alendei_support` and API-key principals are refused; with the service bypassed, a non-platform `acc_app` transaction sees zero catalogue rows and cannot write; `acc_auth`/`acc_relay` hold no grant; every new route is in the route-coverage test and inside the pre-commit coverage boundary.
+- **Authorization and global-catalogue security** — only holders of the required `providers.*` permission at platform scope succeed; organization, workspace, team, reseller, `alendei_support` and API-key principals are refused; with the service bypassed, a transaction without a validated platform-scope claim sees zero catalogue rows and cannot write; the RLS predicate names no role or permission (a test grants the permissions to a second, test-only platform role and shows it succeeds with no policy change, and shows `alendei_support` is RLS-eligible yet refused by authorization); `acc_auth`/`acc_relay` hold no grant; every new route is in the route-coverage test and inside the pre-commit coverage boundary.
 - **Simulator matrix** — the seven submission-time behaviours are reproducible on demand through test-send with the specified normalized outcomes; no message-table row is ever written.
 - **Health state machine** — every specified transition, and no other, for automatic and manual sources.
 - **Circuit breaker** — `CLOSED/OPEN/HALF_OPEN` transitions exact at threshold boundaries under an injected clock; `OPEN` short-circuits.
-- **Hot reload** — a change is observed by a second instance with no restart; the TTL backstop bounds a lost invalidation.
+- **Hot reload** — **best-effort configuration invalidation with bounded convergence** — not transactional configuration propagation: with no restart, a change through one instance is observed by a second instance (a) immediately when the pub/sub publication arrives and (b) within the TTL, on the injected clock, when the publication is missed.
 - **Audit coverage** — every mutation and transition writes its ADR-013 F-4 action in the same transaction, with before/after and no secret material.
 - **OpenAPI consistency** — the generated spec covers every new route and matches the route table and `FRONTEND_API_CONTRACT.md`; `openapi:check` passes.
 - **Observability** — bounded health/circuit/test-send metrics exist and are proven; the Grafana dashboard is provisioned.
 - **Deterministic tests** — no wall-clock sleeps; clocks and latency are injected; repeated runs are identical.
 - **Mutation proofs** — each increment's listed mutations executed on disposable clones and caught, with failing test names recorded; authorization mutations are detected **and contained**.
-- **No credential secret persistence** — no table, column, log line, metric, audit row or response carries a credential or secret value; `provider_credentials` does not exist.
+- **No credential secret persistence** — no table, column, log line, metric, audit row or response carries a credential or secret value; `provider_credentials` does not exist; no credential type, port or resolution code exists (a static cross-cutting check implemented with 2.1, extended by each increment).
 - **No scope creep** — no outbox, worker harness, SIEM, routing, failover, billing, real adapter, message lifecycle, reseller/white-label or WebSocket code is introduced.
 - **Regression** — the full backend suite (1,577 at Gate C, plus the Phase 2 suites) is green with zero skipped tests; lint, typecheck, build, dependency audit and non-frontend formatting pass; migrations apply from empty, re-run as a no-op and leave no drift.
 - **Documentation** — `PROVIDER_ADAPTER.md`, `DATABASE.md`, `API.md`, `FRONTEND_API_CONTRACT.md`, `SECURITY.md`, `TESTING.md`, `OBSERVABILITY.md` and this roadmap describe exactly what exists.
