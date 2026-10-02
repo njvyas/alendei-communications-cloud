@@ -147,6 +147,12 @@ jobs:
           cache: npm
       - name: Install
         run: npm ci
+      # The metadata generator type-checks apps/api, whose project references
+      # resolve @acc/contracts and @acc/db to their built declarations; a clean
+      # checkout has none until the packages are built (as the integration job
+      # already does).
+      - name: Build workspace packages
+        run: npm run build:packages
       - name: Check the snapshot and metadata against the code
         run: npm run openapi:check
       - name: Nothing was regenerated in place
