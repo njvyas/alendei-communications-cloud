@@ -301,7 +301,7 @@ Proven over HTTP in `auth-abuse.sec-spec.ts` (each case ends on the `429` only t
 
 RLS binds a principal only while it is not a superuser, not `BYPASSRLS`, and not the owner (or a member of the owner) of a table — RLS is enabled but deliberately **not forced**, so an owner is exempt. Each of those is configuration that can drift without any application test noticing. `DatabaseModule` therefore calls `assertRlsBoundPrincipal` on both request-serving pools at start-up and **refuses to start** if either principal is a superuser, has `BYPASSRLS`, owns or can act as the owner of any `public` table, or is a member of any other role. The catalog itself is asserted in `principals.int-spec.ts`, including exact per-principal grant maps, no role memberships, no `SET ROLE` path, and negative controls proving that a weakened policy, `BYPASSRLS` or table ownership each re-open the boundary.
 
-### Phase 1C security controls (ADR-012) — organization rows IMPLEMENTED (1C.1a); workspace/team row IMPLEMENTED (1C.1b); session rows IMPLEMENTED and CLOSED (1C.2); database-integrity rows IMPLEMENTED and CLOSED (1C.6, PASS); the rest IN PHASE 1C
+### Phase 1C security controls (ADR-012) — organization rows IMPLEMENTED (1C.1a); workspace/team row IMPLEMENTED (1C.1b); session rows IMPLEMENTED and CLOSED (1C.2); database-integrity rows IMPLEMENTED and CLOSED (1C.6, PASS); OpenAPI (1C.3), fixture (1C.4a) and browser E2E (1C.4b) CLOSED; Gate C decision pending
 
 The first two rows and the API half of the third are **implemented (Phase 1C.1a)**, proven by `organization-administration.sec-spec.ts`; the workspace/team row is **implemented (Phase 1C.1b)**, proven by `workspace-team-administration.sec-spec.ts`; the three session rows are **implemented and closed (Phase 1C.2, PASS)**, proven by `session-policy.sec-spec.ts`; everything else is a frozen target. Each row is a Gate C criterion (`ROADMAP.md` §4d).
 
@@ -379,6 +379,22 @@ The `apps/web/e2e` browser test suite provides full client-side security proofs 
 - **Low-privilege route gating (E2E-11)**: Proves that low-privilege users (`a1-team-reader`) receive network `403 AUTHZ_SCOPE_DENIED` and explicit UI "Access Forbidden" boundaries with zero audit data disclosure.
 - **Safe audit rendering (E2E-09)**: Proves that markup-bearing audit payloads render inertly in `<pre>` blocks with zero executable `<script>` injection and `window.__accFixtureMarkup === undefined`.
 - **Exhaustive storage sweep (E2E-12)**: Proves zero token, secret, or dotted JWT leakage across all 8 console routes.
+
+### Dependency exceptions — advisory-ID based (Gate C remediation, `4fb752e`)
+
+`scripts/audit-check.mjs` fails the build on any high or critical advisory that is not accepted, and on any expired exception. **An exception accepts the advisory ids it lists and nothing else**: a package passes only when every advisory npm reports against it is listed by id; a new advisory on an excepted package is reported as `UNREVIEWED` and fails the gate. (Before `4fb752e` an exception matched by package name, so the five current `multer` advisories passed under an entry that had reviewed four different ids.)
+
+The one exception is `multer` 2.2.0, transitive through `@nestjs/platform-express` 11.2.3, reviewed 02-Oct-2026, **expires 31-Oct-2026**:
+
+| Advisory | Severity | Affected | Type | Reachable in `apps/api` |
+|---|---|---|---|---|
+| GHSA-wc9g-mqfw-jrwm | high (7.5) | `< 2.3.0` | DoS via crafted multipart field names (CWE-248) | no |
+| GHSA-qfvm-cv95-jqjf | high (7.5) | `= 2.2.0` | DoS via file-descriptor leak on aborted uploads (CWE-400/459) | no |
+| GHSA-535w-7cp7-47q4 | high (7.5) | `< 2.3.0` | DoS via oversized array index in field names (CWE-400) | no |
+| GHSA-3pph-fpjx-jg34 | moderate (5.3) | `>= 2.2.0 < 2.4.0` | DoS via orphaned disk writes on aborted uploads (CWE-400/459) | no |
+| GHSA-qvfw-j98x-7q72 | low (3.7) | `< 2.3.0` | File-size limit bypass via async `fileFilter` race (CWE-362) | no |
+
+All five are defects of multer's multipart parser, which runs only when a route applies `FileInterceptor`/`FilesInterceptor`/`AnyFilesInterceptor` or registers `MulterModule` or multer middleware. `apps/api` does none of these — there is no multipart route in Phase 1C — and Express's own parsers handle JSON and urlencoded bodies only, so a multipart body is never parsed. **A fix is available**: `@nestjs/platform-express` ≥ 11.2.6 pins `multer` 2.4.0, outside every range above and within the declared `^11.2.3`; the short expiry exists so the upgrade is decided rather than deferred. The four scaffold-era ids previously listed (GHSA-4pg4-qvpc-4u3m, GHSA-g5hg-p3ph-g8qg, GHSA-44fp-w29j-9vj5, GHSA-fjgf-rc76-4x9p) no longer apply to the installed version and were removed.
 
 ### 4a. Append-only enforcement, and its threat model
 

@@ -1259,7 +1259,18 @@ No backend, database, schema, migration, API contract, RBAC, RLS, or infrastruct
 - Typecheck: 0 errors (`tsc --noEmit`).
 - Production build: clean Next.js Turbopack build (all 15 routes).
 
-**Gate status.** Phase 1C.4b is closed (PASS / CLOSED). **Overall Phase 1C remains open**: Gate C (`ROADMAP.md` §4d) is not passed. Phase 1C.5, D16, and reseller CRUD are not started.
+**Gate status.** Phase 1C.4b is closed (PASS / CLOSED). **Overall Phase 1C remains open**: Gate C (`ROADMAP.md` §4d) is not passed. ADR-012 defines no further Phase 1C increment — what remains is the Gate C decision. D16 and reseller CRUD (Phase 9) remain deferred.
+
+### Gate C readiness remediation (implemented 02-Oct-2026; Gate C decision pending)
+
+A read-only Gate C audit (01-Oct-2026) found two §4d criteria failing — Observability (the two required metrics did not exist) and Regression (`npm run audit` failed; six rate-limit cases failed under a developer `.env`) — plus the logout-CSRF mutation unrecorded and nine historical mutations recorded by count only. Authorized remediation, evidence in `TESTING.md` §6t:
+
+- **Technical checkpoint `c640e82`.** `acc_organization_status_refusals_total{status, operation}` and `acc_session_cap_evictions_total`; `next` 16.3.6, `@grpc/grpc-js` 1.14.5, `brace-expansion` patch releases; test-only pinning of the documented `RATE_LIMIT_*` defaults in `apps/api/test/setup-env.ts`. No schema, migration, OpenAPI artifact, RBAC/RLS or frontend source change.
+- **Refusal-counter design (for acceptance).** Counted once per refused request at the response boundary (`AllExceptionsFilter`), attributed by the four genuine sources through `logContext.refusedOrganizationStatus`, rather than incremented at each of the ~14 throw sites, several of which are dependency-free functions. The filter itself contains no status literals and no new imports — see the enum-order residual below.
+- **Dependency gate `4fb752e`.** `scripts/audit-check.mjs` accepts an exception by advisory id, not by package; the `multer` exception lists its five reviewed advisories and expires 31-Oct-2026 (shortened from 31-Dec-2026) because a fix exists — `@nestjs/platform-express` ≥ 11.2.6 pins `multer` 2.4.0, within the declared `^11.2.3`. The upgrade is not applied (not authorized); `SECURITY.md`, "Dependency exceptions".
+- **Approved 1C.2 test change, recorded.** `audit-writer.spec.ts` "shares no action between the acc_auth vocabulary and the sensitive set" was replaced in `19085bb` by "overlaps the acc_auth vocabulary and the sensitive set in exactly the two approved session actions", because the approved 1C.2 audit-routing correction (Option A, migration `0013`) admits `session.revoked`/`session.revoked_all` to the `acc_auth` vocabulary. The new assertion is exact, not weaker.
+- **Mutation evidence.** All eleven §4d mutations executed and caught, with failing test names (`TESTING.md` §6t).
+- **Residuals proposed for acceptance.** (1) OpenAPI metadata enum order: the committed plugin metadata orders enum values by TypeScript literal-creation order, so innocuous early-loaded code can reorder an enum and fail `openapi:check` without a contract change (fails closed). (2) The response-boundary counter relies on sources setting `refusedOrganizationStatus`. (3) `AuthorizationCoverageInterceptor` runs after the handler, so a missing authorization check is answered `500` but a committed write may not be rolled back (observed in mutants M02/M03; not verified). (4) The `multer` exception until the `@nestjs/platform-express` upgrade.
 
 ### Explicitly out of scope
 
