@@ -602,7 +602,7 @@ Every list endpoint above is paginated (§13) except `/auth/sessions` and `/perm
 
 **Correction.** An earlier version of this section was pinned to commit `6e84d7c` and listed `/users`, `/api-keys` and `/audit` as "PLANNED / NOT IMPLEMENTED" — contradicting §§30d–30f, which document all three as implemented. All three shipped in 1B.6.1, 1B.6.2 and 1B.6.3 respectively. The audit route is `/audit-logs`, not `/audit`.
 
-**Still PLANNED / NOT IMPLEMENTED**, and listed in `API.md` §2 as a target map rather than an inventory: `/resellers` (Phase 9), `/messages`, `/providers`, `/channels`, `/routing`, `/campaigns`, `/contacts`, `/templates`, `/billing`, `/wallets`, `/reports`, `/webhook-endpoints`, and the WebSocket gateway itself.
+**Still PLANNED / NOT IMPLEMENTED**, and listed in `API.md` §2 as a target map rather than an inventory: `/resellers` (Phase 9), `/messages`, `/providers` and `/channels` (Phase 2, scope frozen by ADR-013, platform scope only; the console is increment 2.6, separately gated), `/routing`, `/campaigns`, `/contacts`, `/templates`, `/billing`, `/wallets`, `/reports`, `/webhook-endpoints`, and the WebSocket gateway itself.
 
 ### OpenAPI
 

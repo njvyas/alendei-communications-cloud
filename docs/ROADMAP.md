@@ -230,7 +230,7 @@ Objectively testable; each is pass/fail.
 
 **Order:** 1C.0 → 1C.1a → 1C.1b → 1C.6 → 1C.3, with 1C.2 in parallel after 1C.0. Backend implementation then stops and the finalized frontend contract is handed to Gemini.
 
-**Out of scope for Phase 1C:** credential delivery/invitations (D16), WebSocket gateway/consumption/subscriptions (D15), providers and provider health (Phase 2), outbox/event consumers/SIEM (Phase 2), delivery state (Phase 3+), routing/fallback (Phases 5–6), billing (Phase 7), reseller lifecycle/CRUD and white-label (Phase 9), deployment artifacts (separate track), workspace/team-level RLS (ADR-011 D-4), physical data deletion or retention automation, MFA, password reset, lockout, SSO/OAuth2, API-key rotation, ABAC, scope-set caching.
+**Out of scope for Phase 1C:** credential delivery/invitations (D16), WebSocket gateway/consumption/subscriptions (D15), providers and provider health (Phase 2), outbox/event consumers/SIEM (attributed to Phase 2 here; re-scheduled by ADR-013 PD-1 — not Phase 2 scope), delivery state (Phase 3+), routing/fallback (Phases 5–6), billing (Phase 7), reseller lifecycle/CRUD and white-label (Phase 9), deployment artifacts (separate track), workspace/team-level RLS (ADR-011 D-4), physical data deletion or retention automation, MFA, password reset, lockout, SSO/OAuth2, API-key rotation, ABAC, scope-set caching.
 
 ### 4d. Gate C — Phase 1C acceptance
 
@@ -251,20 +251,123 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 
 ## 5. Phase 2 — Provider abstraction + simulator
 
+**Status: SCOPE FROZEN (ADR-013, 02-Oct-2026); no increment implemented.** Each increment requires its own authorization.
+
 - **Objectives**: implement `provider-registry`, `provider-adapters` (interface + `SimulatorAdapter` only), health/circuit breaker mechanics, admin hot-reload plumbing.
-- **Dependencies**: Phase 1.
-- **Architecture**: `PROVIDER_ADAPTER.md` in full.
-- **Implementation scope**: registry CRUD, credential-reference storage (secrets backend integration), health state machine, circuit breaker, simulator behaviors (`TESTING.md` §2).
-- **DB changes**: `channels, providers, provider_credentials, provider_capabilities, provider_health`.
-- **API changes**: `/channels`, `/providers`.
-- **Frontend changes**: provider list/detail console screens (read + basic admin actions).
-- **Tests**: full simulator-behavior matrix; hot-reload verification (change provider config, confirm no restart needed).
-- **Security checks**: credential-reference-only storage verified (no plaintext secret ever hits the app DB or logs).
-- **Observability**: provider health/circuit dashboards live.
-- **Documentation**: `PROVIDER_ADAPTER.md` refined with implementation specifics.
-- **Acceptance criteria**: admin can add/disable/drain a simulated provider and see health/circuit state change with no deploy.
-- **Deployment requirements**: Dev + Staging.
-- **Rollback strategy**: provider config changes are already versioned/reversible by design; app-level rollback otherwise standard.
+- **Dependencies**: Phase 1 (Gate C closed): `TenantDatabase` and the pre-commit authorization-coverage containment, `AuthorizationService` + `@RequiresPermission`, transactional `AuditWriter`, the OpenAPI pipeline, `/metrics`, `SecretsPort`, Redis, the `with-db-clone` mutation harness.
+- **Architecture**: `PROVIDER_ADAPTER.md`, as partitioned by ADR-013.
+- **Implementation scope**: §5a/§5b. **Not** in Phase 2 (ADR-013 PD-1, PD-2, PD-6): transactional outbox, worker/job harness, SIEM export, `provider_credentials`, real vendor adapters, message lifecycle, routing/failover, billing, reseller/white-label provider administration.
+- **DB changes**: `channels`, `providers`, `provider_capabilities` (2.1); `provider_health` (2.3). **Not** `provider_credentials` (deferred, ADR-013 F-1).
+- **API changes**: `/channels` (read-only), `/providers` (2.1–2.3). Platform scope only.
+- **Frontend changes**: provider list/detail and basic admin actions, polling — increment 2.6, separately authorized and gated.
+- **Tests**: the submission-time simulator matrix, health state machine, circuit breaker, hot reload without restart (`TESTING.md` §6u).
+- **Security checks**: platform-only access proven at the application and RLS layers; no credential or secret value persisted anywhere (`SECURITY.md` §3b).
+- **Observability**: bounded Prometheus health/circuit/test-send metrics and a provisioned Grafana dashboard; console polling. No live WebSocket dashboard (ADR-013 PD-8).
+- **Documentation**: `PROVIDER_ADAPTER.md` refined with implementation specifics as each increment lands.
+- **Acceptance criteria**: Gate D (§5c). In short — a platform administrator can add, disable and drain a simulated provider, test-send to it, and see its health and circuit state change, with no deploy and no restart.
+- **Deployment requirements**: "Dev + Staging" means local Docker Compose execution and disposable-clone CI/integration testing (ADR-013 PD-7). No deployment-artifact or Kubernetes work.
+- **Rollback strategy**: application-level rollback is standard; provider configuration is reversible by the admin operations themselves (enable/disable/drain). Routing-policy versioning and rollback are a later phase.
+
+### 5a. Phase 2 increments (ADR-013)
+
+| Step | Objective | Schema | Exit criterion |
+|---|---|---|---|
+| **2.0** | Scope freeze (this section, ADR-013) | — | ✅ frozen 02-Oct-2026 |
+| **2.1** | Channel & Provider Registry | `channels` (seeded), `providers`, `provider_capabilities`; permissions `providers.read`, `providers.manage` | Gate D.1 |
+| **2.2** | Adapter Contract & Simulator | none (permission `providers.test_send`) | Gate D.2 |
+| **2.3** | Health & Circuit Breaker | `provider_health` | Gate D.3 |
+| **2.4** | Hot Reload | none | Gate D.4 |
+| **2.5** | Credential Reference Contract — documentation and interface only | none | Gate D.5 |
+| **2.6** | Frontend console — separately authorized | none | Gate D.6 |
+
+**Execution order:** 2.1 → 2.2 → 2.3 → 2.4; 2.5 may run alongside 2.2; 2.6 after the 2.1–2.4 contract is stable.
+
+### 5b. Increment specifications
+
+Common to every backend increment: every route declares `@RequiresPermission` and asserts at `{ scopeType: 'platform', scopeId: null }` inside the request's `TenantDatabase.withTenant` transaction; every mutation is security-sensitive and audits in the same transaction at scope `platform` (ADR-013 F-4); the new routes appear in the route-coverage test, the committed OpenAPI snapshot and `FRONTEND_API_CONTRACT.md`; the general rate limiter applies; evidence runs on disposable clones only.
+
+**2.1 — Channel & Provider Registry**
+- *Objective*: the global channel and provider catalogue, administered by platform administrators.
+- *In scope*: `provider-registry` module (`apps/api/src/providers/` — controller, service, DTOs); schema and migration in `packages/db`; contracts (permission keys, audit actions, channel codes, status enums) in `packages/contracts`.
+- *DB*: `channels` (`id, code, display_name, status`; seeded `whatsapp, rcs, sms, email, voice`; read-only), `providers` (`id, channel_id, name, adapter_key, status ∈ {active, disabled, draining}, health_state ∈ {healthy, degraded, critical, offline}` default `healthy`, `circuit_state ∈ {closed, open, half_open}` default `closed`, timestamps), `provider_capabilities` (`provider_id, capability_key, value JSONB`). RLS enabled in the creating migration with the global-catalogue posture (ADR-013 F-3); `principals.int-spec.ts` classification; permission rows attached to `alendei_super_admin` only.
+- *API*: `GET /channels`, `GET /channels/:id`; `GET /providers`, `GET /providers/:id`, `POST /providers` (idempotent), `PATCH /providers/:id` (name only), `PUT /providers/:id/capabilities`, `POST /providers/:id/enable`, `/disable`, `/drain`. No `DELETE`.
+- *Permissions*: `providers.read` (reads), `providers.manage` (writes).
+- *Security*: platform-only at the application and RLS layers; tenant principals receive `403`/`404` per `API.md` §3a and see zero rows at the database; `adapter_key` validated against the code registry (ADR-013 F-9).
+- *Audit*: `provider.created`, `provider.updated`, `provider.capabilities_replaced`, `provider.enabled`, `provider.disabled`, `provider.drained`, with before/after.
+- *Tests*: CRUD and lifecycle transition matrix (illegal transition `409`, nothing changed); tenant/support/API-key refusal; RLS proof with the service bypassed; audit atomicity; idempotent create; OpenAPI.
+- *Mutation proofs*: `providers.manage` assertion removed (detected and contained, zero rows); RLS predicate widened to `true`; status-transition guard removed; audit write removed; `adapter_key` validation removed; OpenAPI drift.
+- *Acceptance*: a platform administrator creates, enables, disables and drains a provider; no other principal can read or change one.
+- *Exclusions*: credentials, adapters, health, circuit, routing fields, priority/weight, organization/reseller ownership.
+
+**2.2 — Adapter Contract & Simulator**
+- *Objective*: the vendor-neutral adapter contract and the only Phase 2 implementation.
+- *In scope*: `ProviderAdapter` and its value types in `packages/contracts`; the code-level adapter registry and `SimulatorAdapter` in `apps/api/src/provider-adapters/`; `POST /providers/:id/test-send`.
+- *Contract*: `capabilities()`, `healthCheck()`, `send()` (acceptance only, normalized failure taxonomy `PROVIDER_ADAPTER.md` §2) are implemented; `estimateCost()`, `checkStatus()`, `parseWebhook()` exist as interface members whose simulator implementation refuses with an explicit "not implemented in Phase 2" error and no behaviour (ADR-013 PD-6).
+- *Simulator*: `SUCCESS`, `TIMEOUT`, `500`, `429`, `INVALID_CREDENTIALS`, `INVALID_REQUEST`, `SLOW_RESPONSE`, selected per request (never by hard-coded branching); latency and timeout driven by an injectable clock/timer so tests are deterministic.
+- *DB*: none (the `providers.test_send` permission row).
+- *API*: `POST /providers/:id/test-send` — explicit single target, synthetic payload, rate-limited, returns the normalized result; persists **no** message and requires no `messages`/`message_attempts`/`webhook_events`.
+- *Permissions*: `providers.test_send`.
+- *Audit*: `provider.test_sent` (behaviour, normalized outcome, latency; never the payload body).
+- *Tests*: the seven-behaviour matrix and taxonomy mapping; a disabled or draining provider refuses test-send (`409`); no row in any message table; determinism (no wall-clock sleeps).
+- *Mutation proofs*: a behaviour mapped to the wrong outcome; `TIMEOUT` treated as success; test-send without `providers.test_send` (contained); a stub given behaviour; disabled-provider guard removed.
+- *Acceptance*: every submission-time behaviour is reproducible on demand through test-send.
+- *Exclusions*: delivery/webhook behaviours (Phase 3), real adapters, cost estimation, message persistence.
+
+**2.3 — Health & Circuit Breaker**
+- *Objective*: the provider health state machine and the circuit breaker, deterministically testable.
+- *In scope*: health and breaker services in `provider-registry`; `provider_health`; metrics; a Grafana dashboard provisioned under `infra/observability/`.
+- *Sample sources (only)*: test-send outcomes; `POST /providers/:id/health-check` (simulator `healthCheck()`); `POST /providers/:id/health` manual override (`source = manual`). No scheduler or background prober (ADR-013 F-6).
+- *DB*: `provider_health` (append-only: `id, provider_id, observed_at, outcome, latency_ms, health_state, circuit_state, source ∈ {automatic, manual}`), global-catalogue RLS, append-only trigger.
+- *API*: `POST /providers/:id/health-check`, `POST /providers/:id/health`, `GET /providers/:id/health` (recent samples).
+- *Permissions*: `providers.manage` (probe, override), `providers.read` (history).
+- *Audit*: `provider.health_checked`, `provider.health_changed`, `provider.health_overridden`, `provider.circuit_changed`.
+- *Tests*: full health transition matrix; breaker `CLOSED → OPEN → HALF_OPEN → CLOSED/OPEN` driven by an injected clock and fixed sample sequences; `OPEN` short-circuits test-send without calling the adapter; threshold boundaries; metrics.
+- *Mutation proofs*: threshold off-by-one; `HALF_OPEN` skipped; cooldown ignores the injected clock; short-circuit removed; manual override not audited; append-only trigger dropped (clone only).
+- *Acceptance*: a sequence of test-sends moves health and circuit state exactly as specified and is visible in metrics.
+- *Exclusions*: router integration, routing eligibility, routing policies, per-provider threshold administration, event publication.
+
+**2.4 — Hot Reload**
+- *Objective*: provider configuration changes take effect without restart.
+- *In scope*: an in-process registry/adapter cache in `provider-registry`; Redis pub/sub invalidation published after commit; a bounded-TTL backstop.
+- *DB / API / permissions*: none new.
+- *Audit*: none new (the triggering change is already audited).
+- *Tests*: two application instances in one test — a change through one is observed by the other without restart; a lost publication is bounded by the TTL; a disabled provider is refused by the other instance's next test-send.
+- *Mutation proofs*: invalidation publish removed; TTL backstop removed; invalidation published before commit.
+- *Acceptance*: change, then observe, with no restart and no deploy.
+- *Exclusions*: outbox-backed invalidation (residual, ADR-013).
+
+**2.5 — Credential Reference Contract (documentation and interface only)**
+- *Objective*: freeze the shape an adapter uses to obtain a credential, without storing any.
+- *In scope*: a `ProviderCredentialResolver` port type in `packages/contracts` returning a resolved secret only through `SecretsPort`; documentation in `PROVIDER_ADAPTER.md` §4a and `SECURITY.md` §3b. `SimulatorAdapter` uses no credential; `INVALID_CREDENTIALS` is a simulated behaviour.
+- *DB / API / permissions / audit*: none.
+- *Tests*: a static test that no Phase 2 table, DTO, log field or audit action carries a credential or secret value.
+- *Mutation proofs*: a secret-bearing column or response field introduced is caught.
+- *Acceptance*: contract documented; nothing persisted.
+- *Exclusions*: `provider_credentials`, ownership model (ADR-013 F-1), rotation, management, any real credential.
+
+**2.6 — Frontend console (separately authorized and gated)**
+- Provider list/detail, enable/disable/drain, test-send, health/circuit display by polling, against the frozen 2.1–2.4 contract; follows the 1C.4b precedent. No backend change.
+
+### 5c. Gate D — Phase 2 acceptance
+
+Objectively testable; each is pass/fail. Evidence runs on disposable clones, never on the canonical test database. Sub-gates D.1–D.6 close their increments; Gate D closes Phase 2.
+
+- **Registry correctness** — every 2.1 route behaves as specified; the lifecycle transition matrix is exact; illegal transitions `409` and change nothing; the seeded channel catalogue is read-only.
+- **Authorization and global-catalogue security** — only `providers.*` holders at platform scope succeed; organization, workspace, team, reseller, `alendei_support` and API-key principals are refused; with the service bypassed, a non-platform `acc_app` transaction sees zero catalogue rows and cannot write; `acc_auth`/`acc_relay` hold no grant; every new route is in the route-coverage test and inside the pre-commit coverage boundary.
+- **Simulator matrix** — the seven submission-time behaviours are reproducible on demand through test-send with the specified normalized outcomes; no message-table row is ever written.
+- **Health state machine** — every specified transition, and no other, for automatic and manual sources.
+- **Circuit breaker** — `CLOSED/OPEN/HALF_OPEN` transitions exact at threshold boundaries under an injected clock; `OPEN` short-circuits.
+- **Hot reload** — a change is observed by a second instance with no restart; the TTL backstop bounds a lost invalidation.
+- **Audit coverage** — every mutation and transition writes its ADR-013 F-4 action in the same transaction, with before/after and no secret material.
+- **OpenAPI consistency** — the generated spec covers every new route and matches the route table and `FRONTEND_API_CONTRACT.md`; `openapi:check` passes.
+- **Observability** — bounded health/circuit/test-send metrics exist and are proven; the Grafana dashboard is provisioned.
+- **Deterministic tests** — no wall-clock sleeps; clocks and latency are injected; repeated runs are identical.
+- **Mutation proofs** — each increment's listed mutations executed on disposable clones and caught, with failing test names recorded; authorization mutations are detected **and contained**.
+- **No credential secret persistence** — no table, column, log line, metric, audit row or response carries a credential or secret value; `provider_credentials` does not exist.
+- **No scope creep** — no outbox, worker harness, SIEM, routing, failover, billing, real adapter, message lifecycle, reseller/white-label or WebSocket code is introduced.
+- **Regression** — the full backend suite (1,577 at Gate C, plus the Phase 2 suites) is green with zero skipped tests; lint, typecheck, build, dependency audit and non-frontend formatting pass; migrations apply from empty, re-run as a no-op and leave no drift.
+- **Documentation** — `PROVIDER_ADAPTER.md`, `DATABASE.md`, `API.md`, `FRONTEND_API_CONTRACT.md`, `SECURITY.md`, `TESTING.md`, `OBSERVABILITY.md` and this roadmap describe exactly what exists.
+- **Explicitly not required at Gate D:** everything excluded by ADR-013; 2.6 is gated separately (D.6).
 
 ## 6. Phase 3 — WhatsApp
 
@@ -282,6 +385,7 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 - **Acceptance criteria**: a message can be sent, tracked through lifecycle states, and appear correctly in `message_events`/`audit_logs`, entirely via the simulator.
 - **Deployment requirements**: Dev + Staging.
 - **Rollback strategy**: standard; no financial/fallback complexity yet (single channel, single attempt).
+- **Handed forward by ADR-013 (for Phase 3's own scope freeze to decide, not committed here)**: the delivery/webhook simulator behaviours (`DELIVERY_DELAY`, `DELIVERY_FAILURE` webhook, `DUPLICATE_WEBHOOK`, `OUT_OF_ORDER_WEBHOOK`); `provider_credentials` and the ADR that freezes its ownership model (ADR-013 F-1); the transactional outbox and worker/job tenant-context harness if Phase 3's consumers require them (ADR-013 PD-1); the meaning of "Dev + Staging" while no deployment artifact exists (ADR-013 PD-7).
 
 ## 7. Phase 4 — SMS + RCS
 

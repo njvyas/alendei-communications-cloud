@@ -54,8 +54,8 @@ Two structurally different kinds of event exist, and the catalogue is organized 
 |---|---|---|
 | `alendei.tenancy.organization_created.v1` | tenancy | New organization provisioned |
 | `alendei.tenancy.user_role_granted.v1` | tenancy | Role assigned at a scope |
-| `alendei.providers.health_changed.v1` | provider-registry | Provider health state transition |
-| `alendei.providers.circuit_state_changed.v1` | provider-router | Breaker CLOSED/OPEN/HALF_OPEN transition |
+| `alendei.providers.health_changed.v1` | provider-registry | Provider health state transition — **designed, not emitted in Phase 2** (no outbox, ADR-013 PD-1; Phase 2 records transitions in `audit_logs`) |
+| `alendei.providers.circuit_state_changed.v1` | provider-router | Breaker CLOSED/OPEN/HALF_OPEN transition — **designed, not emitted in Phase 2** (ADR-013 PD-1; the Phase 2 breaker lives in `provider-registry`, router integration is a later phase) |
 | `alendei.routing.policy_activated.v1` | provider-router | A new `routing_policy_versions` row activated at some scope |
 | `alendei.webhooks.received.v1` | webhooks | Raw inbound webhook persisted (pre-processing) |
 | `alendei.webhooks.duplicate_detected.v1` | webhooks | Dedup constraint rejected a re-delivered inbound provider event |

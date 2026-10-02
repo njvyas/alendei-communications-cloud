@@ -36,7 +36,7 @@ For each candidate channel (in order), filters the provider set down to those th
 2. Suppression check (`suppressions`) — not on a DND/opt-out/bounce/DLT-block list.
 3. Regulatory check — e.g. India DLT template registration for SMS (flagged for verification against current TRAI/DLT rules — see `SECURITY.md` compliance note).
 4. Provider capability check (`provider_capabilities`) — e.g. media support, template approval status.
-5. Provider operational eligibility — health state not `OFFLINE`/`DRAINING`, circuit breaker not `OPEN` (per `PROVIDER_ADAPTER.md` §§5–6).
+5. Provider operational eligibility — administrative status `active` (not `disabled`/`draining`), health state not `OFFLINE`, circuit breaker not `OPEN` (per `PROVIDER_ADAPTER.md` §§5–6; `draining` is an administrative status, not a health state — ADR-013 F-5).
 6. Quota/rate check — org-level and provider-level sending quotas not exhausted.
 
 A channel with zero eligible providers is skipped entirely (Channel Router's next candidate is tried) rather than surfaced as a per-provider failure — this distinction matters for correct fallback semantics (§4 of `FALLBACK_ENGINE.md`).

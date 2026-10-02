@@ -213,7 +213,7 @@ Every prior attempt's outcome remains permanently on its own immutable `message_
 
 - **Provider Adapter Interface**: `send()`, `checkStatus()`, `handleWebhook()`, `capabilities()`, `healthCheck()`, `estimateCost()`.
 - **Provider Registry**: stores provider config, encrypted credentials, capabilities, and live health state; changes are hot-reloaded (DB row change + cache invalidation event), never requiring redeploy.
-- **Provider Health States**: `HEALTHY, DEGRADED, CRITICAL, OFFLINE, DRAINING`.
+- **Provider Health States**: `HEALTHY, DEGRADED, CRITICAL, OFFLINE`. `DRAINING` is an administrative provider status (`providers.status`: `active`, `disabled`, `draining`), not a health state (ADR-013 F-5).
 - **Circuit Breaker States**: `CLOSED, OPEN, HALF_OPEN` — a distinct, faster-reacting signal from health state; breaker state is derived from a rolling error/latency window per provider, health state can also be set manually (e.g., admin drain) or by longer-window SLO breach.
 
 ## 8. Routing & fallback (summary — full detail in `ROUTING_ENGINE.md` / `FALLBACK_ENGINE.md`)

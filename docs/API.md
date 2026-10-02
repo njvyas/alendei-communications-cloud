@@ -17,8 +17,8 @@ All public and console APIs are served under `/api/v1`. Breaking changes ship as
 | `/roles` | `rbac` | Role CRUD (custom roles), plus read of the platform role definitions. **Built in Phase 1B.5.4** (§3c) |
 | `/role-assignments` | `rbac` | Scope-bound role grant and revocation. **Built in Phase 1B.5.5** (§3c) |
 | `/permissions` | `rbac` | Permission catalogue (read-only, system-defined). **Built in Phase 1B.5.4** (§3c) |
-| `/channels` | `provider-registry` | Supported channel catalogue |
-| `/providers` | `provider-registry` | Provider CRUD, enable/disable/drain, capability config |
+| `/channels` | `provider-registry` | Supported channel catalogue — read-only, seeded. **Phase 2.1, frozen (ADR-013), not built**; platform scope only |
+| `/providers` | `provider-registry` | Provider create/read/update, enable/disable/drain, capability config (2.1); test-send (2.2); health check, manual health, health history (2.3). **Phase 2, frozen (ADR-013), not built**; platform scope only; no `DELETE`; no priority/weight/routing operations (later phases) |
 | `/routing` | `provider-router` | Routing policy CRUD, versioning, activation |
 | `/fallback-policies` | `fallback-engine` | Fallback chain CRUD |
 | `/messages` | `comms-api` | Send message, get message/attempt status |
