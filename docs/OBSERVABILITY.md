@@ -23,6 +23,7 @@ Safe, bounded labels for metrics: `environment`, `service`, `operation`, `channe
 | Category | Representative metrics (labels drawn only from the bounded set above) |
 |---|---|
 | API | request latency histogram (by `route`, `status`), error rate, rate-limit rejections |
+| Tenancy and sessions (Phase 1C, ROADMAP §4d) — **implemented** | `acc_organization_status_refusals_total` (by `status` = `suspended`/`closed`, `operation` = `access`/`mutation`): requests refused because the organization is suspended or closed (ADR-012 F-4/F-5), counted once per refused request where the API emits the refusal (`AllExceptionsFilter`); `acc_session_cap_evictions_total`: sessions revoked at sign-in to stay within `AUTH_MAX_SESSIONS_PER_USER` (F-11), counted after the login transaction commits. Proven by `apps/api/test/gate-c-metrics.sec-spec.ts` |
 | Queue | depth per topic/consumer group, consumer lag, processing latency |
 | Provider | per-provider send latency, success/failure rate (by `channel`, `provider`), circuit breaker state (as a gauge, by `provider`), health state (as a gauge, by `provider`) |
 | Delivery | delivery rate (delivered/sent) per `channel`/`provider`, fallback-trigger rate per `channel` |

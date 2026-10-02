@@ -769,6 +769,9 @@ export class OrganizationAdministrationService {
       // The caller can already read the status (`GET /organizations/:id`), so
       // naming it discloses nothing and makes the refusal actionable.
       details: { status },
+      // Counted as a refusal caused by organization status only when the
+      // organization is not active; reactivating an active one is not.
+      ...(status === 'active' ? {} : { logContext: { refusedOrganizationStatus: status } }),
     });
   }
 

@@ -4,6 +4,7 @@ import {
   HttpException,
   HttpStatus,
   Logger,
+  Optional,
   type ExceptionFilter,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
@@ -12,6 +13,7 @@ import { ERROR_CODES, isRetryableErrorCode, type ApiErrorResponse } from '@acc/c
 
 import { RequestContext } from '../context/request-context';
 import { AppException } from '../errors/app.exception';
+import { MetricsService } from '../../observability/metrics.service';
 
 interface NormalizedError {
   status: number;
@@ -46,6 +48,12 @@ const STATUS_CODE_FALLBACKS: Readonly<Record<number, string>> = {
 export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger(AllExceptionsFilter.name);
 
+  /**
+   * Optional so the filter can still be constructed on its own (as the test
+   * harness does); the application's `APP_FILTER` instance always receives it.
+   */
+  constructor(@Optional() private readonly metrics?: MetricsService) {}
+
   catch(exception: unknown, host: ArgumentsHost): void {
     const http = host.switchToHttp();
     const response = http.getResponse<Response>();
@@ -53,6 +61,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const correlationId = RequestContext.correlationId();
 
     const normalized = this.normalize(exception);
+    this.countOrganizationStatusRefusal(normalized);
 
     const body: ApiErrorResponse = {
       error: {
@@ -80,6 +89,31 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     response.status(normalized.status).json(body);
+  }
+
+  /**
+   * ROADMAP §4d: refusals caused by organization status are counted here, at
+   * the one point every refused request leaves the API, so each refused request
+   * is counted exactly once whichever layer refused it. The places that raise
+   * such a refusal (selection and API-key binding, ADR-012 F-4; the F-5 guard,
+   * the in-transaction `assertOrganizationActive` check and the organization
+   * service) name the refused status in `logContext.refusedOrganizationStatus`;
+   * an error without it — including a lifecycle conflict on an active
+   * organization — is not counted. `operation` is `access` for the F-4 `403`s
+   * and `mutation` for the F-5 `409`.
+   *
+   * The status is read from the error rather than written here as literals:
+   * the committed OpenAPI plugin metadata (Phase 1C.3) orders enum values by
+   * TypeScript's literal-type creation order, which new literals in this
+   * early-loaded file would change.
+   */
+  private countOrganizationStatusRefusal(error: NormalizedError): void {
+    const status = error.logContext?.['refusedOrganizationStatus'];
+    if (!this.metrics || typeof status !== 'string') return;
+    this.metrics.organizationStatusRefusals.inc({
+      status,
+      operation: error.code === ERROR_CODES.ORGANIZATION_LIFECYCLE_CONFLICT ? 'mutation' : 'access',
+    });
   }
 
   private normalize(exception: unknown): NormalizedError {

@@ -66,6 +66,7 @@ export async function assertOrganizationActive(tx: Transaction, orgId: string): 
       code: ERROR_CODES.ORGANIZATION_LIFECYCLE_CONFLICT,
       message: `This organization is ${org.status}; the operation is not permitted in that state`,
       details: { status: org.status },
+      logContext: { refusedOrganizationStatus: org.status },
     });
   }
 }

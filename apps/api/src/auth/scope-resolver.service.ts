@@ -62,7 +62,8 @@ export function organizationInactiveError(
         : ERROR_CODES.TENANCY_ORGANIZATION_CLOSED,
     message:
       status === 'suspended' ? 'This organization is suspended' : 'This organization is closed',
-    logContext: { organizationId },
+    // `refusedOrganizationStatus` is what the refusal counter reads (ROADMAP §4d).
+    logContext: { organizationId, refusedOrganizationStatus: status },
   });
 }
 

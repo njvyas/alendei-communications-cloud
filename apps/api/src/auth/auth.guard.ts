@@ -178,6 +178,7 @@ export class AuthGuard implements CanActivate {
         code: ERROR_CODES.ORGANIZATION_LIFECYCLE_CONFLICT,
         message: `This organization is ${principal.organizationStatus}; its data cannot be changed`,
         details: { status: principal.organizationStatus },
+        logContext: { refusedOrganizationStatus: principal.organizationStatus },
       });
     }
 

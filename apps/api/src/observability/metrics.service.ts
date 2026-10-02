@@ -73,6 +73,10 @@ export class MetricsService implements OnModuleInit {
   readonly eventsPublished: Counter<'event_type' | 'outcome'>;
   readonly eventsProcessed: Counter<'consumer_group' | 'event_type' | 'outcome'>;
   readonly outboxBacklog: Gauge<'status'>;
+  /** Requests refused because the organization is suspended or closed (ROADMAP §4d, ADR-012 F-4/F-5). */
+  readonly organizationStatusRefusals: Counter<'status' | 'operation'>;
+  /** Live sessions revoked at sign-in to stay within `AUTH_MAX_SESSIONS_PER_USER` (ROADMAP §4d, ADR-012 F-11). */
+  readonly sessionCapEvictions: Counter<never>;
 
   constructor(private readonly config: AppConfigService) {
     this.registry.setDefaultLabels({
@@ -115,6 +119,18 @@ export class MetricsService implements OnModuleInit {
       name: 'acc_outbox_backlog',
       help: 'Outbox rows awaiting publication, by status.',
       labelNames: ['status'],
+    });
+
+    this.organizationStatusRefusals = this.counter({
+      name: 'acc_organization_status_refusals_total',
+      help: 'Requests refused because the organization is suspended or closed, by organization status and by operation (access: the organization could not be selected or used; mutation: a change to its data was refused).',
+      labelNames: ['status', 'operation'],
+    });
+
+    this.sessionCapEvictions = this.counter({
+      name: 'acc_session_cap_evictions_total',
+      help: 'Live sessions revoked at sign-in because the user reached AUTH_MAX_SESSIONS_PER_USER.',
+      labelNames: [],
     });
   }
 

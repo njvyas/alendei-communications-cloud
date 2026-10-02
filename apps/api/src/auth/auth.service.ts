@@ -17,6 +17,7 @@ import { UserLifecycleService } from '../iam/user-lifecycle.service';
 import { hashRefreshToken } from '../iam/refresh-token';
 import { TenantDatabase } from '../database/tenant-database.service';
 import { AccessTokenService } from './jwt.service';
+import { MetricsService } from '../observability/metrics.service';
 
 export interface RequestMeta {
   readonly ip: string | null;
@@ -61,6 +62,7 @@ export class AuthService {
     private readonly sessions: SessionService,
     private readonly tokens: AccessTokenService,
     private readonly audit: AuditWriter,
+    private readonly metrics: MetricsService,
   ) {}
 
   /**
@@ -80,6 +82,7 @@ export class AuthService {
         message: 'Email or password is incorrect',
       });
 
+    let evictedCount = 0;
     const outcome = await this.db.auth.transaction(async (tx) => {
       const user = await this.users.findByEmail(tx as Transaction, email);
 
@@ -153,6 +156,7 @@ export class AuthService {
         ip: meta.ip,
         userAgent: meta.userAgent,
       });
+      evictedCount = evicted.length;
       for (const evictedId of evicted) {
         await this.audit.record(
           {
@@ -205,6 +209,9 @@ export class AuthService {
     });
 
     if (!outcome) throw invalid();
+    // Counted only once the login transaction has committed, so a rolled-back
+    // sign-in never reports an eviction that did not happen.
+    if (evictedCount > 0) this.metrics.sessionCapEvictions.inc(evictedCount);
     return outcome;
   }
 
