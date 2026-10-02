@@ -23,12 +23,15 @@ import { REQUIRES_PERMISSION, type RequiredPermission } from './requires-permiss
  *
  *   - For a **read**, the response is suppressed before it reaches the caller,
  *     so no unauthorized data is disclosed.
- *   - For a **mutation**, the write has already committed by the time this runs.
- *     The response still fails closed and the operator gets a loud error, but
- *     the guarantee that a mutation was authorized comes from the service's own
- *     check running before it — not from here. The structural guarantee is §6n
- *     case 30's route-table assertion, which fails the build rather than the
- *     request.
+ *   - For a **mutation**, this interceptor cannot help on its own: by the time
+ *     `map` runs, the handler's transaction has committed. So before calling
+ *     the handler it publishes the declaration into the request context, and
+ *     `TenantDatabase` repeats the comparison as the last step *inside* every
+ *     writing tenant transaction, before commit — a missing check rolls the
+ *     write and its success audit row back. The guarantee that a mutation was
+ *     authorized still comes from the service's own check running before it;
+ *     the structural guarantee is §6n case 30's route-table assertion, which
+ *     fails the build rather than the request.
  *
  * It never authorizes anything. It compares what was declared with what was
  * done, and a mismatch is a programming error reported as one.
@@ -48,6 +51,7 @@ export class AuthorizationCoverageInterceptor implements NestInterceptor {
     );
     if (!required) return next.handle();
 
+    RequestContext.declarePermission(String(required.permission));
     return next.handle().pipe(
       map((body) => {
         const performed = RequestContext.authorizationChecks();

@@ -53,12 +53,14 @@ export interface RequiredPermission {
  *      registered route table rather than by review.
  *   2. **A runtime cross-check.** `AuthorizationCoverageInterceptor` verifies
  *      that the declared permission was actually asserted during the request,
- *      and fails the response closed if it was not.
+ *      and fails the response closed if it was not; `TenantDatabase` repeats
+ *      the comparison before a writing transaction commits, so an unchecked
+ *      mutation rolls back.
  *
  * What the runtime cross-check does and does not buy is stated exactly in
- * `SECURITY.md`: it suppresses an unauthorized *response*, and for a mutation
- * the structural guarantee is the route-table assertion plus the service's own
- * check, which runs before the write.
+ * `SECURITY.md`: it suppresses an unauthorized *response* and contains an
+ * unchecked *write*, and the authorization guarantee remains the route-table
+ * assertion plus the service's own check, which runs before the write.
  */
 export const RequiresPermission = (
   permission: PermissionKey | string,

@@ -12,7 +12,7 @@ import { AppException } from '../common/errors/app.exception';
 import { RequestContext } from '../common/context/request-context';
 import { actorFromPrincipal } from '../audit/audit-actor';
 import { AuditWriter } from '../audit/audit-writer.service';
-import { TenantDatabase } from '../database/tenant-database.service';
+import { DENIAL_RECORD, TenantDatabase } from '../database/tenant-database.service';
 import { PermissionEvaluator } from './permission-evaluator.service';
 import { ScopeChainResolver } from './scope-chain-resolver.service';
 
@@ -208,6 +208,9 @@ export class AuthorizationService {
             },
             auditTx,
           ),
+        // A refusal record, not a mutation: committed even when the refused
+        // check was a precondition and the route's declared one never ran.
+        { coverageExempt: DENIAL_RECORD },
       );
     } catch (failure) {
       // Observable to the operator, opaque to the requester: the exception

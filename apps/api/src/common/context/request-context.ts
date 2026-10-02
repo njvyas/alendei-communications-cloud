@@ -32,6 +32,16 @@ export interface RequestContextStore {
    * fail-closed direction for the interceptor that reads it.
    */
   authorizationChecks?: string[];
+  /**
+   * The permission the matched route declared with `@RequiresPermission`, set
+   * by `AuthorizationCoverageInterceptor` before the handler runs.
+   *
+   * Read by `TenantDatabase` just before a writing transaction commits, so a
+   * mutation whose declared permission was never checked is rolled back rather
+   * than committed and then reported. Like `authorizationChecks`, bookkeeping —
+   * never an input to an authorization decision.
+   */
+  declaredPermission?: string;
 }
 
 const storage = new AsyncLocalStorage<RequestContextStore>();
@@ -79,5 +89,15 @@ export const RequestContext = {
 
   authorizationChecks(): readonly string[] {
     return storage.getStore()?.authorizationChecks ?? [];
+  },
+
+  declarePermission(permission: string): void {
+    const store = storage.getStore();
+    if (store) store.declaredPermission = permission;
+  },
+
+  /** The current route's declared permission, or `null` outside a declared route. */
+  declaredPermission(): string | null {
+    return storage.getStore()?.declaredPermission ?? null;
   },
 };
