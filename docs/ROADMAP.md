@@ -48,6 +48,8 @@ Phase 8's sub-phases (8A–8G) implement the Engagement Layer and Experience App
 
 ## 4. Phase 1 — Foundation
 
+**Status: COMPLETE.** Gate C (§4d) APPROVED / CLOSED, 02-Oct-2026 (`DECISIONS.md` ADR-012, "Gate C closure"). Phase 2 is authorized to begin after its read-only scope audit.
+
 - **Objectives**: repo scaffolding (NestJS modular monolith per `ARCHITECTURE.md` §4), CI pipeline skeleton, base Docker Compose stack, IAM/tenancy/RBAC foundation, initial migrations.
 - **Dependencies**: Phase 0 sign-off.
 - **Architecture**: implements `TENANCY.md`, `RBAC.md` module boundaries; adopts the migration tooling decision already resolved in Phase 0.1 (`DATABASE.md` §14 — Drizzle).
@@ -213,7 +215,7 @@ Objectively testable; each is pass/fail.
 
 **Phase 1C.3 — IMPLEMENTED AND CLOSED (PASS)** (Gate C.3, 29-Sep-2026; `03de8c0` … `3f9a77f`, checkpoint `bbbc72c`; closure record in `DECISIONS.md` ADR-012, "1C.3 closure"). **Overall Phase 1C remains open**: Gate C (§4d) is not passed, Phase 1C.4a is IMPLEMENTED AND CLOSED (PASS) (Gate C.4a, 30-Sep-2026; checkpoint `91607aa`; closure record in `DECISIONS.md` ADR-012, "1C.4a closure"); Phase 1C.4b is IMPLEMENTED AND CLOSED (PASS) (Gate C.4b, 01-Oct-2026; checkpoint `4e7effd`; closure record in `DECISIONS.md` ADR-012, "1C.4b closure").
 
-**Gate C (§4d) — remediation implemented, decision pending.** Every ADR-012 increment is closed; ADR-012 defines no further Phase 1C increment. The Gate C readiness audit's two failing criteria (Observability, Regression) were remediated at `c640e82` and `4fb752e`, with the evidence and the eleven named mutations in `TESTING.md` §6t and the record in `DECISIONS.md` ADR-012, "Gate C readiness remediation". Gate C itself is not yet passed.
+**Gate C (§4d) — APPROVED / CLOSED** (user decision, 02-Oct-2026; closure record in `DECISIONS.md` ADR-012, "Gate C closure"). Every ADR-012 increment is closed. The Gate C readiness audit's two failing criteria (Observability, Regression) were remediated at `c640e82` and `4fb752e`, and the M02/M03 authorization-coverage containment at `d16d46f`; evidence and the eleven named mutations are in `TESTING.md` §6t. All 26 current mutating `@RequiresPermission` routes are covered before commit; regression 1,577/1,577 with no skipped tests. **Phase 1C, and with it Phase 1 — Foundation, is complete.**
 
 | Step | Objective | Schema | Exit criterion |
 |---|---|---|---|
