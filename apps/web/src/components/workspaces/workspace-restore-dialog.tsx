@@ -39,7 +39,9 @@ export function WorkspaceRestoreDialog({
     } catch (err: unknown) {
       if (err instanceof ApiError) {
         if (err.status === 409) {
-          setErrorMessage('Cannot restore workspace: workspace is not archived or organization is suspended/closed.');
+          setErrorMessage(
+            'Cannot restore workspace: workspace is not archived or organization is suspended/closed.',
+          );
         } else if (err.status === 403) {
           setErrorMessage('You do not have permission to restore workspaces.');
         } else {
@@ -61,11 +63,16 @@ export function WorkspaceRestoreDialog({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl">
-        <h2 id="restore-workspace-title" className="text-lg font-semibold tracking-tight text-[var(--color-ink)]">
+        <h2
+          id="restore-workspace-title"
+          className="text-lg font-semibold tracking-tight text-[var(--color-ink)]"
+        >
           Restore Workspace
         </h2>
         <p className="mt-2 text-xs text-[var(--color-ink-muted)] leading-relaxed">
-          Restoring <span className="font-semibold text-[var(--color-ink)]">{workspace.name}</span> will re-enable creating new teams, assigning new role grants, and creating API keys within it.
+          Restoring <span className="font-semibold text-[var(--color-ink)]">{workspace.name}</span>{' '}
+          will re-enable creating new teams, assigning new role grants, and creating API keys within
+          it.
         </p>
 
         {errorMessage && (

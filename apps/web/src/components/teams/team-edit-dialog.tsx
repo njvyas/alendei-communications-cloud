@@ -73,7 +73,10 @@ export function TeamEditDialog({ isOpen, team, onClose, onSuccess }: TeamEditDia
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl">
-        <h2 id="edit-team-title" className="text-lg font-semibold tracking-tight text-[var(--color-ink)]">
+        <h2
+          id="edit-team-title"
+          className="text-lg font-semibold tracking-tight text-[var(--color-ink)]"
+        >
           Edit Team
         </h2>
         <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
@@ -88,7 +91,10 @@ export function TeamEditDialog({ isOpen, team, onClose, onSuccess }: TeamEditDia
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div>
-            <label htmlFor="edit-team-name" className="block text-xs font-medium text-[var(--color-ink)]">
+            <label
+              htmlFor="edit-team-name"
+              className="block text-xs font-medium text-[var(--color-ink)]"
+            >
               Team Name <span className="text-[var(--color-bad)]">*</span>
             </label>
             <input

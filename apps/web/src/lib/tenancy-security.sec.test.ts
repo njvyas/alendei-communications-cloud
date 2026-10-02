@@ -143,9 +143,20 @@ describe('Tenancy Administration Security Invariants & Boundary Enforcement', ()
   // SEC-3: Teams Endpoints Strictly Omit orgId to Prevent 400 VALIDATION_FAILED
   // ---------------------------------------------------------------------------
   it('SEC-3: teamsApi strictly omits orgId from query params, create body, and update body', async () => {
-    await teamsApi.list({ workspaceId: WS_ID, orgId: 'unauthorized-org' } as unknown as Parameters<typeof teamsApi.list>[0]);
-    await teamsApi.create({ workspaceId: WS_ID, name: 'Team Alpha', orgId: 'unauthorized-org' } as unknown as Parameters<typeof teamsApi.create>[0]);
-    await teamsApi.update(TEAM_ID, { name: 'Team Beta', orgId: 'unauthorized-org', workspaceId: WS_ID, status: 'archived' } as unknown as Parameters<typeof teamsApi.update>[1]);
+    await teamsApi.list({ workspaceId: WS_ID, orgId: 'unauthorized-org' } as unknown as Parameters<
+      typeof teamsApi.list
+    >[0]);
+    await teamsApi.create({
+      workspaceId: WS_ID,
+      name: 'Team Alpha',
+      orgId: 'unauthorized-org',
+    } as unknown as Parameters<typeof teamsApi.create>[0]);
+    await teamsApi.update(TEAM_ID, {
+      name: 'Team Beta',
+      orgId: 'unauthorized-org',
+      workspaceId: WS_ID,
+      status: 'archived',
+    } as unknown as Parameters<typeof teamsApi.update>[1]);
 
     const listCall = fetchCalls[0]!;
     assert.ok(!listCall.url.includes('orgId='), 'Query string must not contain orgId');
@@ -170,7 +181,12 @@ describe('Tenancy Administration Security Invariants & Boundary Enforcement', ()
   it('SEC-4: workspacesApi.update strips slug, isDefault, status, and orgId from request body', async () => {
     await workspacesApi.update(WS_ID, {
       name: 'Renamed Workspace',
-      ...({ slug: 'illegal-slug', isDefault: false, status: 'archived', orgId: ORG_B } as unknown as Record<string, unknown>),
+      ...({
+        slug: 'illegal-slug',
+        isDefault: false,
+        status: 'archived',
+        orgId: ORG_B,
+      } as unknown as Record<string, unknown>),
     });
 
     const updateCall = fetchCalls[0]!;
@@ -265,7 +281,13 @@ describe('Tenancy Administration Security Invariants & Boundary Enforcement', ()
         }
         return new Response(
           JSON.stringify({
-            data: { id: WS_ID, name: 'Retry Ws', slug: 'retry-ws', status: 'active', isDefault: false },
+            data: {
+              id: WS_ID,
+              name: 'Retry Ws',
+              slug: 'retry-ws',
+              status: 'active',
+              isDefault: false,
+            },
           }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
@@ -283,8 +305,14 @@ describe('Tenancy Administration Security Invariants & Boundary Enforcement', ()
     assert.equal(res.data.name, 'Retry Ws');
 
     assert.equal(fetchCalls.length, 2);
-    assert.equal((fetchCalls[0]!.options.headers as Record<string, string>)['Idempotency-Key'], fixedKey);
-    assert.equal((fetchCalls[1]!.options.headers as Record<string, string>)['Idempotency-Key'], fixedKey);
+    assert.equal(
+      (fetchCalls[0]!.options.headers as Record<string, string>)['Idempotency-Key'],
+      fixedKey,
+    );
+    assert.equal(
+      (fetchCalls[1]!.options.headers as Record<string, string>)['Idempotency-Key'],
+      fixedKey,
+    );
   });
 
   // ---------------------------------------------------------------------------

@@ -140,7 +140,10 @@ export async function assertNoTokensInStorage(page: Page): Promise<void> {
     const localKeys = Object.keys(localStorage);
     const sessionKeys = Object.keys(sessionStorage);
     const localEntries = localKeys.map((k) => ({ key: k, val: localStorage.getItem(k) ?? '' }));
-    const sessionEntries = sessionKeys.map((k) => ({ key: k, val: sessionStorage.getItem(k) ?? '' }));
+    const sessionEntries = sessionKeys.map((k) => ({
+      key: k,
+      val: sessionStorage.getItem(k) ?? '',
+    }));
     const jsCookie = document.cookie;
 
     // IndexedDB sweep
@@ -175,7 +178,8 @@ export async function assertNoTokensInStorage(page: Page): Promise<void> {
   // High-entropy token or API key secret pattern (alphanumeric, at least 32 characters)
   const sensitiveEntropyPattern = /^(?=.*[a-z])(?=.*[0-9])[A-Za-z0-9_-]{32,}$/;
   // Key names that should never store credentials
-  const tokenKeyPattern = /(token|jwt|bearer|secret|credential|auth_token|access_token|refresh_token)/i;
+  const tokenKeyPattern =
+    /(token|jwt|bearer|secret|credential|auth_token|access_token|refresh_token)/i;
 
   // 1. Verify localStorage
   for (const { key, val } of storageState.localEntries) {
@@ -316,7 +320,9 @@ export async function assertExactSecretNotInStorage(page: Page, secret: string):
                         try {
                           const records = JSON.stringify(getAllReq.result);
                           if (records && records.includes(targetSecret)) {
-                            occurrences.push(`IndexedDB [${dbName}.${storeName}] record contains secret`);
+                            occurrences.push(
+                              `IndexedDB [${dbName}.${storeName}] record contains secret`,
+                            );
                           }
                         } catch {
                           // Ignore serialization
@@ -361,7 +367,9 @@ export async function assertExactSecretNotInStorage(page: Page, secret: string):
                 if (res) {
                   const bodyText = await res.clone().text();
                   if (bodyText && bodyText.includes(targetSecret)) {
-                    occurrences.push(`CacheStorage [${cName}] response body for "${req.url}" contains secret`);
+                    occurrences.push(
+                      `CacheStorage [${cName}] response body for "${req.url}" contains secret`,
+                    );
                   }
                 }
               } catch {

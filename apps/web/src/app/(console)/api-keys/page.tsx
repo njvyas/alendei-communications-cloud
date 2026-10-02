@@ -230,8 +230,8 @@ export default function ApiKeysPage() {
         <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center">
           <p className="text-base font-semibold text-[var(--color-bad)]">Access Forbidden</p>
           <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-            You do not hold the required <code className="font-mono">api_keys.read</code> permission in this
-            organization.
+            You do not hold the required <code className="font-mono">api_keys.read</code> permission
+            in this organization.
           </p>
         </div>
       ) : isLoading ? (
@@ -247,20 +247,24 @@ export default function ApiKeysPage() {
             <>
               <p className="text-base font-semibold text-[var(--color-bad)]">Access Forbidden</p>
               <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-                You do not hold the required <code className="font-mono">api_keys.read</code> permission in this
-                organization.
+                You do not hold the required <code className="font-mono">api_keys.read</code>{' '}
+                permission in this organization.
               </p>
             </>
           ) : error instanceof ApiError && error.status === 429 ? (
             <>
-              <p className="text-base font-semibold text-[var(--color-warn)]">Rate Limit Exceeded</p>
+              <p className="text-base font-semibold text-[var(--color-warn)]">
+                Rate Limit Exceeded
+              </p>
               <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
                 Too many requests. Please wait a few moments before trying again.
               </p>
             </>
           ) : (
             <>
-              <p className="text-base font-semibold text-[var(--color-bad)]">Failed to Load API Keys</p>
+              <p className="text-base font-semibold text-[var(--color-bad)]">
+                Failed to Load API Keys
+              </p>
               <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
                 {error instanceof ApiError ? error.message : 'An unexpected error occurred.'}
               </p>
@@ -278,7 +282,9 @@ export default function ApiKeysPage() {
         <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-12 text-center">
           {isFiltered ? (
             <>
-              <p className="text-base font-semibold text-[var(--color-ink)]">No matching API keys found</p>
+              <p className="text-base font-semibold text-[var(--color-ink)]">
+                No matching API keys found
+              </p>
               <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
                 Try adjusting your filters, scope, or search query.
               </p>
@@ -292,7 +298,9 @@ export default function ApiKeysPage() {
             </>
           ) : (
             <>
-              <p className="text-base font-semibold text-[var(--color-ink)]">No API keys created yet</p>
+              <p className="text-base font-semibold text-[var(--color-ink)]">
+                No API keys created yet
+              </p>
               <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
                 Mint an API key to enable secure machine-to-machine integrations.
               </p>
@@ -340,10 +348,15 @@ export default function ApiKeysPage() {
               </thead>
               <tbody className="divide-y divide-[var(--color-border-subtle)]">
                 {apiKeys.map((key) => (
-                  <tr key={key.id} className="hover:bg-[var(--color-surface-raised)]/50 transition-colors">
+                  <tr
+                    key={key.id}
+                    className="hover:bg-[var(--color-surface-raised)]/50 transition-colors"
+                  >
                     <td className="px-4 py-3">
                       <div className="font-semibold text-[var(--color-ink)]">{key.name}</div>
-                      <code className="font-mono text-[11px] text-[var(--color-ink-muted)]">{key.prefix}…</code>
+                      <code className="font-mono text-[11px] text-[var(--color-ink-muted)]">
+                        {key.prefix}…
+                      </code>
                     </td>
                     <td className="px-4 py-3">
                       <span className="inline-flex rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] px-2 py-0.5 text-[10px] font-medium capitalize text-[var(--color-ink)]">
@@ -352,7 +365,10 @@ export default function ApiKeysPage() {
                     </td>
                     <td className="px-4 py-3">
                       <span className="inline-flex items-center gap-1.5 capitalize text-[var(--color-ink)]">
-                        <StatusDot tone={STATUS_TONES[key.status] ?? 'unknown'} label={key.status} />
+                        <StatusDot
+                          tone={STATUS_TONES[key.status] ?? 'unknown'}
+                          label={key.status}
+                        />
                       </span>
                     </td>
                     <td className="px-4 py-3 text-[var(--color-ink-muted)]">

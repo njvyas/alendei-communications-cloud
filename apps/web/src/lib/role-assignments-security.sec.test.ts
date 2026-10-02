@@ -43,7 +43,11 @@ describe('Role Assignments Security Invariants & Boundary Enforcement', () => {
 
   const createMockAuthorization = (
     orgId: string,
-    permissions: string[] = ['role_assignments.read', 'role_assignments.grant', 'role_assignments.revoke'],
+    permissions: string[] = [
+      'role_assignments.read',
+      'role_assignments.grant',
+      'role_assignments.revoke',
+    ],
   ): EffectiveAuthorization => ({
     actorType: 'user',
     userId: '01955b0a-7b3b-7411-9a4f-adminuser111',
@@ -107,10 +111,13 @@ describe('Role Assignments Security Invariants & Boundary Enforcement', () => {
       handle: (_url, options) => {
         const headers = options.headers as Record<string, string>;
         assert.equal(headers['X-Acc-Organization'], ORG_A);
-        return new Response(JSON.stringify({ data: [], page: { nextCursor: null, hasMore: false, limit: 10 } }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return new Response(
+          JSON.stringify({ data: [], page: { nextCursor: null, hasMore: false, limit: 10 } }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        );
       },
     });
 
@@ -184,10 +191,13 @@ describe('Role Assignments Security Invariants & Boundary Enforcement', () => {
       handle: (_url, options) => {
         const headers = options.headers as Record<string, string>;
         assert.equal(headers['X-Acc-Organization'], ORG_A);
-        return new Response(JSON.stringify({ data: [], page: { nextCursor: null, hasMore: false, limit: 10 } }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return new Response(
+          JSON.stringify({ data: [], page: { nextCursor: null, hasMore: false, limit: 10 } }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        );
       },
     });
 
@@ -296,7 +306,11 @@ describe('Role Assignments Security Invariants & Boundary Enforcement', () => {
             error: {
               code: 'AUTHZ_SCOPE_TYPE_NOT_ADMITTED',
               message: 'This role cannot be granted at organization scope',
-              details: { roleKey: 'workspace_lead', allowedScopeTypes: ['workspace'], requested: 'organization' },
+              details: {
+                roleKey: 'workspace_lead',
+                allowedScopeTypes: ['workspace'],
+                requested: 'organization',
+              },
               correlationId: 'corr-scope-admit',
               retryable: false,
             },
@@ -390,7 +404,8 @@ describe('Role Assignments Security Invariants & Boundary Enforcement', () => {
           JSON.stringify({
             error: {
               code: 'VALIDATION_FAILED',
-              message: 'Validation failed: scopeType must be one of reseller, organization, workspace, team',
+              message:
+                'Validation failed: scopeType must be one of reseller, organization, workspace, team',
               correlationId: 'corr-val-scope',
               retryable: false,
             },
@@ -589,7 +604,11 @@ describe('Role Assignments Security Invariants & Boundary Enforcement', () => {
             error: {
               code: 'AUTHZ_SCOPE_TYPE_NOT_ADMITTED',
               message: 'This role cannot be granted at team scope',
-              details: { roleKey: 'org_admin', allowedScopeTypes: ['organization'], requested: 'team' },
+              details: {
+                roleKey: 'org_admin',
+                allowedScopeTypes: ['organization'],
+                requested: 'team',
+              },
               correlationId: 'corr-scope-422',
               retryable: false,
             },
@@ -630,7 +649,8 @@ describe('Role Assignments Security Invariants & Boundary Enforcement', () => {
 
     let deleteAttempts = 0;
     mockHandlers.push({
-      match: (url, options) => url.includes('/role-assignments/grant-last-admin') && options.method === 'DELETE',
+      match: (url, options) =>
+        url.includes('/role-assignments/grant-last-admin') && options.method === 'DELETE',
       handle: () => {
         deleteAttempts++;
         return new Response(
@@ -694,7 +714,17 @@ describe('Role Assignments Security Invariants & Boundary Enforcement', () => {
         assert.equal(headers['X-Acc-Organization'], ORG_A);
         return new Response(
           JSON.stringify({
-            data: { id: 'g-1', userId: USER_ID, roleId: 'r-1', roleKey: 'custom', orgId: ORG_A, scopeType: 'organization', scopeId: ORG_A, grantedBy: 'adm', createdAt: new Date().toISOString() },
+            data: {
+              id: 'g-1',
+              userId: USER_ID,
+              roleId: 'r-1',
+              roleKey: 'custom',
+              orgId: ORG_A,
+              scopeType: 'organization',
+              scopeId: ORG_A,
+              grantedBy: 'adm',
+              createdAt: new Date().toISOString(),
+            },
           }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
@@ -721,7 +751,8 @@ describe('Role Assignments Security Invariants & Boundary Enforcement', () => {
     });
 
     mockHandlers.push({
-      match: (url, options) => url.includes('/role-assignments/grant-to-revoke') && options.method === 'DELETE',
+      match: (url, options) =>
+        url.includes('/role-assignments/grant-to-revoke') && options.method === 'DELETE',
       handle: (_url, options) => {
         const headers = options.headers as Record<string, string>;
         assert.equal(headers['X-Acc-Organization'], ORG_B);
@@ -870,7 +901,12 @@ describe('Role Assignments Security Invariants & Boundary Enforcement', () => {
         if (callCount === 1) {
           return new Response(
             JSON.stringify({
-              error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Rate limit', correlationId: 'c1', retryable: true },
+              error: {
+                code: 'RATE_LIMIT_EXCEEDED',
+                message: 'Rate limit',
+                correlationId: 'c1',
+                retryable: true,
+              },
             }),
             { status: 429, headers: { 'Content-Type': 'application/json' } },
           );
@@ -878,7 +914,17 @@ describe('Role Assignments Security Invariants & Boundary Enforcement', () => {
 
         return new Response(
           JSON.stringify({
-            data: { id: 'g-retry', userId: USER_ID, roleId: 'r-1', roleKey: 'role', orgId: ORG_A, scopeType: 'organization', scopeId: ORG_A, grantedBy: 'admin', createdAt: new Date().toISOString() },
+            data: {
+              id: 'g-retry',
+              userId: USER_ID,
+              roleId: 'r-1',
+              roleKey: 'role',
+              orgId: ORG_A,
+              scopeType: 'organization',
+              scopeId: ORG_A,
+              grantedBy: 'admin',
+              createdAt: new Date().toISOString(),
+            },
           }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );

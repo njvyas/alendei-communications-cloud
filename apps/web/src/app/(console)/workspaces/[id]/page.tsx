@@ -25,11 +25,7 @@ const STATUS_TONES: Record<ScopeStatus, StatusTone> = {
   archived: 'warn',
 };
 
-export default function WorkspaceDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const selectedOrgId = useSession((state) => state.selectedOrganizationId);
   const canReadWorkspaces = useHasPermission('workspaces.read');
@@ -130,16 +126,20 @@ export default function WorkspaceDetailPage({
     return (
       <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center">
         <p className="text-base font-semibold text-[var(--color-bad)]">
-          {isNotFound ? 'Workspace Not Found' : isForbidden ? 'Access Forbidden' : 'Failed to Load Workspace'}
+          {isNotFound
+            ? 'Workspace Not Found'
+            : isForbidden
+              ? 'Access Forbidden'
+              : 'Failed to Load Workspace'}
         </p>
         <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
           {isNotFound
             ? 'The requested workspace does not exist in this organization or is not accessible.'
             : isForbidden
-            ? 'You do not have permission to access this workspace.'
-            : wsError instanceof ApiError
-            ? wsError.message
-            : 'An unexpected error occurred.'}
+              ? 'You do not have permission to access this workspace.'
+              : wsError instanceof ApiError
+                ? wsError.message
+                : 'An unexpected error occurred.'}
         </p>
         <div className="mt-4 flex justify-center gap-3">
           <Link
@@ -181,7 +181,9 @@ export default function WorkspaceDetailPage({
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--color-border-subtle)] pb-6">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold tracking-tight text-[var(--color-ink)]">{workspace.name}</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-[var(--color-ink)]">
+              {workspace.name}
+            </h1>
             <StatusDot tone={STATUS_TONES[workspace.status]} label={workspace.status} />
             {workspace.isDefault && (
               <span className="rounded bg-[var(--color-surface-raised)] border border-[var(--color-border-subtle)] px-2 py-0.5 text-xs font-medium text-[var(--color-ink-muted)]">
@@ -231,7 +233,8 @@ export default function WorkspaceDetailPage({
         <div className="rounded-xl border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 p-4 text-xs text-[var(--color-warn)]">
           <p className="font-semibold">Workspace Archived</p>
           <p className="mt-1 leading-relaxed">
-            This workspace is archived. Creating new teams, granting new roles, or generating API keys targeting this workspace is blocked.
+            This workspace is archived. Creating new teams, granting new roles, or generating API
+            keys targeting this workspace is blocked.
           </p>
         </div>
       )}
@@ -250,11 +253,15 @@ export default function WorkspaceDetailPage({
           </div>
           <div>
             <dt className="text-[var(--color-ink-muted)]">Created</dt>
-            <dd className="text-[var(--color-ink)] mt-0.5">{new Date(workspace.createdAt).toLocaleString()}</dd>
+            <dd className="text-[var(--color-ink)] mt-0.5">
+              {new Date(workspace.createdAt).toLocaleString()}
+            </dd>
           </div>
           <div>
             <dt className="text-[var(--color-ink-muted)]">Updated</dt>
-            <dd className="text-[var(--color-ink)] mt-0.5">{new Date(workspace.updatedAt).toLocaleString()}</dd>
+            <dd className="text-[var(--color-ink)] mt-0.5">
+              {new Date(workspace.updatedAt).toLocaleString()}
+            </dd>
           </div>
         </dl>
       </div>
@@ -294,11 +301,15 @@ export default function WorkspaceDetailPage({
           </div>
         ) : teamsError ? (
           <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-6 text-center">
-            <p className="text-xs text-[var(--color-bad)]">Failed to load teams for this workspace.</p>
+            <p className="text-xs text-[var(--color-bad)]">
+              Failed to load teams for this workspace.
+            </p>
           </div>
         ) : teams.length === 0 ? (
           <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center">
-            <p className="text-sm font-semibold text-[var(--color-ink)]">No teams in this workspace</p>
+            <p className="text-sm font-semibold text-[var(--color-ink)]">
+              No teams in this workspace
+            </p>
             <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
               {isArchived
                 ? 'This workspace is archived and holds no teams.'
@@ -310,15 +321,26 @@ export default function WorkspaceDetailPage({
             <table className="w-full text-left text-xs">
               <thead className="border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] text-[var(--color-ink-muted)]">
                 <tr>
-                  <th scope="col" className="px-4 py-2.5 font-medium">Team Name</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">Status</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">Created</th>
-                  <th scope="col" className="px-4 py-2.5 text-right font-medium">Actions</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">
+                    Team Name
+                  </th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">
+                    Status
+                  </th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">
+                    Created
+                  </th>
+                  <th scope="col" className="px-4 py-2.5 text-right font-medium">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border-subtle)]">
                 {teams.map((team) => (
-                  <tr key={team.id} className="hover:bg-[var(--color-surface-raised)]/50 transition-colors">
+                  <tr
+                    key={team.id}
+                    className="hover:bg-[var(--color-surface-raised)]/50 transition-colors"
+                  >
                     <td className="px-4 py-2.5">
                       <Link
                         href={`/teams/${team.id}`}

@@ -421,10 +421,7 @@ describe('API Keys Security Invariants & Boundary Enforcement', () => {
       );
     }
 
-    assert(
-      !documentCookie.includes(secretValue),
-      'Secret detected in document.cookie!',
-    );
+    assert(!documentCookie.includes(secretValue), 'Secret detected in document.cookie!');
   });
 
   // ---------------------------------------------------------------------------
@@ -497,7 +494,10 @@ describe('API Keys Security Invariants & Boundary Enforcement', () => {
     // Check all captured console outputs
     for (const output of consoleOutputs) {
       assert(!output.includes(secretValue), 'Secret leaked to console output!');
-      assert(!output.includes(`${prefixValue}.${secretValue}`), 'Credential leaked to console output!');
+      assert(
+        !output.includes(`${prefixValue}.${secretValue}`),
+        'Credential leaked to console output!',
+      );
     }
   });
 

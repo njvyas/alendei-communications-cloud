@@ -10,7 +10,12 @@ interface WorkspaceEditDialogProps {
   readonly onSuccess: (ws: WorkspaceView) => void;
 }
 
-export function WorkspaceEditDialog({ isOpen, workspace, onClose, onSuccess }: WorkspaceEditDialogProps) {
+export function WorkspaceEditDialog({
+  isOpen,
+  workspace,
+  onClose,
+  onSuccess,
+}: WorkspaceEditDialogProps) {
   const [name, setName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -73,7 +78,10 @@ export function WorkspaceEditDialog({ isOpen, workspace, onClose, onSuccess }: W
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl">
-        <h2 id="edit-workspace-title" className="text-lg font-semibold tracking-tight text-[var(--color-ink)]">
+        <h2
+          id="edit-workspace-title"
+          className="text-lg font-semibold tracking-tight text-[var(--color-ink)]"
+        >
           Edit Workspace
         </h2>
         <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
@@ -88,15 +96,22 @@ export function WorkspaceEditDialog({ isOpen, workspace, onClose, onSuccess }: W
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div>
-            <label className="block text-xs font-medium text-[var(--color-ink-muted)]">Identifier Slug</label>
+            <label className="block text-xs font-medium text-[var(--color-ink-muted)]">
+              Identifier Slug
+            </label>
             <div className="mt-1 font-mono text-xs text-[var(--color-ink)] px-3 py-1.5 rounded-md bg-[var(--color-surface-raised)] border border-[var(--color-border-subtle)]">
               {workspace.slug}
             </div>
-            <p className="mt-0.5 text-[10px] text-[var(--color-ink-muted)]">Identifier slug is immutable.</p>
+            <p className="mt-0.5 text-[10px] text-[var(--color-ink-muted)]">
+              Identifier slug is immutable.
+            </p>
           </div>
 
           <div>
-            <label htmlFor="edit-ws-name" className="block text-xs font-medium text-[var(--color-ink)]">
+            <label
+              htmlFor="edit-ws-name"
+              className="block text-xs font-medium text-[var(--color-ink)]"
+            >
               Workspace Name <span className="text-[var(--color-bad)]">*</span>
             </label>
             <input

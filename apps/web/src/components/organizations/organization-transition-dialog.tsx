@@ -68,9 +68,13 @@ export function OrganizationTransitionDialog({
     } catch (err: unknown) {
       if (err instanceof ApiError) {
         if (err.status === 409) {
-          setErrorMessage(`Lifecycle conflict: organization is currently in status "${organization.status}".`);
+          setErrorMessage(
+            `Lifecycle conflict: organization is currently in status "${organization.status}".`,
+          );
         } else if (err.status === 403) {
-          setErrorMessage('You do not have permission to execute this platform lifecycle transition.');
+          setErrorMessage(
+            'You do not have permission to execute this platform lifecycle transition.',
+          );
         } else {
           setErrorMessage(err.message);
         }
@@ -90,7 +94,10 @@ export function OrganizationTransitionDialog({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl">
-        <h2 id="transition-org-title" className="text-lg font-semibold tracking-tight text-[var(--color-ink)]">
+        <h2
+          id="transition-org-title"
+          className="text-lg font-semibold tracking-tight text-[var(--color-ink)]"
+        >
           {ACTION_TITLES[action]}
         </h2>
 
@@ -98,19 +105,23 @@ export function OrganizationTransitionDialog({
           <div className="mt-3 rounded-md border border-[var(--color-bad)]/30 bg-[var(--color-bad)]/10 p-3 text-xs text-[var(--color-bad)]">
             <p className="font-semibold">Terminal Lifecycle Action</p>
             <p className="mt-1 text-[11px] leading-relaxed">
-              Closing an organization is permanent and cannot be undone or reactivated. Existing data is retained for audit and compliance, but all tenant access, credentials, and mutations will cease immediately.
+              Closing an organization is permanent and cannot be undone or reactivated. Existing
+              data is retained for audit and compliance, but all tenant access, credentials, and
+              mutations will cease immediately.
             </p>
           </div>
         ) : action === 'suspend' ? (
           <div className="mt-3 rounded-md border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 p-3 text-xs text-[var(--color-warn)]">
             <p className="font-semibold">Operational Suspension</p>
             <p className="mt-1 text-[11px] leading-relaxed">
-              Tenant members without platform grants will be refused selection and blocked from mutations. Organization API keys will immediately stop authenticating.
+              Tenant members without platform grants will be refused selection and blocked from
+              mutations. Organization API keys will immediately stop authenticating.
             </p>
           </div>
         ) : (
           <p className="mt-2 text-xs text-[var(--color-ink-muted)]">
-            Reactivating this organization will restore normal access for tenant members and resume API key authentication.
+            Reactivating this organization will restore normal access for tenant members and resume
+            API key authentication.
           </p>
         )}
 
@@ -122,7 +133,10 @@ export function OrganizationTransitionDialog({
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div>
-            <label htmlFor="transition-reason" className="block text-xs font-medium text-[var(--color-ink)]">
+            <label
+              htmlFor="transition-reason"
+              className="block text-xs font-medium text-[var(--color-ink)]"
+            >
               Reason (Optional, max 500 characters)
             </label>
             <textarea
@@ -139,8 +153,12 @@ export function OrganizationTransitionDialog({
 
           {requiresSlugConfirmation && (
             <div>
-              <label htmlFor="confirm-slug" className="block text-xs font-medium text-[var(--color-bad)]">
-                Type organization slug <code className="font-mono font-bold">{organization.slug}</code> to confirm:
+              <label
+                htmlFor="confirm-slug"
+                className="block text-xs font-medium text-[var(--color-bad)]"
+              >
+                Type organization slug{' '}
+                <code className="font-mono font-bold">{organization.slug}</code> to confirm:
               </label>
               <input
                 id="confirm-slug"
@@ -170,8 +188,8 @@ export function OrganizationTransitionDialog({
                 isClose
                   ? 'bg-[var(--color-bad)] hover:opacity-90'
                   : action === 'suspend'
-                  ? 'bg-[var(--color-warn)] hover:opacity-90'
-                  : 'bg-[var(--color-accent)] hover:opacity-90'
+                    ? 'bg-[var(--color-warn)] hover:opacity-90'
+                    : 'bg-[var(--color-accent)] hover:opacity-90'
               }`}
             >
               {isSubmitting ? (

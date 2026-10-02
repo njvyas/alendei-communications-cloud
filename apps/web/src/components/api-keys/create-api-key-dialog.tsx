@@ -307,7 +307,10 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
     if (!heldPermissions.has(p.key)) return false;
     if (!scopeSearch) return true;
     const q = scopeSearch.toLowerCase();
-    return p.key.toLowerCase().includes(q) || (p.description ? p.description.toLowerCase().includes(q) : false);
+    return (
+      p.key.toLowerCase().includes(q) ||
+      (p.description ? p.description.toLowerCase().includes(q) : false)
+    );
   });
 
   return (
@@ -326,10 +329,13 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
                 <span>✓</span> Key Successfully Created
               </div>
               <h2 id="create-api-key-title" className="mt-2 text-lg font-bold tracking-tight">
-                {createdResult.secret ? 'Save Your API Key Secret' : 'API Key Created (Idempotent Replay)'}
+                {createdResult.secret
+                  ? 'Save Your API Key Secret'
+                  : 'API Key Created (Idempotent Replay)'}
               </h2>
               <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-                Key name: <strong className="text-[var(--color-ink)]">{createdResult.name}</strong> • Prefix:{' '}
+                Key name: <strong className="text-[var(--color-ink)]">{createdResult.name}</strong>{' '}
+                • Prefix:{' '}
                 <code className="font-mono text-[var(--color-ink)]">{createdResult.prefix}</code>
               </p>
             </div>
@@ -341,14 +347,19 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
                     Important: You will not be able to view this secret again!
                   </p>
                   <p className="mt-1">
-                    Copy and store this secret securely. For security, only the Argon2id hash is stored on the server.
-                    If you lose this credential, you must revoke this key and generate a new one.
+                    Copy and store this secret securely. For security, only the Argon2id hash is
+                    stored on the server. If you lose this credential, you must revoke this key and
+                    generate a new one.
                   </p>
                 </div>
 
                 <div>
-                  <label htmlFor="credential-output" className="block text-xs font-medium text-[var(--color-ink-muted)]">
-                    Full API Credential (<code className="font-mono">&lt;prefix&gt;.&lt;secret&gt;</code>)
+                  <label
+                    htmlFor="credential-output"
+                    className="block text-xs font-medium text-[var(--color-ink-muted)]"
+                  >
+                    Full API Credential (
+                    <code className="font-mono">&lt;prefix&gt;.&lt;secret&gt;</code>)
                   </label>
                   <div className="mt-1.5 flex items-center gap-2">
                     <input
@@ -380,7 +391,9 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
                   <div className="flex justify-between">
                     <span className="text-[var(--color-ink-muted)]">Expires:</span>
                     <span className="font-medium">
-                      {createdResult.expiresAt ? new Date(createdResult.expiresAt).toLocaleDateString() : 'Never'}
+                      {createdResult.expiresAt
+                        ? new Date(createdResult.expiresAt).toLocaleDateString()
+                        : 'Never'}
                     </span>
                   </div>
                 </div>
@@ -394,7 +407,8 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
                       className="mt-0.5 size-4 rounded border-[var(--color-border-subtle)] text-[var(--color-accent)] focus:ring-[var(--color-accent)]"
                     />
                     <span className="text-xs text-[var(--color-ink)]">
-                      I have securely copied and saved this API key. I understand it cannot be retrieved again.
+                      I have securely copied and saved this API key. I understand it cannot be
+                      retrieved again.
                     </span>
                   </label>
                 </div>
@@ -413,13 +427,17 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
             ) : (
               <div className="space-y-4">
                 <div className="rounded-lg border border-blue-500/40 bg-blue-500/10 p-4 text-xs text-blue-800 dark:text-blue-300">
-                  <p className="font-semibold text-blue-900 dark:text-blue-200">Idempotent Replay Confirmed</p>
+                  <p className="font-semibold text-blue-900 dark:text-blue-200">
+                    Idempotent Replay Confirmed
+                  </p>
                   <p className="mt-1">
-                    This key was previously created using this idempotency key. Plaintext secrets are generated only on
-                    the initial creation response and are never returned on idempotent replays (ADR-008).
+                    This key was previously created using this idempotency key. Plaintext secrets
+                    are generated only on the initial creation response and are never returned on
+                    idempotent replays (ADR-008).
                   </p>
                   <p className="mt-2">
-                    If you do not have the original secret, please revoke this key and create a new one.
+                    If you do not have the original secret, please revoke this key and create a new
+                    one.
                   </p>
                 </div>
 
@@ -464,7 +482,10 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
 
             {/* Key Name */}
             <div>
-              <label htmlFor="api-key-name" className="block text-xs font-medium text-[var(--color-ink)]">
+              <label
+                htmlFor="api-key-name"
+                className="block text-xs font-medium text-[var(--color-ink)]"
+              >
                 Key Name <span className="text-[var(--color-bad)]">*</span>
               </label>
               <input
@@ -476,13 +497,17 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
                 onChange={(e) => setName(e.target.value)}
                 className="mt-1 w-full rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] px-3 py-1.5 text-xs text-[var(--color-ink)] placeholder:text-[var(--color-ink-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
               />
-              {fieldErrors.name && <p className="mt-1 text-xs text-[var(--color-bad)]">{fieldErrors.name}</p>}
+              {fieldErrors.name && (
+                <p className="mt-1 text-xs text-[var(--color-bad)]">{fieldErrors.name}</p>
+              )}
             </div>
 
             {/* Scope Type Selection */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-medium text-[var(--color-ink)]">Binding Scope Type</label>
+                <label className="block text-xs font-medium text-[var(--color-ink)]">
+                  Binding Scope Type
+                </label>
                 <div className="mt-1 flex gap-2">
                   <button
                     type="button"
@@ -512,7 +537,10 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
               {/* Workspace Selector (Conditional) */}
               {scopeType === 'workspace' && (
                 <div>
-                  <label htmlFor="workspace-select" className="block text-xs font-medium text-[var(--color-ink)]">
+                  <label
+                    htmlFor="workspace-select"
+                    className="block text-xs font-medium text-[var(--color-ink)]"
+                  >
                     Target Workspace <span className="text-[var(--color-bad)]">*</span>
                   </label>
                   <select
@@ -535,7 +563,9 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
                     )}
                   </select>
                   {fieldErrors.workspaceId && (
-                    <p className="mt-1 text-xs text-[var(--color-bad)]">{fieldErrors.workspaceId}</p>
+                    <p className="mt-1 text-xs text-[var(--color-bad)]">
+                      {fieldErrors.workspaceId}
+                    </p>
                   )}
                 </div>
               )}
@@ -543,7 +573,10 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
 
             {/* Expiration Settings */}
             <div>
-              <label htmlFor="expiry-preset" className="block text-xs font-medium text-[var(--color-ink)]">
+              <label
+                htmlFor="expiry-preset"
+                className="block text-xs font-medium text-[var(--color-ink)]"
+              >
                 Expiration
               </label>
               <div className="mt-1 flex flex-wrap gap-2">
@@ -597,8 +630,8 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
                     Permission Scopes <span className="text-[var(--color-bad)]">*</span>
                   </span>
                   <p className="text-[11px] text-[var(--color-ink-muted)]">
-                    Keys can only be granted permissions you personally hold at the target scope. ({selectedScopes.size}/64
-                    selected)
+                    Keys can only be granted permissions you personally hold at the target scope. (
+                    {selectedScopes.size}/64 selected)
                   </p>
                 </div>
                 <div className="flex gap-2">
@@ -630,7 +663,9 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
 
               <div className="max-h-48 overflow-y-auto rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-2 divide-y divide-[var(--color-border-subtle)]">
                 {permissionsLoading ? (
-                  <p className="p-3 text-center text-xs text-[var(--color-ink-muted)]">Loading permissions…</p>
+                  <p className="p-3 text-center text-xs text-[var(--color-ink-muted)]">
+                    Loading permissions…
+                  </p>
                 ) : filteredPermissions.length === 0 ? (
                   <p className="p-3 text-center text-xs text-[var(--color-ink-muted)]">
                     {heldPermissions.size === 0
@@ -653,19 +688,25 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
                         />
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
-                            <span className="font-mono text-xs text-[var(--color-ink)]">{perm.key}</span>
+                            <span className="font-mono text-xs text-[var(--color-ink)]">
+                              {perm.key}
+                            </span>
                             <span className="rounded bg-[var(--color-surface)] px-1.5 py-0.2 text-[10px] text-[var(--color-ink-muted)] border border-[var(--color-border-subtle)]">
                               {perm.domain}
                             </span>
                           </div>
-                          <p className="text-[11px] text-[var(--color-ink-muted)] truncate">{perm.description}</p>
+                          <p className="text-[11px] text-[var(--color-ink-muted)] truncate">
+                            {perm.description}
+                          </p>
                         </div>
                       </label>
                     );
                   })
                 )}
               </div>
-              {fieldErrors.scopes && <p className="text-xs text-[var(--color-bad)]">{fieldErrors.scopes}</p>}
+              {fieldErrors.scopes && (
+                <p className="text-xs text-[var(--color-bad)]">{fieldErrors.scopes}</p>
+              )}
             </div>
 
             {/* Actions */}

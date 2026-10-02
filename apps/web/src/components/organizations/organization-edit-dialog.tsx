@@ -1,7 +1,14 @@
 'use client';
 
 import { useState, useEffect, type FormEvent } from 'react';
-import { ApiError, organizationsApi, type BillingMode, type BillingPolicy, type OrganizationView, type UpdateOrganizationParams } from '@/lib/api-client';
+import {
+  ApiError,
+  organizationsApi,
+  type BillingMode,
+  type BillingPolicy,
+  type OrganizationView,
+  type UpdateOrganizationParams,
+} from '@/lib/api-client';
 import { useCanManagePlatformTenants, useSession } from '@/lib/session-store';
 
 interface OrganizationEditDialogProps {
@@ -116,7 +123,10 @@ export function OrganizationEditDialog({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <div className="w-full max-w-lg rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl max-h-[90vh] overflow-y-auto">
-        <h2 id="edit-org-title" className="text-lg font-semibold tracking-tight text-[var(--color-ink)]">
+        <h2
+          id="edit-org-title"
+          className="text-lg font-semibold tracking-tight text-[var(--color-ink)]"
+        >
           Edit Organization
         </h2>
         <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
@@ -131,15 +141,22 @@ export function OrganizationEditDialog({
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div>
-            <label className="block text-xs font-medium text-[var(--color-ink-muted)]">Identifier Slug</label>
+            <label className="block text-xs font-medium text-[var(--color-ink-muted)]">
+              Identifier Slug
+            </label>
             <div className="mt-1 font-mono text-xs text-[var(--color-ink)] px-3 py-1.5 rounded-md bg-[var(--color-surface-raised)] border border-[var(--color-border-subtle)]">
               {organization.slug}
             </div>
-            <p className="mt-0.5 text-[10px] text-[var(--color-ink-muted)]">Identifier slug is immutable.</p>
+            <p className="mt-0.5 text-[10px] text-[var(--color-ink-muted)]">
+              Identifier slug is immutable.
+            </p>
           </div>
 
           <div>
-            <label htmlFor="edit-org-name" className="block text-xs font-medium text-[var(--color-ink)]">
+            <label
+              htmlFor="edit-org-name"
+              className="block text-xs font-medium text-[var(--color-ink)]"
+            >
               Organization Name <span className="text-[var(--color-bad)]">*</span>
             </label>
             <input
@@ -156,7 +173,10 @@ export function OrganizationEditDialog({
           </div>
 
           <div>
-            <label htmlFor="edit-org-legal-name" className="block text-xs font-medium text-[var(--color-ink)]">
+            <label
+              htmlFor="edit-org-legal-name"
+              className="block text-xs font-medium text-[var(--color-ink)]"
+            >
               Legal Name (Optional)
             </label>
             <input
@@ -174,7 +194,10 @@ export function OrganizationEditDialog({
           </div>
 
           <div>
-            <label htmlFor="edit-org-gstin" className="block text-xs font-medium text-[var(--color-ink)]">
+            <label
+              htmlFor="edit-org-gstin"
+              className="block text-xs font-medium text-[var(--color-ink)]"
+            >
               GSTIN (Optional)
             </label>
             <input
@@ -194,7 +217,10 @@ export function OrganizationEditDialog({
           {showBillingOptions && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-[var(--color-border-subtle)]">
               <div>
-                <label htmlFor="edit-org-billing-mode" className="block text-xs font-medium text-[var(--color-ink)]">
+                <label
+                  htmlFor="edit-org-billing-mode"
+                  className="block text-xs font-medium text-[var(--color-ink)]"
+                >
                   Billing Mode
                 </label>
                 <select
@@ -210,7 +236,10 @@ export function OrganizationEditDialog({
               </div>
 
               <div>
-                <label htmlFor="edit-org-billing-policy" className="block text-xs font-medium text-[var(--color-ink)]">
+                <label
+                  htmlFor="edit-org-billing-policy"
+                  className="block text-xs font-medium text-[var(--color-ink)]"
+                >
                   Billing Policy
                 </label>
                 <select

@@ -47,7 +47,11 @@ describe('Role Assignments Administration API Client', () => {
             scopeType: 'organization',
             scopeId: ORG_ID,
             orgId: ORG_ID,
-            permissions: ['role_assignments.read', 'role_assignments.grant', 'role_assignments.revoke'],
+            permissions: [
+              'role_assignments.read',
+              'role_assignments.grant',
+              'role_assignments.revoke',
+            ],
           },
         ],
         organizationIds: [ORG_ID],
@@ -263,7 +267,8 @@ describe('Role Assignments Administration API Client', () => {
     let deleteCalled = false;
 
     mockHandlers.push({
-      match: (url, options) => url.includes(`/role-assignments/${grantId}`) && options.method === 'DELETE',
+      match: (url, options) =>
+        url.includes(`/role-assignments/${grantId}`) && options.method === 'DELETE',
       handle: (_url, options) => {
         const headers = options.headers as Record<string, string>;
         assert.equal(headers['X-Acc-Organization'], ORG_ID);
@@ -284,7 +289,8 @@ describe('Role Assignments Administration API Client', () => {
     const grantId = '01955b0a-grant-nonexistent';
 
     mockHandlers.push({
-      match: (url, options) => url.includes(`/role-assignments/${grantId}`) && options.method === 'DELETE',
+      match: (url, options) =>
+        url.includes(`/role-assignments/${grantId}`) && options.method === 'DELETE',
       handle: () => {
         return new Response(
           JSON.stringify({
@@ -320,7 +326,8 @@ describe('Role Assignments Administration API Client', () => {
     const grantId = '01955b0a-platform-admin-grant';
 
     mockHandlers.push({
-      match: (url, options) => url.includes(`/role-assignments/${grantId}`) && options.method === 'DELETE',
+      match: (url, options) =>
+        url.includes(`/role-assignments/${grantId}`) && options.method === 'DELETE',
       handle: () => {
         return new Response(
           JSON.stringify({

@@ -352,7 +352,10 @@ describe('Tenancy Administration API Client (Organizations, Workspaces, Teams)',
       });
 
       const idempotencyKey = 'ws-idem-uuid';
-      const res = await workspacesApi.create({ name: 'Default Workspace', slug: 'default-workspace' }, idempotencyKey);
+      const res = await workspacesApi.create(
+        { name: 'Default Workspace', slug: 'default-workspace' },
+        idempotencyKey,
+      );
 
       assert.equal(res.data.slug, 'default-workspace');
       assert.deepEqual(capturedBody, { name: 'Default Workspace', slug: 'default-workspace' });
@@ -478,11 +481,18 @@ describe('Tenancy Administration API Client (Organizations, Workspaces, Teams)',
       });
 
       const idempotencyKey = 'team-idem-uuid';
-      const res = await teamsApi.create({ workspaceId: WS_ID, name: 'Customer Support' }, idempotencyKey);
+      const res = await teamsApi.create(
+        { workspaceId: WS_ID, name: 'Customer Support' },
+        idempotencyKey,
+      );
 
       assert.equal(res.data.name, 'Customer Support');
       assert.deepEqual(capturedBody, { workspaceId: WS_ID, name: 'Customer Support' });
-      assert.equal((capturedBody as Record<string, unknown>).orgId, undefined, 'Must NEVER send orgId in body');
+      assert.equal(
+        (capturedBody as Record<string, unknown>).orgId,
+        undefined,
+        'Must NEVER send orgId in body',
+      );
       assert.equal(capturedHeaders['Idempotency-Key'], idempotencyKey);
       assert.equal(capturedHeaders['X-Acc-Organization'], ORG_ID);
     });

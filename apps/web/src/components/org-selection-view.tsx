@@ -41,7 +41,8 @@ export function OrgSelectionView() {
       <Card className="w-full">
         <CardTitle>Select Organization</CardTitle>
         <CardDescription>
-          Your account has access to multiple organizations. Choose an organization context to continue.
+          Your account has access to multiple organizations. Choose an organization context to
+          continue.
         </CardDescription>
 
         {error && (
@@ -52,7 +53,10 @@ export function OrgSelectionView() {
 
         <form onSubmit={handleSelect} className="mt-5 space-y-4">
           <div>
-            <label htmlFor="organization-select" className="block text-xs font-medium text-[var(--color-ink-muted)]">
+            <label
+              htmlFor="organization-select"
+              className="block text-xs font-medium text-[var(--color-ink-muted)]"
+            >
               Authorized Organizations
             </label>
             <select

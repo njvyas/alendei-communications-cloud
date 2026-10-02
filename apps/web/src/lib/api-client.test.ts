@@ -150,7 +150,11 @@ describe('API Client Security Foundation', () => {
     assert.ok(refreshCall, 'fetch was called on /auth/refresh');
     const headers = refreshCall.options.headers as Record<string, string>;
     assert.equal(headers['X-Acc-Refresh'], '1', 'refresh carries non-simple CSRF header');
-    assert.equal(refreshCall.options.credentials, 'include', 'credentials included for httpOnly cookie');
+    assert.equal(
+      refreshCall.options.credentials,
+      'include',
+      'credentials included for httpOnly cookie',
+    );
   });
 
   // ---------------------------------------------------------------------------
@@ -518,7 +522,11 @@ describe('API Client Security Foundation', () => {
     const meCall = fetchCalls.find((c) => c.url.endsWith('/auth/me'));
     assert.ok(meCall);
     const meHeaders = meCall.options.headers as Record<string, string>;
-    assert.equal(meHeaders['X-Acc-Organization'], undefined, 'identity endpoint does not carry X-Acc-Organization');
+    assert.equal(
+      meHeaders['X-Acc-Organization'],
+      undefined,
+      'identity endpoint does not carry X-Acc-Organization',
+    );
   });
 
   // ---------------------------------------------------------------------------

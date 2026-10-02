@@ -100,7 +100,10 @@ describe('Audit Logs Security Invariants & Boundary Enforcement', () => {
     isPlatformAdmin: false,
   });
 
-  const createMockAuditLog = (orgId: string, overrides: Partial<AuditLogView> = {}): AuditLogView => ({
+  const createMockAuditLog = (
+    orgId: string,
+    overrides: Partial<AuditLogView> = {},
+  ): AuditLogView => ({
     id: '01955b0a-7b3b-7411-9a4f-log000000001',
     occurredAt: '2026-09-24T12:00:00.000Z',
     action: 'api_key.create',
@@ -181,10 +184,13 @@ describe('Audit Logs Security Invariants & Boundary Enforcement', () => {
         }
       }
 
-      return new Response(JSON.stringify({ data: [], page: { nextCursor: null, hasMore: false } }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
+      return new Response(
+        JSON.stringify({ data: [], page: { nextCursor: null, hasMore: false } }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      );
     };
   });
 
@@ -212,14 +218,20 @@ describe('Audit Logs Security Invariants & Boundary Enforcement', () => {
         if (headers['X-Acc-Organization'] === ORG_A) {
           capturedHeaderOrgA = headers['X-Acc-Organization'];
           return new Response(
-            JSON.stringify({ data: [createMockAuditLog(ORG_A)], page: { nextCursor: null, hasMore: false } }),
+            JSON.stringify({
+              data: [createMockAuditLog(ORG_A)],
+              page: { nextCursor: null, hasMore: false },
+            }),
             { status: 200, headers: { 'Content-Type': 'application/json' } },
           );
         }
         if (headers['X-Acc-Organization'] === ORG_B) {
           capturedHeaderOrgB = headers['X-Acc-Organization'];
           return new Response(
-            JSON.stringify({ data: [createMockAuditLog(ORG_B)], page: { nextCursor: null, hasMore: false } }),
+            JSON.stringify({
+              data: [createMockAuditLog(ORG_B)],
+              page: { nextCursor: null, hasMore: false },
+            }),
             { status: 200, headers: { 'Content-Type': 'application/json' } },
           );
         }
@@ -250,10 +262,10 @@ describe('Audit Logs Security Invariants & Boundary Enforcement', () => {
       handle: (_url, options) => {
         const headers = options.headers as Record<string, string>;
         capturedHeader = headers['X-Acc-Organization'];
-        return new Response(
-          JSON.stringify({ data: createMockAuditLog(ORG_A) }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: createMockAuditLog(ORG_A) }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
       },
     });
 
@@ -274,10 +286,13 @@ describe('Audit Logs Security Invariants & Boundary Enforcement', () => {
           ORG_A,
           'X-Acc-Organization header must be pinned to session selectedOrgId and never caller input',
         );
-        return new Response(JSON.stringify({ data: [], page: { nextCursor: null, hasMore: false } }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return new Response(
+          JSON.stringify({ data: [], page: { nextCursor: null, hasMore: false } }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        );
       },
     });
 
@@ -468,7 +483,10 @@ describe('Audit Logs Security Invariants & Boundary Enforcement', () => {
     // Ensure that JSON serialization produces a valid JSON string that does not execute code
     const parsed = JSON.parse(serialized);
     assert.equal(parsed.xssScript, '<script>alert("XSS")</script>');
-    assert.equal(parsed.nested.dangerousHtml, '<b>Bold</b><iframe src="javascript:alert(1)"></iframe>');
+    assert.equal(
+      parsed.nested.dangerousHtml,
+      '<b>Bold</b><iframe src="javascript:alert(1)"></iframe>',
+    );
   });
 
   // ---------------------------------------------------------------------------
@@ -527,8 +545,14 @@ describe('Audit Logs Security Invariants & Boundary Enforcement', () => {
     await auditLogsApi.list();
 
     for (const logLine of consoleOutputs) {
-      assert.ok(!logLine.includes(secretValue), `Console log must never contain payload contents: ${logLine}`);
-      assert.ok(!logLine.includes('valid-bearer-token'), `Console log must never contain bearer tokens: ${logLine}`);
+      assert.ok(
+        !logLine.includes(secretValue),
+        `Console log must never contain payload contents: ${logLine}`,
+      );
+      assert.ok(
+        !logLine.includes('valid-bearer-token'),
+        `Console log must never contain bearer tokens: ${logLine}`,
+      );
     }
   });
 
@@ -585,8 +609,16 @@ describe('Audit Logs Security Invariants & Boundary Enforcement', () => {
     // Invariant: selectedOrganizationId must be present at the partition index
     assert.equal(keyOrgA[0], 'audit-logs');
     assert.equal(keyOrgA[1], 'list');
-    assert.equal(keyOrgA[2], ORG_A, 'Audit log query key must partition strictly by selectedOrgId at index 2');
-    assert.equal(keyOrgB[2], ORG_B, 'Audit log query key must partition strictly by selectedOrgId at index 2');
+    assert.equal(
+      keyOrgA[2],
+      ORG_A,
+      'Audit log query key must partition strictly by selectedOrgId at index 2',
+    );
+    assert.equal(
+      keyOrgB[2],
+      ORG_B,
+      'Audit log query key must partition strictly by selectedOrgId at index 2',
+    );
 
     // Regression proof: Removing selectedOrganizationId from ['audit-logs', 'list', selectedOrgId, queryParams]
     // collapses tenant partition and causes cross-tenant cache collisions

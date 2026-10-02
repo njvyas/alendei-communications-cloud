@@ -10,7 +10,12 @@ interface RevokeApiKeyDialogProps {
   readonly onSuccess: () => void;
 }
 
-export function RevokeApiKeyDialog({ isOpen, apiKey, onClose, onSuccess }: RevokeApiKeyDialogProps) {
+export function RevokeApiKeyDialog({
+  isOpen,
+  apiKey,
+  onClose,
+  onSuccess,
+}: RevokeApiKeyDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -66,15 +71,17 @@ export function RevokeApiKeyDialog({ isOpen, apiKey, onClose, onSuccess }: Revok
 
         <div className="mt-4 space-y-3">
           <p className="text-xs text-[var(--color-ink-muted)]">
-            Are you sure you want to revoke <strong className="text-[var(--color-ink)]">{apiKey.name}</strong> (
+            Are you sure you want to revoke{' '}
+            <strong className="text-[var(--color-ink)]">{apiKey.name}</strong> (
             <code className="font-mono text-[var(--color-ink)]">{apiKey.prefix}…</code>)?
           </p>
 
           <div className="rounded-lg border border-[var(--color-bad)]/30 bg-[var(--color-bad)]/10 p-3 text-xs text-[var(--color-bad)]">
             <p className="font-semibold">This action cannot be undone.</p>
             <p className="mt-1">
-              Revocation is immediate and terminal. Any machine process, background job, or integration presenting this
-              key will immediately fail with <code>401 Unauthorized</code>.
+              Revocation is immediate and terminal. Any machine process, background job, or
+              integration presenting this key will immediately fail with{' '}
+              <code>401 Unauthorized</code>.
             </p>
           </div>
 

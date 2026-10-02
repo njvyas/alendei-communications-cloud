@@ -2,7 +2,13 @@
 
 import { useState, useEffect, type FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ApiError, rolesApi, usersApi, workspacesApi, type CreateUserInput } from '@/lib/api-client';
+import {
+  ApiError,
+  rolesApi,
+  usersApi,
+  workspacesApi,
+  type CreateUserInput,
+} from '@/lib/api-client';
 import { useSession } from '@/lib/session-store';
 
 interface UserCreateDialogProps {
@@ -110,7 +116,10 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
 
     const targetScopeId = scopeType === 'organization' ? selectedOrgId : workspaceId;
     if (!targetScopeId) {
-      errors.scopeId = scopeType === 'organization' ? 'Organization context is required' : 'Please select a workspace';
+      errors.scopeId =
+        scopeType === 'organization'
+          ? 'Organization context is required'
+          : 'Please select a workspace';
     }
 
     if (Object.keys(errors).length > 0) {
@@ -148,11 +157,14 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
         } else if (err.code === 'AUTHZ_SCOPE_TYPE_NOT_ADMITTED') {
           setErrorMessage('The chosen role does not admit the selected scope level.');
         } else if (err.status === 403) {
-          setErrorMessage('You do not have permission to invite users in this organization (users.invite required).');
+          setErrorMessage(
+            'You do not have permission to invite users in this organization (users.invite required).',
+          );
         } else if (err.status === 404) {
           setErrorMessage('The chosen role or workspace could not be found.');
         } else if (err.status === 400) {
-          const issues = err.details?.issues as Array<{ field: string; message: string }> | undefined;
+          const issues = err.details?.issues as
+            Array<{ field: string; message: string }> | undefined;
           if (Array.isArray(issues) && issues.length > 0) {
             const mapped: Record<string, string> = {};
             for (const issue of issues) {
@@ -199,8 +211,9 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
         </div>
 
         <p className="mt-2 text-xs text-[var(--color-ink-muted)]">
-          Invited users receive an initial role assignment in this organization. In Phase 1, the account enters the{' '}
-          <span className="font-semibold">invited</span> state (no credentials or invitation emails are sent).
+          Invited users receive an initial role assignment in this organization. In Phase 1, the
+          account enters the <span className="font-semibold">invited</span> state (no credentials or
+          invitation emails are sent).
         </p>
 
         {errorMessage && (
@@ -214,7 +227,10 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div>
-            <label htmlFor="user-email" className="block text-xs font-medium text-[var(--color-ink)]">
+            <label
+              htmlFor="user-email"
+              className="block text-xs font-medium text-[var(--color-ink)]"
+            >
               Email Address <span className="text-[var(--color-bad)]">*</span>
             </label>
             <input
@@ -233,8 +249,12 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
           </div>
 
           <div>
-            <label htmlFor="user-phone" className="block text-xs font-medium text-[var(--color-ink)]">
-              Phone Number <span className="text-[var(--color-ink-muted)]">(optional, E.164 format)</span>
+            <label
+              htmlFor="user-phone"
+              className="block text-xs font-medium text-[var(--color-ink)]"
+            >
+              Phone Number{' '}
+              <span className="text-[var(--color-ink-muted)]">(optional, E.164 format)</span>
             </label>
             <input
               id="user-phone"
@@ -254,11 +274,15 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
               Initial Role & Scope <span className="text-[var(--color-bad)]">*</span>
             </p>
             <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
-              Every created user must receive an initial grant so they are membered in this organization.
+              Every created user must receive an initial grant so they are membered in this
+              organization.
             </p>
 
             <div className="mt-3">
-              <label htmlFor="user-scope-type" className="block text-xs font-medium text-[var(--color-ink)]">
+              <label
+                htmlFor="user-scope-type"
+                className="block text-xs font-medium text-[var(--color-ink)]"
+              >
                 Scope Level
               </label>
               <select
@@ -274,7 +298,10 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
 
             {scopeType === 'workspace' && (
               <div className="mt-3">
-                <label htmlFor="user-workspace-id" className="block text-xs font-medium text-[var(--color-ink)]">
+                <label
+                  htmlFor="user-workspace-id"
+                  className="block text-xs font-medium text-[var(--color-ink)]"
+                >
                   Workspace
                 </label>
                 {workspacesLoading ? (
@@ -304,11 +331,16 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
             )}
 
             <div className="mt-3">
-              <label htmlFor="user-role-id" className="block text-xs font-medium text-[var(--color-ink)]">
+              <label
+                htmlFor="user-role-id"
+                className="block text-xs font-medium text-[var(--color-ink)]"
+              >
                 Role
               </label>
               {rolesLoading ? (
-                <p className="mt-1 text-xs text-[var(--color-ink-muted)]">Loading available roles…</p>
+                <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
+                  Loading available roles…
+                </p>
               ) : availableRoles.length > 0 ? (
                 <select
                   id="user-role-id"

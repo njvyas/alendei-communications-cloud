@@ -102,7 +102,10 @@ export function TeamCreateDialog({
             setErrorMessage('Cannot create team: the selected workspace is archived.');
           } else {
             setErrorMessage('A team with this name already exists in the selected workspace.');
-            setFieldErrors((prev) => ({ ...prev, name: 'Team name already in use in this workspace' }));
+            setFieldErrors((prev) => ({
+              ...prev,
+              name: 'Team name already in use in this workspace',
+            }));
           }
         } else if (err.status === 403) {
           setErrorMessage('You do not have permission to create teams in this workspace.');
@@ -127,7 +130,10 @@ export function TeamCreateDialog({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl">
-        <h2 id="create-team-title" className="text-lg font-semibold tracking-tight text-[var(--color-ink)]">
+        <h2
+          id="create-team-title"
+          className="text-lg font-semibold tracking-tight text-[var(--color-ink)]"
+        >
           Create Team
         </h2>
         <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
@@ -143,14 +149,20 @@ export function TeamCreateDialog({
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           {!initialWorkspaceId ? (
             <div>
-              <label htmlFor="team-workspace" className="block text-xs font-medium text-[var(--color-ink)]">
+              <label
+                htmlFor="team-workspace"
+                className="block text-xs font-medium text-[var(--color-ink)]"
+              >
                 Parent Workspace <span className="text-[var(--color-bad)]">*</span>
               </label>
               {workspacesLoading ? (
-                <div className="mt-1 text-xs text-[var(--color-ink-muted)]">Loading workspaces…</div>
+                <div className="mt-1 text-xs text-[var(--color-ink-muted)]">
+                  Loading workspaces…
+                </div>
               ) : activeWorkspaces.length === 0 ? (
                 <div className="mt-1 text-xs text-[var(--color-bad)]">
-                  No active workspaces available. Please create or restore an active workspace first.
+                  No active workspaces available. Please create or restore an active workspace
+                  first.
                 </div>
               ) : (
                 <select
@@ -168,13 +180,18 @@ export function TeamCreateDialog({
                 </select>
               )}
               {fieldErrors.workspaceId && (
-                <p className="mt-1 text-[11px] text-[var(--color-bad)]">{fieldErrors.workspaceId}</p>
+                <p className="mt-1 text-[11px] text-[var(--color-bad)]">
+                  {fieldErrors.workspaceId}
+                </p>
               )}
             </div>
           ) : null}
 
           <div>
-            <label htmlFor="team-name" className="block text-xs font-medium text-[var(--color-ink)]">
+            <label
+              htmlFor="team-name"
+              className="block text-xs font-medium text-[var(--color-ink)]"
+            >
               Team Name <span className="text-[var(--color-bad)]">*</span>
             </label>
             <input

@@ -167,7 +167,8 @@ export default function WorkspacesPage() {
         <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center">
           <p className="text-base font-semibold text-[var(--color-bad)]">Access Forbidden</p>
           <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-            You do not hold the required <code className="font-mono">workspaces.read</code> permission in this organization.
+            You do not hold the required <code className="font-mono">workspaces.read</code>{' '}
+            permission in this organization.
           </p>
         </div>
       ) : isLoading ? (
@@ -179,7 +180,9 @@ export default function WorkspacesPage() {
         </div>
       ) : error ? (
         <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center">
-          <p className="text-base font-semibold text-[var(--color-bad)]">Failed to Load Workspaces</p>
+          <p className="text-base font-semibold text-[var(--color-bad)]">
+            Failed to Load Workspaces
+          </p>
           <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
             {error instanceof ApiError ? error.message : 'An unexpected error occurred.'}
           </p>
@@ -194,7 +197,9 @@ export default function WorkspacesPage() {
       ) : workspaces.length === 0 ? (
         <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-12 text-center">
           <p className="text-base font-semibold text-[var(--color-ink)]">
-            {statusFilter !== 'all' ? 'No matching workspaces found' : 'No workspaces in this organization'}
+            {statusFilter !== 'all'
+              ? 'No matching workspaces found'
+              : 'No workspaces in this organization'}
           </p>
           <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
             {statusFilter !== 'all'
@@ -217,15 +222,26 @@ export default function WorkspacesPage() {
             <table className="w-full text-left text-xs">
               <thead className="border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] text-[var(--color-ink-muted)]">
                 <tr>
-                  <th scope="col" className="px-4 py-3 font-medium">Workspace</th>
-                  <th scope="col" className="px-4 py-3 font-medium">Status</th>
-                  <th scope="col" className="px-4 py-3 font-medium">Created</th>
-                  <th scope="col" className="px-4 py-3 text-right font-medium">Actions</th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    Workspace
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    Status
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    Created
+                  </th>
+                  <th scope="col" className="px-4 py-3 text-right font-medium">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border-subtle)]">
                 {workspaces.map((ws) => (
-                  <tr key={ws.id} className="hover:bg-[var(--color-surface-raised)]/50 transition-colors">
+                  <tr
+                    key={ws.id}
+                    className="hover:bg-[var(--color-surface-raised)]/50 transition-colors"
+                  >
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <Link

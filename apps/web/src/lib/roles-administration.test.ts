@@ -50,7 +50,13 @@ describe('Roles & Permissions Administration API Client', () => {
             scopeType: 'organization',
             scopeId: ORG_ID,
             orgId: ORG_ID,
-            permissions: ['roles.read', 'roles.create', 'roles.update', 'roles.delete', 'permissions.read'],
+            permissions: [
+              'roles.read',
+              'roles.create',
+              'roles.update',
+              'roles.delete',
+              'permissions.read',
+            ],
           },
         ],
         organizationIds: [ORG_ID],
@@ -347,7 +353,12 @@ describe('Roles & Permissions Administration API Client', () => {
           JSON.stringify({
             data: [
               { key: 'roles.read', domain: 'roles', action: 'read', description: 'Read roles' },
-              { key: 'roles.create', domain: 'roles', action: 'create', description: 'Create roles' },
+              {
+                key: 'roles.create',
+                domain: 'roles',
+                action: 'create',
+                description: 'Create roles',
+              },
             ],
             page: { nextCursor: null, hasMore: false, limit: 50 },
           }),

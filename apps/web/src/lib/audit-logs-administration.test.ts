@@ -94,10 +94,13 @@ describe('Audit Logs Administration API Client', () => {
         }
       }
 
-      return new Response(JSON.stringify({ data: [], page: { nextCursor: null, hasMore: false } }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
+      return new Response(
+        JSON.stringify({ data: [], page: { nextCursor: null, hasMore: false } }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      );
     };
   });
 
@@ -121,13 +124,22 @@ describe('Audit Logs Administration API Client', () => {
         const parsedUrl = new URL(url, 'http://localhost');
         assert.equal(parsedUrl.searchParams.get('action'), 'api_key.create');
         assert.equal(parsedUrl.searchParams.get('actorType'), 'user');
-        assert.equal(parsedUrl.searchParams.get('actorUserId'), '01955b0a-7b3b-7411-9a4f-user00000001');
+        assert.equal(
+          parsedUrl.searchParams.get('actorUserId'),
+          '01955b0a-7b3b-7411-9a4f-user00000001',
+        );
         assert.equal(parsedUrl.searchParams.get('outcome'), 'success');
         assert.equal(parsedUrl.searchParams.get('resourceType'), 'api_key');
-        assert.equal(parsedUrl.searchParams.get('resourceId'), '01955b0a-7b3b-7411-9a4f-key0000000001');
+        assert.equal(
+          parsedUrl.searchParams.get('resourceId'),
+          '01955b0a-7b3b-7411-9a4f-key0000000001',
+        );
         assert.equal(parsedUrl.searchParams.get('scopeType'), 'organization');
         assert.equal(parsedUrl.searchParams.get('scopeId'), ORG_ID);
-        assert.equal(parsedUrl.searchParams.get('correlationId'), '01955b0a-7b3b-7411-9a4f-trace00000001');
+        assert.equal(
+          parsedUrl.searchParams.get('correlationId'),
+          '01955b0a-7b3b-7411-9a4f-trace00000001',
+        );
         assert.equal(parsedUrl.searchParams.get('occurredFrom'), '2026-09-01T00:00:00.000Z');
         assert.equal(parsedUrl.searchParams.get('occurredTo'), '2026-09-24T23:59:59.999Z');
         assert.equal(parsedUrl.searchParams.get('cursor'), '01955b0a-cursor-id');
@@ -204,10 +216,10 @@ describe('Audit Logs Administration API Client', () => {
         assert.equal(headers['X-Acc-Organization'], ORG_ID);
         assert.equal(headers['Authorization'], 'Bearer mock-access-token');
 
-        return new Response(
-          JSON.stringify({ data: mockLog }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        );
+        return new Response(JSON.stringify({ data: mockLog }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
       },
     });
 

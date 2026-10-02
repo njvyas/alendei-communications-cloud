@@ -92,7 +92,8 @@ export default function RolesPage() {
       <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center shadow-xs">
         <p className="text-sm font-semibold text-[var(--color-bad)]">Access Restricted</p>
         <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-          You do not hold the required <code className="font-mono">roles.read</code> permission in this organization.
+          You do not hold the required <code className="font-mono">roles.read</code> permission in
+          this organization.
         </p>
       </div>
     );
@@ -103,7 +104,9 @@ export default function RolesPage() {
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--color-border-subtle)] pb-4">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight text-[var(--color-ink)]">Roles & Permissions</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-[var(--color-ink)]">
+            Roles & Permissions
+          </h1>
           <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
             Manage system and custom roles governing tenant authorization and permission bundles.
           </p>
@@ -256,7 +259,10 @@ export default function RolesPage() {
                   const isCustomRole = !isPlatformRole && !isSystemRole;
 
                   return (
-                    <tr key={role.id} className="hover:bg-[var(--color-surface)]/40 transition-colors">
+                    <tr
+                      key={role.id}
+                      className="hover:bg-[var(--color-surface)]/40 transition-colors"
+                    >
                       <td className="px-6 py-3.5">
                         <Link
                           href={`/roles/${encodeURIComponent(role.id)}`}
@@ -264,7 +270,9 @@ export default function RolesPage() {
                         >
                           {role.name}
                         </Link>
-                        <p className="mt-0.5 font-mono text-[11px] text-[var(--color-ink-muted)]">{role.key}</p>
+                        <p className="mt-0.5 font-mono text-[11px] text-[var(--color-ink-muted)]">
+                          {role.key}
+                        </p>
                       </td>
 
                       <td className="px-6 py-3.5">
@@ -297,7 +305,9 @@ export default function RolesPage() {
                       </td>
 
                       <td className="px-6 py-3.5">
-                        <span className="font-semibold text-[var(--color-ink)]">{role.permissions.length}</span>{' '}
+                        <span className="font-semibold text-[var(--color-ink)]">
+                          {role.permissions.length}
+                        </span>{' '}
                         <span className="text-[var(--color-ink-muted)]">
                           {role.permissions.length === 1 ? 'grant' : 'grants'}
                         </span>
@@ -347,9 +357,7 @@ export default function RolesPage() {
 
         {/* Keyset Cursor Pagination Footer */}
         <div className="flex items-center justify-between border-t border-[var(--color-border-subtle)] px-6 py-3 text-xs text-[var(--color-ink-muted)]">
-          <div>
-            {isFetching && <span>Refreshing...</span>}
-          </div>
+          <div>{isFetching && <span>Refreshing...</span>}</div>
 
           <div className="flex items-center gap-2">
             <button

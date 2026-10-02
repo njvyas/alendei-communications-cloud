@@ -389,7 +389,10 @@ export interface SessionItem {
 // Auth API Endpoints
 // -----------------------------------------------------------------------------
 export const authApi = {
-  async login(credentials: { email: string; password: string }): Promise<ApiDataResponse<AuthTokens>> {
+  async login(credentials: {
+    email: string;
+    password: string;
+  }): Promise<ApiDataResponse<AuthTokens>> {
     const res = await apiFetch<ApiDataResponse<AuthTokens>>('/auth/login', {
       method: 'POST',
       body: credentials,
@@ -692,7 +695,10 @@ export interface CreateRoleAssignmentInput {
 // Users Administration API
 // -----------------------------------------------------------------------------
 export const usersApi = {
-  async list(params: ListUsersParams = {}, signal?: AbortSignal): Promise<ApiPagedResponse<UserView>> {
+  async list(
+    params: ListUsersParams = {},
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<UserView>> {
     const query = new URLSearchParams();
     if (params.cursor) query.set('cursor', params.cursor);
     if (params.limit !== undefined) query.set('limit', String(params.limit));
@@ -716,7 +722,10 @@ export const usersApi = {
     });
   },
 
-  async create(input: CreateUserInput, idempotencyKey?: string): Promise<ApiDataResponse<UserView>> {
+  async create(
+    input: CreateUserInput,
+    idempotencyKey?: string,
+  ): Promise<ApiDataResponse<UserView>> {
     const headers: Record<string, string> = {};
     if (idempotencyKey) {
       headers['Idempotency-Key'] = idempotencyKey;
@@ -789,7 +798,10 @@ export const rolesApi = {
     });
   },
 
-  async create(input: CreateRoleInput, idempotencyKey?: string): Promise<ApiDataResponse<RoleView>> {
+  async create(
+    input: CreateRoleInput,
+    idempotencyKey?: string,
+  ): Promise<ApiDataResponse<RoleView>> {
     const headers: Record<string, string> = {};
     if (idempotencyKey) {
       headers['Idempotency-Key'] = idempotencyKey;
@@ -911,12 +923,15 @@ export const organizationsApi = {
     reason?: string,
     signal?: AbortSignal,
   ): Promise<ApiDataResponse<OrganizationView>> {
-    return apiFetch<ApiDataResponse<OrganizationView>>(`/organizations/${encodeURIComponent(id)}/suspend`, {
-      method: 'POST',
-      body: reason ? { reason } : {},
-      signal,
-      skipTenant: true,
-    });
+    return apiFetch<ApiDataResponse<OrganizationView>>(
+      `/organizations/${encodeURIComponent(id)}/suspend`,
+      {
+        method: 'POST',
+        body: reason ? { reason } : {},
+        signal,
+        skipTenant: true,
+      },
+    );
   },
 
   async reactivate(
@@ -924,12 +939,15 @@ export const organizationsApi = {
     reason?: string,
     signal?: AbortSignal,
   ): Promise<ApiDataResponse<OrganizationView>> {
-    return apiFetch<ApiDataResponse<OrganizationView>>(`/organizations/${encodeURIComponent(id)}/reactivate`, {
-      method: 'POST',
-      body: reason ? { reason } : {},
-      signal,
-      skipTenant: true,
-    });
+    return apiFetch<ApiDataResponse<OrganizationView>>(
+      `/organizations/${encodeURIComponent(id)}/reactivate`,
+      {
+        method: 'POST',
+        body: reason ? { reason } : {},
+        signal,
+        skipTenant: true,
+      },
+    );
   },
 
   async close(
@@ -937,12 +955,15 @@ export const organizationsApi = {
     reason?: string,
     signal?: AbortSignal,
   ): Promise<ApiDataResponse<OrganizationView>> {
-    return apiFetch<ApiDataResponse<OrganizationView>>(`/organizations/${encodeURIComponent(id)}/close`, {
-      method: 'POST',
-      body: reason ? { reason } : {},
-      signal,
-      skipTenant: true,
-    });
+    return apiFetch<ApiDataResponse<OrganizationView>>(
+      `/organizations/${encodeURIComponent(id)}/close`,
+      {
+        method: 'POST',
+        body: reason ? { reason } : {},
+        signal,
+        skipTenant: true,
+      },
+    );
   },
 };
 
@@ -1019,17 +1040,23 @@ export const workspacesApi = {
   },
 
   async archive(id: string, signal?: AbortSignal): Promise<ApiDataResponse<WorkspaceView>> {
-    return apiFetch<ApiDataResponse<WorkspaceView>>(`/workspaces/${encodeURIComponent(id)}/archive`, {
-      method: 'POST',
-      signal,
-    });
+    return apiFetch<ApiDataResponse<WorkspaceView>>(
+      `/workspaces/${encodeURIComponent(id)}/archive`,
+      {
+        method: 'POST',
+        signal,
+      },
+    );
   },
 
   async restore(id: string, signal?: AbortSignal): Promise<ApiDataResponse<WorkspaceView>> {
-    return apiFetch<ApiDataResponse<WorkspaceView>>(`/workspaces/${encodeURIComponent(id)}/restore`, {
-      method: 'POST',
-      signal,
-    });
+    return apiFetch<ApiDataResponse<WorkspaceView>>(
+      `/workspaces/${encodeURIComponent(id)}/restore`,
+      {
+        method: 'POST',
+        signal,
+      },
+    );
   },
 };
 
@@ -1153,15 +1180,21 @@ export const roleAssignmentsApi = {
     });
   },
 
-  async listForUser(userId: string, signal?: AbortSignal): Promise<ApiPagedResponse<RoleAssignmentView>> {
+  async listForUser(
+    userId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<RoleAssignmentView>> {
     return this.list({ userId }, signal);
   },
 
   async get(id: string, signal?: AbortSignal): Promise<ApiDataResponse<RoleAssignmentView>> {
-    return apiFetch<ApiDataResponse<RoleAssignmentView>>(`/role-assignments/${encodeURIComponent(id)}`, {
-      method: 'GET',
-      signal,
-    });
+    return apiFetch<ApiDataResponse<RoleAssignmentView>>(
+      `/role-assignments/${encodeURIComponent(id)}`,
+      {
+        method: 'GET',
+        signal,
+      },
+    );
   },
 
   async create(

@@ -10,12 +10,7 @@ interface TeamArchiveDialogProps {
   readonly onSuccess: (team: TeamView) => void;
 }
 
-export function TeamArchiveDialog({
-  isOpen,
-  team,
-  onClose,
-  onSuccess,
-}: TeamArchiveDialogProps) {
+export function TeamArchiveDialog({ isOpen, team, onClose, onSuccess }: TeamArchiveDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -61,13 +56,18 @@ export function TeamArchiveDialog({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl">
-        <h2 id="archive-team-title" className="text-lg font-semibold tracking-tight text-[var(--color-ink)]">
+        <h2
+          id="archive-team-title"
+          className="text-lg font-semibold tracking-tight text-[var(--color-ink)]"
+        >
           Archive Team
         </h2>
         <div className="mt-3 rounded-md border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 p-3 text-xs text-[var(--color-warn)]">
           <p className="font-semibold">Archive Team</p>
           <p className="mt-1 leading-relaxed">
-            Archiving <span className="font-semibold text-[var(--color-ink)]">{team.name}</span> prevents assigning new roles or granting permissions at this team scope. Existing grants will continue to function.
+            Archiving <span className="font-semibold text-[var(--color-ink)]">{team.name}</span>{' '}
+            prevents assigning new roles or granting permissions at this team scope. Existing grants
+            will continue to function.
           </p>
         </div>
 

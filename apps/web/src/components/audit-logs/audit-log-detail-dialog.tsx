@@ -66,7 +66,10 @@ export function AuditLogDetailDialog({
         <div className="flex items-start justify-between border-b border-[var(--color-border-subtle)] pb-4">
           <div>
             <div className="flex items-center gap-2">
-              <h2 id="audit-log-detail-title" className="text-base font-bold tracking-tight font-mono">
+              <h2
+                id="audit-log-detail-title"
+                className="text-base font-bold tracking-tight font-mono"
+              >
                 {log.action}
               </h2>
               <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] px-2 py-0.5 text-[11px] font-medium capitalize">
@@ -74,7 +77,10 @@ export function AuditLogDetailDialog({
               </span>
             </div>
             <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-              Occurred: <span className="text-[var(--color-ink)]">{new Date(log.occurredAt).toLocaleString()}</span>{' '}
+              Occurred:{' '}
+              <span className="text-[var(--color-ink)]">
+                {new Date(log.occurredAt).toLocaleString()}
+              </span>{' '}
               ({log.occurredAt})
             </p>
           </div>
@@ -92,7 +98,9 @@ export function AuditLogDetailDialog({
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-3">
             <div>
               <span className="text-[var(--color-ink-muted)] block">Record ID</span>
-              <span className="font-mono text-[11px] text-[var(--color-ink)] select-all">{log.id}</span>
+              <span className="font-mono text-[11px] text-[var(--color-ink)] select-all">
+                {log.id}
+              </span>
             </div>
             <div>
               <span className="text-[var(--color-ink-muted)] block">Actor</span>
@@ -128,11 +136,16 @@ export function AuditLogDetailDialog({
             </div>
             <div>
               <span className="text-[var(--color-ink-muted)] block">Client Origin IP</span>
-              <span className="font-mono text-[11px] text-[var(--color-ink)]">{log.ip ?? 'None'}</span>
+              <span className="font-mono text-[11px] text-[var(--color-ink)]">
+                {log.ip ?? 'None'}
+              </span>
             </div>
             <div>
               <span className="text-[var(--color-ink-muted)] block">User Agent</span>
-              <span className="text-[11px] text-[var(--color-ink)] truncate block" title={log.userAgent ?? undefined}>
+              <span
+                className="text-[11px] text-[var(--color-ink)] truncate block"
+                title={log.userAgent ?? undefined}
+              >
                 {log.userAgent ?? 'None'}
               </span>
             </div>
@@ -142,7 +155,9 @@ export function AuditLogDetailDialog({
           <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="min-w-0 flex-1">
-                <span className="text-[var(--color-ink-muted)] block">Correlation ID (Causal Trace)</span>
+                <span className="text-[var(--color-ink-muted)] block">
+                  Correlation ID (Causal Trace)
+                </span>
                 <span className="font-mono text-[11px] text-[var(--color-ink)] select-all break-all">
                   {log.correlationId}
                 </span>
@@ -171,7 +186,9 @@ export function AuditLogDetailDialog({
             </div>
             {log.causationId && (
               <div className="mt-2 border-t border-[var(--color-border-subtle)] pt-2">
-                <span className="text-[var(--color-ink-muted)] block">Causation ID (Direct Parent Event)</span>
+                <span className="text-[var(--color-ink-muted)] block">
+                  Causation ID (Direct Parent Event)
+                </span>
                 <span className="font-mono text-[11px] text-[var(--color-ink)] select-all break-all">
                   {log.causationId}
                 </span>
@@ -184,7 +201,9 @@ export function AuditLogDetailDialog({
             <h3 className="font-semibold text-[var(--color-ink)] mb-2">Scope Ancestry</h3>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-[11px]">
               <div>
-                <span className="text-[var(--color-ink-muted)] block text-[10px]">Organization</span>
+                <span className="text-[var(--color-ink-muted)] block text-[10px]">
+                  Organization
+                </span>
                 <span>{log.orgId ? `${log.orgId.slice(0, 8)}…` : '—'}</span>
               </div>
               <div>
@@ -206,7 +225,10 @@ export function AuditLogDetailDialog({
           <div className="space-y-3">
             <div>
               <h3 className="font-semibold text-[var(--color-ink)] mb-1">State Before Change</h3>
-              {renderSafeJson(log.before, 'No prior state recorded (creation or unmutated resource).')}
+              {renderSafeJson(
+                log.before,
+                'No prior state recorded (creation or unmutated resource).',
+              )}
             </div>
 
             <div>

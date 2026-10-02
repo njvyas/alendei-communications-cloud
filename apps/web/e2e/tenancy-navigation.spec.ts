@@ -9,11 +9,7 @@ test.describe('Tenancy & Route Authorization (E2E-06, E2E-07, E2E-10, E2E-11)', 
   // ---------------------------------------------------------------------------
   test('E2E-06: Multi-organization selection and switching', async ({ page }) => {
     // 1. Authenticate as multi-org user who holds grants in both Organization A1 and Organization A2
-    await loginViaUi(
-      page,
-      TEST_CREDENTIALS.multiOrg.email,
-      TEST_CREDENTIALS.multiOrg.password,
-    );
+    await loginViaUi(page, TEST_CREDENTIALS.multiOrg.email, TEST_CREDENTIALS.multiOrg.password);
 
     // 2. Handle the initial organization-selection view (rendered when multiple orgs exist)
     await expect(page.getByText('Select Organization')).toBeVisible({ timeout: 10_000 });
@@ -105,7 +101,9 @@ test.describe('Tenancy & Route Authorization (E2E-06, E2E-07, E2E-10, E2E-11)', 
     await page.goto('/api-keys');
     expect(page.url()).toContain('/api-keys');
     await expect(page.getByRole('heading', { name: 'API Keys' })).toBeVisible();
-    await expect(page.getByRole('button', { name: /\+? Create API Key|Create your first API key/i }).first()).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: /\+? Create API Key|Create your first API key/i }).first(),
+    ).toBeVisible();
 
     // 8. /audit-logs: Real audit trail table with planted audit rows
     await page.goto('/audit-logs');
@@ -176,11 +174,7 @@ test.describe('Tenancy & Route Authorization (E2E-06, E2E-07, E2E-10, E2E-11)', 
   // ---------------------------------------------------------------------------
   test('E2E-11: Unauthorized protected route boundary (low-privilege user)', async ({ page }) => {
     // 1. Authenticate as low-privilege user (read_only grant at Team T only, lacking audit.read)
-    await loginViaUi(
-      page,
-      TEST_CREDENTIALS.teamReader.email,
-      TEST_CREDENTIALS.teamReader.password,
-    );
+    await loginViaUi(page, TEST_CREDENTIALS.teamReader.email, TEST_CREDENTIALS.teamReader.password);
 
     // LAYER 1: Direct backend contract refusal proof
     // Low-privilege user attempting to read audit logs receives 403 AUTHZ_SCOPE_DENIED

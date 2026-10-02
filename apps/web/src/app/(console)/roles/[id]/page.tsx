@@ -29,7 +29,8 @@ export default function RoleDetailPage({ params }: RoleDetailPageProps) {
       <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center shadow-xs">
         <p className="text-sm font-semibold text-[var(--color-bad)]">Access Restricted</p>
         <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-          Viewing role details requires the <code className="font-mono">roles.read</code> permission.
+          Viewing role details requires the <code className="font-mono">roles.read</code>{' '}
+          permission.
         </p>
       </div>
     );

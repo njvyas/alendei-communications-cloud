@@ -236,7 +236,8 @@ describe('API Keys Administration API Client', () => {
     const testIdempotencyKey = 'idem-uuid-9999-0000';
 
     mockHandlers.push({
-      match: (url, options) => url.includes('/api-keys') && options.method === 'POST' && !url.includes('/revoke'),
+      match: (url, options) =>
+        url.includes('/api-keys') && options.method === 'POST' && !url.includes('/revoke'),
       handle: (_url, options) => {
         const headers = options.headers as Record<string, string>;
         assert.equal(headers['X-Acc-Organization'], ORG_ID);
@@ -295,7 +296,8 @@ describe('API Keys Administration API Client', () => {
     const replayIdempotencyKey = 'idem-replay-key-1111';
 
     mockHandlers.push({
-      match: (url, options) => url.includes('/api-keys') && options.method === 'POST' && !url.includes('/revoke'),
+      match: (url, options) =>
+        url.includes('/api-keys') && options.method === 'POST' && !url.includes('/revoke'),
       handle: () =>
         new Response(
           JSON.stringify({
@@ -335,7 +337,8 @@ describe('API Keys Administration API Client', () => {
     let dispatchedMethod = '';
 
     mockHandlers.push({
-      match: (url, options) => url.includes(`/api-keys/${keyId}/revoke`) && options.method === 'POST',
+      match: (url, options) =>
+        url.includes(`/api-keys/${keyId}/revoke`) && options.method === 'POST',
       handle: (_url, options) => {
         dispatchedMethod = options.method!;
         const headers = options.headers as Record<string, string>;

@@ -22,8 +22,8 @@ export function ZeroOrgView() {
       <Card className="w-full">
         <CardTitle>No Organization Access</CardTitle>
         <CardDescription>
-          Your account is successfully authenticated, but you do not hold active grants in any organization.
-          Tenant-scoped operations are not available.
+          Your account is successfully authenticated, but you do not hold active grants in any
+          organization. Tenant-scoped operations are not available.
         </CardDescription>
         <div className="mt-6 flex items-center justify-between gap-3">
           {canReadOrganizations && (

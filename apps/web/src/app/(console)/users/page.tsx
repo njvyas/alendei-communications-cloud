@@ -168,7 +168,10 @@ export default function UsersPage() {
           {/* Status & Sort Selectors */}
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-1.5">
-              <label htmlFor="filter-status" className="text-xs font-medium text-[var(--color-ink-muted)]">
+              <label
+                htmlFor="filter-status"
+                className="text-xs font-medium text-[var(--color-ink-muted)]"
+              >
                 Status:
               </label>
               <select
@@ -185,7 +188,10 @@ export default function UsersPage() {
             </div>
 
             <div className="flex items-center gap-1.5">
-              <label htmlFor="sort-users" className="text-xs font-medium text-[var(--color-ink-muted)]">
+              <label
+                htmlFor="sort-users"
+                className="text-xs font-medium text-[var(--color-ink-muted)]"
+              >
                 Sort:
               </label>
               <select
@@ -229,19 +235,24 @@ export default function UsersPage() {
             <>
               <p className="text-base font-semibold text-[var(--color-bad)]">Access Forbidden</p>
               <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-                You do not hold the required <code className="font-mono">users.read</code> permission in this organization.
+                You do not hold the required <code className="font-mono">users.read</code>{' '}
+                permission in this organization.
               </p>
             </>
           ) : error instanceof ApiError && error.status === 429 ? (
             <>
-              <p className="text-base font-semibold text-[var(--color-warn)]">Rate Limit Exceeded</p>
+              <p className="text-base font-semibold text-[var(--color-warn)]">
+                Rate Limit Exceeded
+              </p>
               <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
                 Too many requests. Please wait a few moments before trying again.
               </p>
             </>
           ) : (
             <>
-              <p className="text-base font-semibold text-[var(--color-bad)]">Failed to Load Users</p>
+              <p className="text-base font-semibold text-[var(--color-bad)]">
+                Failed to Load Users
+              </p>
               <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
                 {error instanceof ApiError ? error.message : 'An unexpected error occurred.'}
               </p>
@@ -307,10 +318,15 @@ export default function UsersPage() {
                   <tr key={user.id} className="hover:bg-[var(--color-surface)]/60">
                     <td className="px-4 py-3">
                       <p className="font-medium text-[var(--color-ink)]">{user.email}</p>
-                      <p className="font-mono text-[10px] text-[var(--color-ink-muted)]">{user.id}</p>
+                      <p className="font-mono text-[10px] text-[var(--color-ink-muted)]">
+                        {user.id}
+                      </p>
                     </td>
                     <td className="px-4 py-3">
-                      <StatusDot tone={STATUS_TONES[user.status] ?? 'unknown'} label={user.status} />
+                      <StatusDot
+                        tone={STATUS_TONES[user.status] ?? 'unknown'}
+                        label={user.status}
+                      />
                     </td>
                     <td className="px-4 py-3 text-[var(--color-ink-muted)]">
                       {user.phone ?? <span className="text-[var(--color-ink-muted)]/60">—</span>}

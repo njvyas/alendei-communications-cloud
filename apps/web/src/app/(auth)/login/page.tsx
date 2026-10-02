@@ -22,7 +22,11 @@ export default function LoginPage() {
   useEffect(() => {
     if (status === 'idle') {
       void bootstrapSession();
-    } else if (status === 'ready' || status === 'selecting_organization' || status === 'zero_organizations') {
+    } else if (
+      status === 'ready' ||
+      status === 'selecting_organization' ||
+      status === 'zero_organizations'
+    ) {
       router.replace('/');
     }
   }, [status, router]);
@@ -54,7 +58,9 @@ export default function LoginPage() {
         if (err.status === 429) {
           const retryAfter = (err.details?.retryAfterSeconds as number) ?? 60;
           setRateLimitSeconds(retryAfter);
-          setErrorMessage(`Too many sign-in attempts. Please wait ${retryAfter} seconds before trying again.`);
+          setErrorMessage(
+            `Too many sign-in attempts. Please wait ${retryAfter} seconds before trying again.`,
+          );
         } else if (err.code === 'AUTH_INVALID_CREDENTIALS') {
           setErrorMessage('Invalid email or password.');
         } else if (err.code === 'AUTH_ACCOUNT_DISABLED') {
@@ -78,7 +84,9 @@ export default function LoginPage() {
             Alendei Communications Cloud
           </p>
           <CardTitle>Sign in</CardTitle>
-          <CardDescription>Enter your email and password to access the control plane.</CardDescription>
+          <CardDescription>
+            Enter your email and password to access the control plane.
+          </CardDescription>
         </div>
 
         {errorMessage && (
@@ -97,7 +105,10 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label htmlFor="email" className="block text-xs font-medium text-[var(--color-ink-muted)]">
+            <label
+              htmlFor="email"
+              className="block text-xs font-medium text-[var(--color-ink-muted)]"
+            >
               Email address
             </label>
             <input
@@ -115,7 +126,10 @@ export default function LoginPage() {
           </div>
 
           <div>
-            <label htmlFor="password" className="block text-xs font-medium text-[var(--color-ink-muted)]">
+            <label
+              htmlFor="password"
+              className="block text-xs font-medium text-[var(--color-ink-muted)]"
+            >
               Password
             </label>
             <input

@@ -1,7 +1,14 @@
 'use client';
 
 import { useState, useEffect, type FormEvent } from 'react';
-import { ApiError, organizationsApi, type BillingMode, type BillingPolicy, type CreateOrganizationParams, type OrganizationView } from '@/lib/api-client';
+import {
+  ApiError,
+  organizationsApi,
+  type BillingMode,
+  type BillingPolicy,
+  type CreateOrganizationParams,
+  type OrganizationView,
+} from '@/lib/api-client';
 import { useCanManagePlatformTenants, useSession } from '@/lib/session-store';
 
 interface OrganizationCreateDialogProps {
@@ -22,7 +29,11 @@ function slugify(text: string): string {
     .slice(0, 63);
 }
 
-export function OrganizationCreateDialog({ isOpen, onClose, onSuccess }: OrganizationCreateDialogProps) {
+export function OrganizationCreateDialog({
+  isOpen,
+  onClose,
+  onSuccess,
+}: OrganizationCreateDialogProps) {
   const isPlatformAdmin = useSession((state) => state.authorization?.isPlatformAdmin ?? false);
   const canManagePlatformTenants = useCanManagePlatformTenants();
   const showBillingOptions = isPlatformAdmin || canManagePlatformTenants;
@@ -95,7 +106,8 @@ export function OrganizationCreateDialog({ isOpen, onClose, onSuccess }: Organiz
     if (!trimmedSlug) {
       errors.slug = 'Slug is required';
     } else if (!SLUG_REGEX.test(trimmedSlug)) {
-      errors.slug = 'Slug must be 2-63 lower-case letters, digits or hyphens and start with alphanumeric';
+      errors.slug =
+        'Slug must be 2-63 lower-case letters, digits or hyphens and start with alphanumeric';
     }
 
     if (trimmedLegalName && trimmedLegalName.length > 200) {
@@ -106,7 +118,10 @@ export function OrganizationCreateDialog({ isOpen, onClose, onSuccess }: Organiz
       errors.gstin = 'Must be a valid 15-character GSTIN format (e.g. 24ABCDE1234F1Z5)';
     }
 
-    if (trimmedResellerId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmedResellerId)) {
+    if (
+      trimmedResellerId &&
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmedResellerId)
+    ) {
       errors.resellerId = 'Reseller ID must be a valid UUID';
     }
 
@@ -122,7 +137,7 @@ export function OrganizationCreateDialog({ isOpen, onClose, onSuccess }: Organiz
       slug: trimmedSlug,
       legalName: trimmedLegalName || undefined,
       gstin: trimmedGstin || undefined,
-      resellerId: (isPlatformAdmin && trimmedResellerId) ? trimmedResellerId : undefined,
+      resellerId: isPlatformAdmin && trimmedResellerId ? trimmedResellerId : undefined,
       ...(showBillingOptions ? { billingMode, billingPolicy } : {}),
     };
 
@@ -136,7 +151,9 @@ export function OrganizationCreateDialog({ isOpen, onClose, onSuccess }: Organiz
           setErrorMessage('An organization with this slug already exists.');
           setFieldErrors((prev) => ({ ...prev, slug: 'Slug already taken' }));
         } else if (err.status === 403) {
-          setErrorMessage('You do not have permission to create organizations beneath the target scope.');
+          setErrorMessage(
+            'You do not have permission to create organizations beneath the target scope.',
+          );
         } else if (err.status === 400 && err.details && typeof err.details === 'object') {
           setErrorMessage(err.message);
           const issues = (err.details as { issues?: string[] }).issues;
@@ -170,7 +187,10 @@ export function OrganizationCreateDialog({ isOpen, onClose, onSuccess }: Organiz
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <div className="w-full max-w-lg rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl max-h-[90vh] overflow-y-auto">
-        <h2 id="create-org-title" className="text-lg font-semibold tracking-tight text-[var(--color-ink)]">
+        <h2
+          id="create-org-title"
+          className="text-lg font-semibold tracking-tight text-[var(--color-ink)]"
+        >
           Create New Organization
         </h2>
         <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
@@ -224,7 +244,10 @@ export function OrganizationCreateDialog({ isOpen, onClose, onSuccess }: Organiz
           </div>
 
           <div>
-            <label htmlFor="org-legal-name" className="block text-xs font-medium text-[var(--color-ink)]">
+            <label
+              htmlFor="org-legal-name"
+              className="block text-xs font-medium text-[var(--color-ink)]"
+            >
               Legal Name (Optional)
             </label>
             <input
@@ -242,7 +265,10 @@ export function OrganizationCreateDialog({ isOpen, onClose, onSuccess }: Organiz
           </div>
 
           <div>
-            <label htmlFor="org-gstin" className="block text-xs font-medium text-[var(--color-ink)]">
+            <label
+              htmlFor="org-gstin"
+              className="block text-xs font-medium text-[var(--color-ink)]"
+            >
               GSTIN (Optional)
             </label>
             <input
@@ -261,7 +287,10 @@ export function OrganizationCreateDialog({ isOpen, onClose, onSuccess }: Organiz
 
           {isPlatformAdmin && (
             <div>
-              <label htmlFor="org-reseller" className="block text-xs font-medium text-[var(--color-ink)]">
+              <label
+                htmlFor="org-reseller"
+                className="block text-xs font-medium text-[var(--color-ink)]"
+              >
                 Target Reseller ID (Optional)
               </label>
               <input
@@ -282,7 +311,10 @@ export function OrganizationCreateDialog({ isOpen, onClose, onSuccess }: Organiz
           {showBillingOptions && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-[var(--color-border-subtle)]">
               <div>
-                <label htmlFor="org-billing-mode" className="block text-xs font-medium text-[var(--color-ink)]">
+                <label
+                  htmlFor="org-billing-mode"
+                  className="block text-xs font-medium text-[var(--color-ink)]"
+                >
                   Billing Mode
                 </label>
                 <select
@@ -298,7 +330,10 @@ export function OrganizationCreateDialog({ isOpen, onClose, onSuccess }: Organiz
               </div>
 
               <div>
-                <label htmlFor="org-billing-policy" className="block text-xs font-medium text-[var(--color-ink)]">
+                <label
+                  htmlFor="org-billing-policy"
+                  className="block text-xs font-medium text-[var(--color-ink)]"
+                >
                   Billing Policy
                 </label>
                 <select

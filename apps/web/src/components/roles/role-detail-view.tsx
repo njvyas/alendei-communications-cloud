@@ -14,7 +14,12 @@ interface RoleDetailViewProps {
   onRoleDeleted: (deletedRoleId: string) => void;
 }
 
-export function RoleDetailView({ role, onBack, onRoleUpdated, onRoleDeleted }: RoleDetailViewProps) {
+export function RoleDetailView({
+  role,
+  onBack,
+  onRoleUpdated,
+  onRoleDeleted,
+}: RoleDetailViewProps) {
   const canUpdate = useHasPermission('roles.update');
   const canDelete = useHasPermission('roles.delete');
 
@@ -103,8 +108,9 @@ export function RoleDetailView({ role, onBack, onRoleUpdated, onRoleDeleted }: R
         {!isCustomRole && (
           <div className="mt-4 rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface)]/60 p-3 text-xs text-[var(--color-ink-muted)]">
             <span className="font-semibold text-[var(--color-ink)]">System-Defined Role: </span>
-            This role is defined by the platform architecture and is immutable. Its name, description, allowed scope levels,
-            and bundled permissions cannot be modified or deleted by tenant administrators.
+            This role is defined by the platform architecture and is immutable. Its name,
+            description, allowed scope levels, and bundled permissions cannot be modified or deleted
+            by tenant administrators.
           </div>
         )}
 
@@ -118,7 +124,9 @@ export function RoleDetailView({ role, onBack, onRoleUpdated, onRoleDeleted }: R
           </div>
 
           <div>
-            <p className="text-xs font-medium text-[var(--color-ink-muted)]">Allowed Grant Scopes</p>
+            <p className="text-xs font-medium text-[var(--color-ink-muted)]">
+              Allowed Grant Scopes
+            </p>
             <div className="mt-1 flex flex-wrap gap-1">
               {role.allowedScopeTypes.map((scope) => (
                 <span
@@ -133,12 +141,16 @@ export function RoleDetailView({ role, onBack, onRoleUpdated, onRoleDeleted }: R
 
           <div>
             <p className="text-xs font-medium text-[var(--color-ink-muted)]">Total Permissions</p>
-            <p className="mt-1 text-sm font-semibold text-[var(--color-ink)]">{role.permissions.length}</p>
+            <p className="mt-1 text-sm font-semibold text-[var(--color-ink)]">
+              {role.permissions.length}
+            </p>
           </div>
 
           <div>
             <p className="text-xs font-medium text-[var(--color-ink-muted)]">Last Updated</p>
-            <p className="mt-1 text-sm text-[var(--color-ink)]">{new Date(role.updatedAt).toLocaleString()}</p>
+            <p className="mt-1 text-sm text-[var(--color-ink)]">
+              {new Date(role.updatedAt).toLocaleString()}
+            </p>
           </div>
         </div>
 
@@ -146,7 +158,9 @@ export function RoleDetailView({ role, onBack, onRoleUpdated, onRoleDeleted }: R
         {role.description && (
           <div className="mt-5 border-t border-[var(--color-border-subtle)] pt-4">
             <p className="text-xs font-medium text-[var(--color-ink-muted)]">Description</p>
-            <p className="mt-1 text-xs text-[var(--color-ink)] leading-relaxed">{role.description}</p>
+            <p className="mt-1 text-xs text-[var(--color-ink)] leading-relaxed">
+              {role.description}
+            </p>
           </div>
         )}
       </div>
@@ -163,7 +177,9 @@ export function RoleDetailView({ role, onBack, onRoleUpdated, onRoleDeleted }: R
         </div>
 
         {groupedPermissions.length === 0 ? (
-          <p className="mt-4 text-xs text-[var(--color-ink-muted)]">This role carries no permissions.</p>
+          <p className="mt-4 text-xs text-[var(--color-ink-muted)]">
+            This role carries no permissions.
+          </p>
         ) : (
           <div className="mt-4 space-y-4">
             {groupedPermissions.map(([domain, perms]) => (

@@ -66,8 +66,12 @@ export default function AuditLogsPage() {
     action: activeActionQuery || undefined,
     resourceType: activeResourceTypeQuery || undefined,
     correlationId: activeCorrelationIdQuery || undefined,
-    occurredFrom: occurredFromDate ? new Date(`${occurredFromDate}T00:00:00.000Z`).toISOString() : undefined,
-    occurredTo: occurredToDate ? new Date(`${occurredToDate}T23:59:59.999Z`).toISOString() : undefined,
+    occurredFrom: occurredFromDate
+      ? new Date(`${occurredFromDate}T00:00:00.000Z`).toISOString()
+      : undefined,
+    occurredTo: occurredToDate
+      ? new Date(`${occurredToDate}T23:59:59.999Z`).toISOString()
+      : undefined,
   };
 
   // TanStack Query strictly scoped to selectedOrgId
@@ -213,7 +217,10 @@ export default function AuditLogsPage() {
         </div>
 
         {/* Search Inputs Form */}
-        <form onSubmit={handleSearchSubmit} className="space-y-3 border-t border-[var(--color-border-subtle)] pt-3">
+        <form
+          onSubmit={handleSearchSubmit}
+          className="space-y-3 border-t border-[var(--color-border-subtle)] pt-3"
+        >
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <input
               type="text"
@@ -302,7 +309,8 @@ export default function AuditLogsPage() {
         <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center">
           <p className="text-base font-semibold text-[var(--color-bad)]">Access Forbidden</p>
           <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-            You do not hold the required <code className="font-mono">audit.read</code> permission in this organization.
+            You do not hold the required <code className="font-mono">audit.read</code> permission in
+            this organization.
           </p>
         </div>
       ) : isLoading ? (
@@ -318,20 +326,24 @@ export default function AuditLogsPage() {
             <>
               <p className="text-base font-semibold text-[var(--color-bad)]">Access Forbidden</p>
               <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-                You do not hold the required <code className="font-mono">audit.read</code> permission in this
-                organization.
+                You do not hold the required <code className="font-mono">audit.read</code>{' '}
+                permission in this organization.
               </p>
             </>
           ) : error instanceof ApiError && error.status === 429 ? (
             <>
-              <p className="text-base font-semibold text-[var(--color-warn)]">Rate Limit Exceeded</p>
+              <p className="text-base font-semibold text-[var(--color-warn)]">
+                Rate Limit Exceeded
+              </p>
               <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
                 Too many requests. Please wait a few moments before trying again.
               </p>
             </>
           ) : (
             <>
-              <p className="text-base font-semibold text-[var(--color-bad)]">Failed to Load Audit Logs</p>
+              <p className="text-base font-semibold text-[var(--color-bad)]">
+                Failed to Load Audit Logs
+              </p>
               <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
                 {error instanceof ApiError ? error.message : 'An unexpected error occurred.'}
               </p>
@@ -397,22 +409,34 @@ export default function AuditLogsPage() {
               </thead>
               <tbody className="divide-y divide-[var(--color-border-subtle)]">
                 {logs.map((log) => (
-                  <tr key={log.id} className="hover:bg-[var(--color-surface-raised)]/50 transition-colors">
+                  <tr
+                    key={log.id}
+                    className="hover:bg-[var(--color-surface-raised)]/50 transition-colors"
+                  >
                     <td className="px-4 py-3 text-[var(--color-ink-muted)] whitespace-nowrap">
                       {new Date(log.occurredAt).toLocaleString()}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-xs font-medium text-[var(--color-ink)]">{log.action}</span>
+                        <span className="font-mono text-xs font-medium text-[var(--color-ink)]">
+                          {log.action}
+                        </span>
                         <span className="inline-flex items-center gap-1 capitalize">
-                          <StatusDot tone={OUTCOME_TONES[log.outcome] ?? 'unknown'} label={log.outcome} />
+                          <StatusDot
+                            tone={OUTCOME_TONES[log.outcome] ?? 'unknown'}
+                            label={log.outcome}
+                          />
                         </span>
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="font-medium text-[var(--color-ink)] capitalize">{log.actorType}</span>
+                      <span className="font-medium text-[var(--color-ink)] capitalize">
+                        {log.actorType}
+                      </span>
                       {log.actorLabel ? (
-                        <span className="block text-[11px] text-[var(--color-ink-muted)]">{log.actorLabel}</span>
+                        <span className="block text-[11px] text-[var(--color-ink-muted)]">
+                          {log.actorLabel}
+                        </span>
                       ) : log.actorUserId ? (
                         <span className="block font-mono text-[10px] text-[var(--color-ink-muted)]">
                           {log.actorUserId.slice(0, 8)}…
@@ -420,7 +444,9 @@ export default function AuditLogsPage() {
                       ) : null}
                     </td>
                     <td className="px-4 py-3">
-                      <span className="font-medium text-[var(--color-ink)]">{log.resourceType}</span>
+                      <span className="font-medium text-[var(--color-ink)]">
+                        {log.resourceType}
+                      </span>
                       {log.resourceId && (
                         <span className="block font-mono text-[10px] text-[var(--color-ink-muted)]">
                           {log.resourceId.slice(0, 8)}…

@@ -262,16 +262,29 @@ export default function TeamsPage() {
             <table className="w-full text-left text-xs">
               <thead className="border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] text-[var(--color-ink-muted)]">
                 <tr>
-                  <th scope="col" className="px-4 py-3 font-medium">Team</th>
-                  <th scope="col" className="px-4 py-3 font-medium">Workspace</th>
-                  <th scope="col" className="px-4 py-3 font-medium">Status</th>
-                  <th scope="col" className="px-4 py-3 font-medium">Created</th>
-                  <th scope="col" className="px-4 py-3 text-right font-medium">Actions</th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    Team
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    Workspace
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    Status
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    Created
+                  </th>
+                  <th scope="col" className="px-4 py-3 text-right font-medium">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border-subtle)]">
                 {teams.map((team) => (
-                  <tr key={team.id} className="hover:bg-[var(--color-surface-raised)]/50 transition-colors">
+                  <tr
+                    key={team.id}
+                    className="hover:bg-[var(--color-surface-raised)]/50 transition-colors"
+                  >
                     <td className="px-4 py-3">
                       <Link
                         href={`/teams/${team.id}`}
@@ -286,7 +299,9 @@ export default function TeamsPage() {
                         className="text-[var(--color-ink)] hover:underline"
                       >
                         {workspaceMap.get(team.workspaceId) ?? (
-                          <span className="font-mono text-[10px]">{team.workspaceId.slice(0, 8)}…</span>
+                          <span className="font-mono text-[10px]">
+                            {team.workspaceId.slice(0, 8)}…
+                          </span>
                         )}
                       </Link>
                     </td>

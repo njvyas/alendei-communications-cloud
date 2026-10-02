@@ -60,7 +60,10 @@ export function RoleDeleteDialog({ role, isOpen, onClose, onSuccess }: RoleDelet
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4"
     >
       <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-6 shadow-xl">
-        <h2 id="delete-role-dialog-title" className="text-base font-semibold text-[var(--color-ink)]">
+        <h2
+          id="delete-role-dialog-title"
+          className="text-base font-semibold text-[var(--color-ink)]"
+        >
           Delete Role: {role.name}
         </h2>
 
@@ -69,7 +72,8 @@ export function RoleDeleteDialog({ role, isOpen, onClose, onSuccess }: RoleDelet
             <div className="rounded-lg border border-[var(--color-bad)]/40 bg-[var(--color-bad)]/10 p-3 text-[var(--color-bad)]">
               <p className="font-semibold">System Roles Cannot Be Deleted</p>
               <p className="mt-1 text-[11px]">
-                The role <code className="font-mono">{role.key}</code> is defined by the platform and is protected from deletion.
+                The role <code className="font-mono">{role.key}</code> is defined by the platform
+                and is protected from deletion.
               </p>
             </div>
             <div className="flex justify-end">
@@ -90,7 +94,8 @@ export function RoleDeleteDialog({ role, isOpen, onClose, onSuccess }: RoleDelet
               <code className="font-mono text-[11px]">{role.key}</code>)?
             </p>
             <p className="text-[11px] text-[var(--color-ink-muted)]">
-              Roles that are currently granted to any active users cannot be deleted until all grants are revoked.
+              Roles that are currently granted to any active users cannot be deleted until all
+              grants are revoked.
             </p>
 
             {errorMessage && (

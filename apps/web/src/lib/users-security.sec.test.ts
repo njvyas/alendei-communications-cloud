@@ -11,10 +11,7 @@ import {
   type EffectiveAuthorization,
   type UserIdentity,
 } from './api-client';
-import {
-  hasPermission,
-  useSession,
-} from './session-store';
+import { hasPermission, useSession } from './session-store';
 
 describe('Users Security Invariants & Boundary Enforcement', () => {
   const originalFetch = globalThis.fetch;
@@ -114,10 +111,13 @@ describe('Users Security Invariants & Boundary Enforcement', () => {
       match: (url) => url.includes('/users'),
       handle: (_url, options) => {
         capturedHeaders = options.headers as Record<string, string>;
-        return new Response(JSON.stringify({ data: [], page: { nextCursor: null, hasMore: false, limit: 25 } }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return new Response(
+          JSON.stringify({ data: [], page: { nextCursor: null, hasMore: false, limit: 25 } }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        );
       },
     });
 
@@ -156,9 +156,23 @@ describe('Users Security Invariants & Boundary Enforcement', () => {
     assert.equal((callB.options.headers as Record<string, string>)['X-Acc-Organization'], ORG_B);
 
     // Verify query keys differ by organization
-    const queryKeyOrgA = ['users', 'list', ORG_A, { status: undefined, email: undefined, sort: '-createdAt' }];
-    const queryKeyOrgB = ['users', 'list', ORG_B, { status: undefined, email: undefined, sort: '-createdAt' }];
-    assert.notDeepEqual(queryKeyOrgA, queryKeyOrgB, 'query keys for Org A and Org B must be strictly distinct');
+    const queryKeyOrgA = [
+      'users',
+      'list',
+      ORG_A,
+      { status: undefined, email: undefined, sort: '-createdAt' },
+    ];
+    const queryKeyOrgB = [
+      'users',
+      'list',
+      ORG_B,
+      { status: undefined, email: undefined, sort: '-createdAt' },
+    ];
+    assert.notDeepEqual(
+      queryKeyOrgA,
+      queryKeyOrgB,
+      'query keys for Org A and Org B must be strictly distinct',
+    );
   });
 
   // ---------------------------------------------------------------------------
@@ -242,7 +256,11 @@ describe('Users Security Invariants & Boundary Enforcement', () => {
     useSession.getState().selectOrganization(ORG_B);
 
     assert.equal(hasPermission('users.read'), true);
-    assert.equal(hasPermission('users.invite'), false, 'users.invite must NOT bleed from Org A into Org B');
+    assert.equal(
+      hasPermission('users.invite'),
+      false,
+      'users.invite must NOT bleed from Org A into Org B',
+    );
     assert.equal(hasPermission('users.disable'), false);
     assert.equal(hasPermission('users.reactivate'), false);
   });
@@ -288,7 +306,9 @@ describe('Users Security Invariants & Boundary Enforcement', () => {
               correlationId: 'corr-val-1',
               retryable: false,
               details: {
-                issues: [{ field: 'email', rule: 'IS_EMAIL', message: 'email must be a valid email' }],
+                issues: [
+                  { field: 'email', rule: 'IS_EMAIL', message: 'email must be a valid email' },
+                ],
               },
             },
           }),
@@ -359,7 +379,8 @@ describe('Users Security Invariants & Boundary Enforcement', () => {
 
     await assert.rejects(
       async () => apiFetch('/test-rate-limit'),
-      (err: unknown) => err instanceof ApiError && err.status === 429 && err.code === 'RATE_LIMIT_EXCEEDED',
+      (err: unknown) =>
+        err instanceof ApiError && err.status === 429 && err.code === 'RATE_LIMIT_EXCEEDED',
     );
   });
 
@@ -427,7 +448,11 @@ describe('Users Security Invariants & Boundary Enforcement', () => {
 
     assert.equal(sentIdempotencyKeys.length, 2);
     assert.equal(sentIdempotencyKeys[0], fixedIdempotencyKey);
-    assert.equal(sentIdempotencyKeys[1], fixedIdempotencyKey, 'retry MUST send the identical idempotency key');
+    assert.equal(
+      sentIdempotencyKeys[1],
+      fixedIdempotencyKey,
+      'retry MUST send the identical idempotency key',
+    );
   });
 
   // ---------------------------------------------------------------------------

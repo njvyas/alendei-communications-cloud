@@ -17,7 +17,12 @@ const STATUS_TONES: Record<string, StatusTone> = {
   revoked: 'bad',
 };
 
-export function ApiKeyDetailDialog({ isOpen, apiKey, onClose, onRevokeClick }: ApiKeyDetailDialogProps) {
+export function ApiKeyDetailDialog({
+  isOpen,
+  apiKey,
+  onClose,
+  onRevokeClick,
+}: ApiKeyDetailDialogProps) {
   const canRevoke = useHasPermission('api_keys.revoke');
 
   if (!isOpen || !apiKey) return null;
@@ -41,7 +46,8 @@ export function ApiKeyDetailDialog({ isOpen, apiKey, onClose, onRevokeClick }: A
               </span>
             </div>
             <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-              Identifier Prefix: <code className="font-mono text-[var(--color-ink)]">{apiKey.prefix}…</code>
+              Identifier Prefix:{' '}
+              <code className="font-mono text-[var(--color-ink)]">{apiKey.prefix}…</code>
             </p>
           </div>
           <button
@@ -58,7 +64,9 @@ export function ApiKeyDetailDialog({ isOpen, apiKey, onClose, onRevokeClick }: A
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-3">
             <div>
               <span className="text-[var(--color-ink-muted)] block">Key ID</span>
-              <span className="font-mono text-[11px] text-[var(--color-ink)] select-all">{apiKey.id}</span>
+              <span className="font-mono text-[11px] text-[var(--color-ink)] select-all">
+                {apiKey.id}
+              </span>
             </div>
             <div>
               <span className="text-[var(--color-ink-muted)] block">Binding Scope</span>
@@ -68,7 +76,9 @@ export function ApiKeyDetailDialog({ isOpen, apiKey, onClose, onRevokeClick }: A
             </div>
             <div>
               <span className="text-[var(--color-ink-muted)] block">Created At</span>
-              <span className="text-[var(--color-ink)]">{new Date(apiKey.createdAt).toLocaleString()}</span>
+              <span className="text-[var(--color-ink)]">
+                {new Date(apiKey.createdAt).toLocaleString()}
+              </span>
             </div>
             <div>
               <span className="text-[var(--color-ink-muted)] block">Last Used</span>
@@ -79,7 +89,9 @@ export function ApiKeyDetailDialog({ isOpen, apiKey, onClose, onRevokeClick }: A
             <div>
               <span className="text-[var(--color-ink-muted)] block">Expires</span>
               <span className="text-[var(--color-ink)]">
-                {apiKey.expiresAt ? new Date(apiKey.expiresAt).toLocaleString() : 'Never (No expiration)'}
+                {apiKey.expiresAt
+                  ? new Date(apiKey.expiresAt).toLocaleString()
+                  : 'Never (No expiration)'}
               </span>
             </div>
             <div>
@@ -92,7 +104,8 @@ export function ApiKeyDetailDialog({ isOpen, apiKey, onClose, onRevokeClick }: A
               <div className="col-span-1 sm:col-span-2 border-t border-[var(--color-border-subtle)] pt-2 text-[var(--color-bad)]">
                 <span className="font-semibold block">Revoked</span>
                 <span>
-                  {new Date(apiKey.revokedAt).toLocaleString()} ({apiKey.revokedReason ?? 'revoked_by_administrator'})
+                  {new Date(apiKey.revokedAt).toLocaleString()} (
+                  {apiKey.revokedReason ?? 'revoked_by_administrator'})
                 </span>
               </div>
             )}
@@ -105,7 +118,9 @@ export function ApiKeyDetailDialog({ isOpen, apiKey, onClose, onRevokeClick }: A
             </h3>
             <div className="max-h-36 overflow-y-auto rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-2">
               {apiKey.scopes.length === 0 ? (
-                <p className="text-xs text-[var(--color-ink-muted)] italic">No scopes granted to this key.</p>
+                <p className="text-xs text-[var(--color-ink-muted)] italic">
+                  No scopes granted to this key.
+                </p>
               ) : (
                 <div className="flex flex-wrap gap-1.5">
                   {apiKey.scopes.map((scope) => (

@@ -46,7 +46,9 @@ export function RevokeAssignmentDialog({
             'You do not have permission to revoke role assignments at this scope (role_assignments.revoke required).',
           );
         } else if (err.status === 409) {
-          setErrorMessage(err.message || 'Cannot revoke this role assignment due to an active conflict.');
+          setErrorMessage(
+            err.message || 'Cannot revoke this role assignment due to an active conflict.',
+          );
         } else if (err.status === 429) {
           setErrorMessage('Rate limit exceeded. Please wait a moment and try again.');
         } else {
@@ -71,15 +73,20 @@ export function RevokeAssignmentDialog({
         className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 id="revoke-assignment-title" className="text-base font-semibold text-[var(--color-ink)]">
+        <h3
+          id="revoke-assignment-title"
+          className="text-base font-semibold text-[var(--color-ink)]"
+        >
           Revoke Role Assignment
         </h3>
 
         <div className="mt-3 text-xs leading-relaxed text-[var(--color-ink-muted)] space-y-2">
           <p>
             Are you sure you want to revoke the role{' '}
-            <span className="font-mono font-semibold text-[var(--color-ink)]">{assignment.roleKey}</span> from{' '}
-            <span className="font-semibold text-[var(--color-ink)]">{userEmail}</span>?
+            <span className="font-mono font-semibold text-[var(--color-ink)]">
+              {assignment.roleKey}
+            </span>{' '}
+            from <span className="font-semibold text-[var(--color-ink)]">{userEmail}</span>?
           </p>
 
           <div className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-3 space-y-1 font-mono text-[11px]">
@@ -90,13 +97,16 @@ export function RevokeAssignmentDialog({
             <p>
               <span className="text-[var(--color-ink-muted)]">Target Scope: </span>
               <span className="text-[var(--color-ink)]">
-                {targetLabel ? `${targetLabel} (${assignment.scopeId})` : (assignment.scopeId ?? 'Global')}
+                {targetLabel
+                  ? `${targetLabel} (${assignment.scopeId})`
+                  : (assignment.scopeId ?? 'Global')}
               </span>
             </p>
           </div>
 
           <p className="text-[var(--color-bad)]">
-            The user will immediately lose all permissions and access granted by this role at this scope.
+            The user will immediately lose all permissions and access granted by this role at this
+            scope.
           </p>
         </div>
 

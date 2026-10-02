@@ -80,7 +80,9 @@ export default function OrganizationsPage() {
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-[var(--color-ink)]">Organizations</h1>
+          <h1 className="text-xl font-bold tracking-tight text-[var(--color-ink)]">
+            Organizations
+          </h1>
           <p className="text-xs text-[var(--color-ink-muted)]">
             Tenant organization administration, lifecycle management, and provisioning.
           </p>
@@ -148,7 +150,8 @@ export default function OrganizationsPage() {
         <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center">
           <p className="text-base font-semibold text-[var(--color-bad)]">Access Forbidden</p>
           <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-            You do not hold the required <code className="font-mono">organizations.read</code> permission.
+            You do not hold the required <code className="font-mono">organizations.read</code>{' '}
+            permission.
           </p>
         </div>
       ) : isLoading ? (
@@ -169,7 +172,9 @@ export default function OrganizationsPage() {
             </>
           ) : (
             <>
-              <p className="text-base font-semibold text-[var(--color-bad)]">Failed to Load Organizations</p>
+              <p className="text-base font-semibold text-[var(--color-bad)]">
+                Failed to Load Organizations
+              </p>
               <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
                 {error instanceof ApiError ? error.message : 'An unexpected error occurred.'}
               </p>
@@ -186,7 +191,9 @@ export default function OrganizationsPage() {
       ) : orgs.length === 0 ? (
         <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-12 text-center">
           <p className="text-base font-semibold text-[var(--color-ink)]">
-            {statusFilter !== 'all' ? 'No organizations match the selected filter' : 'No organizations found'}
+            {statusFilter !== 'all'
+              ? 'No organizations match the selected filter'
+              : 'No organizations found'}
           </p>
           <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
             {statusFilter !== 'all'
@@ -209,17 +216,32 @@ export default function OrganizationsPage() {
             <table className="w-full text-left text-xs">
               <thead className="border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] text-[var(--color-ink-muted)]">
                 <tr>
-                  <th scope="col" className="px-4 py-3 font-medium">Organization</th>
-                  <th scope="col" className="px-4 py-3 font-medium">Status</th>
-                  <th scope="col" className="px-4 py-3 font-medium">Legal Entity</th>
-                  <th scope="col" className="px-4 py-3 font-medium">Billing</th>
-                  <th scope="col" className="px-4 py-3 font-medium">Created</th>
-                  <th scope="col" className="px-4 py-3 text-right font-medium">Actions</th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    Organization
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    Status
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    Legal Entity
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    Billing
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    Created
+                  </th>
+                  <th scope="col" className="px-4 py-3 text-right font-medium">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border-subtle)]">
                 {orgs.map((org) => (
-                  <tr key={org.id} className="hover:bg-[var(--color-surface-raised)]/50 transition-colors">
+                  <tr
+                    key={org.id}
+                    className="hover:bg-[var(--color-surface-raised)]/50 transition-colors"
+                  >
                     <td className="px-4 py-3">
                       <Link
                         href={`/organizations/${org.id}`}

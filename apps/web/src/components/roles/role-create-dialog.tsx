@@ -22,11 +22,16 @@ interface RoleCreateDialogProps {
 }
 
 const ROLE_KEY_PATTERN = /^[a-z][a-z0-9_]{2,63}$/;
-const CREATABLE_SCOPES: readonly { type: TenantCreatableScopeType; label: string; desc: string }[] = [
-  { type: 'organization', label: 'Organization', desc: 'Can be granted at the organization level' },
-  { type: 'workspace', label: 'Workspace', desc: 'Can be granted at the workspace level' },
-  { type: 'team', label: 'Team', desc: 'Can be granted at the team level' },
-];
+const CREATABLE_SCOPES: readonly { type: TenantCreatableScopeType; label: string; desc: string }[] =
+  [
+    {
+      type: 'organization',
+      label: 'Organization',
+      desc: 'Can be granted at the organization level',
+    },
+    { type: 'workspace', label: 'Workspace', desc: 'Can be granted at the workspace level' },
+    { type: 'team', label: 'Team', desc: 'Can be granted at the team level' },
+  ];
 
 export function RoleCreateDialog({ isOpen, onClose, onSuccess }: RoleCreateDialogProps) {
   const selectedOrgId = useSession((state) => state.selectedOrganizationId);
@@ -35,7 +40,9 @@ export function RoleCreateDialog({ isOpen, onClose, onSuccess }: RoleCreateDialo
   const [key, setKey] = useState('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [allowedScopeTypes, setAllowedScopeTypes] = useState<TenantCreatableScopeType[]>(['organization']);
+  const [allowedScopeTypes, setAllowedScopeTypes] = useState<TenantCreatableScopeType[]>([
+    'organization',
+  ]);
   const [selectedPermissions, setSelectedPermissions] = useState<Set<string>>(new Set());
   const [permissionFilter, setPermissionFilter] = useState('');
   const [filterOnlyHeld, setFilterOnlyHeld] = useState(false);
@@ -64,7 +71,11 @@ export function RoleCreateDialog({ isOpen, onClose, onSuccess }: RoleCreateDialo
   }, [isOpen]);
 
   // Load permission catalogue
-  const { data: permissionsData, isLoading: permissionsLoading, error: permissionsError } = useQuery({
+  const {
+    data: permissionsData,
+    isLoading: permissionsLoading,
+    error: permissionsError,
+  } = useQuery({
     queryKey: ['permissions', 'catalogue'],
     queryFn: ({ signal }) => permissionsApi.list({ limit: 100 }, signal),
     enabled: isOpen,
@@ -156,7 +167,8 @@ export function RoleCreateDialog({ isOpen, onClose, onSuccess }: RoleCreateDialo
     if (!trimmedKey) {
       errors.key = 'Role key is required';
     } else if (!ROLE_KEY_PATTERN.test(trimmedKey)) {
-      errors.key = 'Key must be lower snake_case, 3-64 characters, starting with a letter (e.g. support_lead)';
+      errors.key =
+        'Key must be lower snake_case, 3-64 characters, starting with a letter (e.g. support_lead)';
     }
 
     if (!trimmedName) {
@@ -225,7 +237,10 @@ export function RoleCreateDialog({ isOpen, onClose, onSuccess }: RoleCreateDialo
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)] px-6 py-4">
           <div>
-            <h2 id="create-role-dialog-title" className="text-base font-semibold text-[var(--color-ink)]">
+            <h2
+              id="create-role-dialog-title"
+              className="text-base font-semibold text-[var(--color-ink)]"
+            >
               Create Custom Role
             </h2>
             <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
@@ -253,7 +268,10 @@ export function RoleCreateDialog({ isOpen, onClose, onSuccess }: RoleCreateDialo
                     <p className="text-[11px] font-medium">Offending unheld permissions:</p>
                     <div className="mt-1 flex flex-wrap gap-1">
                       {rejectedPermissions.map((p) => (
-                        <span key={p} className="rounded bg-[var(--color-bad)]/20 px-1.5 py-0.5 font-mono text-[10px]">
+                        <span
+                          key={p}
+                          className="rounded bg-[var(--color-bad)]/20 px-1.5 py-0.5 font-mono text-[10px]"
+                        >
                           {p}
                         </span>
                       ))}
@@ -365,7 +383,9 @@ export function RoleCreateDialog({ isOpen, onClose, onSuccess }: RoleCreateDialo
                       />
                       <div>
                         <span className="font-semibold text-[var(--color-ink)]">{scope.label}</span>
-                        <p className="mt-0.5 text-[10px] text-[var(--color-ink-muted)]">{scope.desc}</p>
+                        <p className="mt-0.5 text-[10px] text-[var(--color-ink-muted)]">
+                          {scope.desc}
+                        </p>
                       </div>
                     </label>
                   );
@@ -411,17 +431,26 @@ export function RoleCreateDialog({ isOpen, onClose, onSuccess }: RoleCreateDialo
               {/* Grouped Permission List */}
               <div className="mt-3 max-h-60 space-y-4 overflow-y-auto rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-3">
                 {permissionsLoading ? (
-                  <p className="text-center text-xs text-[var(--color-ink-muted)] py-4">Loading catalogue...</p>
+                  <p className="text-center text-xs text-[var(--color-ink-muted)] py-4">
+                    Loading catalogue...
+                  </p>
                 ) : permissionsError ? (
-                  <p className="text-center text-xs text-[var(--color-bad)] py-4">Failed to load permissions catalogue.</p>
+                  <p className="text-center text-xs text-[var(--color-bad)] py-4">
+                    Failed to load permissions catalogue.
+                  </p>
                 ) : groupedPermissions.length === 0 ? (
-                  <p className="text-center text-xs text-[var(--color-ink-muted)] py-4">No matching permissions found.</p>
+                  <p className="text-center text-xs text-[var(--color-ink-muted)] py-4">
+                    No matching permissions found.
+                  </p>
                 ) : (
                   groupedPermissions.map(([domain, perms]) => {
                     const allInGroupSelected = perms.every((p) => selectedPermissions.has(p.key));
 
                     return (
-                      <div key={domain} className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-2.5">
+                      <div
+                        key={domain}
+                        className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-2.5"
+                      >
                         <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)] pb-1.5">
                           <span className="font-mono font-semibold uppercase tracking-wider text-[11px] text-[var(--color-brand)]">
                             {domain}

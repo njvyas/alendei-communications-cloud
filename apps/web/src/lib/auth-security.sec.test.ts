@@ -1,12 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-  apiFetch,
-  authApi,
-  getAccessToken,
-  setAccessToken,
-} from './api-client';
+import { apiFetch, authApi, getAccessToken, setAccessToken } from './api-client';
 import { useSession } from './session-store';
 
 describe('Frontend Security Invariants', () => {
@@ -210,10 +205,7 @@ describe('Frontend Security Invariants', () => {
         !output.includes(sensitiveSecretToken),
         'console logs must NEVER disclose in-memory access tokens',
       );
-      assert.ok(
-        !output.includes(rawPassword),
-        'console logs must NEVER disclose user passwords',
-      );
+      assert.ok(!output.includes(rawPassword), 'console logs must NEVER disclose user passwords');
       assert.ok(
         !output.includes(`Bearer ${sensitiveSecretToken}`),
         'console logs must NEVER disclose Authorization header values',

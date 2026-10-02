@@ -11,7 +11,10 @@ import {
 } from './api-client';
 import { getActiveOrganizationGrants, useSession } from './session-store';
 
-function createMockUser(authorizedOrganizationIds: string[] = [], orgIdInTenant: string | null = null): UserIdentity {
+function createMockUser(
+  authorizedOrganizationIds: string[] = [],
+  orgIdInTenant: string | null = null,
+): UserIdentity {
   return {
     userId: 'user-uuid-1',
     actorType: 'user',
@@ -157,12 +160,9 @@ describe('Session Store & Organization Context', () => {
       authorization: auth,
     });
 
-    assert.throws(
-      () => {
-        useSession.getState().selectOrganization('org-forged-or-unauthorized');
-      },
-      /Cannot select unauthorized organization/,
-    );
+    assert.throws(() => {
+      useSession.getState().selectOrganization('org-forged-or-unauthorized');
+    }, /Cannot select unauthorized organization/);
 
     const state = useSession.getState();
     assert.equal(state.selectedOrganizationId, null);

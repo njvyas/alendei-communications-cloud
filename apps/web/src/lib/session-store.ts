@@ -116,7 +116,8 @@ export const useSession = create<SessionState>((set, get) => ({
       setSelectedOrganization(null);
       set({
         selectedOrganizationId: null,
-        status: authorizedOrganizationIds.length > 0 ? 'selecting_organization' : 'zero_organizations',
+        status:
+          authorizedOrganizationIds.length > 0 ? 'selecting_organization' : 'zero_organizations',
         errorMessage: `Cannot select unauthorized organization: ${orgId}`,
       });
       throw new Error(`Cannot select unauthorized organization: ${orgId}`);
@@ -147,7 +148,8 @@ export const useSession = create<SessionState>((set, get) => ({
     setSelectedOrganization(null);
     set({
       selectedOrganizationId: null,
-      status: authorizedOrganizationIds.length > 0 ? 'selecting_organization' : 'zero_organizations',
+      status:
+        authorizedOrganizationIds.length > 0 ? 'selecting_organization' : 'zero_organizations',
     });
   },
 
@@ -262,7 +264,8 @@ export function useHeldOrganizationPermissions(): Set<string> {
       } else if (
         grant.scopeType === 'organization' &&
         state.selectedOrganizationId &&
-        (grant.scopeId === state.selectedOrganizationId || grant.orgId === state.selectedOrganizationId)
+        (grant.scopeId === state.selectedOrganizationId ||
+          grant.orgId === state.selectedOrganizationId)
       ) {
         for (const p of grant.permissions) held.add(p);
       }

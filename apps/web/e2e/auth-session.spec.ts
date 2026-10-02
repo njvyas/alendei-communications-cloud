@@ -51,7 +51,9 @@ test.describe('Auth & Session Security (E2E-01 .. E2E-05)', () => {
     expect(page.url()).toContain('/login');
   });
 
-  test('E2E-03: Authenticated identity does not expose tokens in URL or storage', async ({ page }) => {
+  test('E2E-03: Authenticated identity does not expose tokens in URL or storage', async ({
+    page,
+  }) => {
     await loginViaUi(page);
 
     // 1. Authenticated shell renders

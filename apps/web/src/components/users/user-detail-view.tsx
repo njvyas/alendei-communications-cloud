@@ -111,7 +111,8 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
     } catch (err: unknown) {
       if (err instanceof ApiError) {
         if (err.status === 400) {
-          const issues = err.details?.issues as Array<{ field: string; message: string }> | undefined;
+          const issues = err.details?.issues as
+            Array<{ field: string; message: string }> | undefined;
           if (issues && issues.length > 0 && issues[0]) {
             setPhoneError(issues[0].message);
           } else {
@@ -149,12 +150,16 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
     } catch (err: unknown) {
       if (err instanceof ApiError) {
         if (err.code === 'AUTHZ_LAST_PLATFORM_ADMIN') {
-          setActionError('Cannot disable the last active platform administrator. Appoint another administrator first.');
+          setActionError(
+            'Cannot disable the last active platform administrator. Appoint another administrator first.',
+          );
         } else if (err.code === 'USER_LIFECYCLE_CONFLICT') {
           // Re-sync state
           await refetchUser();
           void queryClient.invalidateQueries({ queryKey: ['users', 'list', selectedOrgId] });
-          setActionError(`User status was already modified by another operator (${(err.details?.status as string) || 'updated'}). State has been refreshed.`);
+          setActionError(
+            `User status was already modified by another operator (${(err.details?.status as string) || 'updated'}). State has been refreshed.`,
+          );
         } else if (err.status === 403) {
           setActionError('You lack permission for this lifecycle action in this organization.');
         } else {
@@ -209,14 +214,17 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
             <>
               <p className="text-sm font-semibold text-[var(--color-bad)]">Access Forbidden</p>
               <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-                You lack the <code className="font-mono">users.read</code> permission required to view this user.
+                You lack the <code className="font-mono">users.read</code> permission required to
+                view this user.
               </p>
             </>
           ) : (
             <>
               <p className="text-sm font-semibold text-[var(--color-bad)]">Error Loading User</p>
               <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-                {userError instanceof ApiError ? userError.message : 'An unexpected error occurred.'}
+                {userError instanceof ApiError
+                  ? userError.message
+                  : 'An unexpected error occurred.'}
               </p>
             </>
           )}
@@ -281,7 +289,8 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
         {/* Global Lifecycle Warning Banner when viewing disabled user */}
         {user.status === 'disabled' && (
           <div className="mt-4 rounded-md border border-[var(--color-bad)]/30 bg-[var(--color-bad)]/10 p-3 text-xs text-[var(--color-bad)]">
-            This account is currently <span className="font-semibold">disabled globally</span> across all organizations and has all sessions terminated.
+            This account is currently <span className="font-semibold">disabled globally</span>{' '}
+            across all organizations and has all sessions terminated.
           </div>
         )}
 
@@ -346,7 +355,9 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
               </div>
             ) : (
               <p className="mt-1 text-sm font-medium text-[var(--color-ink)]">
-                {user.phone ?? <span className="text-[var(--color-ink-muted)]">Not configured</span>}
+                {user.phone ?? (
+                  <span className="text-[var(--color-ink-muted)]">Not configured</span>
+                )}
               </p>
             )}
           </div>
@@ -389,7 +400,9 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
               type="button"
               onClick={() => setIsAssignDialogOpen(true)}
               disabled={user.status === 'disabled'}
-              title={user.status === 'disabled' ? 'Cannot assign roles to a disabled user' : undefined}
+              title={
+                user.status === 'disabled' ? 'Cannot assign roles to a disabled user' : undefined
+              }
               className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               + Assign Role
@@ -405,13 +418,15 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
 
         {!canReadAssignments ? (
           <p className="mt-4 text-xs text-[var(--color-ink-muted)]">
-            Viewing role assignments requires <code className="font-mono">role_assignments.read</code> permission.
+            Viewing role assignments requires{' '}
+            <code className="font-mono">role_assignments.read</code> permission.
           </p>
         ) : assignmentsLoading ? (
           <p className="mt-4 text-xs text-[var(--color-ink-muted)]">Loading assignments…</p>
         ) : assignmentsError ? (
           <p className="mt-4 text-xs text-[var(--color-bad)]">
-            Failed to load assignments: {assignmentsError instanceof ApiError ? assignmentsError.message : 'Unknown error'}
+            Failed to load assignments:{' '}
+            {assignmentsError instanceof ApiError ? assignmentsError.message : 'Unknown error'}
           </p>
         ) : assignmentsData?.data && assignmentsData.data.length > 0 ? (
           <div className="mt-4 overflow-x-auto">
@@ -440,13 +455,17 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
 
                   return (
                     <tr key={grant.id}>
-                      <td className="py-2.5 font-mono font-medium text-[var(--color-ink)]">{grant.roleKey}</td>
+                      <td className="py-2.5 font-mono font-medium text-[var(--color-ink)]">
+                        {grant.roleKey}
+                      </td>
                       <td className="py-2.5">
                         <span className="inline-flex items-center rounded bg-[var(--color-surface)] px-2 py-0.5 text-[10px] font-mono font-medium text-[var(--color-ink)] border border-[var(--color-border-subtle)]">
                           {grant.scopeType}
                         </span>
                       </td>
-                      <td className="py-2.5 text-[var(--color-ink-muted)] font-mono text-[11px]">{targetDisplay}</td>
+                      <td className="py-2.5 text-[var(--color-ink-muted)] font-mono text-[11px]">
+                        {targetDisplay}
+                      </td>
                       <td className="py-2.5 text-[var(--color-ink-muted)]">
                         {new Date(grant.createdAt).toLocaleDateString()}
                       </td>
@@ -482,7 +501,9 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
         onClose={() => setIsAssignDialogOpen(false)}
         onSuccess={() => {
           void refetchAssignments();
-          void queryClient.invalidateQueries({ queryKey: ['role-assignments', selectedOrgId, userId] });
+          void queryClient.invalidateQueries({
+            queryKey: ['role-assignments', selectedOrgId, userId],
+          });
           onUserMutated?.();
         }}
       />
@@ -502,7 +523,9 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
         onClose={() => setRevokingAssignment(null)}
         onSuccess={() => {
           void refetchAssignments();
-          void queryClient.invalidateQueries({ queryKey: ['role-assignments', selectedOrgId, userId] });
+          void queryClient.invalidateQueries({
+            queryKey: ['role-assignments', selectedOrgId, userId],
+          });
           onUserMutated?.();
         }}
       />
@@ -519,7 +542,10 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
             className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 id="confirm-action-title" className="text-base font-semibold text-[var(--color-ink)]">
+            <h3
+              id="confirm-action-title"
+              className="text-base font-semibold text-[var(--color-ink)]"
+            >
               {confirmAction === 'disable' ? 'Disable User Account' : 'Reactivate User Account'}
             </h3>
 
@@ -530,9 +556,10 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
                     Warning: Disabling is GLOBAL to the identity across all organizations.
                   </p>
                   <p className="mt-2">
-                    This will immediately revoke all active browser sessions, tokens, and API keys created by{' '}
-                    <span className="font-semibold text-[var(--color-ink)]">{user.email}</span>. This does not merely
-                    remove them from this organization.
+                    This will immediately revoke all active browser sessions, tokens, and API keys
+                    created by{' '}
+                    <span className="font-semibold text-[var(--color-ink)]">{user.email}</span>.
+                    This does not merely remove them from this organization.
                   </p>
                 </>
               ) : (
@@ -541,8 +568,9 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
                     Reactivating will restore the account globally across organizations.
                   </p>
                   <p className="mt-2">
-                    Note: Users who have not yet set credentials return to the <span className="font-semibold">invited</span>{' '}
-                    state. Prior terminated sessions are not restored; the user must sign in anew.
+                    Note: Users who have not yet set credentials return to the{' '}
+                    <span className="font-semibold">invited</span> state. Prior terminated sessions
+                    are not restored; the user must sign in anew.
                   </p>
                 </>
               )}
@@ -571,14 +599,16 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
                 onClick={handleLifecycleAction}
                 disabled={isSubmittingAction}
                 className={`rounded-md px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 ${
-                  confirmAction === 'disable' ? 'bg-[var(--color-bad)] hover:opacity-90' : 'bg-[var(--color-accent)] hover:opacity-90'
+                  confirmAction === 'disable'
+                    ? 'bg-[var(--color-bad)] hover:opacity-90'
+                    : 'bg-[var(--color-accent)] hover:opacity-90'
                 }`}
               >
                 {isSubmittingAction
                   ? 'Processing…'
                   : confirmAction === 'disable'
-                  ? 'Confirm Disable'
-                  : 'Confirm Reactivate'}
+                    ? 'Confirm Disable'
+                    : 'Confirm Reactivate'}
               </button>
             </div>
           </div>

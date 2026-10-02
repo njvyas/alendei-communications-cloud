@@ -179,7 +179,8 @@ describe('Users Administration API Client', () => {
 
     await assert.rejects(
       async () => usersApi.get('01955b0a-0000-0000-0000-000000000000'),
-      (err: unknown) => err instanceof ApiError && err.status === 404 && err.code === 'RESOURCE_NOT_FOUND',
+      (err: unknown) =>
+        err instanceof ApiError && err.status === 404 && err.code === 'RESOURCE_NOT_FOUND',
     );
   });
 
@@ -275,7 +276,8 @@ describe('Users Administration API Client', () => {
     const targetUserId = '01955b0a-7b3b-7411-9a4f-9e67d4f95555';
 
     mockHandlers.push({
-      match: (url, options) => url.endsWith(`/users/${targetUserId}/disable`) && options.method === 'POST',
+      match: (url, options) =>
+        url.endsWith(`/users/${targetUserId}/disable`) && options.method === 'POST',
       handle: () =>
         new Response(
           JSON.stringify({
@@ -379,15 +381,25 @@ describe('Users Administration API Client', () => {
     await roleAssignmentsApi.listForUser('user-test-123');
 
     const rolesCall = fetchCalls.find((c) => c.url.endsWith('/roles'));
-    const wsCall = fetchCalls.find((c) => c.url.endsWith('/workspaces') || c.url.endsWith('/tenants/workspaces'));
-    const assignmentsCall = fetchCalls.find((c) => c.url.includes('/role-assignments?userId=user-test-123'));
+    const wsCall = fetchCalls.find(
+      (c) => c.url.endsWith('/workspaces') || c.url.endsWith('/tenants/workspaces'),
+    );
+    const assignmentsCall = fetchCalls.find((c) =>
+      c.url.includes('/role-assignments?userId=user-test-123'),
+    );
 
     assert.ok(rolesCall);
     assert.ok(wsCall);
     assert.ok(assignmentsCall);
 
-    assert.equal((rolesCall.options.headers as Record<string, string>)['X-Acc-Organization'], ORG_ID);
+    assert.equal(
+      (rolesCall.options.headers as Record<string, string>)['X-Acc-Organization'],
+      ORG_ID,
+    );
     assert.equal((wsCall.options.headers as Record<string, string>)['X-Acc-Organization'], ORG_ID);
-    assert.equal((assignmentsCall.options.headers as Record<string, string>)['X-Acc-Organization'], ORG_ID);
+    assert.equal(
+      (assignmentsCall.options.headers as Record<string, string>)['X-Acc-Organization'],
+      ORG_ID,
+    );
   });
 });

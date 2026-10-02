@@ -64,10 +64,7 @@ export function AssignRoleDialog({
   });
 
   // Fetch workspaces for active organization
-  const {
-    data: workspacesData,
-    isLoading: workspacesLoading,
-  } = useQuery({
+  const { data: workspacesData, isLoading: workspacesLoading } = useQuery({
     queryKey: ['workspaces', 'list', selectedOrgId],
     queryFn: ({ signal }) => workspacesApi.list(signal),
     enabled: isOpen && !!selectedOrgId,
@@ -204,7 +201,8 @@ export function AssignRoleDialog({
               Assign Role
             </h3>
             <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
-              Grant a tenant role to <span className="font-semibold text-[var(--color-ink)]">{userEmail}</span>
+              Grant a tenant role to{' '}
+              <span className="font-semibold text-[var(--color-ink)]">{userEmail}</span>
             </p>
           </div>
           <button
@@ -219,7 +217,10 @@ export function AssignRoleDialog({
         <form onSubmit={handleSubmit} className="mt-4 space-y-5">
           {/* Step 1: Select Role */}
           <div>
-            <label htmlFor="assign-role-select" className="block text-xs font-medium text-[var(--color-ink)]">
+            <label
+              htmlFor="assign-role-select"
+              className="block text-xs font-medium text-[var(--color-ink)]"
+            >
               Select Role <span className="text-[var(--color-bad)]">*</span>
             </label>
             {rolesLoading ? (
@@ -228,7 +229,8 @@ export function AssignRoleDialog({
               <p className="mt-1 text-xs text-[var(--color-bad)]">Failed to load roles.</p>
             ) : assignableRoles.length === 0 ? (
               <div className="mt-1 rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-3 text-xs text-[var(--color-ink-muted)]">
-                No custom tenant roles found in this organization. System and platform roles cannot be assigned via tenant administration.
+                No custom tenant roles found in this organization. System and platform roles cannot
+                be assigned via tenant administration.
               </div>
             ) : (
               <select
@@ -252,10 +254,14 @@ export function AssignRoleDialog({
             <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-3.5 space-y-2 text-xs">
               <div>
                 <p className="font-semibold text-[var(--color-ink)]">{selectedRole.name}</p>
-                <p className="font-mono text-[11px] text-[var(--color-ink-muted)]">{selectedRole.key}</p>
+                <p className="font-mono text-[11px] text-[var(--color-ink-muted)]">
+                  {selectedRole.key}
+                </p>
               </div>
               {selectedRole.description && (
-                <p className="text-[var(--color-ink-muted)] leading-relaxed">{selectedRole.description}</p>
+                <p className="text-[var(--color-ink-muted)] leading-relaxed">
+                  {selectedRole.description}
+                </p>
               )}
               <div>
                 <span className="font-medium text-[var(--color-ink)]">Admitted Scope Levels: </span>
@@ -337,7 +343,9 @@ export function AssignRoleDialog({
                       {selectedScopeType === 'workspace' && (
                         <div className="mt-2">
                           {workspacesLoading ? (
-                            <p className="text-[11px] text-[var(--color-ink-muted)]">Loading workspaces…</p>
+                            <p className="text-[11px] text-[var(--color-ink-muted)]">
+                              Loading workspaces…
+                            </p>
                           ) : workspaces.length === 0 ? (
                             <p className="text-[11px] text-[var(--color-bad)]">
                               No workspaces exist in this organization.
@@ -366,7 +374,9 @@ export function AssignRoleDialog({
                   <div className="flex items-start gap-3 rounded-lg border border-[var(--color-border-subtle)]/60 bg-[var(--color-surface-raised)]/40 p-3 text-xs opacity-75">
                     <input type="radio" disabled className="mt-0.5 opacity-50" />
                     <div>
-                      <p className="font-medium text-[var(--color-ink-muted)]">Team Scope (Unavailable)</p>
+                      <p className="font-medium text-[var(--color-ink-muted)]">
+                        Team Scope (Unavailable)
+                      </p>
                       <p className="text-[11px] text-[var(--color-ink-muted)] mt-0.5">
                         Team-scope assignment is not yet available in this dialog.
                       </p>
@@ -409,7 +419,12 @@ export function AssignRoleDialog({
             </button>
             <button
               type="submit"
-              disabled={isSubmitting || !selectedRoleId || !selectedScopeType || (selectedScopeType === 'workspace' && !selectedWorkspaceId)}
+              disabled={
+                isSubmitting ||
+                !selectedRoleId ||
+                !selectedScopeType ||
+                (selectedScopeType === 'workspace' && !selectedWorkspaceId)
+              }
               className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
             >
               {isSubmitting ? 'Assigning…' : 'Assign Role'}

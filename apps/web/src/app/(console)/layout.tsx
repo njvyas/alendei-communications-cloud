@@ -40,7 +40,8 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const user = useSession((state) => state.user);
   const clearSession = useSession((state) => state.clearSession);
   const canReadOrganizations = useCanReadOrganizations();
-  const isNavigatingOrganizations = pathname === '/organizations' || pathname.startsWith('/organizations/');
+  const isNavigatingOrganizations =
+    pathname === '/organizations' || pathname.startsWith('/organizations/');
 
   useEffect(() => {
     if (status === 'idle') {

@@ -43,7 +43,8 @@ export function WorkspaceArchiveDialog({
     } catch (err: unknown) {
       if (err instanceof ApiError) {
         if (err.status === 409) {
-          const details = err.details as { status?: string; isDefault?: boolean; activeTeams?: number } | undefined;
+          const details = err.details as
+            { status?: string; isDefault?: boolean; activeTeams?: number } | undefined;
           if (details?.isDefault) {
             setErrorMessage('The default workspace cannot be archived.');
           } else if (typeof details?.activeTeams === 'number' && details.activeTeams > 0) {
@@ -74,7 +75,10 @@ export function WorkspaceArchiveDialog({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl">
-        <h2 id="archive-workspace-title" className="text-lg font-semibold tracking-tight text-[var(--color-ink)]">
+        <h2
+          id="archive-workspace-title"
+          className="text-lg font-semibold tracking-tight text-[var(--color-ink)]"
+        >
           Archive Workspace
         </h2>
 
@@ -82,14 +86,18 @@ export function WorkspaceArchiveDialog({
           <div className="mt-3 rounded-md border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 p-3 text-xs text-[var(--color-warn)]">
             <p className="font-semibold">Default Workspace Protected</p>
             <p className="mt-1 leading-relaxed">
-              <code className="font-mono font-bold">{workspace.name}</code> is the organization&apos;s default workspace. The default workspace cannot be archived.
+              <code className="font-mono font-bold">{workspace.name}</code> is the
+              organization&apos;s default workspace. The default workspace cannot be archived.
             </p>
           </div>
         ) : (
           <div className="mt-3 rounded-md border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 p-3 text-xs text-[var(--color-warn)]">
             <p className="font-semibold">Archive Workspace</p>
             <p className="mt-1 leading-relaxed">
-              Archiving <span className="font-semibold text-[var(--color-ink)]">{workspace.name}</span> prevents creating new teams, assigning new roles, or generating new API keys bound to it. Existing grants and keys will continue to work.
+              Archiving{' '}
+              <span className="font-semibold text-[var(--color-ink)]">{workspace.name}</span>{' '}
+              prevents creating new teams, assigning new roles, or generating new API keys bound to
+              it. Existing grants and keys will continue to work.
             </p>
           </div>
         )}

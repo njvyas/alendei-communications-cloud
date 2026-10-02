@@ -22,11 +22,16 @@ interface RoleEditDialogProps {
   onSuccess: (updatedRole: RoleView) => void;
 }
 
-const CREATABLE_SCOPES: readonly { type: TenantCreatableScopeType; label: string; desc: string }[] = [
-  { type: 'organization', label: 'Organization', desc: 'Can be granted at the organization level' },
-  { type: 'workspace', label: 'Workspace', desc: 'Can be granted at the workspace level' },
-  { type: 'team', label: 'Team', desc: 'Can be granted at the team level' },
-];
+const CREATABLE_SCOPES: readonly { type: TenantCreatableScopeType; label: string; desc: string }[] =
+  [
+    {
+      type: 'organization',
+      label: 'Organization',
+      desc: 'Can be granted at the organization level',
+    },
+    { type: 'workspace', label: 'Workspace', desc: 'Can be granted at the workspace level' },
+    { type: 'team', label: 'Team', desc: 'Can be granted at the team level' },
+  ];
 
 export function RoleEditDialog({ role, isOpen, onClose, onSuccess }: RoleEditDialogProps) {
   const heldPermissions = useHeldOrganizationPermissions();
@@ -49,7 +54,8 @@ export function RoleEditDialog({ role, isOpen, onClose, onSuccess }: RoleEditDia
       setDescription(role.description ?? '');
       // Cast allowedScopeTypes filtering down to tenant creatable scopes
       const tenantScopes = role.allowedScopeTypes.filter(
-        (s): s is TenantCreatableScopeType => s === 'organization' || s === 'workspace' || s === 'team',
+        (s): s is TenantCreatableScopeType =>
+          s === 'organization' || s === 'workspace' || s === 'team',
       );
       setAllowedScopeTypes(tenantScopes.length > 0 ? tenantScopes : ['organization']);
       setSelectedPermissions(new Set(role.permissions));
@@ -63,7 +69,11 @@ export function RoleEditDialog({ role, isOpen, onClose, onSuccess }: RoleEditDia
   }, [isOpen, role]);
 
   // Load permission catalogue
-  const { data: permissionsData, isLoading: permissionsLoading, error: permissionsError } = useQuery({
+  const {
+    data: permissionsData,
+    isLoading: permissionsLoading,
+    error: permissionsError,
+  } = useQuery({
     queryKey: ['permissions', 'catalogue'],
     queryFn: ({ signal }) => permissionsApi.list({ limit: 100 }, signal),
     enabled: isOpen,
@@ -220,7 +230,10 @@ export function RoleEditDialog({ role, isOpen, onClose, onSuccess }: RoleEditDia
         <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)] px-6 py-4">
           <div>
             <div className="flex items-center gap-2">
-              <h2 id="edit-role-dialog-title" className="text-base font-semibold text-[var(--color-ink)]">
+              <h2
+                id="edit-role-dialog-title"
+                className="text-base font-semibold text-[var(--color-ink)]"
+              >
                 Edit Role: {role.name}
               </h2>
               {isImmutable && (
@@ -229,7 +242,9 @@ export function RoleEditDialog({ role, isOpen, onClose, onSuccess }: RoleEditDia
                 </span>
               )}
             </div>
-            <p className="mt-0.5 font-mono text-xs text-[var(--color-ink-muted)]">Key: {role.key}</p>
+            <p className="mt-0.5 font-mono text-xs text-[var(--color-ink-muted)]">
+              Key: {role.key}
+            </p>
           </div>
           <button
             type="button"
@@ -245,8 +260,9 @@ export function RoleEditDialog({ role, isOpen, onClose, onSuccess }: RoleEditDia
             <div className="rounded-lg border border-[var(--color-bad)]/40 bg-[var(--color-bad)]/10 p-4 text-[var(--color-bad)]">
               <p className="font-semibold">System and Platform Roles Cannot Be Modified</p>
               <p className="mt-1 text-[11px]">
-                The role <code className="font-mono">{role.key}</code> is defined by the platform schema and is immutable.
-                Tenant administrators cannot modify its name, description, allowed scope types, or permissions.
+                The role <code className="font-mono">{role.key}</code> is defined by the platform
+                schema and is immutable. Tenant administrators cannot modify its name, description,
+                allowed scope types, or permissions.
               </p>
             </div>
             <div className="flex justify-end">
@@ -271,7 +287,10 @@ export function RoleEditDialog({ role, isOpen, onClose, onSuccess }: RoleEditDia
                       <p className="text-[11px] font-medium">Offending unheld permissions:</p>
                       <div className="mt-1 flex flex-wrap gap-1">
                         {rejectedPermissions.map((p) => (
-                          <span key={p} className="rounded bg-[var(--color-bad)]/20 px-1.5 py-0.5 font-mono text-[10px]">
+                          <span
+                            key={p}
+                            className="rounded bg-[var(--color-bad)]/20 px-1.5 py-0.5 font-mono text-[10px]"
+                          >
                             {p}
                           </span>
                         ))}
@@ -284,7 +303,10 @@ export function RoleEditDialog({ role, isOpen, onClose, onSuccess }: RoleEditDia
               {/* Immutable Role Key & Editable Name */}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
-                  <label htmlFor="edit-role-key" className="block font-medium text-[var(--color-ink)]">
+                  <label
+                    htmlFor="edit-role-key"
+                    className="block font-medium text-[var(--color-ink)]"
+                  >
                     Role Key
                   </label>
                   <input
@@ -300,7 +322,10 @@ export function RoleEditDialog({ role, isOpen, onClose, onSuccess }: RoleEditDia
                 </div>
 
                 <div>
-                  <label htmlFor="edit-role-name" className="block font-medium text-[var(--color-ink)]">
+                  <label
+                    htmlFor="edit-role-name"
+                    className="block font-medium text-[var(--color-ink)]"
+                  >
                     Display Name <span className="text-[var(--color-bad)]">*</span>
                   </label>
                   <input
@@ -325,7 +350,10 @@ export function RoleEditDialog({ role, isOpen, onClose, onSuccess }: RoleEditDia
 
               {/* Description */}
               <div>
-                <label htmlFor="edit-role-desc" className="block font-medium text-[var(--color-ink)]">
+                <label
+                  htmlFor="edit-role-desc"
+                  className="block font-medium text-[var(--color-ink)]"
+                >
                   Description
                 </label>
                 <textarea
@@ -371,8 +399,12 @@ export function RoleEditDialog({ role, isOpen, onClose, onSuccess }: RoleEditDia
                           disabled={isSubmitting}
                         />
                         <div>
-                          <span className="font-semibold text-[var(--color-ink)]">{scope.label}</span>
-                          <p className="mt-0.5 text-[10px] text-[var(--color-ink-muted)]">{scope.desc}</p>
+                          <span className="font-semibold text-[var(--color-ink)]">
+                            {scope.label}
+                          </span>
+                          <p className="mt-0.5 text-[10px] text-[var(--color-ink-muted)]">
+                            {scope.desc}
+                          </p>
                         </div>
                       </label>
                     );
@@ -418,17 +450,26 @@ export function RoleEditDialog({ role, isOpen, onClose, onSuccess }: RoleEditDia
                 {/* Grouped Permission List */}
                 <div className="mt-3 max-h-60 space-y-4 overflow-y-auto rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-3">
                   {permissionsLoading ? (
-                    <p className="text-center text-xs text-[var(--color-ink-muted)] py-4">Loading catalogue...</p>
+                    <p className="text-center text-xs text-[var(--color-ink-muted)] py-4">
+                      Loading catalogue...
+                    </p>
                   ) : permissionsError ? (
-                    <p className="text-center text-xs text-[var(--color-bad)] py-4">Failed to load permissions catalogue.</p>
+                    <p className="text-center text-xs text-[var(--color-bad)] py-4">
+                      Failed to load permissions catalogue.
+                    </p>
                   ) : groupedPermissions.length === 0 ? (
-                    <p className="text-center text-xs text-[var(--color-ink-muted)] py-4">No matching permissions found.</p>
+                    <p className="text-center text-xs text-[var(--color-ink-muted)] py-4">
+                      No matching permissions found.
+                    </p>
                   ) : (
                     groupedPermissions.map(([domain, perms]) => {
                       const allInGroupSelected = perms.every((p) => selectedPermissions.has(p.key));
 
                       return (
-                        <div key={domain} className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-2.5">
+                        <div
+                          key={domain}
+                          className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-2.5"
+                        >
                           <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)] pb-1.5">
                             <span className="font-mono font-semibold uppercase tracking-wider text-[11px] text-[var(--color-brand)]">
                               {domain}

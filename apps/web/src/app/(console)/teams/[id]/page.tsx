@@ -15,11 +15,7 @@ const STATUS_TONES: Record<ScopeStatus, StatusTone> = {
   archived: 'warn',
 };
 
-export default function TeamDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default function TeamDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const selectedOrgId = useSession((state) => state.selectedOrganizationId);
   const canReadTeams = useHasPermission('teams.read');
@@ -51,7 +47,8 @@ export default function TeamDetailPage({
   // Fetch parent workspace name
   const { data: parentWsData } = useQuery({
     queryKey: ['workspaces', 'detail', selectedOrgId, team?.workspaceId],
-    queryFn: ({ signal }) => (team?.workspaceId ? workspacesApi.get(team.workspaceId, signal) : null),
+    queryFn: ({ signal }) =>
+      team?.workspaceId ? workspacesApi.get(team.workspaceId, signal) : null,
     enabled: !!selectedOrgId && !!team?.workspaceId,
   });
 
@@ -106,10 +103,10 @@ export default function TeamDetailPage({
           {isNotFound
             ? 'The requested team does not exist in this organization or is not accessible.'
             : isForbidden
-            ? 'You do not have permission to access this team.'
-            : teamError instanceof ApiError
-            ? teamError.message
-            : 'An unexpected error occurred.'}
+              ? 'You do not have permission to access this team.'
+              : teamError instanceof ApiError
+                ? teamError.message
+                : 'An unexpected error occurred.'}
         </p>
         <div className="mt-4 flex justify-center gap-3">
           <Link
@@ -151,7 +148,9 @@ export default function TeamDetailPage({
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--color-border-subtle)] pb-6">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold tracking-tight text-[var(--color-ink)]">{team.name}</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-[var(--color-ink)]">
+              {team.name}
+            </h1>
             <StatusDot tone={STATUS_TONES[team.status]} label={team.status} />
           </div>
           <p className="mt-1 font-mono text-xs text-[var(--color-ink-muted)]">ID: {team.id}</p>
@@ -194,7 +193,8 @@ export default function TeamDetailPage({
         <div className="rounded-xl border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 p-4 text-xs text-[var(--color-warn)]">
           <p className="font-semibold">Team Archived</p>
           <p className="mt-1 leading-relaxed">
-            This team is archived. Granting new permissions or roles targeting this team scope is blocked.
+            This team is archived. Granting new permissions or roles targeting this team scope is
+            blocked.
           </p>
         </div>
       )}
@@ -210,7 +210,9 @@ export default function TeamDetailPage({
                 href={`/workspaces/${team.workspaceId}`}
                 className="font-medium text-[var(--color-accent)] hover:underline"
               >
-                {parentWorkspace ? `${parentWorkspace.name} (${parentWorkspace.slug})` : team.workspaceId}
+                {parentWorkspace
+                  ? `${parentWorkspace.name} (${parentWorkspace.slug})`
+                  : team.workspaceId}
               </Link>
             </dd>
           </div>
@@ -220,11 +222,15 @@ export default function TeamDetailPage({
           </div>
           <div>
             <dt className="text-[var(--color-ink-muted)]">Created</dt>
-            <dd className="text-[var(--color-ink)] mt-0.5">{new Date(team.createdAt).toLocaleString()}</dd>
+            <dd className="text-[var(--color-ink)] mt-0.5">
+              {new Date(team.createdAt).toLocaleString()}
+            </dd>
           </div>
           <div>
             <dt className="text-[var(--color-ink-muted)]">Updated</dt>
-            <dd className="text-[var(--color-ink)] mt-0.5">{new Date(team.updatedAt).toLocaleString()}</dd>
+            <dd className="text-[var(--color-ink)] mt-0.5">
+              {new Date(team.updatedAt).toLocaleString()}
+            </dd>
           </div>
         </dl>
       </div>

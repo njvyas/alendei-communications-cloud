@@ -4,10 +4,17 @@ import { use, useState } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { ApiError, organizationsApi, type OrganizationStatus } from '@/lib/api-client';
-import { useCanManagePlatformTenants, useCanReadOrganizations, useSession } from '@/lib/session-store';
+import {
+  useCanManagePlatformTenants,
+  useCanReadOrganizations,
+  useSession,
+} from '@/lib/session-store';
 import { StatusDot, type StatusTone } from '@/components/ui/status-dot';
 import { OrganizationEditDialog } from '@/components/organizations/organization-edit-dialog';
-import { OrganizationTransitionDialog, type OrganizationLifecycleAction } from '@/components/organizations/organization-transition-dialog';
+import {
+  OrganizationTransitionDialog,
+  type OrganizationLifecycleAction,
+} from '@/components/organizations/organization-transition-dialog';
 
 const STATUS_TONES: Record<OrganizationStatus, StatusTone> = {
   active: 'ok',
@@ -15,18 +22,16 @@ const STATUS_TONES: Record<OrganizationStatus, StatusTone> = {
   closed: 'bad',
 };
 
-export default function OrganizationDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default function OrganizationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const canReadOrganizations = useCanReadOrganizations();
   const canManagePlatformTenants = useCanManagePlatformTenants();
   const isPlatformAdmin = useSession((state) => state.authorization?.isPlatformAdmin ?? false);
 
   const [isEditOpen, setIsEditOpen] = useState(false);
-  const [transitionAction, setTransitionAction] = useState<OrganizationLifecycleAction | null>(null);
+  const [transitionAction, setTransitionAction] = useState<OrganizationLifecycleAction | null>(
+    null,
+  );
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['organizations', 'detail', id],
@@ -86,16 +91,20 @@ export default function OrganizationDetailPage({
     return (
       <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center">
         <p className="text-base font-semibold text-[var(--color-bad)]">
-          {isNotFound ? 'Organization Not Found' : isForbidden ? 'Access Forbidden' : 'Failed to Load Organization'}
+          {isNotFound
+            ? 'Organization Not Found'
+            : isForbidden
+              ? 'Access Forbidden'
+              : 'Failed to Load Organization'}
         </p>
         <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
           {isNotFound
             ? 'The requested organization does not exist or is outside your administrative reach.'
             : isForbidden
-            ? 'You do not have permission to access this organization.'
-            : error instanceof ApiError
-            ? error.message
-            : 'An unexpected error occurred.'}
+              ? 'You do not have permission to access this organization.'
+              : error instanceof ApiError
+                ? error.message
+                : 'An unexpected error occurred.'}
         </p>
         <div className="mt-4 flex justify-center gap-3">
           <Link
@@ -135,7 +144,9 @@ export default function OrganizationDetailPage({
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--color-border-subtle)] pb-6">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold tracking-tight text-[var(--color-ink)]">{org.name}</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-[var(--color-ink)]">
+              {org.name}
+            </h1>
             <StatusDot tone={STATUS_TONES[org.status]} label={org.status} />
           </div>
           <p className="mt-1 font-mono text-xs text-[var(--color-ink-muted)]">ID: {org.id}</p>
@@ -203,7 +214,8 @@ export default function OrganizationDetailPage({
         <div className="rounded-xl border border-[var(--color-bad)]/30 bg-[var(--color-bad)]/10 p-4 text-xs text-[var(--color-bad)]">
           <p className="font-semibold">Terminal Lifecycle State</p>
           <p className="mt-1 leading-relaxed">
-            This organization is closed. Data is preserved for audit retention, but no further mutations or active operations can be executed.
+            This organization is closed. Data is preserved for audit retention, but no further
+            mutations or active operations can be executed.
           </p>
         </div>
       )}
@@ -212,7 +224,8 @@ export default function OrganizationDetailPage({
         <div className="rounded-xl border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 p-4 text-xs text-[var(--color-warn)]">
           <p className="font-semibold">Suspended State</p>
           <p className="mt-1 leading-relaxed">
-            This organization is suspended. Non-platform members cannot select this organization, and API keys are blocked from operation.
+            This organization is suspended. Non-platform members cannot select this organization,
+            and API keys are blocked from operation.
           </p>
         </div>
       )}
@@ -228,11 +241,15 @@ export default function OrganizationDetailPage({
             </div>
             <div className="flex justify-between py-2.5">
               <dt className="text-[var(--color-ink-muted)]">Legal Name</dt>
-              <dd className="text-[var(--color-ink)]">{org.legalName ?? <span className="italic text-[var(--color-ink-muted)]">—</span>}</dd>
+              <dd className="text-[var(--color-ink)]">
+                {org.legalName ?? <span className="italic text-[var(--color-ink-muted)]">—</span>}
+              </dd>
             </div>
             <div className="flex justify-between py-2.5">
               <dt className="text-[var(--color-ink-muted)]">GSTIN</dt>
-              <dd className="font-mono text-[var(--color-ink)]">{org.gstin ?? <span className="italic text-[var(--color-ink-muted)]">—</span>}</dd>
+              <dd className="font-mono text-[var(--color-ink)]">
+                {org.gstin ?? <span className="italic text-[var(--color-ink-muted)]">—</span>}
+              </dd>
             </div>
             <div className="flex justify-between py-2.5">
               <dt className="text-[var(--color-ink-muted)]">Reseller ID</dt>
@@ -255,16 +272,24 @@ export default function OrganizationDetailPage({
             <div className="flex justify-between py-2.5">
               <dt className="text-[var(--color-ink-muted)]">Status Changed At</dt>
               <dd className="text-[var(--color-ink)]">
-                {org.statusChangedAt ? new Date(org.statusChangedAt).toLocaleString() : <span className="italic text-[var(--color-ink-muted)]">—</span>}
+                {org.statusChangedAt ? (
+                  new Date(org.statusChangedAt).toLocaleString()
+                ) : (
+                  <span className="italic text-[var(--color-ink-muted)]">—</span>
+                )}
               </dd>
             </div>
             <div className="flex justify-between py-2.5">
               <dt className="text-[var(--color-ink-muted)]">Created At</dt>
-              <dd className="text-[var(--color-ink)]">{new Date(org.createdAt).toLocaleString()}</dd>
+              <dd className="text-[var(--color-ink)]">
+                {new Date(org.createdAt).toLocaleString()}
+              </dd>
             </div>
             <div className="flex justify-between py-2.5">
               <dt className="text-[var(--color-ink-muted)]">Updated At</dt>
-              <dd className="text-[var(--color-ink)]">{new Date(org.updatedAt).toLocaleString()}</dd>
+              <dd className="text-[var(--color-ink)]">
+                {new Date(org.updatedAt).toLocaleString()}
+              </dd>
             </div>
           </dl>
         </div>

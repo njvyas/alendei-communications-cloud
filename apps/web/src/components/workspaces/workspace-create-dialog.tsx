@@ -81,7 +81,8 @@ export function WorkspaceCreateDialog({ isOpen, onClose, onSuccess }: WorkspaceC
     if (!trimmedSlug) {
       errors.slug = 'Slug is required';
     } else if (!SLUG_REGEX.test(trimmedSlug)) {
-      errors.slug = 'Slug must be 2-63 lower-case letters, digits or hyphens and start with alphanumeric';
+      errors.slug =
+        'Slug must be 2-63 lower-case letters, digits or hyphens and start with alphanumeric';
     }
 
     if (Object.keys(errors).length > 0) {
@@ -92,7 +93,10 @@ export function WorkspaceCreateDialog({ isOpen, onClose, onSuccess }: WorkspaceC
     setIsSubmitting(true);
 
     try {
-      const res = await workspacesApi.create({ name: trimmedName, slug: trimmedSlug }, idempotencyKey);
+      const res = await workspacesApi.create(
+        { name: trimmedName, slug: trimmedSlug },
+        idempotencyKey,
+      );
       onSuccess(res.data);
       onClose();
     } catch (err: unknown) {
@@ -121,7 +125,10 @@ export function WorkspaceCreateDialog({ isOpen, onClose, onSuccess }: WorkspaceC
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
     >
       <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl">
-        <h2 id="create-workspace-title" className="text-lg font-semibold tracking-tight text-[var(--color-ink)]">
+        <h2
+          id="create-workspace-title"
+          className="text-lg font-semibold tracking-tight text-[var(--color-ink)]"
+        >
           Create Workspace
         </h2>
         <p className="mt-1 text-xs text-[var(--color-ink-muted)]">

@@ -137,6 +137,7 @@ The Audit Logs module (`/audit-logs`) implements forensic observation and causal
 The Tenancy Administration modules implement resource-oriented organization, workspace, and team management:
 
 ### 1. Organizations Module (`/organizations`, `/organizations/[id]`)
+
 - **List & Discovery**: Lists organizations within the caller's grant-derived reach (`GET /api/v1/organizations`). Supports cursor pagination (`cursor`, `limit`), sort ordering (`name` [default], `createdAt`, `-createdAt`), and status filtering (`active`, `suspended`, `closed`).
 - **Organization Provisioning**: `POST /api/v1/organizations` supports provisioning new tenant organizations beneath target reseller or platform scopes. Idempotency is preserved across retries via persistent `Idempotency-Key`. Supports configuring legal entity (`legalName`, `gstin`) and platform-only billing options (`billingMode`, `billingPolicy`).
 - **Organization Detail**: Displays immutable identifier slug, legal entity attributes, reseller ID, and billing configuration.
@@ -148,6 +149,7 @@ The Tenancy Administration modules implement resource-oriented organization, wor
 - **Tenant Context Independence**: All `/organizations` routes act outside single-tenant pinning (`skipTenant: true`); `X-Acc-Organization` is deliberately omitted. Users with zero authorized organizations but holding `organizations.read` can access `/organizations` to provision and manage tenants.
 
 ### 2. Workspaces Module (`/workspaces`, `/workspaces/[id]`)
+
 - **List & Discovery**: Lists workspaces in the active organization (`GET /api/v1/workspaces`). Pinned strictly to `selectedOrgId` via `X-Acc-Organization`. Supports cursor pagination, status filtering (`active`, `archived`), and sort order (`name` [default], `createdAt`, `-createdAt`).
 - **Workspace Creation**: `POST /api/v1/workspaces` creates workspaces with name and slug. Protected with persistent `Idempotency-Key`.
 - **Workspace Updates**: `PATCH /api/v1/workspaces/:id` allows editing `name`. Forbidden fields (`slug`, `isDefault`, `status`, `orgId`) are stripped.
@@ -157,6 +159,7 @@ The Tenancy Administration modules implement resource-oriented organization, wor
 - **Embedded Teams**: Workspace detail view embeds the list of teams within the workspace (`GET /teams?workspaceId=...`) and provides direct team provisioning within that workspace.
 
 ### 3. Teams Module (`/teams`, `/teams/[id]`)
+
 - **List & Discovery**: Lists teams within the active organization (`GET /api/v1/teams`). Supports filtering by parent workspace (`workspaceId`), status (`active`, `archived`), cursor pagination, and sort order.
 - **Strict Invariant — NO `orgId`**: Per contract §31c, team endpoints (`GET /teams`, `POST /teams`, `PATCH /teams/:id`) strictly omit `orgId` (sending `orgId` triggers `400 VALIDATION_FAILED`). A team's organization is derived exclusively from its parent workspace.
 - **Team Creation**: `POST /api/v1/teams` creates teams with `workspaceId` and `name`. Refused with `409 WORKSPACE_LIFECYCLE_CONFLICT` if the parent workspace is archived.

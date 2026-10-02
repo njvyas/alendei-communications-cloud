@@ -21,7 +21,10 @@ test.describe('Security & Browser Storage Sweep (E2E-08, E2E-09, E2E-12)', () =>
     await expect(page.getByRole('heading', { name: 'API Keys' })).toBeVisible();
 
     // 3. Open Create API Key dialog
-    await page.getByRole('button', { name: /\+? Create API Key|Create your first API key/i }).first().click();
+    await page
+      .getByRole('button', { name: /\+? Create API Key|Create your first API key/i })
+      .first()
+      .click();
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
 

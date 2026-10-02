@@ -9,11 +9,7 @@ import {
   type EffectiveAuthorization,
   type UserIdentity,
 } from './api-client';
-import {
-  getHeldOrganizationPermissions,
-  hasPermission,
-  useSession,
-} from './session-store';
+import { getHeldOrganizationPermissions, hasPermission, useSession } from './session-store';
 
 describe('Roles & Permissions Security Invariants & Boundary Enforcement', () => {
   const originalFetch = globalThis.fetch;
@@ -180,7 +176,8 @@ describe('Roles & Permissions Security Invariants & Boundary Enforcement', () =>
     });
 
     mockHandlers.push({
-      match: (url, options) => url.includes(`/roles/${systemRoleId}`) && options.method === 'DELETE',
+      match: (url, options) =>
+        url.includes(`/roles/${systemRoleId}`) && options.method === 'DELETE',
       handle: () => {
         return new Response(
           JSON.stringify({
@@ -341,10 +338,13 @@ describe('Roles & Permissions Security Invariants & Boundary Enforcement', () =>
         const headers = options.headers as Record<string, string>;
         // Must match session's active ORG_A, not arbitrary caller values
         assert.equal(headers['X-Acc-Organization'], ORG_A);
-        return new Response(JSON.stringify({ data: [], page: { nextCursor: null, hasMore: false, limit: 25 } }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return new Response(
+          JSON.stringify({ data: [], page: { nextCursor: null, hasMore: false, limit: 25 } }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        );
       },
     });
 
@@ -384,10 +384,7 @@ describe('Roles & Permissions Security Invariants & Boundary Enforcement', () =>
     await rolesApi.list();
     const callA = fetchCalls[fetchCalls.length - 1];
     assert.ok(callA);
-    assert.equal(
-      (callA.options.headers as Record<string, string>)['X-Acc-Organization'],
-      ORG_A,
-    );
+    assert.equal((callA.options.headers as Record<string, string>)['X-Acc-Organization'], ORG_A);
 
     // Switch to ORG_B
     useSession.getState().selectOrganization(ORG_B);
@@ -396,10 +393,7 @@ describe('Roles & Permissions Security Invariants & Boundary Enforcement', () =>
     await rolesApi.list();
     const callB = fetchCalls[fetchCalls.length - 1];
     assert.ok(callB);
-    assert.equal(
-      (callB.options.headers as Record<string, string>)['X-Acc-Organization'],
-      ORG_B,
-    );
+    assert.equal((callB.options.headers as Record<string, string>)['X-Acc-Organization'], ORG_B);
   });
 
   // ---------------------------------------------------------------------------
