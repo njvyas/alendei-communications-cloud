@@ -35,7 +35,11 @@ const { exceptions } = JSON.parse(
 
 const today = new Date().toISOString().slice(0, 10);
 const expired = exceptions.filter((entry) => entry.expires < today);
-const acceptedPackages = new Set(exceptions.map((entry) => entry.package));
+const exceptionFor = new Map(exceptions.map((entry) => [entry.package, entry]));
+
+/** The GitHub advisory id of an `npm audit` advisory object (`…/advisories/GHSA-…`). */
+const advisoryId = (advisory) =>
+  /GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}$/.exec(advisory.url ?? '')?.[0];
 
 /**
  * `npm audit` records a vulnerability for every package on the path to a root
@@ -49,10 +53,25 @@ const acceptedPackages = new Set(exceptions.map((entry) => entry.package));
  */
 const vulnerabilities = report.vulnerabilities ?? {};
 
+/**
+ * An exception accepts advisories, not packages: a root cause is accepted only
+ * when EVERY advisory npm reports against it is listed, by id, in its
+ * exception. A new advisory on an excepted package is therefore unaccepted until
+ * someone reviews it and adds its id — the package name alone never covers it.
+ */
+const unreviewed = new Map();
 const unacceptedRoots = Object.entries(vulnerabilities)
   .filter(([name, vulnerability]) => {
-    const isRootCause = (vulnerability.via ?? []).some((entry) => typeof entry === 'object');
-    return isRootCause && !acceptedPackages.has(name);
+    const advisories = (vulnerability.via ?? []).filter((entry) => typeof entry === 'object');
+    if (advisories.length === 0) return false;
+    const exception = exceptionFor.get(name);
+    if (!exception) return true;
+    const listed = new Set(exception.advisories ?? []);
+    const missing = advisories
+      .map((a) => advisoryId(a) ?? a.url ?? a.title)
+      .filter((id) => !listed.has(id));
+    if (missing.length > 0) unreviewed.set(name, [...new Set(missing)]);
+    return missing.length > 0;
   })
   .map(([name]) => name);
 
@@ -81,7 +100,11 @@ console.log(
   `npm audit: ${counts.critical ?? 0} critical, ${counts.high ?? 0} high, ` +
     `${counts.moderate ?? 0} moderate, ${counts.low ?? 0} low`,
 );
-console.log(`accepted exceptions: ${exceptions.map((e) => e.package).join(', ') || 'none'}`);
+console.log(
+  `accepted exceptions: ${
+    exceptions.map((e) => `${e.package} [${(e.advisories ?? []).join(', ')}]`).join('; ') || 'none'
+  }`,
+);
 
 let failed = false;
 
@@ -94,6 +117,10 @@ for (const { name, severity, causes } of unaccepted) {
   const titles = causes.map((c) => c.title).join('; ') || '(propagated)';
   console.error(`UNACCEPTED ${severity.toUpperCase()}: ${name} — ${titles}`);
   failed = true;
+}
+
+for (const [name, ids] of unreviewed) {
+  console.error(`UNREVIEWED ADVISORIES on excepted package ${name}: ${ids.join(', ')}`);
 }
 
 if (failed) {

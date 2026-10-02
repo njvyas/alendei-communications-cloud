@@ -4,22 +4,26 @@
     "high/critical advisory NOT listed here, and fails on any listed exception",
     "whose `expires` date has passed — so an exception can never quietly become",
     "permanent. Every entry must state why the vulnerable code path is",
-    "unreachable in this codebase (DEPLOYMENT.md §4, SECURITY.md §6)."
+    "unreachable in this codebase (DEPLOYMENT.md §4, SECURITY.md §6).",
+    "An exception accepts the advisory ids it lists, and only those: a new advisory",
+    "on the same package fails the gate until it is reviewed and added by id."
   ],
   "exceptions": [
     {
       "package": "multer",
       "severity": "high",
       "advisories": [
-        "GHSA-4pg4-qvpc-4u3m",
-        "GHSA-g5hg-p3ph-g8qg",
-        "GHSA-44fp-w29j-9vj5",
-        "GHSA-fjgf-rc76-4x9p"
+        "GHSA-wc9g-mqfw-jrwm",
+        "GHSA-qfvm-cv95-jqjf",
+        "GHSA-535w-7cp7-47q4",
+        "GHSA-3pph-fpjx-jg34",
+        "GHSA-qvfw-j98x-7q72"
       ],
-      "reason": "Transitive via @nestjs/platform-express, which pins multer to an exact 2.2.0 in both v11 and v12 — no dependency-version choice avoids it. All four advisories are denial-of-service in multipart/form-data parsing. ACC exposes no multipart route in Phase 1: no controller uses FileInterceptor/FilesInterceptor and no multer middleware is registered, so the parser is never invoked. Re-evaluate before Phase 8+ introduces media upload.",
+      "reviewed": "2026-10-02",
+      "reason": "Transitive via @nestjs/platform-express 11.2.3, which pins multer 2.2.0. All five are multipart/form-data parser defects: GHSA-wc9g-mqfw-jrwm (high, DoS via crafted field names, <2.3.0), GHSA-qfvm-cv95-jqjf (high, DoS via file-descriptor leak on aborted uploads, =2.2.0), GHSA-535w-7cp7-47q4 (high, DoS via oversized array index in field names, <2.3.0), GHSA-3pph-fpjx-jg34 (moderate, DoS via orphaned disk writes on aborted uploads, >=2.2.0 <2.4.0), GHSA-qvfw-j98x-7q72 (low, file-size limit bypass via async fileFilter race, <2.3.0). multer runs only when a route applies FileInterceptor/FilesInterceptor/AnyFilesInterceptor or registers MulterModule or multer middleware; apps/api does none of these (no multipart route in Phase 1C), and Express's own parsers handle JSON and urlencoded bodies only, so a multipart body is never parsed. A fix exists: @nestjs/platform-express >=11.2.6 pins multer 2.4.0, outside every listed range, within the declared ^11.2.3 — the expiry is short so the upgrade is decided rather than deferred. Supersedes the 2026 scaffold review of GHSA-4pg4-qvpc-4u3m, GHSA-g5hg-p3ph-g8qg, GHSA-44fp-w29j-9vj5 and GHSA-fjgf-rc76-4x9p, which no longer apply to the installed version.",
       "reachable": false,
       "owner": "platform",
-      "expires": "2026-12-31"
+      "expires": "2026-10-31"
     }
   ]
 }
