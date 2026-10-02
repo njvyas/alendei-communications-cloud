@@ -1,0 +1,35 @@
+# Gitleaks fingerprint allowlist — exact known false positives only.
+#
+# Each entry is a commit-scoped fingerprint (<commit>:<file>:<rule>:<line>). It
+# suppresses that one finding at that one commit and line, and nothing else: no
+# rule, path or file is ignored, so any new secret — including a new one in these
+# same files, or this same value moved to a new line in a new commit — is still
+# reported. Audited 02-Oct-2026 (full-history scan, gitleaks 8.30.1); each value
+# was confirmed absent from .env, packages/db/.env and CI configuration, and used
+# only where listed. Add an entry only with the same audit; never add a rule-wide
+# or path-wide bypass.
+
+# Unit-test JWT signing fixture, handed to AccessTokenService through a stub
+# SecretsPort; production resolves AUTH_JWT_SECRET_REF through SecretsPort and CI
+# uses its own ephemeral ACC_CI_JWT_SECRET.
+b8aebd326d76a6ec1d7002dc0c62772776943f46:apps/api/src/auth/jwt.service.spec.ts:generic-api-key:6
+
+# Event-type name `alendei.iam.api_key_revoked.v1` (EVENT_TYPES.API_KEY_REVOKED);
+# matched only because the identifier contains "api_key". Not a credential.
+f8e2731f4dde0d17890aa083140ebeb8df283ae8:packages/contracts/src/events.ts:generic-api-key:36
+
+# Frontend unit/security-test Idempotency-Key fixtures (UUID-shaped request keys,
+# not credentials).
+711a73a9fe9cedf9c67a3da30020b8c840e8feff:apps/web/src/lib/users-administration.test.ts:generic-api-key:190
+711a73a9fe9cedf9c67a3da30020b8c840e8feff:apps/web/src/lib/users-security.sec.test.ts:generic-api-key:370
+
+# Mocked API-key `secret` in frontend tests (a synthetic sequential string, not in
+# ACC's ak_(live|test)_<prefix>.<secret> format; it authenticates nothing).
+576f0f5df9736ceb84324785e5ae7221df16d6cc:apps/web/src/lib/api-keys-administration.test.ts:generic-api-key:271
+576f0f5df9736ceb84324785e5ae7221df16d6cc:apps/web/src/lib/api-keys-administration.test.ts:generic-api-key:282
+576f0f5df9736ceb84324785e5ae7221df16d6cc:apps/web/src/lib/api-keys-security.sec.test.ts:generic-api-key:377
+
+# Planted "sensitive" strings in SEC-10, which proves audit payloads are never
+# persisted in browser storage. Synthetic by design.
+cafcd436c17cb2945301de8b03b4b246f0e554d6:apps/web/src/lib/audit-logs-security.sec.test.ts:generic-api-key:479
+cafcd436c17cb2945301de8b03b4b246f0e554d6:apps/web/src/lib/audit-logs-security.sec.test.ts:generic-api-key:480
