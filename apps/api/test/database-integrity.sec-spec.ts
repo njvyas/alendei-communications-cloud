@@ -22,6 +22,7 @@
 import { ERROR_CODES, PLATFORM_ROLE_KEYS, TENANT_ROLE_KEYS } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Pool, type PoolClient } from 'pg';
@@ -75,7 +76,12 @@ describe('Phase 1C.6 database integrity', () => {
 
   const url = (path: string) => `/${PREFIX}${path}`;
   const suffix = () => uuidv7().replace(/-/g, '').slice(-10);
-  const keyPrefix = () => `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+  // Random, not the head of a UUIDv7: `uuidv7` holds its first 16 hex digits
+  // (timestamp and rand_a) constant within a millisecond and counts in the tail,
+  // so two keys minted in the same millisecond shared a prefix and collided on
+  // `api_keys_key_prefix_key` (23505) before the composite FK under test (23503)
+  // was ever evaluated. Production mints prefixes from `randomBytes` too.
+  const keyPrefix = () => `ak_test_${randomBytes(8).toString('hex')}`;
 
   // --- fixtures ---------------------------------------------------------------
 
