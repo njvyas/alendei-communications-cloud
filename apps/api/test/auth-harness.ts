@@ -18,6 +18,7 @@ import { AppModule } from '../src/app.module';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
 import { validationPipe } from '../src/common/http/validation.pipe';
 import { AccessTokenService } from '../src/auth/jwt.service';
+import { PROVIDER_CLOCK, type ProviderClock } from '../src/providers/provider-clock';
 import { REDIS_CLIENT } from '../src/redis/redis.module';
 
 export const PASSWORD = 'a-sufficiently-long-test-passphrase';
@@ -61,13 +62,43 @@ export interface Harness {
  */
 export interface HarnessOptions {
   readonly controllers?: readonly Type<unknown>[];
+  /**
+   * Replaces the provider health/circuit clock (Phase 2.3, `PROVIDER_CLOCK`)
+   * with one the suite drives, so windows, cooldowns and leases are crossed
+   * exactly, with no wall-clock sleeps. Nothing else is overridden.
+   */
+  readonly providerClock?: ProviderClock;
+}
+
+/**
+ * A provider clock the test moves by hand (Phase 2.3). Starts at the real time,
+ * so persisted timestamps stay plausible, and only ever moves when told to.
+ */
+export class ManualProviderClock implements ProviderClock {
+  private current: number;
+
+  constructor(start: Date = new Date()) {
+    this.current = start.getTime();
+  }
+
+  now(): Date {
+    return new Date(this.current);
+  }
+
+  advance(ms: number): void {
+    this.current += ms;
+  }
 }
 
 export async function startHarness(options: HarnessOptions = {}): Promise<Harness> {
-  const moduleRef = await Test.createTestingModule({
+  let builder = Test.createTestingModule({
     imports: [AppModule],
     controllers: [...(options.controllers ?? [])],
-  }).compile();
+  });
+  if (options.providerClock) {
+    builder = builder.overrideProvider(PROVIDER_CLOCK).useValue(options.providerClock);
+  }
+  const moduleRef = await builder.compile();
   const app = moduleRef.createNestApplication({ logger: false });
   app.use(cookieParser());
   app.useGlobalPipes(validationPipe());
@@ -299,6 +330,26 @@ export async function purgeAudit(admin: Database, where = sql`true`): Promise<vo
     await admin.execute(sql`DELETE FROM audit_logs WHERE ${where}`);
   } finally {
     await admin.execute(sql`ALTER TABLE audit_logs ENABLE TRIGGER trg_audit_logs_append_only`);
+  }
+}
+
+/**
+ * Removes provider health samples (Phase 2.3). `provider_health` is append-only
+ * exactly as `audit_logs` is, so — like `purgeAudit` — teardown disables the
+ * trigger as the owner, deletes, and re-enables it; a sample holds its
+ * provider through a `RESTRICT` foreign key, so this runs before the provider
+ * itself is deleted.
+ */
+export async function purgeProviderHealth(admin: Database, where = sql`true`): Promise<void> {
+  await admin.execute(
+    sql`ALTER TABLE provider_health DISABLE TRIGGER trg_provider_health_append_only`,
+  );
+  try {
+    await admin.execute(sql`DELETE FROM provider_health WHERE ${where}`);
+  } finally {
+    await admin.execute(
+      sql`ALTER TABLE provider_health ENABLE TRIGGER trg_provider_health_append_only`,
+    );
   }
 }
 

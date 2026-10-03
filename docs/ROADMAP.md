@@ -251,7 +251,7 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 
 ## 5. Phase 2 — Provider abstraction + simulator
 
-**Status: SCOPE FROZEN (ADR-013, 02-Oct-2026). 2.1 CLOSED (migrations `0018`–`0019`; Gate D.1 approved). 2.2 IMPLEMENTED (migrations `0020`–`0021`; Gate D.2 pending re-review). 2.3–2.6 not started.** Each increment requires its own authorization.
+**Status: SCOPE FROZEN (ADR-013, 02-Oct-2026). 2.1 CLOSED (migrations `0018`–`0019`; Gate D.1 approved). 2.2 CLOSED (migrations `0020`–`0021`; Gate D.2 approved). 2.3 IMPLEMENTED (migration `0022`; Gate D.3 pending review). 2.4–2.6 not started.** Each increment requires its own authorization.
 
 - **Objectives**: implement `provider-registry`, `provider-adapters` (interface + `SimulatorAdapter` only), health/circuit breaker mechanics, admin hot-reload plumbing.
 - **Dependencies**: Phase 1 (Gate C closed): `TenantDatabase` and the pre-commit authorization-coverage containment, `AuthorizationService` + `@RequiresPermission`, transactional `AuditWriter`, the OpenAPI pipeline, `/metrics`, `SecretsPort`, Redis, the `with-db-clone` mutation harness.
@@ -274,8 +274,8 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 |---|---|---|---|
 | **2.0** | Scope freeze (this section, ADR-013) | — | ✅ frozen 02-Oct-2026 |
 | **2.1** | Channel & Provider Registry | `channels` (seeded), `providers`, `provider_capabilities`; permissions `providers.read`, `providers.manage` (and `providers.test_send` defined, unused until 2.2) | ✅ CLOSED — migrations `0018`, `0019`; Gate D.1 approved |
-| **2.2** | Adapter Contract & Simulator | none; migration `0020` adds the `provider.test_sent` audit policy (permission `providers.test_send` already defined by 2.1) | ✅ IMPLEMENTED; **Gate D.2 pending review** |
-| **2.3** | Health & Circuit Breaker | `provider_health` | Gate D.3 |
+| **2.2** | Adapter Contract & Simulator | none; migration `0020` adds the `provider.test_sent` audit policy (permission `providers.test_send` already defined by 2.1) | ✅ CLOSED — migrations `0020`, `0021`; Gate D.2 approved |
+| **2.3** | Health & Circuit Breaker | `provider_health`; health/circuit columns on `providers` | ✅ IMPLEMENTED — migration `0022`; **Gate D.3 pending review** |
 | **2.4** | Hot Reload | none | Gate D.4 |
 | **2.5** | Credential Reference Contract — documentation only | none | Gate D.5 |
 | **2.6** | Frontend console — separately authorized | none | Gate D.6 |
@@ -314,6 +314,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 - *Exclusions*: delivery/webhook behaviours (Phase 3), real adapters, cost estimation, message persistence.
 
 **2.3 — Health & Circuit Breaker**
+- *Status*: **IMPLEMENTED** (03-Oct-2026; migration `0022`; Gate D.3 pending review). The model is canonical in `PROVIDER_ADAPTER.md` §5–§6 (frozen before implementation, ADR-013 "2.3 design"); evidence `TESTING.md` §6u.
 - *Objective*: the provider health state machine and the circuit breaker, deterministically testable.
 - *In scope*: health and breaker services in `provider-registry`; `provider_health`; metrics; a Grafana dashboard provisioned under `infra/observability/`.
 - *Sample sources (only)*: test-send outcomes; `POST /providers/:id/health-check` (simulator `healthCheck()`); `POST /providers/:id/health` manual override (`source = manual`). No scheduler or background prober (ADR-013 F-6).

@@ -4,11 +4,17 @@ import {
   CHANNEL_CODES,
   CHANNEL_STATUSES,
   PROVIDER_CIRCUIT_STATES,
+  PROVIDER_HEALTH_CLASSIFICATIONS,
+  PROVIDER_HEALTH_SAMPLE_KINDS,
+  PROVIDER_HEALTH_SOURCES,
+  PROVIDER_PROBE_OUTCOMES,
+  PROVIDER_SUBMISSION_SAMPLE_OUTCOMES,
   PROVIDER_FAILURE_CATEGORIES,
   PROVIDER_HEALTH_STATES,
   PROVIDER_STATUSES,
   SCOPE_TYPES,
   SIMULATOR_BEHAVIORS,
+  SIMULATOR_HEALTH_BEHAVIORS,
 } from '@acc/contracts';
 import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 
@@ -370,10 +376,30 @@ export class ProviderSchema {
   @ApiProperty() name!: string;
   @ApiProperty() adapterKey!: string;
   @ApiProperty({ enum: PROVIDER_STATUSES }) status!: string;
-  @ApiProperty({ enum: PROVIDER_HEALTH_STATES, description: 'Read-only in Phase 2.1' })
+  @ApiProperty({
+    enum: PROVIDER_HEALTH_STATES,
+    description: 'Derived from samples, or the manual override when set (Phase 2.3)',
+  })
   healthState!: string;
-  @ApiProperty({ enum: PROVIDER_CIRCUIT_STATES, description: 'Read-only in Phase 2.1' })
+  @ApiProperty({
+    // OpenAPI 3.0: a nullable enum must list null among its values.
+    enum: [...PROVIDER_HEALTH_STATES, null],
+    nullable: true,
+    description: 'The manual health pin; null when health is derived automatically',
+  })
+  healthOverride!: string | null;
+  @ApiProperty(nullableTimestamp) healthChangedAt!: string | null;
+  @ApiProperty({
+    enum: PROVIDER_CIRCUIT_STATES,
+    description: 'Moved only by the circuit breaker (Phase 2.3)',
+  })
   circuitState!: string;
+  @ApiProperty(nullableTimestamp) circuitChangedAt!: string | null;
+  @ApiProperty({
+    ...nullableTimestamp,
+    description: "When an open circuit's cooldown ends; null in any other state",
+  })
+  circuitCooldownUntil!: string | null;
   @ApiProperty(timestamp) createdAt!: string;
   @ApiProperty(timestamp) updatedAt!: string;
 }
@@ -420,4 +446,44 @@ export class ProviderTestSendResultSchema {
   @ApiProperty(nullableString) providerMessageId!: string | null;
   @ApiProperty(PROVIDER_FAILURE as never) failure!: Record<string, unknown> | null;
   @ApiProperty({ type: 'integer' }) latencyMs!: number;
+  @ApiProperty({ description: "Whether this submission was the circuit's half-open probe" })
+  circuitProbe!: boolean;
+  @ApiProperty({ enum: PROVIDER_HEALTH_STATES }) healthState!: string;
+  @ApiProperty({ enum: PROVIDER_CIRCUIT_STATES }) circuitState!: string;
+}
+
+// --- provider health and circuit breaker (Phase 2.3) ------------------------------
+
+@ApiSchema({ name: 'ProviderHealthCheckResult' })
+export class ProviderHealthCheckResultSchema {
+  @ApiProperty(uuid) providerId!: string;
+  @ApiProperty() adapterKey!: string;
+  @ApiProperty({ enum: CHANNEL_CODES }) channelCode!: string;
+  @ApiProperty({ enum: SIMULATOR_HEALTH_BEHAVIORS }) behavior!: string;
+  @ApiProperty({ enum: PROVIDER_PROBE_OUTCOMES }) outcome!: string;
+  @ApiProperty({ type: 'integer' }) latencyMs!: number;
+  @ApiProperty(uuid) correlationId!: string;
+  @ApiProperty({ enum: PROVIDER_HEALTH_STATES }) healthState!: string;
+  @ApiProperty({ enum: PROVIDER_CIRCUIT_STATES }) circuitState!: string;
+}
+
+@ApiSchema({ name: 'ProviderHealthSample' })
+export class ProviderHealthSampleSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty(uuid) providerId!: string;
+  @ApiProperty({ enum: PROVIDER_HEALTH_SAMPLE_KINDS }) kind!: string;
+  @ApiProperty({
+    enum: [
+      ...new Set([...PROVIDER_SUBMISSION_SAMPLE_OUTCOMES, ...PROVIDER_PROBE_OUTCOMES, 'manual']),
+    ],
+  })
+  outcome!: string;
+  @ApiProperty({ enum: PROVIDER_HEALTH_CLASSIFICATIONS }) classification!: string;
+  @ApiProperty({ type: 'integer', nullable: true }) latencyMs!: number | null;
+  @ApiProperty({ enum: PROVIDER_HEALTH_STATES }) healthState!: string;
+  @ApiProperty({ enum: PROVIDER_CIRCUIT_STATES }) circuitState!: string;
+  @ApiProperty({ type: 'integer' }) circuitGeneration!: number;
+  @ApiProperty({ enum: PROVIDER_HEALTH_SOURCES }) source!: string;
+  @ApiProperty(timestamp) observedAt!: string;
+  @ApiProperty(timestamp) createdAt!: string;
 }

@@ -59,6 +59,11 @@ export const AUDIT_ACTIONS = {
   PROVIDER_DRAINED: 'provider.drained',
   // Phase 2.2: a synthetic submission through the provider's adapter (ADR-013 F-4).
   PROVIDER_TEST_SENT: 'provider.test_sent',
+  // Phase 2.3: health and circuit breaker (ADR-013 F-4, `PROVIDER_ADAPTER.md` §5-§6).
+  PROVIDER_HEALTH_CHECKED: 'provider.health_checked',
+  PROVIDER_HEALTH_CHANGED: 'provider.health_changed',
+  PROVIDER_HEALTH_OVERRIDDEN: 'provider.health_overridden',
+  PROVIDER_CIRCUIT_CHANGED: 'provider.circuit_changed',
 
   AUTHORIZATION_DENIED: 'authorization.denied',
 } as const;
@@ -188,6 +193,13 @@ export const SECURITY_SENSITIVE_AUDIT_ACTIONS: readonly AuditAction[] = Object.f
   // can incur cost or reach a recipient, so it is recorded in its own
   // transaction or not at all.
   AUDIT_ACTIONS.PROVIDER_TEST_SENT,
+  // Health and circuit state (Phase 2.3) decide, once routing exists, whether a
+  // provider carries traffic; each is recorded with the state change it
+  // describes, in that change's transaction.
+  AUDIT_ACTIONS.PROVIDER_HEALTH_CHECKED,
+  AUDIT_ACTIONS.PROVIDER_HEALTH_CHANGED,
+  AUDIT_ACTIONS.PROVIDER_HEALTH_OVERRIDDEN,
+  AUDIT_ACTIONS.PROVIDER_CIRCUIT_CHANGED,
 ]);
 
 export function isSecuritySensitiveAction(action: string): boolean {

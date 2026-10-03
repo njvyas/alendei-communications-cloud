@@ -19,11 +19,11 @@ export type ChannelStatus = (typeof CHANNEL_STATUSES)[number];
 export const PROVIDER_STATUSES = ['active', 'disabled', 'draining'] as const;
 export type ProviderStatus = (typeof PROVIDER_STATUSES)[number];
 
-/** Observed health (ADR-013 F-5). Read-only in 2.1; transitions arrive in 2.3. */
+/** Observed health (ADR-013 F-5): derived from samples or manually overridden (`PROVIDER_ADAPTER.md` §5, Phase 2.3). */
 export const PROVIDER_HEALTH_STATES = ['healthy', 'degraded', 'critical', 'offline'] as const;
 export type ProviderHealthState = (typeof PROVIDER_HEALTH_STATES)[number];
 
-/** Computed breaker state (ADR-013 F-7). Read-only in 2.1; transitions arrive in 2.3. */
+/** Computed breaker state (ADR-013 F-7): moved only by the circuit breaker (`PROVIDER_ADAPTER.md` §6, Phase 2.3). */
 export const PROVIDER_CIRCUIT_STATES = ['closed', 'open', 'half_open'] as const;
 export type ProviderCircuitState = (typeof PROVIDER_CIRCUIT_STATES)[number];
 

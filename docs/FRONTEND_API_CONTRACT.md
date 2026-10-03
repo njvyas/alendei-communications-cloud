@@ -1357,8 +1357,12 @@ The five channels are seeded by migration `0018`. **No route creates, changes or
   "name": "Primary SMS",       // 1–200 characters, no surrounding whitespace; unique per channel, case-insensitively
   "adapterKey": "simulator",   // an adapter registered in code; Phase 2 registers only `simulator`
   "status": "disabled",        // active | disabled | draining — administrative
-  "healthState": "healthy",    // healthy | degraded | critical | offline — read-only in 2.1 (2.3)
-  "circuitState": "closed",    // closed | open | half_open — read-only in 2.1 (2.3)
+  "healthState": "healthy",    // healthy | degraded | critical | offline — derived from samples, or the override (2.3, PROVIDER_ADAPTER.md §5)
+  "healthOverride": null,      // the manual pin, or null when health is derived (2.3)
+  "healthChangedAt": null,     // ISO-8601 of the last health change, or null (2.3)
+  "circuitState": "closed",    // closed | open | half_open — moved only by the circuit breaker (2.3, §6)
+  "circuitChangedAt": null,    // ISO-8601 of the last circuit transition, or null (2.3)
+  "circuitCooldownUntil": null, // when an open circuit's cooldown ends; null unless open (2.3)
   "createdAt": "ISO-8601",
   "updatedAt": "ISO-8601"
 }
@@ -1377,7 +1381,7 @@ The five channels are seeded by migration `0018`. **No route creates, changes or
 | `POST` | `/api/v1/providers/:id/disable` | session only | `providers.manage` | — | → `disabled` | `409 …` unless `active` or `draining` | not keyed | `provider.disabled` |
 | `POST` | `/api/v1/providers/:id/drain` | session only | `providers.manage` | — | → `draining` | `409 …` unless `active` | not keyed | `provider.drained` |
 
-| `POST` | `/api/v1/providers/:id/test-send` (Phase 2.2) | session only | `providers.test_send` | `{behavior}` only — `SUCCESS`, `TIMEOUT`, `500`, `429`, `INVALID_CREDENTIALS`, `INVALID_REQUEST`, `SLOW_RESPONSE`; adapter, provider, recipient, content, credential and tenant fields are `400` | `200 {data:testSendResult}` — a simulated provider rejection is a `200` with `outcome: "rejected"`, not an error | `400`; `401`; `403`; `404`; `409 PROVIDER_LIFECYCLE_CONFLICT` (`details.status`) unless `active`; `422 PROVIDER_ADAPTER_UNKNOWN` (`details.adapterKeys`) if the provider's catalogue adapter key is not registered | not idempotent: each call is a new test | `provider.test_sent` (behaviour, outcome, category, latency, submission id — never a payload); audit `outcome` `success` when accepted, `failure` when rejected. A `403` can also arrive *after* the submission ran, if the caller's authority was withdrawn meanwhile — the result is then neither returned nor recorded |
+| `POST` | `/api/v1/providers/:id/test-send` (Phase 2.2; circuit 2.3) | session only | `providers.test_send` | `{behavior}` only — `SUCCESS`, `TIMEOUT`, `500`, `429`, `INVALID_CREDENTIALS`, `INVALID_REQUEST`, `SLOW_RESPONSE`; adapter, provider, recipient, content, credential, circuit and tenant fields are `400` | `200 {data:testSendResult}` — a simulated provider rejection is a `200` with `outcome: "rejected"`, not an error | `400`; `401`; `403`; `404`; `409 PROVIDER_LIFECYCLE_CONFLICT` (`details.status`) unless `active` — checked **before** the circuit; `422 PROVIDER_ADAPTER_UNKNOWN` (`details.adapterKeys`) if the provider's catalogue adapter key is not registered; `409 PROVIDER_CIRCUIT_OPEN` (`details.circuitState` `open` with `details.retryAfterMs`, or `half_open` while the probe is in flight) — the adapter is not called | not idempotent: each call is a new test | `provider.test_sent` (behaviour, outcome, category, latency, submission id — never a payload); audit `outcome` `success` when accepted, `failure` when rejected. A `403` can also arrive *after* the submission ran, if the caller's authority was withdrawn meanwhile — the result is then neither returned nor recorded |
 
 ```jsonc
 // testSendResult — exhaustive
@@ -1400,7 +1404,43 @@ The five channels are seeded by migration `0018`. **No route creates, changes or
 }
 ```
 
-**There is no `DELETE /providers/:id`** — a provider is disabled, never deleted. **No credential, health-check, routing, priority or weight operation exists** (health is 2.3). Test-send reaches only the simulator in Phase 2; it never connects to a real provider and persists no message. Every audit row is at `platform` scope and carries before/after values; none carries a credential or secret.
+The test-send answer also carries (2.3) `"circuitProbe": false` (whether this submission was the circuit's half-open probe), `"healthState"` and `"circuitState"` — the provider's state after the answer was recorded. A circuit refusal records `provider.test_sent` with outcome `failure` and `after.outcome = "short_circuited"`.
+
+| Method | Path | Auth | Permission | Request | Success | Errors | Idempotency | Audit |
+|---|---|---|---|---|---|---|---|---|
+| `POST` | `/api/v1/providers/:id/health-check` (Phase 2.3) | session only | `providers.manage` | `{behavior}` only — `HEALTHY`, `UNHEALTHY`, `TIMEOUT` (the simulator's health answer); any other field `400` | `200 {data:healthCheckResult}` — an unhealthy answer is a `200`, not an error. Permitted in every lifecycle status and circuit state; moves health, never the circuit | `400`; `401`; `403`; `404`; `422 PROVIDER_ADAPTER_UNKNOWN` | not idempotent: each call is a new probe | `provider.health_checked` (`success` healthy, `failure` otherwise); `provider.health_changed` if health moved |
+| `POST` | `/api/v1/providers/:id/health` (Phase 2.3) | session only | `providers.manage` | `{override, reason?}` — `override` is **required**: `healthy`, `degraded`, `critical`, `offline` to pin health, or `null` to return to automatic derivation; `reason` ≤ 500 characters; no circuit or status field exists (`400`) | `200 {data:providerDetail}` | `400`; `401`; `403`; `404` | naturally idempotent: the override already in force changes and records nothing | `provider.health_overridden` (before/after, reason); `provider.health_changed` if health moved |
+| `GET` | `/api/v1/providers/:id/health` (Phase 2.3) | session only | `providers.read` | `limit`, `cursor`, `sort` (`-createdAt` default, `createdAt`) | `200 {data:[healthSample], page}`, newest first | `400` (any other query parameter); `401`; `403`; `404` | safe | — |
+
+```jsonc
+// healthCheckResult — exhaustive
+{
+  "providerId": "uuid", "adapterKey": "simulator", "channelCode": "sms",
+  "behavior": "UNHEALTHY",
+  "outcome": "unhealthy",          // healthy | unhealthy | timeout
+  "latencyMs": 0,                  // TIMEOUT answers 3000 (the probe timeout)
+  "correlationId": "uuid",
+  "healthState": "healthy",        // after the probe was recorded
+  "circuitState": "closed"         // unchanged by a probe
+}
+// healthSample — exhaustive
+{
+  "id": "uuid", "providerId": "uuid",
+  "kind": "submission",            // submission (test-send) | probe (health check) | override
+  "outcome": "provider_error",     // accepted | <failure category, lower case> | healthy | unhealthy | timeout | manual
+  "classification": "failure",     // success | failure | neutral (PROVIDER_ADAPTER.md §5b)
+  "latencyMs": 0,                  // null for an override
+  "healthState": "critical",       // the provider's state after this sample
+  "circuitState": "open",
+  "circuitGeneration": 1,          // the circuit episode the observation belongs to
+  "source": "automatic",           // automatic | manual
+  "observedAt": "ISO-8601", "createdAt": "ISO-8601"
+}
+```
+
+Health and circuit are **displayed by polling** these reads (ADR-013 PD-8); there is no push. Health never refuses a request in Phase 2; the circuit refuses only test-send.
+
+**There is no `DELETE /providers/:id`** — a provider is disabled, never deleted. **No credential, routing, priority or weight operation exists, and no route sets the circuit directly**. Test-send reaches only the simulator in Phase 2; it never connects to a real provider and persists no message. Every audit row is at `platform` scope and carries before/after values; none carries a credential or secret.
 
 **Lifecycle:** `disabled → active` (enable); `active → draining` (drain); `active | draining → disabled` (disable); `draining → active` (enable). Two concurrent transitions on one provider serialize: exactly one succeeds.
 

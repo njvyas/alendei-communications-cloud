@@ -14,6 +14,7 @@ import {
   AUDIT_ACTIONS,
   ERROR_CODES,
   PLATFORM_ROLE_KEYS,
+  PROVIDER_HEALTH_DEFAULTS,
   PROVIDER_SUBMISSION_DEFAULTS,
   SIMULATOR_BEHAVIORS,
 } from '@acc/contracts';
@@ -31,7 +32,9 @@ import {
   PREFIX,
   createTenant,
   destroyTenant,
+  ManualProviderClock,
   purgeAudit,
+  purgeProviderHealth,
   startHarness,
   type Harness,
   type TenantFixture,
@@ -56,6 +59,17 @@ describe('Phase 2.2 provider adapter test-send', () => {
   let apiKey: string;
   let apiKeyId: string;
   let provider: string;
+
+  /**
+   * Phase 2.3: test-sends now feed the provider's circuit and health. This suite
+   * proves the 2.2 adapter behaviours, so each case starts beyond both sample
+   * windows (`PROVIDER_ADAPTER.md` §5c, §6a) — the injected clock is advanced,
+   * nothing sleeps — and the shared provider's earlier answers cannot trip its
+   * circuit. The circuit's own effect on test-send is proven by
+   * `provider-health-circuit.sec-spec.ts`.
+   */
+  const clock = new ManualProviderClock();
+  beforeEach(() => clock.advance(PROVIDER_HEALTH_DEFAULTS.WINDOW_MS + 1));
 
   const url = (p: string) => `/${PREFIX}${p}`;
   const suffix = () => randomBytes(5).toString('hex');
@@ -197,7 +211,7 @@ describe('Phase 2.2 provider adapter test-send', () => {
   }
 
   beforeAll(async () => {
-    h = await startHarness();
+    h = await startHarness({ providerClock: clock });
     credentials = h.app.get(CredentialService);
     appPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
     tenant = await createTenant(h.admin, 'p22', credentials);
@@ -275,6 +289,7 @@ describe('Phase 2.2 provider adapter test-send', () => {
       );
     if (createdProviders.length > 0) {
       await purgeAudit(h.admin, sql`resource_id IN (${list(createdProviders)})`);
+      await purgeProviderHealth(h.admin, sql`provider_id IN (${list(createdProviders)})`);
       await h.admin.execute(
         sql`DELETE FROM provider_capabilities WHERE provider_id IN (${list(createdProviders)})`,
       );
@@ -414,7 +429,9 @@ describe('Phase 2.2 provider adapter test-send', () => {
 
     it('no message, attempt or webhook table exists to write to', async () => {
       const { rows } = await h.admin.execute<{ n: number }>(
-        sql`select count(*)::int n from information_schema.tables where table_schema = 'public' and table_name in ('messages','message_attempts','webhook_events','provider_health')`,
+        // `provider_health` exists from Phase 2.3 by design (migration 0022); it
+        // holds observations, not messages, and is proven in the 2.3 suite.
+        sql`select count(*)::int n from information_schema.tables where table_schema = 'public' and table_name in ('messages','message_attempts','webhook_events')`,
       );
       expect(rows[0]!.n).toBe(0);
     });
@@ -632,7 +649,7 @@ describe('Phase 2.2 provider adapter test-send', () => {
       });
     });
 
-    it('the test-send audit policy names no role, adds no function, and leaves the other audit policies as they were', async () => {
+    it('the test-send audit policy names no role, adds no function, and leaves the other audit policies as they were (plus the 2.3 health policy)', async () => {
       const { rows } = await h.admin.execute<{ policyname: string; with_check: string }>(
         sql`select policyname, with_check from pg_policies where tablename = 'audit_logs' and cmd = 'INSERT' order by policyname`,
       );
@@ -640,6 +657,8 @@ describe('Phase 2.2 provider adapter test-send', () => {
         'audit_logs_auth_insert',
         'audit_logs_insert',
         'audit_logs_platform_self_denial_insert',
+        // Phase 2.3 (migration 0022), pinned in provider-health-circuit.sec-spec.ts.
+        'audit_logs_provider_health_insert',
         'audit_logs_provider_insert',
         'audit_logs_provider_test_send_insert',
       ]);

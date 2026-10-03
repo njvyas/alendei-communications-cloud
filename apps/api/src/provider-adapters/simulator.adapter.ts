@@ -4,15 +4,18 @@ import {
   PROVIDER_SUBMISSION_DEFAULTS,
   RETRYABLE_FAILURE_CATEGORIES,
   SIMULATOR_BEHAVIORS,
+  SIMULATOR_HEALTH_BEHAVIORS,
   type ProviderAdapter,
   type ProviderAdapterCapabilities,
   type ProviderAdapterContext,
   type ProviderFailureCategory,
+  type ProviderHealthCheckOptions,
   type ProviderHealthProbe,
   type ProviderSubmission,
   type ProviderSubmissionOptions,
   type ProviderSubmissionResult,
   type SimulatorBehavior,
+  type SimulatorHealthBehavior,
 } from '@acc/contracts';
 
 import { SUBMISSION_TIMER, type SubmissionTimer } from './submission-timer';
@@ -76,6 +79,26 @@ export class SimulatorAdapter implements ProviderAdapter {
 
   async healthCheck(): Promise<ProviderHealthProbe> {
     return { healthy: true, latencyMs: 0 };
+  }
+
+  /**
+   * A view of this adapter whose health check answers with `behavior` (Phase
+   * 2.3): `HEALTHY` and `UNHEALTHY` at once, `TIMEOUT` never — the executor's
+   * timeout decides, and its abort ends the wait. An unknown behaviour is
+   * unhealthy, never healthy.
+   */
+  forHealthBehavior(behavior: SimulatorHealthBehavior): ProviderAdapter {
+    return {
+      adapterKey: this.adapterKey,
+      capabilities: () => this.capabilities(),
+      healthCheck: (_context, options) => this.simulateHealth(behavior, options),
+      // A health view selects no submission behaviour, so it sends as the bare
+      // simulator does: `CONFIGURATION_ERROR`, never success.
+      send: (context, submission) => this.send(context, submission),
+      estimateCost: () => this.estimateCost(),
+      checkStatus: () => this.checkStatus(),
+      parseWebhook: () => this.parseWebhook(),
+    };
   }
 
   /** A view of this adapter that answers every submission with `behavior`. */
@@ -175,6 +198,21 @@ export class SimulatorAdapter implements ProviderAdapter {
         );
       }
     }
+  }
+
+  private async simulateHealth(
+    behavior: SimulatorHealthBehavior,
+    options?: ProviderHealthCheckOptions,
+  ): Promise<ProviderHealthProbe> {
+    if (!(SIMULATOR_HEALTH_BEHAVIORS as readonly string[]).includes(behavior)) {
+      return { healthy: false, latencyMs: 0 };
+    }
+    if (behavior === 'TIMEOUT') {
+      const started = this.timer.now();
+      await this.timer.sleep(Infinity, options?.signal);
+      return { healthy: false, latencyMs: Math.round(this.timer.now() - started) };
+    }
+    return { healthy: behavior === 'HEALTHY', latencyMs: 0 };
   }
 
   private accept(submission: ProviderSubmission, latencyMs: number): ProviderSubmissionResult {

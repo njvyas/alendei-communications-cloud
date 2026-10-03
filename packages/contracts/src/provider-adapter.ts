@@ -120,6 +120,16 @@ export interface ProviderHealthProbe {
 }
 
 /**
+ * The health check's timeout (Phase 2.3, additive and optional). The executor
+ * enforces it; an adapter may also honour `signal`, so an unanswered probe
+ * leaves nothing running.
+ */
+export interface ProviderHealthCheckOptions {
+  readonly timeoutMs: number;
+  readonly signal?: AbortSignal;
+}
+
+/**
  * The adapter port. `capabilities`, `healthCheck` and `send` are implemented in
  * Phase 2; `estimateCost` (billing, Phase 7), `checkStatus` and `parseWebhook`
  * (message lifecycle, Phase 3) are interface members only and carry no Phase 2
@@ -128,7 +138,10 @@ export interface ProviderHealthProbe {
 export interface ProviderAdapter {
   readonly adapterKey: string;
   capabilities(): ProviderAdapterCapabilities;
-  healthCheck(context: ProviderAdapterContext): Promise<ProviderHealthProbe>;
+  healthCheck(
+    context: ProviderAdapterContext,
+    options?: ProviderHealthCheckOptions,
+  ): Promise<ProviderHealthProbe>;
   send(
     context: ProviderAdapterContext,
     submission: ProviderSubmission,

@@ -29,6 +29,10 @@ const ALLOWED_LABELS = new Set([
   'outcome',
   'consumer_group',
   'event_type',
+  // Phase 2.3: the two ends of a provider health or circuit transition — each a
+  // fixed enum of at most four values (`PROVIDER_ADAPTER.md` §6g).
+  'from_state',
+  'to_state',
 ]);
 
 /** Labels that would create one time series per tenant/message/campaign. */
@@ -79,6 +83,18 @@ export class MetricsService implements OnModuleInit {
   readonly sessionCapEvictions: Counter<never>;
   /** Every provider adapter submission, by channel and normalized outcome (Phase 2.2). */
   readonly providerSubmissions: Counter<'channel' | 'outcome'>;
+  /** Provider health checks, by channel and probe outcome (Phase 2.3). */
+  readonly providerHealthChecks: Counter<'channel' | 'outcome'>;
+  /** 1 for each provider's current health state, 0 for the others (Phase 2.3). */
+  readonly providerHealthState: Gauge<'provider' | 'status'>;
+  readonly providerHealthTransitions: Counter<'provider' | 'from_state' | 'to_state'>;
+  /** 1 for each provider's current circuit state, 0 for the others (Phase 2.3). */
+  readonly providerCircuitState: Gauge<'provider' | 'status'>;
+  readonly providerCircuitTransitions: Counter<'provider' | 'from_state' | 'to_state'>;
+  /** Submissions refused by the circuit without calling the adapter (Phase 2.3). */
+  readonly providerCircuitRejections: Counter<'provider' | 'status'>;
+  /** Half-open probe results, and probe slots reclaimed after their lease (Phase 2.3). */
+  readonly providerCircuitProbes: Counter<'provider' | 'outcome'>;
 
   constructor(private readonly config: AppConfigService) {
     this.registry.setDefaultLabels({
@@ -139,6 +155,50 @@ export class MetricsService implements OnModuleInit {
       name: 'acc_provider_submissions_total',
       help: 'Provider adapter submissions (Phase 2.2: test-sends to the simulator), by channel and normalized outcome: accepted, or the failure category in lower case (timeout, provider_error, rate_limited, auth_error, invalid_request, configuration_error, unknown).',
       labelNames: ['channel', 'outcome'],
+    });
+
+    // Phase 2.3 (`PROVIDER_ADAPTER.md` §6g). `provider` is the catalogue id: the
+    // platform catalogue is bounded (a few dozen providers), never per tenant.
+    this.providerHealthChecks = this.counter({
+      name: 'acc_provider_health_checks_total',
+      help: 'Provider health checks (POST /providers/:id/health-check), by channel and probe outcome: healthy, unhealthy or timeout.',
+      labelNames: ['channel', 'outcome'],
+    });
+
+    this.providerHealthState = this.gauge({
+      name: 'acc_provider_health_state',
+      help: "A provider's health state as last written by this instance: 1 for the current state, 0 for the others.",
+      labelNames: ['provider', 'status'],
+    });
+
+    this.providerHealthTransitions = this.counter({
+      name: 'acc_provider_health_transitions_total',
+      help: 'Provider health state changes, automatic or manual, by provider and from/to state.',
+      labelNames: ['provider', 'from_state', 'to_state'],
+    });
+
+    this.providerCircuitState = this.gauge({
+      name: 'acc_provider_circuit_state',
+      help: "A provider's circuit-breaker state as last written by this instance: 1 for the current state, 0 for the others.",
+      labelNames: ['provider', 'status'],
+    });
+
+    this.providerCircuitTransitions = this.counter({
+      name: 'acc_provider_circuit_transitions_total',
+      help: 'Circuit-breaker transitions (closed>open, open>half_open, half_open>open, half_open>closed), by provider. Circuit-open events are to_state="open".',
+      labelNames: ['provider', 'from_state', 'to_state'],
+    });
+
+    this.providerCircuitRejections = this.counter({
+      name: 'acc_provider_circuit_rejections_total',
+      help: 'Submissions refused by the circuit breaker without calling the adapter, by provider and circuit state (open, or half_open with the probe slot held).',
+      labelNames: ['provider', 'status'],
+    });
+
+    this.providerCircuitProbes = this.counter({
+      name: 'acc_provider_circuit_probes_total',
+      help: 'Half-open probe results by provider: success, failure, neutral, stale (answered after the episode ended or the slot was reclaimed), or abandoned (slot reclaimed after its lease).',
+      labelNames: ['provider', 'outcome'],
     });
   }
 

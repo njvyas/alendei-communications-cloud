@@ -1,0 +1,11 @@
+# Grafana dashboard provisioning (Phase 2.3, ADR-013 PD-8). Dashboards are
+# files in infra/observability/grafana-dashboards/, read-only in Grafana.
+apiVersion: 1
+providers:
+  - name: acc
+    folder: ACC
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards

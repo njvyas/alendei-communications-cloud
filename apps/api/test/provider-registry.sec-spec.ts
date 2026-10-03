@@ -32,6 +32,7 @@ import {
   createTenant,
   destroyTenant,
   purgeAudit,
+  purgeProviderHealth,
   startHarness,
   type Harness,
   type TenantFixture,
@@ -312,13 +313,12 @@ describe('Phase 2.1 provider and channel registry', () => {
       (r) => r.id,
     );
     if (ids.length > 0) {
-      await purgeAudit(
-        h.admin,
-        sql`resource_id IN (${sql.join(
-          ids.map((id) => sql`${id}`),
-          sql`, `,
-        )})`,
+      const idList = sql.join(
+        ids.map((id) => sql`${id}`),
+        sql`, `,
       );
+      await purgeAudit(h.admin, sql`resource_id IN (${idList})`);
+      await purgeProviderHealth(h.admin, sql`provider_id IN (${idList})`);
       await h.admin.delete(schema.providers).where(inArray(schema.providers.id, ids));
     }
     const list = (values: string[]) =>
@@ -880,7 +880,7 @@ describe('Phase 2.1 provider and channel registry', () => {
       }
     });
 
-    it('reads are gated on platform scope and writes on providers.manage at platform scope; neither predicate names a role', async () => {
+    it('reads are gated on platform scope and writes on providers.manage at platform scope (with the 2.3 observation update for providers.test_send); no predicate names a role', async () => {
       const { rows: policies } = await h.admin.execute<{
         policyname: string;
         cmd: string;
@@ -892,6 +892,9 @@ describe('Phase 2.1 provider and channel registry', () => {
       );
       const READ = 'app_has_platform_scope()';
       const WRITE = "app_has_platform_permission('providers.manage'::text)";
+      // Phase 2.3 (migration 0022): test-send writes observation state; the guard
+      // trigger confines it to those columns (provider-health-circuit.sec-spec.ts).
+      const OBSERVE = "app_has_platform_permission('providers.test_send'::text)";
       expect(
         policies.map((p) => `${p.policyname}:${p.cmd}:${p.roles}:${p.qual}:${p.with_check}`),
       ).toEqual([
@@ -901,6 +904,7 @@ describe('Phase 2.1 provider and channel registry', () => {
         `provider_capabilities_platform_read:SELECT:{acc_app}:${READ}:null`,
         `provider_capabilities_platform_update:UPDATE:{acc_app}:${WRITE}:${WRITE}`,
         `providers_platform_insert:INSERT:{acc_app}:null:${WRITE}`,
+        `providers_platform_observation_update:UPDATE:{acc_app}:${OBSERVE}:${OBSERVE}`,
         `providers_platform_read:SELECT:{acc_app}:${READ}:null`,
         `providers_platform_update:UPDATE:{acc_app}:${WRITE}:${WRITE}`,
       ]);
@@ -933,7 +937,7 @@ describe('Phase 2.1 provider and channel registry', () => {
 
     it('no catalogue table can hold a credential, and provider_credentials does not exist', async () => {
       const { rows } = await h.admin.execute<{ table_name: string; column_name: string }>(
-        sql`select table_name, column_name from information_schema.columns where table_schema = 'public' and table_name in ('channels','providers','provider_capabilities')`,
+        sql`select table_name, column_name from information_schema.columns where table_schema = 'public' and table_name in ('channels','providers','provider_capabilities','provider_health')`,
       );
       expect(rows.length).toBeGreaterThan(0);
       for (const r of rows) {

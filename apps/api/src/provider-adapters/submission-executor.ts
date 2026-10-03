@@ -3,6 +3,7 @@ import {
   PROVIDER_FAILURE_CATEGORIES,
   RETRYABLE_FAILURE_CATEGORIES,
   type ProviderAdapter,
+  type ProviderProbeOutcome,
   type ProviderAdapterContext,
   type ProviderSubmission,
   type ProviderSubmissionResult,
@@ -47,6 +48,46 @@ export class ProviderSubmissionExecutor {
       channel: context.channel,
       outcome: result.outcome === 'accepted' ? 'accepted' : result.failure.category.toLowerCase(),
     });
+    return result;
+  }
+
+  /**
+   * Runs one health check under `timeoutMs` (Phase 2.3) and counts it, once, by
+   * channel and outcome. No answer in time is `timeout`; a thrown error or an
+   * answer outside the contract is `unhealthy` — never `healthy`.
+   */
+  async probe(
+    adapter: ProviderAdapter,
+    context: ProviderAdapterContext,
+    timeoutMs: number,
+  ): Promise<{ outcome: ProviderProbeOutcome; latencyMs: number }> {
+    const started = this.timer.now();
+    const abort = new AbortController();
+    const timeout = this.timer
+      .sleep(timeoutMs, abort.signal)
+      .then((): typeof TIMED_OUT => TIMED_OUT);
+    let result: { outcome: ProviderProbeOutcome; latencyMs: number };
+    try {
+      const raced = await Promise.race([
+        adapter.healthCheck(context, { timeoutMs, signal: abort.signal }),
+        timeout,
+      ]);
+      const latencyMs = Math.round(this.timer.now() - started);
+      if (raced === TIMED_OUT) result = { outcome: 'timeout', latencyMs: timeoutMs };
+      else if (raced?.healthy === true) result = { outcome: 'healthy', latencyMs };
+      else result = { outcome: 'unhealthy', latencyMs };
+    } catch (error) {
+      this.logger.error({
+        msg: 'provider adapter threw during a health check',
+        adapterKey: adapter.adapterKey,
+        providerId: context.providerId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      result = { outcome: 'unhealthy', latencyMs: Math.round(this.timer.now() - started) };
+    } finally {
+      abort.abort();
+    }
+    this.metrics?.providerHealthChecks.inc({ channel: context.channel, outcome: result.outcome });
     return result;
   }
 

@@ -144,23 +144,24 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * in the module graph this configuration (test + flag) builds — one per
      * method and path; no middleware, no framework route:
      *
-     *   69 application operations (including the three health routes; Phase
+     *   72 application operations (including the three health routes; Phase
      *      2.1 added the ten provider/channel catalogue operations, Phase 2.2
-     *      the provider test-send)
+     *      the provider test-send, Phase 2.3 the provider health check, the
+     *      health override and the health-sample list)
      * +  1 OpenAPI document operation (`GET /api/v1/openapi.json`)
-     * = 70 documented operations
+     * = 73 documented operations
      * +  1 intentional exclusion (`GET /metrics`, the only one)
-     * = 71 handler routes
+     * = 74 handler routes
      *
      * A route added or removed on purpose changes these numbers here, in the
      * same change; the two tests below fail on any route or operation that
      * exists on only one side.
      */
-    const APPLICATION_OPERATIONS = 69;
+    const APPLICATION_OPERATIONS = 72;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 
-    it('reconciles exactly: 69 application operations + 1 document operation = 70; GET /metrics the sole exclusion', () => {
+    it('reconciles exactly: 72 application operations + 1 document operation = 73; GET /metrics the sole exclusion', () => {
       const all = routes.map(key);
       expect(new Set(all).size).toBe(all.length);
       const excluded = routes.filter(isExcluded).map(key);
@@ -526,8 +527,11 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
       }
       if (rule.enum !== undefined) {
         const got = [...((resolved.enum as unknown[]) ?? [])].sort();
-        if (JSON.stringify(got) !== JSON.stringify(rule.enum))
-          problems.push(`${label}: enum differs`);
+        // OpenAPI 3.0: a nullable enum admits null only if null is one of its
+        // values (Phase 2.3, the first nullable enum), so a DTO that admits
+        // null must document it there too.
+        const want = rule.nullable ? [...(rule.enum as unknown[]), null].sort() : rule.enum;
+        if (JSON.stringify(got) !== JSON.stringify(want)) problems.push(`${label}: enum differs`);
       }
       if (rule.items)
         compare(

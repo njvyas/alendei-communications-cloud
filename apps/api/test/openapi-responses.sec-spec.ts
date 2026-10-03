@@ -310,6 +310,17 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
     });
     await db.execute(sql`DELETE FROM organizations WHERE id IN (${list(orgs)})`);
     if (created.providers.length > 0) {
+      // `provider_health` is append-only (Phase 2.3, migration 0022): the owner
+      // lifts the trigger for teardown, as for `audit_logs`.
+      await db.execute(
+        sql`ALTER TABLE provider_health DISABLE TRIGGER trg_provider_health_append_only`,
+      );
+      await db.execute(
+        sql`DELETE FROM provider_health WHERE provider_id IN (${list(created.providers)})`,
+      );
+      await db.execute(
+        sql`ALTER TABLE provider_health ENABLE TRIGGER trg_provider_health_append_only`,
+      );
       await db.execute(
         sql`DELETE FROM provider_capabilities WHERE provider_id IN (${list(created.providers)})`,
       );
@@ -489,6 +500,30 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
           `provider test-send ${behavior}`,
         );
       }
+      // Phase 2.3: a healthy and an unhealthy probe, a set and a cleared
+      // override, and the sample history all validate against the document.
+      for (const behavior of ['HEALTHY', 'UNHEALTHY']) {
+        expectStatus(
+          await hit('POST', `providers/${providerId}/health-check`, {
+            ...credential,
+            body: { behavior },
+          }),
+          200,
+          `provider health-check ${behavior}`,
+        );
+      }
+      for (const body of [{ override: 'offline', reason: 'OA maintenance' }, { override: null }]) {
+        expectStatus(
+          await hit('POST', `providers/${providerId}/health`, { ...credential, body }),
+          200,
+          `provider health override ${String(body.override)}`,
+        );
+      }
+      expectStatus(
+        await hit('GET', `providers/${providerId}/health`, credential),
+        200,
+        'provider health samples',
+      );
     });
 
     it('workspaces, teams and the deprecated tenancy aliases', async () => {
@@ -773,11 +808,15 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
             ? { capabilities: [] }
             : template.endsWith('/test-send')
               ? { behavior: 'SUCCESS' }
-              : method !== 'PATCH'
-                ? {}
-                : template.includes('/users/')
-                  ? { phone: '+15551234567' }
-                  : { name: `x ${suffix()}` },
+              : template.endsWith('/health-check')
+                ? { behavior: 'HEALTHY' }
+                : template.endsWith('/health') && method === 'POST'
+                  ? { override: null }
+                  : method !== 'PATCH'
+                    ? {}
+                    : template.includes('/users/')
+                      ? { phone: '+15551234567' }
+                      : { name: `x ${suffix()}` },
         });
         expect(`${method} ${template} → ${res.status}`).toMatch(/→ (404|403)$/);
       }

@@ -18,8 +18,11 @@ import { OptionalTenantContext } from '../auth/public.decorator';
 import { RequiresPermission } from '../auth/requires-permission.decorator';
 import { AcceptedCredentials } from '../openapi/accepted-credentials.decorator';
 import { ApiData, ApiErrors, ApiPaged } from '../openapi/openapi-responses';
+import { ListQueryDto } from '../common/http/list-query.dto';
 import {
   ProviderDetailSchema,
+  ProviderHealthCheckResultSchema,
+  ProviderHealthSampleSchema,
   ProviderSchema,
   ProviderTestSendResultSchema,
 } from '../openapi/openapi-schemas';
@@ -27,23 +30,31 @@ import { PLATFORM_CATALOGUE, requestPrincipal } from './channels.controller';
 import {
   CreateProviderDto,
   ListProvidersQueryDto,
+  ProviderHealthCheckDto,
+  ProviderHealthOverrideDto,
   ProviderTestSendDto,
   ReplaceProviderCapabilitiesDto,
   UpdateProviderDto,
 } from './provider.dto';
+import { ProviderHealthService } from './provider-health.service';
 import { ProviderRegistryService } from './provider-registry.service';
 
 /**
- * Provider registry (Phase 2.1, `FRONTEND_API_CONTRACT.md` §32b, ADR-013).
+ * Provider registry (Phase 2.1), test-send (2.2) and health/circuit (2.3) —
+ * `FRONTEND_API_CONTRACT.md` §32b, ADR-013.
  *
  * Platform scope only: `providers.read` for reads, `providers.manage` for every
- * write. No `DELETE` — a provider is disabled, never deleted. No credential,
- * health, circuit, routing or test-send operation exists in 2.1.
+ * write and the health check, `providers.test_send` for test-send. No `DELETE` —
+ * a provider is disabled, never deleted. No credential or routing operation,
+ * and no route that sets the circuit directly.
  */
 @ApiTags('providers')
 @Controller('providers')
 export class ProvidersController {
-  constructor(private readonly registry: ProviderRegistryService) {}
+  constructor(
+    private readonly registry: ProviderRegistryService,
+    private readonly health: ProviderHealthService,
+  ) {}
 
   @Get()
   @OptionalTenantContext()
@@ -189,5 +200,69 @@ export class ProvidersController {
   @ApiErrors(400, 401, 403, 404, 409, 422, 429)
   async testSend(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: ProviderTestSendDto) {
     return { data: await this.registry.testSend(requestPrincipal(), id, dto.behavior) };
+  }
+
+  @Post(':id/health-check')
+  @OptionalTenantContext()
+  @RequiresPermission(PERMISSIONS.PROVIDERS_MANAGE, {
+    target: 'deferred',
+    because: PLATFORM_CATALOGUE,
+  })
+  @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession')
+  @ApiOperation({
+    summary: 'Run the provider adapter’s health check',
+    description:
+      'Phase 2.3: the simulator only; the behaviour selects the simulated answer. Permitted in every lifecycle status and circuit state. Records a probe sample that moves health, never the circuit. An unhealthy answer is a 200 with outcome "unhealthy" or "timeout".',
+  })
+  @ApiData(ProviderHealthCheckResultSchema)
+  @ApiErrors(400, 401, 403, 404, 422, 429)
+  async healthCheck(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: ProviderHealthCheckDto,
+  ) {
+    return { data: await this.health.healthCheck(requestPrincipal(), id, dto.behavior) };
+  }
+
+  @Post(':id/health')
+  @OptionalTenantContext()
+  @RequiresPermission(PERMISSIONS.PROVIDERS_MANAGE, {
+    target: 'deferred',
+    because: PLATFORM_CATALOGUE,
+  })
+  @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession')
+  @ApiOperation({
+    summary: 'Set or clear the manual health override',
+    description:
+      'Phase 2.3: override pins health to a state until cleared with null, which re-derives it from the samples. Setting the override already in force changes nothing. Never touches the circuit.',
+  })
+  @ApiData(ProviderDetailSchema)
+  @ApiErrors(400, 401, 403, 404, 429)
+  async overrideHealth(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: ProviderHealthOverrideDto,
+  ) {
+    return {
+      data: await this.health.setOverride(requestPrincipal(), id, dto.override, dto.reason ?? null),
+    };
+  }
+
+  @Get(':id/health')
+  @OptionalTenantContext()
+  @RequiresPermission(PERMISSIONS.PROVIDERS_READ, {
+    target: 'deferred',
+    because: PLATFORM_CATALOGUE,
+  })
+  @AcceptedCredentials('userSession')
+  @ApiOperation({
+    summary: 'List a provider’s health samples, newest first',
+    description: 'Phase 2.3: test-send submissions, health-check probes and manual overrides.',
+  })
+  @ApiPaged(ProviderHealthSampleSchema)
+  @ApiErrors(400, 401, 403, 404, 429)
+  async listHealth(@Param('id', new ParseUUIDPipe()) id: string, @Query() query: ListQueryDto) {
+    const { items, page } = await this.health.listSamples(requestPrincipal(), id, query);
+    return { data: items, page };
   }
 }

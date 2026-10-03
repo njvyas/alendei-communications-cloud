@@ -8,6 +8,7 @@ import {
   IsString,
   IsUUID,
   Matches,
+  ValidateIf,
   MaxLength,
   MinLength,
   ValidateNested,
@@ -15,8 +16,11 @@ import {
 import {
   PROVIDER_CAPABILITY_KEY_PATTERN,
   PROVIDER_CAPABILITY_LIMITS,
+  PROVIDER_HEALTH_OVERRIDE_REASON_MAX,
+  PROVIDER_HEALTH_STATES,
   PROVIDER_STATUSES,
   SIMULATOR_BEHAVIORS,
+  SIMULATOR_HEALTH_BEHAVIORS,
 } from '@acc/contracts';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -112,4 +116,34 @@ export class ProviderTestSendDto {
   @IsIn(SIMULATOR_BEHAVIORS)
   @ApiProperty({ enum: SIMULATOR_BEHAVIORS })
   behavior!: (typeof SIMULATOR_BEHAVIORS)[number];
+}
+
+/**
+ * `POST /providers/:id/health-check` (Phase 2.3). The caller chooses only the
+ * simulator's health answer; the adapter comes from the catalogue row.
+ */
+export class ProviderHealthCheckDto {
+  @IsIn(SIMULATOR_HEALTH_BEHAVIORS)
+  @ApiProperty({ enum: SIMULATOR_HEALTH_BEHAVIORS })
+  behavior!: (typeof SIMULATOR_HEALTH_BEHAVIORS)[number];
+}
+
+/**
+ * `POST /providers/:id/health` (Phase 2.3, `PROVIDER_ADAPTER.md` §5d): pin
+ * health to a state, or `null` to return to automatic derivation. The field is
+ * required — an absent `override` is a `400`, never a silent clear. No circuit
+ * field exists: the circuit is not manually controllable.
+ */
+export class ProviderHealthOverrideDto {
+  @ValidateIf((_o, value) => value !== null)
+  @IsIn(PROVIDER_HEALTH_STATES)
+  // OpenAPI 3.0: a nullable enum must list null among its values.
+  @ApiProperty({ enum: [...PROVIDER_HEALTH_STATES, null], nullable: true })
+  override!: (typeof PROVIDER_HEALTH_STATES)[number] | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(PROVIDER_HEALTH_OVERRIDE_REASON_MAX)
+  @ApiPropertyOptional({ maxLength: PROVIDER_HEALTH_OVERRIDE_REASON_MAX })
+  reason?: string;
 }

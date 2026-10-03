@@ -2,6 +2,7 @@ import {
   CHANNEL_CODES,
   PROVIDER_ADAPTER_KEYS,
   PROVIDER_FAILURE_CATEGORIES,
+  PROVIDER_HEALTH_DEFAULTS,
   PROVIDER_SUBMISSION_DEFAULTS,
   RETRYABLE_FAILURE_CATEGORIES,
   SIMULATOR_BEHAVIORS,
@@ -386,5 +387,76 @@ describe('ProviderAdapterRegistry', () => {
     expect(() => new ProviderAdapterRegistry([simulator(), extra])).toThrow(
       'do not match PROVIDER_ADAPTER_KEYS',
     );
+  });
+});
+
+describe('health check — simulator behaviours and the executor probe (Phase 2.3)', () => {
+  /** Runs one health check through the executor, driving the virtual clock until it settles. */
+  async function probe(
+    adapter: ProviderAdapter,
+    timeoutMs = PROVIDER_HEALTH_DEFAULTS.PROBE_TIMEOUT_MS,
+  ) {
+    const timer = new VirtualTimer();
+    const executor = new ProviderSubmissionExecutor(timer);
+    let settled: { outcome: string; latencyMs: number } | undefined;
+    void executor.probe(adapter, context(), timeoutMs).then((r) => (settled = r));
+    await timer.advance(timeoutMs + 1000);
+    return { result: settled!, timer };
+  }
+
+  it('HEALTHY and UNHEALTHY answer at once and deterministically, run after run', async () => {
+    for (let i = 0; i < 3; i++) {
+      const sim = new SimulatorAdapter(new VirtualTimer());
+      expect((await probe(sim.forHealthBehavior('HEALTHY'))).result).toEqual({
+        outcome: 'healthy',
+        latencyMs: 0,
+      });
+      expect((await probe(sim.forHealthBehavior('UNHEALTHY'))).result).toEqual({
+        outcome: 'unhealthy',
+        latencyMs: 0,
+      });
+    }
+  });
+
+  it('TIMEOUT never answers: the executor reports timeout at exactly the probe timeout, and leaves no waiter behind', async () => {
+    const timer = new VirtualTimer();
+    const sim = new SimulatorAdapter(timer);
+    const executor = new ProviderSubmissionExecutor(timer);
+    let settled: { outcome: string; latencyMs: number } | undefined;
+    void executor
+      .probe(sim.forHealthBehavior('TIMEOUT'), context(), PROVIDER_HEALTH_DEFAULTS.PROBE_TIMEOUT_MS)
+      .then((r) => (settled = r));
+    await timer.advance(PROVIDER_HEALTH_DEFAULTS.PROBE_TIMEOUT_MS - 1);
+    expect(settled).toBeUndefined();
+    await timer.advance(1);
+    expect(settled).toEqual({
+      outcome: 'timeout',
+      latencyMs: PROVIDER_HEALTH_DEFAULTS.PROBE_TIMEOUT_MS,
+    });
+    expect(timer.pending).toBe(0);
+  });
+
+  it('an unknown behaviour, a thrown error or an answer outside the contract is unhealthy — never healthy', async () => {
+    const sim = new SimulatorAdapter(new VirtualTimer());
+    expect((await probe(sim.forHealthBehavior('BOGUS' as never))).result.outcome).toBe('unhealthy');
+    const adapter = (healthCheck: ProviderAdapter['healthCheck']): ProviderAdapter => ({
+      ...sim.forHealthBehavior('HEALTHY'),
+      healthCheck,
+    });
+    expect((await probe(adapter(() => Promise.reject(new Error('boom'))))).result.outcome).toBe(
+      'unhealthy',
+    );
+    expect(
+      (await probe(adapter(async () => ({ healthy: 'yes', latencyMs: 0 }) as never))).result
+        .outcome,
+    ).toBe('unhealthy');
+    expect((await probe(adapter(async () => null as never))).result.outcome).toBe('unhealthy');
+  });
+
+  it('a health view never sends successfully: it has no submission behaviour', async () => {
+    const result = await new SimulatorAdapter(new VirtualTimer())
+      .forHealthBehavior('HEALTHY')
+      .send(context(), submission(), { timeoutMs: 10 });
+    expect(result.outcome === 'rejected' && result.failure.category).toBe('CONFIGURATION_ERROR');
   });
 });

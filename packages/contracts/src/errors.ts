@@ -108,6 +108,14 @@ export const ERROR_CODES = {
    * (`PROVIDER_ADAPTER_KEYS`; ADR-013 F-9). Phase 2 registers `simulator` only.
    */
   PROVIDER_ADAPTER_UNKNOWN: 'PROVIDER_ADAPTER_UNKNOWN',
+  /**
+   * `409`: the provider's circuit breaker refused the submission without calling
+   * the adapter (Phase 2.3, `PROVIDER_ADAPTER.md` §6c) — `open` inside its
+   * cooldown, or `half_open` with its single probe slot held.
+   * `details.circuitState` carries the state; `details.retryAfterMs` the time
+   * left in the cooldown when `open`.
+   */
+  PROVIDER_CIRCUIT_OPEN: 'PROVIDER_CIRCUIT_OPEN',
 
   // --- Workspace and team lifecycle (Phase 1C.1b, ADR-012 F-6) -------------
   /**

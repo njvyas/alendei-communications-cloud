@@ -11,23 +11,18 @@ import {
   type AuditAction,
   type AuthPrincipal,
   type ChannelCode,
-  type ChannelStatus,
   type PageInfo,
-  type PermissionKey,
   type ProviderCircuitState,
+  type ProviderFailure,
   type ProviderHealthState,
   type ProviderStatus,
   type ProviderTransition,
-  type ProviderFailure,
   type SimulatorBehavior,
 } from '@acc/contracts';
-import { schema, type Transaction } from '@acc/db';
-import { and, asc, eq, sql, type SQL } from 'drizzle-orm';
+import { schema } from '@acc/db';
+import { and, eq, sql, type SQL } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 
-import { actorFromPrincipal } from '../audit/audit-actor';
-import { AuditWriter } from '../audit/audit-writer.service';
-import { AuthorizationService } from '../auth/authorization.service';
 import { RequestContext } from '../common/context/request-context';
 import { AppException } from '../common/errors/app.exception';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
@@ -38,6 +33,23 @@ import {
 } from '../provider-adapters/adapter-registry';
 import { SimulatorAdapter } from '../provider-adapters/simulator.adapter';
 import { ProviderSubmissionExecutor } from '../provider-adapters/submission-executor';
+import { ProviderAccess } from './provider-access.service';
+import { ProviderStateStore, type Admission } from './provider-state.store';
+import {
+  channelCodeOf,
+  channelView,
+  lifecycleConflict,
+  loadProvider,
+  notFound,
+  providerDetail,
+  providerView,
+  readCapabilities,
+  type ChannelView,
+  type ProviderCapabilityView,
+  type ProviderDetailView,
+  type ProviderRow,
+  type ProviderView,
+} from './provider-views';
 import type {
   CreateProviderDto,
   ProviderCapabilityDto,
@@ -45,41 +57,12 @@ import type {
   UpdateProviderDto,
 } from './provider.dto';
 
-/** The channel resource (`FRONTEND_API_CONTRACT.md` §32a). Exhaustive. */
-export interface ChannelView {
-  readonly id: string;
-  readonly code: ChannelCode;
-  readonly displayName: string;
-  readonly status: ChannelStatus;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-/** The provider resource (`FRONTEND_API_CONTRACT.md` §32b). Exhaustive. */
-export interface ProviderView {
-  readonly id: string;
-  readonly channelId: string;
-  readonly channelCode: ChannelCode;
-  readonly name: string;
-  readonly adapterKey: string;
-  readonly status: ProviderStatus;
-  /** Read-only in 2.1; the health mechanism arrives in 2.3. */
-  readonly healthState: ProviderHealthState;
-  /** Read-only in 2.1; the circuit breaker arrives in 2.3. */
-  readonly circuitState: ProviderCircuitState;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-export interface ProviderCapabilityView {
-  readonly key: string;
-  readonly value: unknown;
-}
-
-/** `GET /providers/:id` and every mutation answer: the provider with its capability set. */
-export interface ProviderDetailView extends ProviderView {
-  readonly capabilities: readonly ProviderCapabilityView[];
-}
+export type {
+  ChannelView,
+  ProviderCapabilityView,
+  ProviderDetailView,
+  ProviderView,
+} from './provider-views';
 
 /** `POST /providers/:id/test-send` answer (`FRONTEND_API_CONTRACT.md` §32b). Exhaustive. */
 export interface ProviderTestSendView {
@@ -94,18 +77,17 @@ export interface ProviderTestSendView {
   readonly providerMessageId: string | null;
   readonly failure: ProviderFailure | null;
   readonly latencyMs: number;
+  /** Whether this submission was the circuit's half-open probe (Phase 2.3). */
+  readonly circuitProbe: boolean;
+  /** The provider's health and circuit state after this answer was recorded (Phase 2.3). */
+  readonly healthState: ProviderHealthState;
+  readonly circuitState: ProviderCircuitState;
 }
 
 export interface ListProvidersFilter extends ListQueryInput {
   readonly channelId?: string;
   readonly status?: ProviderStatus;
 }
-
-type ChannelRow = typeof schema.channels.$inferSelect;
-type ProviderRow = typeof schema.providers.$inferSelect;
-
-/** Every catalogue decision is made at platform scope (ADR-013 F-3). */
-const PLATFORM = { scopeType: 'platform', scopeId: null } as const;
 
 const TRANSITION_ACTIONS: Readonly<Record<ProviderTransition, AuditAction>> = {
   enable: AUDIT_ACTIONS.PROVIDER_ENABLED,
@@ -120,12 +102,13 @@ const TRANSITION_ACTIONS: Readonly<Record<ProviderTransition, AuditAction>> = {
  * is no tenant to pin a query to. The model is layered and names no role
  * (ADR-013 F-3): the authenticated principal must hold the route's
  * `providers.*` permission at `{ scopeType: 'platform' }` — decided by
- * `AuthorizationService.assert` inside the request's transaction, which also
- * puts every mutation inside the Gate C pre-commit coverage boundary — and,
- * beneath that, RLS admits only a transaction whose user holds a validated
- * platform-scope grant (`app_has_platform_scope()`, migration `0018`). The
- * request's selected organization, if any, attributes a refusal in the audit
- * trail and nothing else: it is neither a target nor an authority here.
+ * `AuthorizationService.assert` inside the request's transaction
+ * (`ProviderAccess.authorize`), which also puts every mutation inside the Gate C
+ * pre-commit coverage boundary — and, beneath that, RLS admits only a
+ * transaction whose user holds a validated platform-scope grant
+ * (`app_has_platform_scope()`, migration `0018`). The request's selected
+ * organization, if any, attributes a refusal in the audit trail and nothing
+ * else: it is neither a target nor an authority here.
  *
  * **Authorize before disclosing.** Every operation asserts before it reads a
  * catalogue row, so an unauthorized caller learns nothing about which
@@ -138,11 +121,11 @@ export class ProviderRegistryService {
 
   constructor(
     private readonly db: TenantDatabase,
-    private readonly authorization: AuthorizationService,
-    private readonly audit: AuditWriter,
+    private readonly access: ProviderAccess,
     private readonly lists: ListQuery,
     private readonly adapters: ProviderAdapterRegistry,
     private readonly executor: ProviderSubmissionExecutor,
+    private readonly state: ProviderStateStore,
   ) {}
 
   private readonly channelListSpec: ListQuerySpec = {
@@ -163,77 +146,6 @@ export class ProviderRegistryService {
     tieBreaker: schema.providers.id,
   };
 
-  // --- authorization ----------------------------------------------------------
-
-  /**
-   * The route's permission at platform scope, decided by `AuthorizationService`
-   * — the only authority. Called first in every operation's transaction.
-   *
-   * Every refusal goes through `assert` and its `authorization.denied` row — a
-   * platform-scope principal without the permission (`alendei_support`, with or
-   * without `X-Acc-Organization`) is filed at `platform` (migration `0019`).
-   *
-   * One case cannot be: a principal with **no** organization in context, **no**
-   * reseller grant and **no** platform-scope grant — for example a member of
-   * several organizations calling without `X-Acc-Organization`. There is no scope
-   * its refusal could be filed under (ADR-005 D-6 files a denial at the actor's
-   * own scope, and it has none here), so `AuthorizationService.recordDenial`
-   * would fail with a `500`. Such a principal can never hold a platform-scope
-   * permission — platform coverage requires a platform-scope grant — so it is
-   * refused here: the same `403`, logged at `warn` with the correlation id by
-   * `AllExceptionsFilter`, and the check recorded so route coverage holds. This
-   * path only ever refuses; the non-auditing `allows` is asked as well, so a
-   * principal the evaluator permits can never be refused here (ADR-013 F-3).
-   */
-  private async authorize(
-    tx: Transaction,
-    principal: AuthPrincipal,
-    permission: PermissionKey,
-  ): Promise<void> {
-    const { orgId, resellerId } = principal.tenant;
-    const hasPlatformGrant = principal.roles.some((grant) => grant.scopeType === 'platform');
-    const attributable = Boolean(orgId || resellerId || hasPlatformGrant);
-    if (
-      !attributable &&
-      !(await this.authorization.allows(tx, {
-        principal,
-        permission,
-        target: PLATFORM,
-        resourceType: 'Provider',
-      }))
-    ) {
-      RequestContext.recordAuthorizationCheck(permission);
-      throw new AppException({
-        status: HttpStatus.FORBIDDEN,
-        code: ERROR_CODES.AUTHZ_SCOPE_DENIED,
-        message: 'You do not have permission to perform this action',
-        logContext: {
-          permission,
-          targetScopeType: 'platform',
-          reason:
-            'refused; no organization, reseller or platform scope to attribute the refusal to',
-        },
-      });
-    }
-    await this.authorization.assert(tx, {
-      principal,
-      permission,
-      target: PLATFORM,
-      resourceType: 'Provider',
-    });
-    // Defensive: the catalogue is administered by signed-in users. An API key
-    // is organization-bound and cannot hold platform authority, so the assertion
-    // above refuses it; this keeps that true if the evaluator ever changes.
-    if (principal.actorType !== 'user' || !principal.userId) {
-      throw new AppException({
-        status: HttpStatus.FORBIDDEN,
-        code: ERROR_CODES.AUTHZ_SCOPE_DENIED,
-        message: 'You do not have permission to perform this action',
-        logContext: { permission, targetScopeType: 'platform', reason: 'not a signed-in user' },
-      });
-    }
-  }
-
   // --- channels -----------------------------------------------------------------
 
   async listChannels(
@@ -242,7 +154,7 @@ export class ProviderRegistryService {
   ): Promise<{ items: readonly ChannelView[]; page: PageInfo }> {
     const resolved = this.lists.resolve(filter, this.channelListSpec);
     const rows = await this.db.withRequestTenant(async (tx) => {
-      await this.authorize(tx, principal, PERMISSIONS.PROVIDERS_READ);
+      await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_READ);
       return tx
         .select()
         .from(schema.channels)
@@ -261,7 +173,7 @@ export class ProviderRegistryService {
 
   async getChannel(principal: AuthPrincipal, id: string): Promise<ChannelView> {
     return this.db.withRequestTenant(async (tx) => {
-      await this.authorize(tx, principal, PERMISSIONS.PROVIDERS_READ);
+      await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_READ);
       const [row] = await tx.select().from(schema.channels).where(eq(schema.channels.id, id));
       if (!row) throw notFound('Channel', id);
       return channelView(row);
@@ -276,7 +188,7 @@ export class ProviderRegistryService {
   ): Promise<{ items: readonly ProviderView[]; page: PageInfo }> {
     const resolved = this.lists.resolve(filter, this.providerListSpec);
     const rows = await this.db.withRequestTenant(async (tx) => {
-      await this.authorize(tx, principal, PERMISSIONS.PROVIDERS_READ);
+      await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_READ);
       const predicates: SQL[] = [];
       if (filter.channelId) predicates.push(eq(schema.providers.channelId, filter.channelId));
       if (filter.status) predicates.push(eq(schema.providers.status, filter.status));
@@ -307,8 +219,8 @@ export class ProviderRegistryService {
 
   async getProvider(principal: AuthPrincipal, id: string): Promise<ProviderDetailView> {
     return this.db.withRequestTenant(async (tx) => {
-      await this.authorize(tx, principal, PERMISSIONS.PROVIDERS_READ);
-      return this.detail(tx, await this.load(tx, id));
+      await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_READ);
+      return providerDetail(tx, await loadProvider(tx, id));
     });
   }
 
@@ -331,7 +243,7 @@ export class ProviderRegistryService {
    */
   async create(principal: AuthPrincipal, input: CreateProviderDto): Promise<ProviderDetailView> {
     return this.db.withRequestTenant(async (tx) => {
-      await this.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
+      await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
       if (!(PROVIDER_ADAPTER_KEYS as readonly string[]).includes(input.adapterKey)) {
         throw new AppException({
           status: HttpStatus.UNPROCESSABLE_ENTITY,
@@ -373,7 +285,7 @@ export class ProviderRegistryService {
         });
       }
       const view = providerView(row, channel.code);
-      await this.record(tx, principal, AUDIT_ACTIONS.PROVIDER_CREATED, view.id, null, {
+      await this.access.record(tx, principal, AUDIT_ACTIONS.PROVIDER_CREATED, view.id, null, {
         ...view,
       });
       return { ...view, capabilities: [] };
@@ -387,9 +299,9 @@ export class ProviderRegistryService {
     input: UpdateProviderDto,
   ): Promise<ProviderDetailView> {
     return this.db.withRequestTenant(async (tx) => {
-      await this.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
-      const before = await this.load(tx, id, { forUpdate: true });
-      if (input.name === undefined || input.name === before.name) return this.detail(tx, before);
+      await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
+      const before = await loadProvider(tx, id, { forUpdate: true });
+      if (input.name === undefined || input.name === before.name) return providerDetail(tx, before);
 
       const row = await this.writeUnique(() =>
         tx
@@ -398,7 +310,7 @@ export class ProviderRegistryService {
           .where(eq(schema.providers.id, id))
           .returning(),
       );
-      await this.record(
+      await this.access.record(
         tx,
         principal,
         AUDIT_ACTIONS.PROVIDER_UPDATED,
@@ -406,7 +318,7 @@ export class ProviderRegistryService {
         { name: before.name },
         { name: row.name },
       );
-      return this.detail(tx, row);
+      return providerDetail(tx, row);
     });
   }
 
@@ -422,10 +334,10 @@ export class ProviderRegistryService {
   ): Promise<ProviderDetailView> {
     const next = normalizeCapabilities(input.capabilities);
     return this.db.withRequestTenant(async (tx) => {
-      await this.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
-      const provider = await this.load(tx, id, { forUpdate: true });
-      const before = await this.capabilities(tx, id);
-      if (sameCapabilities(before, next)) return this.detail(tx, provider);
+      await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
+      const provider = await loadProvider(tx, id, { forUpdate: true });
+      const before = await readCapabilities(tx, id);
+      if (sameCapabilities(before, next)) return providerDetail(tx, provider);
 
       await tx
         .delete(schema.providerCapabilities)
@@ -435,7 +347,7 @@ export class ProviderRegistryService {
           .insert(schema.providerCapabilities)
           .values(next.map((c) => ({ providerId: id, capabilityKey: c.key, value: c.value })));
       }
-      await this.record(
+      await this.access.record(
         tx,
         principal,
         AUDIT_ACTIONS.PROVIDER_CAPABILITIES_REPLACED,
@@ -443,7 +355,7 @@ export class ProviderRegistryService {
         { capabilities: before },
         { capabilities: next },
       );
-      return this.detail(tx, provider);
+      return providerDetail(tx, provider);
     });
   }
 
@@ -451,7 +363,8 @@ export class ProviderRegistryService {
    * `enable`, `disable` or `drain` (ADR-013 F-5). The row is locked before its
    * status is read, so two concurrent transitions serialize and the second sees
    * the first's result; an illegal transition changes nothing and is a `409`
-   * carrying the current status.
+   * carrying the current status. A lifecycle transition never touches health or
+   * circuit state (`PROVIDER_ADAPTER.md` §5.0).
    */
   async transition(
     principal: AuthPrincipal,
@@ -460,8 +373,8 @@ export class ProviderRegistryService {
   ): Promise<ProviderDetailView> {
     const rule = PROVIDER_TRANSITIONS[transition];
     return this.db.withRequestTenant(async (tx) => {
-      await this.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
-      const before = await this.load(tx, id, { forUpdate: true });
+      await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
+      const before = await loadProvider(tx, id, { forUpdate: true });
       if (!(rule.from as readonly ProviderStatus[]).includes(before.status)) {
         throw lifecycleConflict(before.status);
       }
@@ -470,7 +383,7 @@ export class ProviderRegistryService {
         .set({ status: rule.to })
         .where(eq(schema.providers.id, id))
         .returning();
-      await this.record(
+      await this.access.record(
         tx,
         principal,
         TRANSITION_ACTIONS[transition],
@@ -478,11 +391,11 @@ export class ProviderRegistryService {
         { status: before.status },
         { status: row!.status },
       );
-      return this.detail(tx, row!);
+      return providerDetail(tx, row!);
     });
   }
 
-  // --- test-send (Phase 2.2) ----------------------------------------------------------
+  // --- test-send (Phase 2.2; circuit breaker, Phase 2.3) ---------------------------------
 
   /**
    * Sends one synthetic submission through the provider's adapter and returns
@@ -491,14 +404,19 @@ export class ProviderRegistryService {
    * Three steps, deliberately split so no database transaction is held open
    * across the adapter's wait (up to the platform timeout):
    *
-   *   1. In a transaction: `providers.test_send` at platform scope, then the
-   *      provider. Only an `active` provider is a submission target — `disabled`
-   *      and `draining` are `409` — and its adapter comes from **its catalogue
-   *      row**, resolved through the code registry; an unregistered key fails
-   *      closed (`422`). Nothing the caller sends names an adapter.
+   *   1. In a transaction, in the fixed precedence of `PROVIDER_ADAPTER.md`
+   *      §6f: `providers.test_send` at platform scope; the provider, locked;
+   *      only an `active` provider is a submission target — `disabled` and
+   *      `draining` are `409` and never consult the circuit; its adapter comes
+   *      from **its catalogue row**, resolved through the code registry, and an
+   *      unregistered key fails closed (`422`); then **circuit admission**
+   *      (§6c). A refusal calls no adapter and is recorded as a short-circuited
+   *      `provider.test_sent` (`failure`) before the `409`.
    *   2. The submission, outside any transaction, under the executor's timeout.
-   *   3. In a transaction: the permission again, then `provider.test_sent` —
-   *      the behaviour, outcome, category and latency, never a payload.
+   *   3. In a transaction: the permission again, fresh from the database, then
+   *      the sample and its circuit and health effects (§6d) and
+   *      `provider.test_sent` — the behaviour, outcome, category and latency,
+   *      never a payload.
    *
    * A provider's rejection (`500`, `429`, a timeout …) is the *result* of a
    * successful test-send and is answered `200` with `outcome: "rejected"`.
@@ -508,68 +426,93 @@ export class ProviderRegistryService {
     id: string,
     behavior: SimulatorBehavior,
   ): Promise<ProviderTestSendView> {
-    const target = await this.db.withRequestTenant(async (tx) => {
-      await this.authorize(tx, principal, PERMISSIONS.PROVIDERS_TEST_SEND);
-      const provider = await this.load(tx, id);
+    const gate = await this.db.withRequestTenant(async (tx) => {
+      await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_TEST_SEND);
+      const provider = await loadProvider(tx, id, { forUpdate: true });
       if (provider.status !== 'active') throw lifecycleConflict(provider.status);
-      const [channel] = await tx
-        .select({ code: schema.channels.code })
-        .from(schema.channels)
-        .where(eq(schema.channels.id, provider.channelId));
-      const capabilities = await this.capabilities(tx, provider.id);
+      const adapter = this.simulatorFor(provider);
+      const admission = await this.state.admit(tx, principal, provider);
+      if (!admission.admitted) {
+        await this.access.record(
+          tx,
+          principal,
+          AUDIT_ACTIONS.PROVIDER_TEST_SENT,
+          id,
+          null,
+          {
+            behavior,
+            outcome: 'short_circuited',
+            circuitState: admission.state,
+            category: null,
+            retryable: null,
+            latencyMs: null,
+            submissionId: null,
+          },
+          'failure',
+        );
+        return { admission } as const;
+      }
+      const capabilities = await readCapabilities(tx, provider.id);
       return {
+        admission,
         provider,
-        channel: channel!.code,
+        adapter,
+        channel: await channelCodeOf(tx, provider.channelId),
         capabilities: Object.fromEntries(capabilities.map((c) => [c.key, c.value])),
-      };
+      } as const;
     });
-
-    let adapter;
-    try {
-      adapter = this.adapters.resolve(target.provider.adapterKey);
-    } catch (error) {
-      if (!(error instanceof ProviderAdapterNotRegistered)) throw error;
-      throw new AppException({
-        status: HttpStatus.UNPROCESSABLE_ENTITY,
-        code: ERROR_CODES.PROVIDER_ADAPTER_UNKNOWN,
-        message: "The provider's adapter is not registered",
-        details: { adapterKeys: [...this.adapters.keys()] },
-        logContext: { providerId: id, adapterKey: target.provider.adapterKey },
-      });
-    }
-    // The behaviour selects a simulator scenario; only the simulator takes one.
-    if (!(adapter instanceof SimulatorAdapter)) {
-      throw new AppException({
-        status: HttpStatus.UNPROCESSABLE_ENTITY,
-        code: ERROR_CODES.VALIDATION_FAILED,
-        message: 'A simulator behaviour can only be sent to a simulator provider',
-      });
-    }
+    if (!gate.admission.admitted) throw circuitOpen(gate.admission);
+    const { provider, adapter, channel, capabilities } = gate as Required<typeof gate>;
+    const ticket = gate.admission.ticket;
 
     const correlationId = RequestContext.correlationId();
     const submission = {
       submissionId: uuidv7(),
       correlationId,
-      channel: target.channel,
+      channel,
       recipient: 'simulator:test-recipient',
       content: { text: 'ACC provider test-send' },
     };
     const result = await this.executor.execute(
       adapter.forBehavior(behavior),
-      {
-        providerId: target.provider.id,
-        adapterKey: target.provider.adapterKey,
-        channel: target.channel,
-        capabilities: target.capabilities,
-      },
+      { providerId: provider.id, adapterKey: provider.adapterKey, channel, capabilities },
       submission,
       PROVIDER_SUBMISSION_DEFAULTS.TIMEOUT_MS,
     );
 
+    const recorded = await this.db.withRequestTenant(async (tx) => {
+      await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_TEST_SEND);
+      await this.access.assertAuthorityCurrent(tx, PERMISSIONS.PROVIDERS_TEST_SEND, {
+        reason: 'authority withdrawn while the test-send ran; result not recorded',
+        submissionId: submission.submissionId,
+      });
+      const states = await this.state.recordSubmission(tx, principal, provider.id, ticket, result);
+      await this.access.record(
+        tx,
+        principal,
+        AUDIT_ACTIONS.PROVIDER_TEST_SENT,
+        provider.id,
+        null,
+        {
+          behavior,
+          outcome: result.outcome,
+          category: result.outcome === 'rejected' ? result.failure.category : null,
+          retryable: result.outcome === 'rejected' ? result.failure.retryable : null,
+          latencyMs: result.latencyMs,
+          submissionId: submission.submissionId,
+          circuitProbe: ticket.probeId !== null,
+          circuitState: states.circuitState,
+          healthState: states.healthState,
+        },
+        testSendAuditOutcome(result.outcome),
+      );
+      return states;
+    });
+
     const view: ProviderTestSendView = {
-      providerId: target.provider.id,
-      adapterKey: target.provider.adapterKey,
-      channelCode: target.channel,
+      providerId: provider.id,
+      adapterKey: provider.adapterKey,
+      channelCode: channel,
       behavior,
       submissionId: submission.submissionId,
       correlationId,
@@ -577,28 +520,10 @@ export class ProviderRegistryService {
       providerMessageId: result.outcome === 'accepted' ? result.providerMessageId : null,
       failure: result.outcome === 'rejected' ? result.failure : null,
       latencyMs: result.latencyMs,
+      circuitProbe: ticket.probeId !== null,
+      healthState: recorded.healthState,
+      circuitState: recorded.circuitState,
     };
-
-    await this.db.withRequestTenant(async (tx) => {
-      await this.authorize(tx, principal, PERMISSIONS.PROVIDERS_TEST_SEND);
-      await this.assertAuthorityCurrent(tx, PERMISSIONS.PROVIDERS_TEST_SEND, view.submissionId);
-      await this.record(
-        tx,
-        principal,
-        AUDIT_ACTIONS.PROVIDER_TEST_SENT,
-        view.providerId,
-        null,
-        {
-          behavior,
-          outcome: view.outcome,
-          category: view.failure?.category ?? null,
-          retryable: view.failure?.retryable ?? null,
-          latencyMs: view.latencyMs,
-          submissionId: view.submissionId,
-        },
-        testSendAuditOutcome(view.outcome),
-      );
-    });
 
     // Diagnostics only: no recipient, content or credential is logged.
     this.logger.log({
@@ -610,6 +535,9 @@ export class ProviderRegistryService {
       outcome: view.outcome,
       category: view.failure?.category ?? null,
       latencyMs: view.latencyMs,
+      circuitProbe: view.circuitProbe,
+      circuitState: view.circuitState,
+      healthState: view.healthState,
       submissionId: view.submissionId,
       correlationId,
     });
@@ -617,79 +545,36 @@ export class ProviderRegistryService {
   }
 
   /**
-   * The actor's authority **as the database holds it now**, not as it stood
-   * when the request was authenticated.
-   *
-   * `AuthorizationService.assert` evaluates the grants `AuthGuard` resolved at
-   * the start of the request. For test-send that snapshot is up to a submission
-   * timeout old by the second transaction, so the audit write is gated on a
-   * fresh read as well: `app_has_platform_permission`, the same predicate the
-   * `provider.test_sent` RLS policy applies (migration `0020`). If the grant was
-   * revoked or the user disabled while the submission ran, the request ends
-   * with a `403` and no audit row — rather than an RLS refusal surfacing as a
-   * `500`. The submission itself was authorized when it started; its result is
-   * neither returned nor recorded.
+   * The provider's adapter, from its catalogue row through the code registry —
+   * never from the request. An unregistered key fails closed (`422`), and only
+   * the simulator accepts a behaviour.
    */
-  private async assertAuthorityCurrent(
-    tx: Transaction,
-    permission: PermissionKey,
-    submissionId: string,
-  ): Promise<void> {
-    const { rows } = await tx.execute<{ allowed: boolean }>(
-      sql`select app_has_platform_permission(${permission}) as allowed`,
-    );
-    if (rows[0]?.allowed === true) return;
-    throw new AppException({
-      status: HttpStatus.FORBIDDEN,
-      code: ERROR_CODES.AUTHZ_SCOPE_DENIED,
-      message: 'You do not have permission to perform this action',
-      logContext: {
-        permission,
-        targetScopeType: 'platform',
-        reason: 'authority withdrawn while the test-send ran; result not recorded',
-        submissionId,
-      },
-    });
+  simulatorFor(provider: ProviderRow): SimulatorAdapter {
+    let adapter;
+    try {
+      adapter = this.adapters.resolve(provider.adapterKey);
+    } catch (error) {
+      if (!(error instanceof ProviderAdapterNotRegistered)) throw error;
+      throw new AppException({
+        status: HttpStatus.UNPROCESSABLE_ENTITY,
+        code: ERROR_CODES.PROVIDER_ADAPTER_UNKNOWN,
+        message: "The provider's adapter is not registered",
+        details: { adapterKeys: [...this.adapters.keys()] },
+        logContext: { providerId: provider.id, adapterKey: provider.adapterKey },
+      });
+    }
+    // The behaviour selects a simulator scenario; only the simulator takes one.
+    if (!(adapter instanceof SimulatorAdapter)) {
+      throw new AppException({
+        status: HttpStatus.UNPROCESSABLE_ENTITY,
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: 'A simulator behaviour can only be sent to a simulator provider',
+      });
+    }
+    return adapter;
   }
 
   // --- internals -----------------------------------------------------------------------
-
-  private async load(
-    tx: Transaction,
-    id: string,
-    options: { forUpdate?: boolean } = {},
-  ): Promise<ProviderRow> {
-    const query = tx.select().from(schema.providers).where(eq(schema.providers.id, id));
-    const [row] = options.forUpdate ? await query.for('update') : await query;
-    if (!row) throw notFound('Provider', id);
-    return row;
-  }
-
-  private async detail(tx: Transaction, row: ProviderRow): Promise<ProviderDetailView> {
-    const [channel] = await tx
-      .select({ code: schema.channels.code })
-      .from(schema.channels)
-      .where(eq(schema.channels.id, row.channelId));
-    return {
-      ...providerView(row, channel!.code),
-      capabilities: await this.capabilities(tx, row.id),
-    };
-  }
-
-  private async capabilities(
-    tx: Transaction,
-    providerId: string,
-  ): Promise<ProviderCapabilityView[]> {
-    const rows = await tx
-      .select({
-        key: schema.providerCapabilities.capabilityKey,
-        value: schema.providerCapabilities.value,
-      })
-      .from(schema.providerCapabilities)
-      .where(eq(schema.providerCapabilities.providerId, providerId))
-      .orderBy(asc(schema.providerCapabilities.capabilityKey));
-    return rows.map((r) => ({ key: r.key, value: r.value }));
-  }
 
   /** Runs a single-row write, mapping the per-channel name uniqueness to a `409`. */
   private async writeUnique(write: () => Promise<ProviderRow[]>): Promise<ProviderRow> {
@@ -707,38 +592,6 @@ export class ProviderRegistryService {
       }
       throw error;
     }
-  }
-
-  /**
-   * The audit row, in the mutation's own transaction (every provider action is
-   * security-sensitive, ADR-013 F-4), at `platform` scope — the scope the
-   * decision was made at. Nothing secret can reach it: the catalogue holds no
-   * credential, and capability keys that would name one are refused.
-   */
-  private record(
-    tx: Transaction,
-    principal: AuthPrincipal,
-    action: AuditAction,
-    providerId: string,
-    before: Record<string, unknown> | null,
-    after: Record<string, unknown>,
-    outcome: 'success' | 'failure' = 'success',
-  ): Promise<void> {
-    return this.audit.record(
-      {
-        scopeType: 'platform',
-        scopeId: null,
-        ...actorFromPrincipal(principal),
-        action,
-        resourceType: 'Provider',
-        resourceId: providerId,
-        outcome,
-        before,
-        after,
-        metadata: {},
-      },
-      tx,
-    );
   }
 }
 
@@ -820,52 +673,25 @@ function canonicalJson(value: unknown): string {
  * submission the provider accepts, so `accepted` is `success` (`SUCCESS`,
  * `SLOW_RESPONSE`) and every `rejected` answer is `failure` (`500`, `429`,
  * `TIMEOUT`, `INVALID_CREDENTIALS`, `INVALID_REQUEST`, and any adapter error).
+ * A submission the circuit refused (Phase 2.3) is `failure` too.
  */
 export function testSendAuditOutcome(outcome: 'accepted' | 'rejected'): 'success' | 'failure' {
   return outcome === 'accepted' ? 'success' : 'failure';
 }
 
-function lifecycleConflict(status: ProviderStatus): AppException {
+/** The circuit refused the submission (`PROVIDER_ADAPTER.md` §6c). */
+function circuitOpen(refusal: Extract<Admission, { admitted: false }>): AppException {
   return new AppException({
     status: HttpStatus.CONFLICT,
-    code: ERROR_CODES.PROVIDER_LIFECYCLE_CONFLICT,
-    message: `This provider is ${status}; the operation is not permitted in that state`,
+    code: ERROR_CODES.PROVIDER_CIRCUIT_OPEN,
+    message:
+      refusal.state === 'open'
+        ? "This provider's circuit is open; the submission was not sent"
+        : "This provider's circuit is half-open and its probe is in flight; the submission was not sent",
     // Readable through `GET /providers/:id`, so naming it discloses nothing.
-    details: { status },
+    details: {
+      circuitState: refusal.state,
+      ...(refusal.retryAfterMs !== null ? { retryAfterMs: refusal.retryAfterMs } : {}),
+    },
   });
-}
-
-function notFound(resource: 'Provider' | 'Channel', id: string): AppException {
-  return new AppException({
-    status: HttpStatus.NOT_FOUND,
-    code: ERROR_CODES.RESOURCE_NOT_FOUND,
-    message: `${resource} not found`,
-    logContext: { [`requested${resource}Id`]: id },
-  });
-}
-
-function channelView(row: ChannelRow): ChannelView {
-  return {
-    id: row.id,
-    code: row.code,
-    displayName: row.displayName,
-    status: row.status,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-  };
-}
-
-function providerView(row: ProviderRow, channelCode: ChannelCode): ProviderView {
-  return {
-    id: row.id,
-    channelId: row.channelId,
-    channelCode,
-    name: row.name,
-    adapterKey: row.adapterKey,
-    status: row.status,
-    healthState: row.healthState,
-    circuitState: row.circuitState,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-  };
 }

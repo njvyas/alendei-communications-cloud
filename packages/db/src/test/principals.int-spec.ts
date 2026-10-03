@@ -44,6 +44,8 @@ const TABLES = [
   'organizations',
   'permissions',
   'provider_capabilities',
+  // Phase 2.3 (migration 0022): append-only health samples, same global posture.
+  'provider_health',
   'providers',
   'resellers',
   'role_permissions',
@@ -68,6 +70,8 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
     organizations: 'INSERT,SELECT,UPDATE',
     permissions: 'SELECT',
     provider_capabilities: 'DELETE,INSERT,SELECT,UPDATE',
+    // Phase 2.3: samples are appended, never changed or removed.
+    provider_health: 'INSERT,SELECT',
     providers: 'INSERT,SELECT,UPDATE',
     resellers: 'INSERT,SELECT,UPDATE',
     role_permissions: 'DELETE,INSERT,SELECT,UPDATE',
