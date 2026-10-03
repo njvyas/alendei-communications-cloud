@@ -880,30 +880,55 @@ describe('Phase 2.1 provider and channel registry', () => {
       }
     });
 
-    it('the RLS predicate names no role and no permission', async () => {
+    it('reads are gated on platform scope and writes on providers.manage at platform scope; neither predicate names a role', async () => {
       const { rows: policies } = await h.admin.execute<{
-        tablename: string;
+        policyname: string;
+        cmd: string;
         roles: string;
         qual: string | null;
         with_check: string | null;
       }>(
-        sql`select tablename, roles::text, qual, with_check from pg_policies where tablename in ('channels','providers','provider_capabilities') order by tablename, policyname`,
+        sql`select policyname, cmd, roles::text, qual, with_check from pg_policies where tablename in ('channels','providers','provider_capabilities') order by policyname`,
       );
-      expect(policies).toHaveLength(3);
-      for (const p of policies) {
-        expect(p.roles).toBe('{acc_app}');
-        for (const expr of [p.qual, p.with_check].filter(Boolean)) {
-          expect(expr).toBe('app_has_platform_scope()');
-        }
+      const READ = 'app_has_platform_scope()';
+      const WRITE = "app_has_platform_permission('providers.manage'::text)";
+      expect(
+        policies.map((p) => `${p.policyname}:${p.cmd}:${p.roles}:${p.qual}:${p.with_check}`),
+      ).toEqual([
+        `channels_platform_read:SELECT:{acc_app}:${READ}:null`,
+        `provider_capabilities_platform_delete:DELETE:{acc_app}:${WRITE}:null`,
+        `provider_capabilities_platform_insert:INSERT:{acc_app}:null:${WRITE}`,
+        `provider_capabilities_platform_read:SELECT:{acc_app}:${READ}:null`,
+        `provider_capabilities_platform_update:UPDATE:{acc_app}:${WRITE}:${WRITE}`,
+        `providers_platform_insert:INSERT:{acc_app}:null:${WRITE}`,
+        `providers_platform_read:SELECT:{acc_app}:${READ}:null`,
+        `providers_platform_update:UPDATE:{acc_app}:${WRITE}:${WRITE}`,
+      ]);
+      const { rows: fns } = await h.admin.execute<{
+        proname: string;
+        src: string;
+        acl: string;
+        secdef: boolean;
+      }>(
+        sql`select proname, prosrc as src, proacl::text as acl, prosecdef as secdef from pg_proc where proname in ('app_has_platform_scope', 'app_has_platform_permission') order by proname`,
+      );
+      expect(fns.map((f) => f.proname)).toEqual([
+        'app_has_platform_permission',
+        'app_has_platform_scope',
+      ]);
+      for (const f of fns) {
+        expect(f.secdef).toBe(true);
+        expect(f.acl).toBe('{postgres=X/postgres,acc_app=X/postgres}');
+        expect(f.src).toContain("ur.scope_type = 'platform'");
+        expect(f.src).toContain("u.status = 'active'");
+        for (const forbidden of [
+          'alendei_super_admin',
+          'alendei_support',
+          'r.key',
+          'is_platform_admin',
+        ])
+          expect(f.src).not.toContain(forbidden);
       }
-      const { rows: fn } = await h.admin.execute<{ src: string; acl: string; secdef: boolean }>(
-        sql`select prosrc as src, proacl::text as acl, prosecdef as secdef from pg_proc where proname = 'app_has_platform_scope'`,
-      );
-      expect(fn[0]!.secdef).toBe(true);
-      expect(fn[0]!.acl).toBe('{postgres=X/postgres,acc_app=X/postgres}');
-      expect(fn[0]!.src).toContain("ur.scope_type = 'platform'");
-      for (const forbidden of ['alendei_super_admin', 'alendei_support', 'r.key', 'permission'])
-        expect(fn[0]!.src).not.toContain(forbidden);
     });
 
     it('no catalogue table can hold a credential, and provider_credentials does not exist', async () => {
@@ -920,6 +945,249 @@ describe('Phase 2.1 provider and channel registry', () => {
         sql`select count(*)::int n from information_schema.tables where table_name = 'provider_credentials'`,
       );
       expect(t[0]!.n).toBe(0);
+    });
+  });
+
+  // ===========================================================================
+  describe('F. Gate D.1 remediation — one eligibility model for writes and their audit', () => {
+    let manager: Person;
+    let managerToken: string;
+
+    beforeAll(async () => {
+      // A second platform role — not alendei_super_admin — carrying providers.read
+      // and providers.manage: the stand-in for a future privileged platform role.
+      manager = await createUser('manager');
+      await grant(
+        manager.userId,
+        await testPlatformRole(['providers.read', 'providers.manage']),
+        'platform',
+        null,
+      );
+      managerToken = await login(manager.email);
+    });
+
+    it('a second synthetic platform role with providers.manage performs every write, and each audit row is inserted', async () => {
+      const name = providerName();
+      const created = await call('post', managerToken, '/providers')
+        .send({ channelId: channels.email, name, adapterKey: 'simulator' })
+        .expect(201);
+      const id = created.body.data.id as string;
+      await call('patch', managerToken, `/providers/${id}`)
+        .send({ name: `${name}-x` })
+        .expect(200);
+      await call('put', managerToken, `/providers/${id}/capabilities`)
+        .send({ capabilities: [{ key: 'media_support', value: true }] })
+        .expect(200);
+      for (const t of ['enable', 'drain', 'disable'])
+        await call('post', managerToken, `/providers/${id}/${t}`).expect(200);
+      const rows = (
+        await h.admin.execute<{ action: string; scope_type: string; actor_user_id: string }>(
+          sql`select action, scope_type, actor_user_id from audit_logs where resource_id = ${id} order by id`,
+        )
+      ).rows;
+      expect(rows.map((r) => r.action)).toEqual([
+        AUDIT_ACTIONS.PROVIDER_CREATED,
+        AUDIT_ACTIONS.PROVIDER_UPDATED,
+        AUDIT_ACTIONS.PROVIDER_CAPABILITIES_REPLACED,
+        AUDIT_ACTIONS.PROVIDER_ENABLED,
+        AUDIT_ACTIONS.PROVIDER_DRAINED,
+        AUDIT_ACTIONS.PROVIDER_DISABLED,
+      ]);
+      for (const r of rows)
+        expect(r).toMatchObject({ scope_type: 'platform', actor_user_id: manager.userId });
+    });
+
+    it('at the database, catalogue writes and provider audit rows admit exactly the same principals', async () => {
+      const p = await createProvider();
+      const auditRow = (actor: string) =>
+        `insert into audit_logs (scope_type, scope_id, actor_type, actor_user_id, action, resource_type, resource_id, outcome, metadata, correlation_id)
+         values ('platform', null, 'user', '${actor}', 'provider.updated', 'Provider', '${p.id}', 'success', '{}'::jsonb, '${uuidv7()}')`;
+      const attempt = async (ctx: {
+        userId?: string | null;
+        isPlatformAdmin?: boolean;
+        orgId?: string | null;
+      }) =>
+        asPrincipal(appPool, ctx, async (c) => {
+          const outcome: Record<string, string> = {};
+          const step = async (label: string, q: string, params: unknown[] = []) => {
+            await c.query('SAVEPOINT s');
+            try {
+              const r = await c.query(q, params);
+              outcome[label] = r.command === 'UPDATE' ? `rows=${r.rowCount}` : 'ok';
+            } catch (e) {
+              outcome[label] = (e as { code?: string }).code ?? 'error';
+            }
+            await c.query('ROLLBACK TO SAVEPOINT s');
+          };
+          await step(
+            'insert',
+            `insert into providers (channel_id, name, adapter_key) values ($1, $2, 'simulator')`,
+            [channels.sms, providerName()],
+          );
+          await step('update', `update providers set name = $2 where id = $1`, [
+            p.id,
+            providerName(),
+          ]);
+          await step(
+            'capability',
+            `insert into provider_capabilities (provider_id, capability_key, value) values ($1, 'x_cap', '1'::jsonb)`,
+            [p.id],
+          );
+          await step('audit', auditRow(ctx.userId ?? people.platform!.userId));
+          return outcome;
+        });
+      const admitted = { insert: 'ok', update: 'rows=1', capability: 'ok', audit: 'ok' };
+      const refused = { insert: '42501', update: 'rows=0', capability: '42501', audit: '42501' };
+      expect(await attempt({ userId: people.platform!.userId, isPlatformAdmin: true })).toEqual(
+        admitted,
+      );
+      expect(await attempt({ userId: manager.userId })).toEqual(admitted);
+      // Platform scope without the permission (RLS-eligible for reads only).
+      expect(await attempt({ userId: people.support!.userId })).toEqual(refused);
+      expect(await attempt({ userId: people.reader!.userId })).toEqual(refused);
+      // Tenant and reseller principals.
+      expect(await attempt({ userId: tenant.userId, orgId: tenant.orgId })).toEqual(refused);
+      expect(await attempt({ userId: people.reseller!.userId })).toEqual(refused);
+      // A forged administrator flag, and a disabled platform administrator.
+      expect(await attempt({ userId: tenant.userId, isPlatformAdmin: true })).toEqual(refused);
+      expect(
+        await attempt({ userId: people.disabledPlatform!.userId, isPlatformAdmin: true }),
+      ).toEqual(refused);
+      // A legitimate manager cannot file a provider audit row in someone else's name.
+      await asPrincipal(appPool, { userId: manager.userId }, async (c) => {
+        expect((await pgError(c.query(auditRow(people.platform!.userId)))).code).toBe('42501');
+      });
+      expect((await providerRow(p.id))!.name).toBe(p.name);
+    });
+
+    it('alendei_support is refused through the ordinary denial mechanism — at platform scope with no organization in context, at the named organization with one — and cannot forge a denial for another user', async () => {
+      // A platform-grant holder may select any active organization, and with
+      // exactly one selectable `@OptionalTenantContext` would select it
+      // implicitly. A second active organization makes "no organization in
+      // context" a fact of this test rather than of whatever else the database
+      // holds.
+      const second = await createTenant(h.admin, 'p21s', credentials);
+      try {
+        const denials = async () =>
+          (
+            await h.admin.execute<Record<string, unknown>>(
+              sql`select scope_type, scope_id, org_id, outcome, metadata from audit_logs where action = ${AUDIT_ACTIONS.AUTHORIZATION_DENIED} and actor_user_id = ${people.support!.userId} order by id`,
+            )
+          ).rows;
+        const before = (await denials()).length;
+        const r = await call('post', tokens.support!, '/providers')
+          .send({ channelId: channels.sms, name: providerName(), adapterKey: 'simulator' })
+          .expect(403);
+        expect(r.body.error.code).toBe(ERROR_CODES.AUTHZ_SCOPE_DENIED);
+        let rows = await denials();
+        expect(rows).toHaveLength(before + 1);
+        expect(rows.at(-1)).toMatchObject({
+          scope_type: 'platform',
+          scope_id: null,
+          org_id: null,
+          outcome: 'denied',
+        });
+        expect(rows.at(-1)!.metadata).toMatchObject({
+          permission: 'providers.manage',
+          attemptedScopeType: 'platform',
+        });
+
+        await call('get', tokens.support!, '/providers', tenant.orgId).expect(403);
+        rows = await denials();
+        expect(rows).toHaveLength(before + 2);
+        expect(rows.at(-1)).toMatchObject({
+          scope_type: 'organization',
+          scope_id: tenant.orgId,
+          outcome: 'denied',
+        });
+      } finally {
+        await purgeAudit(h.admin, sql`org_id = ${second.orgId}`);
+        await destroyTenant(h.admin, second);
+      }
+      await asPrincipal(appPool, { userId: people.support!.userId }, async (c) => {
+        const err = await pgError(
+          c.query(
+            `insert into audit_logs (scope_type, scope_id, actor_type, actor_user_id, action, resource_type, resource_id, outcome, metadata, correlation_id)
+             values ('platform', null, 'user', $1, 'authorization.denied', 'Provider', null, 'denied', '{}'::jsonb, $2)`,
+            [people.platform!.userId, uuidv7()],
+          ),
+        );
+        expect(err.code).toBe('42501');
+      });
+    });
+
+    it('a principal with no organization, reseller or platform scope is refused with 403, logged not audited, and changes nothing; naming an organization makes the refusal auditable', async () => {
+      // A member of two organizations, calling without X-Acc-Organization.
+      const second = await createTenant(h.admin, 'p21b', credentials);
+      try {
+        const member = await createUser('two-orgs');
+        for (const t of [tenant, second])
+          await h.admin.insert(schema.userRoles).values({
+            userId: member.userId,
+            roleId: t.roleId,
+            scopeType: 'organization',
+            scopeId: t.orgId,
+          });
+        const token = await login(member.email);
+        const deniedRows = async () =>
+          (
+            await h.admin.execute<{ n: number }>(
+              sql`select count(*)::int n from audit_logs where actor_user_id = ${member.userId} and action = ${AUDIT_ACTIONS.AUTHORIZATION_DENIED}`,
+            )
+          ).rows[0]!.n;
+        const before = await counts();
+        for (const path of ['/providers', '/channels'])
+          expect((await call('get', token, path).expect(403)).body.error.code).toBe(
+            ERROR_CODES.AUTHZ_SCOPE_DENIED,
+          );
+        await call('post', token, '/providers')
+          .send({ channelId: channels.sms, name: providerName(), adapterKey: 'simulator' })
+          .expect(403);
+        expect(await counts()).toEqual(before);
+        expect(await deniedRows()).toBe(0);
+        await call('get', token, '/providers', tenant.orgId).expect(403);
+        expect(await deniedRows()).toBe(1);
+        await h.admin.execute(sql`DELETE FROM user_roles WHERE user_id = ${member.userId}`);
+      } finally {
+        await destroyTenant(h.admin, second);
+      }
+    });
+
+    it('retry semantics: a repeated create changes nothing and names the provider that exists — sequentially, concurrently, and whatever Idempotency-Key is sent', async () => {
+      const body = { channelId: channels.whatsapp, name: providerName(), adapterKey: 'simulator' };
+      const first = await call('post', tokens.platform!, '/providers').send(body).expect(201);
+      const id = first.body.data.id as string;
+      const before = await counts();
+      const retry = await call('post', tokens.platform!, '/providers')
+        .set('idempotency-key', `retry-${randomBytes(12).toString('hex')}`)
+        .send(body)
+        .expect(409);
+      expect(retry.body.error).toMatchObject({
+        code: ERROR_CODES.RESOURCE_CONFLICT,
+        details: { providerId: id },
+      });
+      const caseVariant = await call('post', tokens.platform!, '/providers')
+        .send({ ...body, name: body.name.toUpperCase() })
+        .expect(409);
+      expect(caseVariant.body.error.details).toEqual({ providerId: id });
+      expect(await counts()).toEqual(before);
+      expect(await auditFor(id, AUDIT_ACTIONS.PROVIDER_CREATED)).toHaveLength(1);
+
+      const raced = { ...body, name: providerName() };
+      const results = await Promise.all([
+        call('post', tokens.platform!, '/providers').send(raced),
+        call('post', tokens.platform!, '/providers').send(raced),
+      ]);
+      expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+      const winner = results.find((r) => r.status === 201)!.body.data.id as string;
+      expect(results.find((r) => r.status === 409)!.body.error.details).toEqual({
+        providerId: winner,
+      });
+      expect(await counts()).toEqual({
+        ...before,
+        providers: before.providers + 1,
+        providerAudits: before.providerAudits + 1,
+      });
     });
   });
 });

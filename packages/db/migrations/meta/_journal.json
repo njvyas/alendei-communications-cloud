@@ -134,6 +134,13 @@
       "when": 1790958868698,
       "tag": "0018_phase2_1_provider_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1790996671619,
+      "tag": "0019_phase2_1_platform_permission_eligibility",
+      "breakpoints": true
     }
   ]
 }

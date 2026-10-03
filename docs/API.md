@@ -453,7 +453,7 @@ Idempotency is **execution/replay coordination**: it records that a request ran 
 | `POST /auth/login` | Replaying a login would replay a **token**, turning a stored response into a credential. Sessions are deliberately per-attempt |
 | `POST /auth/refresh` | Rotation is single-use **by design** (ADR-003): replay-detection there revokes the token family. Idempotency would directly contradict it |
 | `POST /auth/logout` | `204`, naturally idempotent |
-| `POST /providers` (Phase 2.1) | Naturally idempotent: one provider name per channel (`providers_channel_name_key`, case-insensitive), so a retried create is `409 RESOURCE_CONFLICT` and creates nothing. Keyed idempotency is not available here: `idempotency_keys` is namespaced by organization and the catalogue has none (ADR-013 2.1 notes) |
+| `POST /providers` (Phase 2.1) | Naturally idempotent, by explicit decision (ADR-013 2.1 notes (c)): one provider name per channel (`providers_channel_name_key`, case-insensitive) makes a second side effect impossible. A retried or concurrent duplicate create changes nothing and answers `409 RESOURCE_CONFLICT` with `details.providerId` naming the existing provider, so the client can fetch what it created; `Idempotency-Key` is not consumed. Keyed idempotency is not used because `idempotency_keys` is namespaced by organization and the catalogue has none |
 | `PATCH /providers/:id`, `PUT /providers/:id/capabilities` (Phase 2.1) | Converge on the same state when re-applied; an unchanged value changes and records nothing |
 | `POST /providers/:id/enable` · `/disable` · `/drain` (Phase 2.1) | A repeat is `409 PROVIDER_LIFECYCLE_CONFLICT` naming the status already reached — the honest answer, needing no stored response |
 

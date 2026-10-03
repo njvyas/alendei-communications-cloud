@@ -251,7 +251,7 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 
 ## 5. Phase 2 — Provider abstraction + simulator
 
-**Status: SCOPE FROZEN (ADR-013, 02-Oct-2026). 2.1 IMPLEMENTED (migration `0018`; Gate D.1 pending review); 2.2–2.6 not started.** Each increment requires its own authorization.
+**Status: SCOPE FROZEN (ADR-013, 02-Oct-2026). 2.1 IMPLEMENTED (migrations `0018`–`0019`; Gate D.1 pending re-review); 2.2–2.6 not started.** Each increment requires its own authorization.
 
 - **Objectives**: implement `provider-registry`, `provider-adapters` (interface + `SimulatorAdapter` only), health/circuit breaker mechanics, admin hot-reload plumbing.
 - **Dependencies**: Phase 1 (Gate C closed): `TenantDatabase` and the pre-commit authorization-coverage containment, `AuthorizationService` + `@RequiresPermission`, transactional `AuditWriter`, the OpenAPI pipeline, `/metrics`, `SecretsPort`, Redis, the `with-db-clone` mutation harness.
@@ -273,7 +273,7 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 | Step | Objective | Schema | Exit criterion |
 |---|---|---|---|
 | **2.0** | Scope freeze (this section, ADR-013) | — | ✅ frozen 02-Oct-2026 |
-| **2.1** | Channel & Provider Registry | `channels` (seeded), `providers`, `provider_capabilities`; permissions `providers.read`, `providers.manage` (and `providers.test_send` defined, unused until 2.2) | ✅ IMPLEMENTED — migration `0018`; **Gate D.1 pending review** |
+| **2.1** | Channel & Provider Registry | `channels` (seeded), `providers`, `provider_capabilities`; permissions `providers.read`, `providers.manage` (and `providers.test_send` defined, unused until 2.2) | ✅ IMPLEMENTED — migrations `0018`, `0019` (Gate D.1 remediation); **Gate D.1 pending re-review** |
 | **2.2** | Adapter Contract & Simulator | none (permission `providers.test_send`) | Gate D.2 |
 | **2.3** | Health & Circuit Breaker | `provider_health` | Gate D.3 |
 | **2.4** | Hot Reload | none | Gate D.4 |
@@ -290,7 +290,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 - *Objective*: the global channel and provider catalogue, administered by platform administrators.
 - *In scope*: `provider-registry` module (`apps/api/src/providers/` — controller, service, DTOs); schema and migration in `packages/db`; contracts (permission keys, audit actions, channel codes, status enums) in `packages/contracts`.
 - *DB*: `channels` (`id, code, display_name, status`; seeded `whatsapp, rcs, sms, email, voice`; read-only), `providers` (`id, channel_id, name, adapter_key, status ∈ {active, disabled, draining}, health_state ∈ {healthy, degraded, critical, offline}` default `healthy`, `circuit_state ∈ {closed, open, half_open}` default `closed`, timestamps), `provider_capabilities` (`provider_id, capability_key, value JSONB`). RLS enabled in the creating migration with the global-catalogue posture (ADR-013 F-3); `principals.int-spec.ts` classification; permission rows attached to `alendei_super_admin` only (today's grant, not the boundary — ADR-013 F-3).
-- *API*: `GET /channels`, `GET /channels/:id`; `GET /providers`, `GET /providers/:id`, `POST /providers` (idempotent), `PATCH /providers/:id` (name only), `PUT /providers/:id/capabilities`, `POST /providers/:id/enable`, `/disable`, `/drain`. No `DELETE`.
+- *API*: `GET /channels`, `GET /channels/:id`; `GET /providers`, `GET /providers/:id`, `POST /providers` (naturally idempotent — ADR-013 2.1 notes (c)), `PATCH /providers/:id` (name only), `PUT /providers/:id/capabilities`, `POST /providers/:id/enable`, `/disable`, `/drain`. No `DELETE`.
 - *Permissions*: `providers.read` (reads), `providers.manage` (writes).
 - *Security*: the ADR-013 F-3 layering — authenticated principal → validated `providers.*` permission (`AuthorizationService`) → platform-scope target → RLS platform-scope eligibility. RLS names no role or permission; the role-name-bound `app_is_platform_admin()` is not used for these tables, and 2.1 introduces a reviewed role-name-independent platform-scope eligibility primitive. Tenant and API-key principals receive `403`/`404` per `API.md` §3a and see zero rows at the database; `alendei_support` is RLS-eligible and refused by authorization (`403`, audited); `adapter_key` validated against the code registry (ADR-013 F-9).
 - *Audit*: `provider.created`, `provider.updated`, `provider.capabilities_replaced`, `provider.enabled`, `provider.disabled`, `provider.drained`, with before/after.

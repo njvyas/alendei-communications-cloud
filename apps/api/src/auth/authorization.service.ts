@@ -231,11 +231,14 @@ export class AuthorizationService {
    * was: a principal pinned to one workspace did not act "in the organization",
    * and recording it that way would overstate its reach on a permanent record.
    *
-   * No fallback is invented. A principal with no resolved scope at all cannot
-   * be described honestly, and the `audit_logs` RLS policy would refuse the row
-   * regardless — so this fails closed and loudly rather than guessing. It is
-   * defensive: every reachable path resolves a tenant context long before an
-   * authorization check, and `TenancyController` refuses without one.
+   * No fallback is invented. A principal holding a platform-scope grant but no
+   * selected organization (Phase 2.1's catalogue routes make this reachable, for
+   * example `alendei_support` without `X-Acc-Organization`) genuinely occupies
+   * `platform`, so that is where its refusal is filed. A principal with no
+   * resolved scope at all — no organization, no reseller, no platform grant —
+   * cannot be described honestly, and the `audit_logs` RLS policies would refuse
+   * the row regardless, so this fails closed and loudly rather than guessing;
+   * routes that can reach such a principal refuse it before asserting.
    */
   private actorScope(principal: AuthPrincipal): ScopeRef {
     const { orgId, workspaceId, resellerId, isPlatformAdmin } = principal.tenant;
@@ -244,6 +247,14 @@ export class AuthorizationService {
     if (orgId) return { scopeType: 'organization', scopeId: orgId };
     if (resellerId) return { scopeType: 'reseller', scopeId: resellerId };
     if (isPlatformAdmin) return { scopeType: 'platform', scopeId: null };
+    // A principal holding any platform-scope grant (for example `alendei_support`
+    // with no organization selected) legitimately occupies `platform`, whatever
+    // its role is named. Its own denial row there is admitted by
+    // `audit_logs_platform_self_denial_insert` (migration `0019`), which the
+    // database checks against the actor's current grants.
+    if (principal.roles.some((grant) => grant.scopeType === 'platform')) {
+      return { scopeType: 'platform', scopeId: null };
+    }
 
     throw new Error(
       'audit: cannot record authorization.denied — the principal has no resolved scope to attribute it to',

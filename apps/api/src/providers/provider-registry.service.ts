@@ -19,7 +19,7 @@ import {
   type ProviderTransition,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
-import { and, asc, eq, type SQL } from 'drizzle-orm';
+import { and, asc, eq, sql, type SQL } from 'drizzle-orm';
 
 import { actorFromPrincipal } from '../audit/audit-actor';
 import { AuditWriter } from '../audit/audit-writer.service';
@@ -140,26 +140,30 @@ export class ProviderRegistryService {
    * The route's permission at platform scope, decided by `AuthorizationService`
    * — the only authority. Called first in every operation's transaction.
    *
-   * One refusal is answered here instead of by `assert`: a principal the
-   * evaluator refuses **and** that has no scope the audit trail can attribute
-   * the refusal to — no selected organization, no reseller and no validated
-   * platform-administrator claim (for example `alendei_support` calling
-   * without `X-Acc-Organization`). `AuthorizationService.recordDenial` cannot
-   * file an `authorization.denied` row for such a principal and would fail the
-   * request with a `500`. The decision is still the evaluator's, asked through
-   * the non-auditing `allows`; only the transport of the refusal differs — the
-   * same `403`, logged rather than audited, with the check recorded so route
-   * coverage is unchanged. A principal the evaluator *permits* always proceeds
-   * to `assert`, whatever its role is named, so a future platform role holding
-   * `providers.*` is never refused here (ADR-013 F-3).
+   * Every refusal goes through `assert` and its `authorization.denied` row — a
+   * platform-scope principal without the permission (`alendei_support`, with or
+   * without `X-Acc-Organization`) is filed at `platform` (migration `0019`).
+   *
+   * One case cannot be: a principal with **no** organization in context, **no**
+   * reseller grant and **no** platform-scope grant — for example a member of
+   * several organizations calling without `X-Acc-Organization`. There is no scope
+   * its refusal could be filed under (ADR-005 D-6 files a denial at the actor's
+   * own scope, and it has none here), so `AuthorizationService.recordDenial`
+   * would fail with a `500`. Such a principal can never hold a platform-scope
+   * permission — platform coverage requires a platform-scope grant — so it is
+   * refused here: the same `403`, logged at `warn` with the correlation id by
+   * `AllExceptionsFilter`, and the check recorded so route coverage holds. This
+   * path only ever refuses; the non-auditing `allows` is asked as well, so a
+   * principal the evaluator permits can never be refused here (ADR-013 F-3).
    */
   private async authorize(
     tx: Transaction,
     principal: AuthPrincipal,
     permission: PermissionKey,
   ): Promise<void> {
-    const { orgId, resellerId, isPlatformAdmin } = principal.tenant;
-    const attributable = Boolean(orgId || resellerId || isPlatformAdmin);
+    const { orgId, resellerId } = principal.tenant;
+    const hasPlatformGrant = principal.roles.some((grant) => grant.scopeType === 'platform');
+    const attributable = Boolean(orgId || resellerId || hasPlatformGrant);
     if (
       !attributable &&
       !(await this.authorization.allows(tx, {
@@ -177,7 +181,8 @@ export class ProviderRegistryService {
         logContext: {
           permission,
           targetScopeType: 'platform',
-          reason: 'refused, with no attributable actor scope',
+          reason:
+            'refused; no organization, reseller or platform scope to attribute the refusal to',
         },
       });
     }
@@ -281,9 +286,19 @@ export class ProviderRegistryService {
   // --- provider mutations -----------------------------------------------------------
 
   /**
-   * Creates a provider, `disabled`. Naturally idempotent rather than keyed: one
-   * name per channel (`providers_channel_name_key`), so a retried create is a
-   * `409` that changes nothing (`API.md` §4a).
+   * Creates a provider, `disabled`.
+   *
+   * **Naturally idempotent, not keyed** (ADR-013 2.1 notes; `API.md` §4a). The
+   * canonical `Idempotency-Key` mechanism stores its record in an organization's
+   * namespace (`idempotency_keys.org_id NOT NULL`, RLS by organization), and the
+   * catalogue has no organization; giving it one would change a Phase 1 table and
+   * its proofs, which 2.1 does not do. The provider's natural key — one name per
+   * channel, case-insensitively — already makes a second side effect impossible.
+   * A retried or duplicate create therefore changes nothing and answers `409
+   * RESOURCE_CONFLICT` naming the provider that exists (`details.providerId`), so
+   * a client retrying after a timeout can recognize and fetch what it created.
+   * `INSERT … ON CONFLICT DO NOTHING` keeps that answer exact under concurrency:
+   * the loser waits for the winner, inserts nothing, and reads the winner's row.
    */
   async create(principal: AuthPrincipal, input: CreateProviderDto): Promise<ProviderDetailView> {
     return this.db.withRequestTenant(async (tx) => {
@@ -303,12 +318,31 @@ export class ProviderRegistryService {
         .where(eq(schema.channels.id, input.channelId));
       if (!channel) throw notFound('Channel', input.channelId);
 
-      const row = await this.writeUnique(() =>
-        tx
-          .insert(schema.providers)
-          .values({ channelId: channel.id, name: input.name, adapterKey: input.adapterKey })
-          .returning(),
-      );
+      const [row] = await tx
+        .insert(schema.providers)
+        .values({ channelId: channel.id, name: input.name, adapterKey: input.adapterKey })
+        .onConflictDoNothing()
+        .returning();
+      if (!row) {
+        const [existing] = await tx
+          .select({ id: schema.providers.id })
+          .from(schema.providers)
+          .where(
+            and(
+              eq(schema.providers.channelId, channel.id),
+              sql`lower(${schema.providers.name}) = lower(${input.name})`,
+            ),
+          );
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.RESOURCE_CONFLICT,
+          message: 'A provider with this name already exists on the channel',
+          // Only a principal already authorized to administer this global
+          // catalogue (`providers.manage` at platform) reaches this line, and the
+          // conflict itself already reveals that the name is taken.
+          ...(existing ? { details: { providerId: existing.id } } : {}),
+        });
+      }
       const view = providerView(row, channel.code);
       await this.record(tx, principal, AUDIT_ACTIONS.PROVIDER_CREATED, view.id, null, {
         ...view,
