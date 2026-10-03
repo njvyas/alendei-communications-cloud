@@ -472,6 +472,23 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
           `provider ${transition}`,
         );
       }
+      // Phase 2.2: test-send needs an active provider; an accepted and a
+      // rejected answer both validate against the same documented schema.
+      expectStatus(
+        await hit('POST', `providers/${providerId}/enable`, credential),
+        200,
+        'provider re-enable',
+      );
+      for (const behavior of ['SUCCESS', 'INVALID_REQUEST']) {
+        expectStatus(
+          await hit('POST', `providers/${providerId}/test-send`, {
+            ...credential,
+            body: { behavior },
+          }),
+          200,
+          `provider test-send ${behavior}`,
+        );
+      }
     });
 
     it('workspaces, teams and the deprecated tenancy aliases', async () => {
@@ -754,11 +771,13 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
           ...as.session(bearer),
           body: template.endsWith('/capabilities')
             ? { capabilities: [] }
-            : method !== 'PATCH'
-              ? {}
-              : template.includes('/users/')
-                ? { phone: '+15551234567' }
-                : { name: `x ${suffix()}` },
+            : template.endsWith('/test-send')
+              ? { behavior: 'SUCCESS' }
+              : method !== 'PATCH'
+                ? {}
+                : template.includes('/users/')
+                  ? { phone: '+15551234567' }
+                  : { name: `x ${suffix()}` },
         });
         expect(`${method} ${template} → ${res.status}`).toMatch(/→ (404|403)$/);
       }

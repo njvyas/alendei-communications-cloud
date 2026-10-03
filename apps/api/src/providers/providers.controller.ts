@@ -18,11 +18,16 @@ import { OptionalTenantContext } from '../auth/public.decorator';
 import { RequiresPermission } from '../auth/requires-permission.decorator';
 import { AcceptedCredentials } from '../openapi/accepted-credentials.decorator';
 import { ApiData, ApiErrors, ApiPaged } from '../openapi/openapi-responses';
-import { ProviderDetailSchema, ProviderSchema } from '../openapi/openapi-schemas';
+import {
+  ProviderDetailSchema,
+  ProviderSchema,
+  ProviderTestSendResultSchema,
+} from '../openapi/openapi-schemas';
 import { PLATFORM_CATALOGUE, requestPrincipal } from './channels.controller';
 import {
   CreateProviderDto,
   ListProvidersQueryDto,
+  ProviderTestSendDto,
   ReplaceProviderCapabilitiesDto,
   UpdateProviderDto,
 } from './provider.dto';
@@ -165,5 +170,24 @@ export class ProvidersController {
   @ApiErrors(400, 401, 403, 404, 409, 429)
   async drain(@Param('id', new ParseUUIDPipe()) id: string) {
     return { data: await this.registry.transition(requestPrincipal(), id, 'drain') };
+  }
+
+  @Post(':id/test-send')
+  @OptionalTenantContext()
+  @RequiresPermission(PERMISSIONS.PROVIDERS_TEST_SEND, {
+    target: 'deferred',
+    because: PLATFORM_CATALOGUE,
+  })
+  @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession')
+  @ApiOperation({
+    summary: 'Send a synthetic test submission through the provider’s adapter',
+    description:
+      'Phase 2.2: the simulator only. The behaviour selects the simulated answer; the adapter comes from the provider’s catalogue row; the payload is synthetic and no message is persisted. A provider rejection is a 200 with outcome "rejected".',
+  })
+  @ApiData(ProviderTestSendResultSchema)
+  @ApiErrors(400, 401, 403, 404, 409, 422, 429)
+  async testSend(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: ProviderTestSendDto) {
+    return { data: await this.registry.testSend(requestPrincipal(), id, dto.behavior) };
   }
 }

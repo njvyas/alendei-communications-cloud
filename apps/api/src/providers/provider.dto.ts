@@ -16,6 +16,7 @@ import {
   PROVIDER_CAPABILITY_KEY_PATTERN,
   PROVIDER_CAPABILITY_LIMITS,
   PROVIDER_STATUSES,
+  SIMULATOR_BEHAVIORS,
 } from '@acc/contracts';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -99,4 +100,16 @@ export class ReplaceProviderCapabilitiesDto {
   @Type(() => ProviderCapabilityDto)
   @ApiProperty({ type: [ProviderCapabilityDto], maxItems: PROVIDER_CAPABILITY_LIMITS.MAX_ENTRIES })
   capabilities!: ProviderCapabilityDto[];
+}
+
+/**
+ * `POST /providers/:id/test-send` (Phase 2.2). The caller chooses only the
+ * simulator behaviour: the target is the provider in the path, its adapter comes
+ * from the catalogue row, and the payload is synthetic. No adapter key,
+ * recipient, content or credential is accepted.
+ */
+export class ProviderTestSendDto {
+  @IsIn(SIMULATOR_BEHAVIORS)
+  @ApiProperty({ enum: SIMULATOR_BEHAVIORS })
+  behavior!: (typeof SIMULATOR_BEHAVIORS)[number];
 }

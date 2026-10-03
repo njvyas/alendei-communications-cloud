@@ -4,9 +4,11 @@ import {
   CHANNEL_CODES,
   CHANNEL_STATUSES,
   PROVIDER_CIRCUIT_STATES,
+  PROVIDER_FAILURE_CATEGORIES,
   PROVIDER_HEALTH_STATES,
   PROVIDER_STATUSES,
   SCOPE_TYPES,
+  SIMULATOR_BEHAVIORS,
 } from '@acc/contracts';
 import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 
@@ -385,4 +387,37 @@ export class ProviderCapabilitySchema {
 @ApiSchema({ name: 'ProviderDetail' })
 export class ProviderDetailSchema extends ProviderSchema {
   @ApiProperty({ type: [ProviderCapabilitySchema] }) capabilities!: ProviderCapabilitySchema[];
+}
+
+/**
+ * The normalized adapter failure, or `null` when the provider accepted. Inline
+ * rather than a `$ref`: OpenAPI 3.0 cannot make a `$ref` nullable (`nullable`
+ * beside `allOf` does not admit `null`), and the contract suite validates the
+ * accepted answer's `null` against this.
+ */
+const PROVIDER_FAILURE = {
+  type: 'object',
+  nullable: true,
+  required: ['category', 'retryable', 'providerCode', 'message'],
+  properties: {
+    category: { type: 'string', enum: [...PROVIDER_FAILURE_CATEGORIES] },
+    retryable: { type: 'boolean' },
+    providerCode: { type: 'string', nullable: true },
+    message: { type: 'string' },
+  },
+  additionalProperties: false,
+} as const;
+
+@ApiSchema({ name: 'ProviderTestSendResult' })
+export class ProviderTestSendResultSchema {
+  @ApiProperty(uuid) providerId!: string;
+  @ApiProperty() adapterKey!: string;
+  @ApiProperty({ enum: CHANNEL_CODES }) channelCode!: string;
+  @ApiProperty({ enum: SIMULATOR_BEHAVIORS }) behavior!: string;
+  @ApiProperty(uuid) submissionId!: string;
+  @ApiProperty(uuid) correlationId!: string;
+  @ApiProperty({ enum: ['accepted', 'rejected'] }) outcome!: string;
+  @ApiProperty(nullableString) providerMessageId!: string | null;
+  @ApiProperty(PROVIDER_FAILURE as never) failure!: Record<string, unknown> | null;
+  @ApiProperty({ type: 'integer' }) latencyMs!: number;
 }

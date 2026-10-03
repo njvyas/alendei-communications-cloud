@@ -1377,7 +1377,30 @@ The five channels are seeded by migration `0018`. **No route creates, changes or
 | `POST` | `/api/v1/providers/:id/disable` | session only | `providers.manage` | — | → `disabled` | `409 …` unless `active` or `draining` | not keyed | `provider.disabled` |
 | `POST` | `/api/v1/providers/:id/drain` | session only | `providers.manage` | — | → `draining` | `409 …` unless `active` | not keyed | `provider.drained` |
 
-**There is no `DELETE /providers/:id`** — a provider is disabled, never deleted. **No credential, health-check, test-send, routing, priority or weight operation exists in 2.1** (test-send is 2.2; health is 2.3). Every audit row is at `platform` scope and carries before/after values; none carries a credential or secret.
+| `POST` | `/api/v1/providers/:id/test-send` (Phase 2.2) | session only | `providers.test_send` | `{behavior}` only — `SUCCESS`, `TIMEOUT`, `500`, `429`, `INVALID_CREDENTIALS`, `INVALID_REQUEST`, `SLOW_RESPONSE`; adapter, provider, recipient, content, credential and tenant fields are `400` | `200 {data:testSendResult}` — a simulated provider rejection is a `200` with `outcome: "rejected"`, not an error | `400`; `401`; `403`; `404`; `409 PROVIDER_LIFECYCLE_CONFLICT` (`details.status`) unless `active`; `422 PROVIDER_ADAPTER_UNKNOWN` (`details.adapterKeys`) if the provider's catalogue adapter key is not registered | not idempotent: each call is a new test | `provider.test_sent` (behaviour, outcome, category, latency, submission id — never a payload) |
+
+```jsonc
+// testSendResult — exhaustive
+{
+  "providerId": "uuid",
+  "adapterKey": "simulator",
+  "channelCode": "sms",
+  "behavior": "429",
+  "submissionId": "uuid",           // assigned by ACC for this one attempt
+  "correlationId": "uuid",
+  "outcome": "rejected",            // accepted | rejected
+  "providerMessageId": null,        // "sim-<submissionId>" when accepted
+  "failure": {                      // null when accepted
+    "category": "RATE_LIMITED",     // TIMEOUT | PROVIDER_ERROR | RATE_LIMITED | AUTH_ERROR | INVALID_REQUEST | INVALID_RECIPIENT | UNSUPPORTED_CONTENT | CONFIGURATION_ERROR | UNKNOWN
+    "retryable": true,              // fixed per category: TIMEOUT, PROVIDER_ERROR, RATE_LIMITED
+    "providerCode": "SIM-429",      // the provider's own code, for operators; or null
+    "message": "Simulated provider rate limit"
+  },
+  "latencyMs": 0                    // TIMEOUT answers 3000 (the platform timeout)
+}
+```
+
+**There is no `DELETE /providers/:id`** — a provider is disabled, never deleted. **No credential, health-check, routing, priority or weight operation exists** (health is 2.3). Test-send reaches only the simulator in Phase 2; it never connects to a real provider and persists no message. Every audit row is at `platform` scope and carries before/after values; none carries a credential or secret.
 
 **Lifecycle:** `disabled → active` (enable); `active → draining` (drain); `active | draining → disabled` (disable); `draining → active` (enable). Two concurrent transitions on one provider serialize: exactly one succeeds.
 

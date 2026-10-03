@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import {
   AUDIT_ACTIONS,
   ERROR_CODES,
@@ -6,6 +6,7 @@ import {
   PROVIDER_ADAPTER_KEYS,
   PROVIDER_CAPABILITY_FORBIDDEN_KEY_FRAGMENTS,
   PROVIDER_CAPABILITY_LIMITS,
+  PROVIDER_SUBMISSION_DEFAULTS,
   PROVIDER_TRANSITIONS,
   type AuditAction,
   type AuthPrincipal,
@@ -17,9 +18,12 @@ import {
   type ProviderHealthState,
   type ProviderStatus,
   type ProviderTransition,
+  type ProviderFailure,
+  type SimulatorBehavior,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
 import { and, asc, eq, sql, type SQL } from 'drizzle-orm';
+import { uuidv7 } from 'uuidv7';
 
 import { actorFromPrincipal } from '../audit/audit-actor';
 import { AuditWriter } from '../audit/audit-writer.service';
@@ -28,6 +32,12 @@ import { RequestContext } from '../common/context/request-context';
 import { AppException } from '../common/errors/app.exception';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
 import { TenantDatabase } from '../database/tenant-database.service';
+import {
+  ProviderAdapterNotRegistered,
+  ProviderAdapterRegistry,
+} from '../provider-adapters/adapter-registry';
+import { SimulatorAdapter } from '../provider-adapters/simulator.adapter';
+import { ProviderSubmissionExecutor } from '../provider-adapters/submission-executor';
 import type {
   CreateProviderDto,
   ProviderCapabilityDto,
@@ -71,6 +81,21 @@ export interface ProviderDetailView extends ProviderView {
   readonly capabilities: readonly ProviderCapabilityView[];
 }
 
+/** `POST /providers/:id/test-send` answer (`FRONTEND_API_CONTRACT.md` §32b). Exhaustive. */
+export interface ProviderTestSendView {
+  readonly providerId: string;
+  readonly adapterKey: string;
+  readonly channelCode: ChannelCode;
+  readonly behavior: SimulatorBehavior;
+  readonly submissionId: string;
+  readonly correlationId: string;
+  /** The provider's answer: accepted, or rejected with a normalized failure. A rejection is data, not an HTTP error. */
+  readonly outcome: 'accepted' | 'rejected';
+  readonly providerMessageId: string | null;
+  readonly failure: ProviderFailure | null;
+  readonly latencyMs: number;
+}
+
 export interface ListProvidersFilter extends ListQueryInput {
   readonly channelId?: string;
   readonly status?: ProviderStatus;
@@ -109,11 +134,15 @@ const TRANSITION_ACTIONS: Readonly<Record<ProviderTransition, AuditAction>> = {
  */
 @Injectable()
 export class ProviderRegistryService {
+  private readonly logger = new Logger(ProviderRegistryService.name);
+
   constructor(
     private readonly db: TenantDatabase,
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly lists: ListQuery,
+    private readonly adapters: ProviderAdapterRegistry,
+    private readonly executor: ProviderSubmissionExecutor,
   ) {}
 
   private readonly channelListSpec: ListQuerySpec = {
@@ -451,6 +480,131 @@ export class ProviderRegistryService {
       );
       return this.detail(tx, row!);
     });
+  }
+
+  // --- test-send (Phase 2.2) ----------------------------------------------------------
+
+  /**
+   * Sends one synthetic submission through the provider's adapter and returns
+   * the normalized answer (ADR-013 PD-3, ROADMAP §5b 2.2). Persists no message.
+   *
+   * Three steps, deliberately split so no database transaction is held open
+   * across the adapter's wait (up to the platform timeout):
+   *
+   *   1. In a transaction: `providers.test_send` at platform scope, then the
+   *      provider. Only an `active` provider is a submission target — `disabled`
+   *      and `draining` are `409` — and its adapter comes from **its catalogue
+   *      row**, resolved through the code registry; an unregistered key fails
+   *      closed (`422`). Nothing the caller sends names an adapter.
+   *   2. The submission, outside any transaction, under the executor's timeout.
+   *   3. In a transaction: the permission again, then `provider.test_sent` —
+   *      the behaviour, outcome, category and latency, never a payload.
+   *
+   * A provider's rejection (`500`, `429`, a timeout …) is the *result* of a
+   * successful test-send and is answered `200` with `outcome: "rejected"`.
+   */
+  async testSend(
+    principal: AuthPrincipal,
+    id: string,
+    behavior: SimulatorBehavior,
+  ): Promise<ProviderTestSendView> {
+    const target = await this.db.withRequestTenant(async (tx) => {
+      await this.authorize(tx, principal, PERMISSIONS.PROVIDERS_TEST_SEND);
+      const provider = await this.load(tx, id);
+      if (provider.status !== 'active') throw lifecycleConflict(provider.status);
+      const [channel] = await tx
+        .select({ code: schema.channels.code })
+        .from(schema.channels)
+        .where(eq(schema.channels.id, provider.channelId));
+      const capabilities = await this.capabilities(tx, provider.id);
+      return {
+        provider,
+        channel: channel!.code,
+        capabilities: Object.fromEntries(capabilities.map((c) => [c.key, c.value])),
+      };
+    });
+
+    let adapter;
+    try {
+      adapter = this.adapters.resolve(target.provider.adapterKey);
+    } catch (error) {
+      if (!(error instanceof ProviderAdapterNotRegistered)) throw error;
+      throw new AppException({
+        status: HttpStatus.UNPROCESSABLE_ENTITY,
+        code: ERROR_CODES.PROVIDER_ADAPTER_UNKNOWN,
+        message: "The provider's adapter is not registered",
+        details: { adapterKeys: [...this.adapters.keys()] },
+        logContext: { providerId: id, adapterKey: target.provider.adapterKey },
+      });
+    }
+    // The behaviour selects a simulator scenario; only the simulator takes one.
+    if (!(adapter instanceof SimulatorAdapter)) {
+      throw new AppException({
+        status: HttpStatus.UNPROCESSABLE_ENTITY,
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: 'A simulator behaviour can only be sent to a simulator provider',
+      });
+    }
+
+    const correlationId = RequestContext.correlationId();
+    const submission = {
+      submissionId: uuidv7(),
+      correlationId,
+      channel: target.channel,
+      recipient: 'simulator:test-recipient',
+      content: { text: 'ACC provider test-send' },
+    };
+    const result = await this.executor.execute(
+      adapter.forBehavior(behavior),
+      {
+        providerId: target.provider.id,
+        adapterKey: target.provider.adapterKey,
+        channel: target.channel,
+        capabilities: target.capabilities,
+      },
+      submission,
+      PROVIDER_SUBMISSION_DEFAULTS.TIMEOUT_MS,
+    );
+
+    const view: ProviderTestSendView = {
+      providerId: target.provider.id,
+      adapterKey: target.provider.adapterKey,
+      channelCode: target.channel,
+      behavior,
+      submissionId: submission.submissionId,
+      correlationId,
+      outcome: result.outcome,
+      providerMessageId: result.outcome === 'accepted' ? result.providerMessageId : null,
+      failure: result.outcome === 'rejected' ? result.failure : null,
+      latencyMs: result.latencyMs,
+    };
+
+    await this.db.withRequestTenant(async (tx) => {
+      await this.authorize(tx, principal, PERMISSIONS.PROVIDERS_TEST_SEND);
+      await this.record(tx, principal, AUDIT_ACTIONS.PROVIDER_TEST_SENT, view.providerId, null, {
+        behavior,
+        outcome: view.outcome,
+        category: view.failure?.category ?? null,
+        retryable: view.failure?.retryable ?? null,
+        latencyMs: view.latencyMs,
+        submissionId: view.submissionId,
+      });
+    });
+
+    // Diagnostics only: no recipient, content or credential is logged.
+    this.logger.log({
+      msg: 'provider test-send',
+      providerId: view.providerId,
+      adapterKey: view.adapterKey,
+      channel: view.channelCode,
+      behavior,
+      outcome: view.outcome,
+      category: view.failure?.category ?? null,
+      latencyMs: view.latencyMs,
+      submissionId: view.submissionId,
+      correlationId,
+    });
+    return view;
   }
 
   // --- internals -----------------------------------------------------------------------

@@ -18,7 +18,7 @@ All public and console APIs are served under `/api/v1`. Breaking changes ship as
 | `/role-assignments` | `rbac` | Scope-bound role grant and revocation. **Built in Phase 1B.5.5** (§3c) |
 | `/permissions` | `rbac` | Permission catalogue (read-only, system-defined). **Built in Phase 1B.5.4** (§3c) |
 | `/channels` | `provider-registry` | Supported channel catalogue — read-only, seeded by migration `0018`. **Built in Phase 2.1** (ADR-013; `FRONTEND_API_CONTRACT.md` §32a); platform scope only (`providers.read`) |
-| `/providers` | `provider-registry` | Provider create/read/update (name), capability replacement, enable/disable/drain — **built in Phase 2.1** (`FRONTEND_API_CONTRACT.md` §32b; `providers.read`/`providers.manage`, platform scope only; no `DELETE`). Test-send (2.2) and health check, manual health, health history (2.3) are frozen, not built. No priority/weight/routing operations (later phases) |
+| `/providers` | `provider-registry` | Provider create/read/update (name), capability replacement, enable/disable/drain — **built in Phase 2.1** (`FRONTEND_API_CONTRACT.md` §32b; `providers.read`/`providers.manage`, platform scope only; no `DELETE`). Test-send — **built in Phase 2.2** (`POST /providers/:id/test-send`, `providers.test_send`; the simulator only). Health check, manual health, health history (2.3) are frozen, not built. No priority/weight/routing operations (later phases) |
 | `/routing` | `provider-router` | Routing policy CRUD, versioning, activation |
 | `/fallback-policies` | `fallback-engine` | Fallback chain CRUD |
 | `/messages` | `comms-api` | Send message, get message/attempt status |
@@ -455,6 +455,7 @@ Idempotency is **execution/replay coordination**: it records that a request ran 
 | `POST /auth/logout` | `204`, naturally idempotent |
 | `POST /providers` (Phase 2.1) | Naturally idempotent, by explicit decision (ADR-013 2.1 notes (c)): one provider name per channel (`providers_channel_name_key`, case-insensitive) makes a second side effect impossible. A retried or concurrent duplicate create changes nothing and answers `409 RESOURCE_CONFLICT` with `details.providerId` naming the existing provider, so the client can fetch what it created; `Idempotency-Key` is not consumed. Keyed idempotency is not used because `idempotency_keys` is namespaced by organization and the catalogue has none |
 | `PATCH /providers/:id`, `PUT /providers/:id/capabilities` (Phase 2.1) | Converge on the same state when re-applied; an unchanged value changes and records nothing |
+| `POST /providers/:id/test-send` (Phase 2.2) | Not idempotent by design: each call is a new test of the provider's adapter, with its own `submissionId` and audit row; it persists no message and changes no catalogue state, so a repeat has nothing to duplicate but the test itself |
 | `POST /providers/:id/enable` · `/disable` · `/drain` (Phase 2.1) | A repeat is `409 PROVIDER_LIFECYCLE_CONFLICT` naming the status already reached — the honest answer, needing no stored response |
 
 An endpoint is added to the first table only when a duplicate would cause a second side effect. Requiring the header for frontend convenience where it buys nothing is how a mechanism becomes ceremony.

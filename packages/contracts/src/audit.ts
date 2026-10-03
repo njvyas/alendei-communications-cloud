@@ -57,6 +57,8 @@ export const AUDIT_ACTIONS = {
   PROVIDER_ENABLED: 'provider.enabled',
   PROVIDER_DISABLED: 'provider.disabled',
   PROVIDER_DRAINED: 'provider.drained',
+  // Phase 2.2: a synthetic submission through the provider's adapter (ADR-013 F-4).
+  PROVIDER_TEST_SENT: 'provider.test_sent',
 
   AUTHORIZATION_DENIED: 'authorization.denied',
 } as const;
@@ -182,6 +184,10 @@ export const SECURITY_SENSITIVE_AUDIT_ACTIONS: readonly AuditAction[] = Object.f
   AUDIT_ACTIONS.PROVIDER_ENABLED,
   AUDIT_ACTIONS.PROVIDER_DISABLED,
   AUDIT_ACTIONS.PROVIDER_DRAINED,
+  // A test-send reaches the provider's adapter; once real providers exist it
+  // can incur cost or reach a recipient, so it is recorded in its own
+  // transaction or not at all.
+  AUDIT_ACTIONS.PROVIDER_TEST_SENT,
 ]);
 
 export function isSecuritySensitiveAction(action: string): boolean {

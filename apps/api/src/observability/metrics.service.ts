@@ -77,6 +77,8 @@ export class MetricsService implements OnModuleInit {
   readonly organizationStatusRefusals: Counter<'status' | 'operation'>;
   /** Live sessions revoked at sign-in to stay within `AUTH_MAX_SESSIONS_PER_USER` (ROADMAP §4d, ADR-012 F-11). */
   readonly sessionCapEvictions: Counter<never>;
+  /** Every provider adapter submission, by channel and normalized outcome (Phase 2.2). */
+  readonly providerSubmissions: Counter<'channel' | 'outcome'>;
 
   constructor(private readonly config: AppConfigService) {
     this.registry.setDefaultLabels({
@@ -131,6 +133,12 @@ export class MetricsService implements OnModuleInit {
       name: 'acc_session_cap_evictions_total',
       help: 'Live sessions revoked at sign-in because the user reached AUTH_MAX_SESSIONS_PER_USER.',
       labelNames: [],
+    });
+
+    this.providerSubmissions = this.counter({
+      name: 'acc_provider_submissions_total',
+      help: 'Provider adapter submissions (Phase 2.2: test-sends to the simulator), by channel and normalized outcome: accepted, or the failure category in lower case (timeout, provider_error, rate_limited, auth_error, invalid_request, configuration_error, unknown).',
+      labelNames: ['channel', 'outcome'],
     });
   }
 
