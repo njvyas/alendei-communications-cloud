@@ -17,8 +17,8 @@ All public and console APIs are served under `/api/v1`. Breaking changes ship as
 | `/roles` | `rbac` | Role CRUD (custom roles), plus read of the platform role definitions. **Built in Phase 1B.5.4** (§3c) |
 | `/role-assignments` | `rbac` | Scope-bound role grant and revocation. **Built in Phase 1B.5.5** (§3c) |
 | `/permissions` | `rbac` | Permission catalogue (read-only, system-defined). **Built in Phase 1B.5.4** (§3c) |
-| `/channels` | `provider-registry` | Supported channel catalogue — read-only, seeded. **Phase 2.1, frozen (ADR-013), not built**; platform scope only |
-| `/providers` | `provider-registry` | Provider create/read/update, enable/disable/drain, capability config (2.1); test-send (2.2); health check, manual health, health history (2.3). **Phase 2, frozen (ADR-013), not built**; platform scope only; no `DELETE`; no priority/weight/routing operations (later phases) |
+| `/channels` | `provider-registry` | Supported channel catalogue — read-only, seeded by migration `0018`. **Built in Phase 2.1** (ADR-013; `FRONTEND_API_CONTRACT.md` §32a); platform scope only (`providers.read`) |
+| `/providers` | `provider-registry` | Provider create/read/update (name), capability replacement, enable/disable/drain — **built in Phase 2.1** (`FRONTEND_API_CONTRACT.md` §32b; `providers.read`/`providers.manage`, platform scope only; no `DELETE`). Test-send (2.2) and health check, manual health, health history (2.3) are frozen, not built. No priority/weight/routing operations (later phases) |
 | `/routing` | `provider-router` | Routing policy CRUD, versioning, activation |
 | `/fallback-policies` | `fallback-engine` | Fallback chain CRUD |
 | `/messages` | `comms-api` | Send message, get message/attempt status |
@@ -453,6 +453,9 @@ Idempotency is **execution/replay coordination**: it records that a request ran 
 | `POST /auth/login` | Replaying a login would replay a **token**, turning a stored response into a credential. Sessions are deliberately per-attempt |
 | `POST /auth/refresh` | Rotation is single-use **by design** (ADR-003): replay-detection there revokes the token family. Idempotency would directly contradict it |
 | `POST /auth/logout` | `204`, naturally idempotent |
+| `POST /providers` (Phase 2.1) | Naturally idempotent: one provider name per channel (`providers_channel_name_key`, case-insensitive), so a retried create is `409 RESOURCE_CONFLICT` and creates nothing. Keyed idempotency is not available here: `idempotency_keys` is namespaced by organization and the catalogue has none (ADR-013 2.1 notes) |
+| `PATCH /providers/:id`, `PUT /providers/:id/capabilities` (Phase 2.1) | Converge on the same state when re-applied; an unchanged value changes and records nothing |
+| `POST /providers/:id/enable` · `/disable` · `/drain` (Phase 2.1) | A repeat is `409 PROVIDER_LIFECYCLE_CONFLICT` naming the status already reached — the honest answer, needing no stored response |
 
 An endpoint is added to the first table only when a duplicate would cause a second side effect. Requiring the header for frontend convenience where it buys nothing is how a mechanism becomes ceremony.
 

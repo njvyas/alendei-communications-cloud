@@ -1,4 +1,13 @@
-import { ACTOR_TYPES, AUDIT_OUTCOMES, SCOPE_TYPES } from '@acc/contracts';
+import {
+  ACTOR_TYPES,
+  AUDIT_OUTCOMES,
+  CHANNEL_CODES,
+  CHANNEL_STATUSES,
+  PROVIDER_CIRCUIT_STATES,
+  PROVIDER_HEALTH_STATES,
+  PROVIDER_STATUSES,
+  SCOPE_TYPES,
+} from '@acc/contracts';
 import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 
 import { API_KEY_SCOPE_TYPES, API_KEY_STATUSES } from '../api-keys/api-key.dto';
@@ -24,6 +33,21 @@ const nullableUuid = { type: 'string', format: 'uuid', nullable: true } as const
 const timestamp = { type: 'string', format: 'date-time' } as const;
 const nullableTimestamp = { type: 'string', format: 'date-time', nullable: true } as const;
 const nullableString = { type: 'string', nullable: true } as const;
+/**
+ * Any JSON value (a provider capability's value is free-form, non-secret JSON).
+ * OpenAPI 3.0 has no `null` type and forbids `nullable` beside `anyOf` without
+ * a `type`, so `null` is admitted through the object member.
+ */
+export const ANY_JSON = {
+  description: 'Any JSON value',
+  anyOf: [
+    { type: 'string' },
+    { type: 'number' },
+    { type: 'boolean' },
+    { type: 'object', additionalProperties: true, nullable: true },
+    { type: 'array', items: {} },
+  ],
+};
 
 // --- tenancy -----------------------------------------------------------------
 
@@ -323,3 +347,42 @@ export const RESPONSE_SCHEMAS = [
   AuditLogSchema,
   LivenessSchema,
 ] as const;
+
+// --- provider catalogue (Phase 2.1, ADR-013) ------------------------------------
+
+@ApiSchema({ name: 'Channel' })
+export class ChannelSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty({ enum: CHANNEL_CODES }) code!: string;
+  @ApiProperty() displayName!: string;
+  @ApiProperty({ enum: CHANNEL_STATUSES }) status!: string;
+  @ApiProperty(timestamp) createdAt!: string;
+  @ApiProperty(timestamp) updatedAt!: string;
+}
+
+@ApiSchema({ name: 'Provider' })
+export class ProviderSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty(uuid) channelId!: string;
+  @ApiProperty({ enum: CHANNEL_CODES }) channelCode!: string;
+  @ApiProperty() name!: string;
+  @ApiProperty() adapterKey!: string;
+  @ApiProperty({ enum: PROVIDER_STATUSES }) status!: string;
+  @ApiProperty({ enum: PROVIDER_HEALTH_STATES, description: 'Read-only in Phase 2.1' })
+  healthState!: string;
+  @ApiProperty({ enum: PROVIDER_CIRCUIT_STATES, description: 'Read-only in Phase 2.1' })
+  circuitState!: string;
+  @ApiProperty(timestamp) createdAt!: string;
+  @ApiProperty(timestamp) updatedAt!: string;
+}
+
+@ApiSchema({ name: 'ProviderCapability' })
+export class ProviderCapabilitySchema {
+  @ApiProperty() key!: string;
+  @ApiProperty(ANY_JSON) value!: unknown;
+}
+
+@ApiSchema({ name: 'ProviderDetail' })
+export class ProviderDetailSchema extends ProviderSchema {
+  @ApiProperty({ type: [ProviderCapabilitySchema] }) capabilities!: ProviderCapabilitySchema[];
+}

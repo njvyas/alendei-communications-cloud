@@ -264,8 +264,11 @@ describe('§6n case 30 — route authorization coverage', () => {
     // the three administrator session routes under `/users/:id/sessions`, all
     // scoped at the selected organization (the per-grant F-9 coverage is an
     // additional check, not a different target): 43 → 46 scoped; and the
-    // identity route `POST /auth/sessions/revoke-all`: 6 → 7 exempt.
-    expect(scoped.length).toBe(46);
+    // identity route `POST /auth/sessions/revoke-all`: 6 → 7 exempt. Phase 2.1
+    // added the ten provider/channel catalogue routes, all scoped and all
+    // `deferred` — every one authorizes at platform scope, never at the selected
+    // organization (ADR-013 F-3): 46 → 56 scoped.
+    expect(scoped.length).toBe(56);
     expect(exempt.length).toBe(7);
     expect(open.length).toBe(6);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
@@ -275,8 +278,10 @@ describe('§6n case 30 — route authorization coverage', () => {
     // The two grant/revoke handlers; the three API-key routes whose target is
     // the key's own stored binding scope (Phase 1B.6.2) or the binding named in
     // the body; and the audit-log detail route, whose target is the scope the
-    // record was written at (Phase 1B.6.3).
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(21);
+    // record was written at (Phase 1B.6.3). Phase 2.1's ten catalogue routes
+    // all defer: each targets `platform`, never the selected organization
+    // (ADR-013 F-3): 21 → 31.
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(31);
   });
 });
 

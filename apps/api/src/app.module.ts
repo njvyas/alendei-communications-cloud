@@ -25,6 +25,7 @@ import { TenancyModule } from './tenancy/tenancy.module';
 import { UsersModule } from './users/users.module';
 import { SecretsModule } from './secrets/secrets.module';
 import { WorkspacesModule } from './workspaces/workspaces.module';
+import { ProvidersModule } from './providers/providers.module';
 import { OPENAPI_MODULES } from './openapi/openapi.module';
 
 /**
@@ -57,6 +58,7 @@ import { OPENAPI_MODULES } from './openapi/openapi.module';
     AuditReadModule,
     OrganizationsModule,
     WorkspacesModule,
+    ProvidersModule,
     // The OpenAPI document route, when `OPENAPI_UI_ENABLED` is on (Phase 1C.3).
     ...OPENAPI_MODULES,
   ],

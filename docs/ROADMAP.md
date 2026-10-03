@@ -251,7 +251,7 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 
 ## 5. Phase 2 — Provider abstraction + simulator
 
-**Status: SCOPE FROZEN (ADR-013, 02-Oct-2026); no increment implemented.** Each increment requires its own authorization.
+**Status: SCOPE FROZEN (ADR-013, 02-Oct-2026). 2.1 IMPLEMENTED (migration `0018`; Gate D.1 pending review); 2.2–2.6 not started.** Each increment requires its own authorization.
 
 - **Objectives**: implement `provider-registry`, `provider-adapters` (interface + `SimulatorAdapter` only), health/circuit breaker mechanics, admin hot-reload plumbing.
 - **Dependencies**: Phase 1 (Gate C closed): `TenantDatabase` and the pre-commit authorization-coverage containment, `AuthorizationService` + `@RequiresPermission`, transactional `AuditWriter`, the OpenAPI pipeline, `/metrics`, `SecretsPort`, Redis, the `with-db-clone` mutation harness.
@@ -273,7 +273,7 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 | Step | Objective | Schema | Exit criterion |
 |---|---|---|---|
 | **2.0** | Scope freeze (this section, ADR-013) | — | ✅ frozen 02-Oct-2026 |
-| **2.1** | Channel & Provider Registry | `channels` (seeded), `providers`, `provider_capabilities`; permissions `providers.read`, `providers.manage` | Gate D.1 |
+| **2.1** | Channel & Provider Registry | `channels` (seeded), `providers`, `provider_capabilities`; permissions `providers.read`, `providers.manage` (and `providers.test_send` defined, unused until 2.2) | ✅ IMPLEMENTED — migration `0018`; **Gate D.1 pending review** |
 | **2.2** | Adapter Contract & Simulator | none (permission `providers.test_send`) | Gate D.2 |
 | **2.3** | Health & Circuit Breaker | `provider_health` | Gate D.3 |
 | **2.4** | Hot Reload | none | Gate D.4 |

@@ -63,6 +63,20 @@ export const PERMISSIONS = {
   RESELLERS_READ: 'resellers.read',
   RESELLERS_UPDATE: 'resellers.update',
 
+  // --- Provider and channel catalogue (Phase 2.1, ADR-013 PD-5) -------------
+  // Platform-scope catalogue permissions. They are enforced by
+  // `AuthorizationService` at `{ scopeType: 'platform' }`; the catalogue's RLS
+  // admits only platform-scope principals and names no role (ADR-013 F-3).
+  /** Read the channel and provider catalogue. */
+  PROVIDERS_READ: 'providers.read',
+  /** Create, update and change the status of providers. */
+  PROVIDERS_MANAGE: 'providers.manage',
+  /**
+   * Send a synthetic test message to one provider (Phase 2.2). Defined in 2.1
+   * so the catalogue is complete; no route checks it until 2.2.
+   */
+  PROVIDERS_TEST_SEND: 'providers.test_send',
+
   // --- Platform control plane (`RBAC.md` §3) -------------------------------
   /** Cross-tenant read of any organization's tenancy records. */
   PLATFORM_TENANTS_READ: 'platform.tenants.read',

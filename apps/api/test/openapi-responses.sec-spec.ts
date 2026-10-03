@@ -62,7 +62,12 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
   const problems: string[] = [];
   const successes = new Map<string, Set<Credential>>();
   const observed = new Map<string, Set<number>>();
-  const created = { users: [] as string[], orgs: [] as string[], resellers: [] as string[] };
+  const created = {
+    users: [] as string[],
+    orgs: [] as string[],
+    resellers: [] as string[],
+    providers: [] as string[],
+  };
   const suffix = () => uuidv7().replace(/-/g, '').slice(-10);
 
   // --- the request helper: every response is validated ----------------------------
@@ -304,6 +309,12 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
       }
     });
     await db.execute(sql`DELETE FROM organizations WHERE id IN (${list(orgs)})`);
+    if (created.providers.length > 0) {
+      await db.execute(
+        sql`DELETE FROM provider_capabilities WHERE provider_id IN (${list(created.providers)})`,
+      );
+      await db.execute(sql`DELETE FROM providers WHERE id IN (${list(created.providers)})`);
+    }
     await db.delete(schema.users).where(inArray(schema.users.id, users));
     await db.delete(schema.resellers).where(inArray(schema.resellers.id, created.resellers));
     await booted.clearRateLimits();
@@ -419,6 +430,46 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
           }),
           200,
           transition,
+        );
+      }
+    });
+
+    it('the provider and channel catalogue (Phase 2.1, platform scope only)', async () => {
+      const credential = as.session(platform);
+      const channels = await hit('GET', 'channels', credential);
+      expectStatus(channels, 200, 'channels list');
+      const channelId = (channels.body.data as Json[])[0]!.id as string;
+      expectStatus(await hit('GET', `channels/${channelId}`, credential), 200, 'channel get');
+      const createdProvider = await hit('POST', 'providers', {
+        ...credential,
+        body: { channelId, name: `OA provider ${suffix()}`, adapterKey: 'simulator' },
+      });
+      expectStatus(createdProvider, 201, 'provider create');
+      const providerId = createdProvider.body.data.id as string;
+      created.providers.push(providerId);
+      expectStatus(await hit('GET', 'providers', credential), 200, 'provider list');
+      expectStatus(await hit('GET', `providers/${providerId}`, credential), 200, 'provider get');
+      expectStatus(
+        await hit('PATCH', `providers/${providerId}`, {
+          ...credential,
+          body: { name: `OA provider ${suffix()}` },
+        }),
+        200,
+        'provider update',
+      );
+      expectStatus(
+        await hit('PUT', `providers/${providerId}/capabilities`, {
+          ...credential,
+          body: { capabilities: [{ key: 'max_message_size', value: 1600 }] },
+        }),
+        200,
+        'provider capabilities',
+      );
+      for (const transition of ['enable', 'drain', 'disable']) {
+        expectStatus(
+          await hit('POST', `providers/${providerId}/${transition}`, credential),
+          200,
+          `provider ${transition}`,
         );
       }
     });
@@ -696,11 +747,14 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
     it('an unknown id: 404 (or the documented refusal) on every operation that addresses a resource by id', async () => {
       for (const { method, template, op } of operations()) {
         if (!template.includes('{')) continue;
-        const bearer = String(op.operationId).startsWith('Organizations_') ? platform : admin;
+        const bearer = /^(Organizations|Providers|Channels)_/.test(String(op.operationId))
+          ? platform
+          : admin;
         const res = await hit(method, concrete(template, uuidv7), {
           ...as.session(bearer),
-          body:
-            method !== 'PATCH'
+          body: template.endsWith('/capabilities')
+            ? { capabilities: [] }
+            : method !== 'PATCH'
               ? {}
               : template.includes('/users/')
                 ? { phone: '+15551234567' }

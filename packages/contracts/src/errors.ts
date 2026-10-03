@@ -95,6 +95,20 @@ export const ERROR_CODES = {
    */
   ORGANIZATION_LIFECYCLE_CONFLICT: 'ORGANIZATION_LIFECYCLE_CONFLICT',
 
+  // --- Provider catalogue (Phase 2.1, ADR-013 F-5) ---------------------------
+  /**
+   * `409`: the provider's current status does not admit the transition
+   * (`active → disabled | draining`, `draining → disabled | active`,
+   * `disabled → active`; anything else). `details.status` carries the current
+   * status.
+   */
+  PROVIDER_LIFECYCLE_CONFLICT: 'PROVIDER_LIFECYCLE_CONFLICT',
+  /**
+   * `422`: `adapterKey` does not name an adapter registered in code
+   * (`PROVIDER_ADAPTER_KEYS`; ADR-013 F-9). Phase 2 registers `simulator` only.
+   */
+  PROVIDER_ADAPTER_UNKNOWN: 'PROVIDER_ADAPTER_UNKNOWN',
+
   // --- Workspace and team lifecycle (Phase 1C.1b, ADR-012 F-6) -------------
   /**
    * `409`: the workspace's current state does not admit the operation — it is

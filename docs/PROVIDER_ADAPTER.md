@@ -1,6 +1,6 @@
 # Provider Abstraction Architecture
 
-> **Phase 2 status (ADR-013, 02-Oct-2026): SCOPE FROZEN, not implemented.** Phase 2 builds the registry, the adapter contract with `SimulatorAdapter` only, health and circuit-breaker mechanics and hot reload, partitioned into increments 2.1–2.6 (`ROADMAP.md` §5a–§5c). Sections below say which parts are Phase 2 and which are later phases.
+> **Phase 2 status (ADR-013): SCOPE FROZEN; increment 2.1 (the channel and provider registry, migration `0018`) IMPLEMENTED — Gate D.1 pending review; 2.2–2.6 not implemented.** Phase 2 builds the registry, the adapter contract with `SimulatorAdapter` only, health and circuit-breaker mechanics and hot reload, partitioned into increments 2.1–2.6 (`ROADMAP.md` §5a–§5c). Sections below say which parts are Phase 2 and which are later phases.
 
 ## 1. Purpose
 

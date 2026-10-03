@@ -61,7 +61,13 @@ The precedent is already in the schema and should be followed rather than re-arg
 
 **`provider_credentials` is not implemented, and its ownership model is NOT FROZEN (ADR-013 PD-2, F-1).** `DEPLOYMENT.md` §0f described it as tenant-scoped, a scope within the existing hierarchy, `org_id` for RLS, and a `credential_ref`; `DATABASE.md` §3 / `PROVIDER_ADAPTER.md` §4a described a platform/reseller/organization configuration scope with a NULL platform `scope_id`. The two cannot both hold, and neither is adopted until the channel-phase ADR that builds the table; no hybrid is defined. **Binding now** (both agreed): the value is a `credential_ref` resolved through `SecretsPort`, never the credential; the secret never enters PostgreSQL, logs, metrics, audit rows, API responses or any frontend; a shared deployment must be able to hold Alendei-owned, reseller-owned and organization-owned credentials side by side, under database-enforced isolation. **Credential architecture requires a separate reviewed decision (its own ADR) before implementation**; Phase 2.5 records these requirements as documentation only — no port, type or code (ADR-013 PD-2).
 
-### 3b. Phase 2 security controls (ADR-013 — frozen, not implemented)
+### 3b. Phase 2 security controls (ADR-013 — frozen; the 2.1 controls IMPLEMENTED, Gate D.1 pending review)
+
+The rows below are the Phase 2 requirements. Those that govern the registry — layered model, global-catalogue RLS, grants and denials, coverage containment, audit, no secret persistence, adapter binding — are **implemented by 2.1** (migration `0018`, `apps/api/src/providers/`, proven by `provider-registry.sec-spec.ts`); test-send and hot reload arrive with 2.2 and 2.4. Two 2.1 implementation facts the table does not state:
+
+- **An unattributable refusal is logged, not audited.** A principal the evaluator refuses that has no scope an `authorization.denied` row can be filed under — no selected organization, no reseller, no validated platform-administrator claim (`alendei_support` without `X-Acc-Organization`, for example) — receives the same `403`, decided by the non-auditing `AuthorizationService.allows`, and the refusal is logged. `AuthorizationService.recordDenial` cannot attribute such a principal and would otherwise fail the request with a `500`. A principal the evaluator *permits* is never refused by this path.
+- **Catalogue mutations by a future non-`alendei_super_admin` platform role would fail closed at the audit write.** The catalogue's RLS admits any platform-scope principal (by design), but `audit_logs_insert` admits a `platform`-scope row only under `app_is_platform_admin()` (migration `0001`, ADR-011), which is bound to `alendei_super_admin`. Such a role can read the catalogue today; its writes would be refused (the request rolls back) until the audit policy is revisited. No such role exists; recorded as a residual (ADR-013, 2.1 notes).
+
 
 | Control | Requirement |
 |---|---|

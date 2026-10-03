@@ -3,3 +3,4 @@ export * from './iam';
 export * from './rbac';
 export * from './platform';
 export * from './audit';
+export * from './providers';

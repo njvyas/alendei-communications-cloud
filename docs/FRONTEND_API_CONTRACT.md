@@ -602,7 +602,9 @@ Every list endpoint above is paginated (§13) except `/auth/sessions` and `/perm
 
 **Correction.** An earlier version of this section was pinned to commit `6e84d7c` and listed `/users`, `/api-keys` and `/audit` as "PLANNED / NOT IMPLEMENTED" — contradicting §§30d–30f, which document all three as implemented. All three shipped in 1B.6.1, 1B.6.2 and 1B.6.3 respectively. The audit route is `/audit-logs`, not `/audit`.
 
-**Still PLANNED / NOT IMPLEMENTED**, and listed in `API.md` §2 as a target map rather than an inventory: `/resellers` (Phase 9), `/messages`, `/providers` and `/channels` (Phase 2, scope frozen by ADR-013, platform scope only; the console is increment 2.6, separately gated), `/routing`, `/campaigns`, `/contacts`, `/templates`, `/billing`, `/wallets`, `/reports`, `/webhook-endpoints`, and the WebSocket gateway itself.
+**Implemented in Phase 2.1:** `/channels` and `/providers` (§32; platform scope only; the console is increment 2.6, separately gated).
+
+**Still PLANNED / NOT IMPLEMENTED**, and listed in `API.md` §2 as a target map rather than an inventory: `/resellers` (Phase 9), `/messages`, `/routing`, `/campaigns`, `/contacts`, `/templates`, `/billing`, `/wallets`, `/reports`, `/webhook-endpoints`, and the WebSocket gateway itself.
 
 ### OpenAPI
 
@@ -1312,7 +1314,74 @@ Every route acts in the organization selected by `X-Acc-Organization` (or implic
 
 Invitation / credential delivery (users created via `POST /users` still cannot sign in until the existing bootstrap mechanism activates them — D16), reseller CRUD and reseller suspension, WebSocket consumption and subscriptions, organization deletion, workspace/team deletion, cross-organization moves of workspaces or teams, and changing an organization's reseller.
 
-## 32. Related
+## 32. Phase 2.1 provider and channel catalogue (ADR-013) — IMPLEMENTED (Gate D.1 pending review)
+
+> **Implemented** in `apps/api/src/providers/` (migration `0018`). **Platform scope only**: there is no organization, workspace, team, reseller or white-label view of this catalogue in Phase 2. The console screens are increment 2.6, separately gated; this section is the contract they will be built against.
+
+**Common rules.**
+
+- **Who:** a signed-in user holding the route's `providers.*` permission at **platform** scope — today only `alendei_super_admin`. API keys are never accepted (an API key is organization-bound). Everyone else gets `403 AUTHZ_SCOPE_DENIED`, including `alendei_support` and every tenant role, even one composed to carry `providers.*` at an organization.
+- **`X-Acc-Organization` is optional and never changes the result.** If present (or implied by a single organization) it only attributes a refusal in the audit trail. `orgId`, `workspaceId`, `teamId` in a body or query are `400 VALIDATION_FAILED` (unknown field).
+- **Authorize before disclose:** every route checks the permission before reading a row, so an unauthorized caller learns nothing about which channels or providers exist. An authorized caller gets `404 RESOURCE_NOT_FOUND` for an unknown id.
+- **Envelopes, pagination, errors, rate limiting:** exactly as §§9, 13, 14, 23.
+
+### 32a. Channels — read-only
+
+```jsonc
+// channel — exhaustive
+{
+  "id": "uuid",
+  "code": "sms",               // whatsapp | rcs | sms | email | voice
+  "displayName": "SMS",
+  "status": "active",          // active | disabled
+  "createdAt": "ISO-8601",
+  "updatedAt": "ISO-8601"
+}
+```
+
+| Method | Path | Auth | Permission | Request | Success | Errors |
+|---|---|---|---|---|---|---|
+| `GET` | `/api/v1/channels` | session only | `providers.read` at platform | `limit`, `cursor`, `sort` (`code` default, `-code`) | `200 {data:[channel], page}` | `400`; `401`; `403` |
+| `GET` | `/api/v1/channels/:id` | session only | `providers.read` at platform | — | `200 {data:channel}` | `400` malformed id; `401`; `403`; `404` |
+
+The five channels are seeded by migration `0018`. **No route creates, changes or deletes a channel** (ADR-013 F-2).
+
+### 32b. Providers
+
+```jsonc
+// provider — list item (exhaustive)
+{
+  "id": "uuid",
+  "channelId": "uuid",
+  "channelCode": "sms",
+  "name": "Primary SMS",       // 1–200 characters, no surrounding whitespace; unique per channel, case-insensitively
+  "adapterKey": "simulator",   // an adapter registered in code; Phase 2 registers only `simulator`
+  "status": "disabled",        // active | disabled | draining — administrative
+  "healthState": "healthy",    // healthy | degraded | critical | offline — read-only in 2.1 (2.3)
+  "circuitState": "closed",    // closed | open | half_open — read-only in 2.1 (2.3)
+  "createdAt": "ISO-8601",
+  "updatedAt": "ISO-8601"
+}
+// provider detail (GET /providers/:id and every mutation's answer) = the list item plus:
+{ "capabilities": [ { "key": "max_message_size", "value": 1600 } ] }  // sorted by key; value is any JSON
+```
+
+| Method | Path | Auth | Permission | Request | Success | Errors | Idempotency | Audit |
+|---|---|---|---|---|---|---|---|---|
+| `GET` | `/api/v1/providers` | session only | `providers.read` | `channelId?`, `status?`, `limit`, `cursor`, `sort` (`name` default, `createdAt`, `-createdAt`, `-name`) | `200 {data:[provider], page}` | `400`; `401`; `403` | safe | — |
+| `GET` | `/api/v1/providers/:id` | session only | `providers.read` | — | `200 {data:providerDetail}` | `400`; `401`; `403`; `404` | safe | — |
+| `POST` | `/api/v1/providers` | session only | `providers.manage` | `{channelId, name, adapterKey}` — nothing else; `status`, `healthState`, `circuitState`, credential, priority, weight and tenant fields are `400` | `201 {data:providerDetail}`, created **`disabled`** with no capabilities | `400`; `403`; `404` channel; `409 RESOURCE_CONFLICT` name taken on the channel; `422 PROVIDER_ADAPTER_UNKNOWN` (`details.adapterKeys`) | **naturally idempotent, no `Idempotency-Key`**: a retry is `409` and creates nothing | `provider.created` |
+| `PATCH` | `/api/v1/providers/:id` | session only | `providers.manage` | `{name?}` only | `200 {data:providerDetail}`; an absent or unchanged name changes and records nothing | `400`; `403`; `404`; `409 RESOURCE_CONFLICT` | naturally idempotent | `provider.updated` (before/after) |
+| `PUT` | `/api/v1/providers/:id/capabilities` | session only | `providers.manage` | `{capabilities: [{key, value}]}` — the **complete** set, at most 50; `key` `^[a-z][a-z0-9_]{1,63}$`, unique, and must not contain `secret`, `password`, `passwd`, `token`, `credential`, `apikey`, `api_key` or `private_key`; `value` any JSON ≤ 4096 bytes serialized | `200 {data:providerDetail}`; re-sending the same set changes and records nothing | `400` (`details.issues[].rule`: `DUPLICATE_KEY`, `SECRET_KEY_FORBIDDEN`, `VALUE_TOO_LARGE`); `403`; `404` | naturally idempotent (complete replacement) | `provider.capabilities_replaced` (before/after) |
+| `POST` | `/api/v1/providers/:id/enable` | session only | `providers.manage` | — | `200 {data:providerDetail}` → `active` | `403`; `404`; `409 PROVIDER_LIFECYCLE_CONFLICT` (`details.status`) unless `disabled` or `draining` | not keyed | `provider.enabled` |
+| `POST` | `/api/v1/providers/:id/disable` | session only | `providers.manage` | — | → `disabled` | `409 …` unless `active` or `draining` | not keyed | `provider.disabled` |
+| `POST` | `/api/v1/providers/:id/drain` | session only | `providers.manage` | — | → `draining` | `409 …` unless `active` | not keyed | `provider.drained` |
+
+**There is no `DELETE /providers/:id`** — a provider is disabled, never deleted. **No credential, health-check, test-send, routing, priority or weight operation exists in 2.1** (test-send is 2.2; health is 2.3). Every audit row is at `platform` scope and carries before/after values; none carries a credential or secret.
+
+**Lifecycle:** `disabled → active` (enable); `active → draining` (drain); `active | draining → disabled` (disable); `draining → active` (enable). Two concurrent transitions on one provider serialize: exactly one succeeds.
+
+## 33. Related
 
 `API.md` (target architecture), `RBAC.md` (permission model), `TENANCY.md` (isolation),
 `SECURITY.md`, `EVENTS.md`, `ROADMAP.md` (path to the frontend-ready gate).

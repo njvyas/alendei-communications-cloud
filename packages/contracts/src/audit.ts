@@ -50,6 +50,14 @@ export const AUDIT_ACTIONS = {
   USER_ROLE_GRANTED: 'user_role.granted',
   USER_ROLE_REVOKED: 'user_role.revoked',
 
+  // Provider catalogue (Phase 2.1, ADR-013 F-4). Recorded at `platform` scope.
+  PROVIDER_CREATED: 'provider.created',
+  PROVIDER_UPDATED: 'provider.updated',
+  PROVIDER_CAPABILITIES_REPLACED: 'provider.capabilities_replaced',
+  PROVIDER_ENABLED: 'provider.enabled',
+  PROVIDER_DISABLED: 'provider.disabled',
+  PROVIDER_DRAINED: 'provider.drained',
+
   AUTHORIZATION_DENIED: 'authorization.denied',
 } as const;
 
@@ -165,6 +173,15 @@ export const SECURITY_SENSITIVE_AUDIT_ACTIONS: readonly AuditAction[] = Object.f
   AUDIT_ACTIONS.WORKSPACE_RESTORED,
   AUDIT_ACTIONS.TEAM_ARCHIVED,
   AUDIT_ACTIONS.TEAM_RESTORED,
+  // Provider catalogue (Phase 2.1, ADR-013 F-4): once routing exists, each of
+  // these can redirect real traffic, so each is recorded in its own mutation's
+  // transaction or the mutation does not happen.
+  AUDIT_ACTIONS.PROVIDER_CREATED,
+  AUDIT_ACTIONS.PROVIDER_UPDATED,
+  AUDIT_ACTIONS.PROVIDER_CAPABILITIES_REPLACED,
+  AUDIT_ACTIONS.PROVIDER_ENABLED,
+  AUDIT_ACTIONS.PROVIDER_DISABLED,
+  AUDIT_ACTIONS.PROVIDER_DRAINED,
 ]);
 
 export function isSecuritySensitiveAction(action: string): boolean {
