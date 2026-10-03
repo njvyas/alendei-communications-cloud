@@ -581,14 +581,23 @@ export class ProviderRegistryService {
 
     await this.db.withRequestTenant(async (tx) => {
       await this.authorize(tx, principal, PERMISSIONS.PROVIDERS_TEST_SEND);
-      await this.record(tx, principal, AUDIT_ACTIONS.PROVIDER_TEST_SENT, view.providerId, null, {
-        behavior,
-        outcome: view.outcome,
-        category: view.failure?.category ?? null,
-        retryable: view.failure?.retryable ?? null,
-        latencyMs: view.latencyMs,
-        submissionId: view.submissionId,
-      });
+      await this.assertAuthorityCurrent(tx, PERMISSIONS.PROVIDERS_TEST_SEND, view.submissionId);
+      await this.record(
+        tx,
+        principal,
+        AUDIT_ACTIONS.PROVIDER_TEST_SENT,
+        view.providerId,
+        null,
+        {
+          behavior,
+          outcome: view.outcome,
+          category: view.failure?.category ?? null,
+          retryable: view.failure?.retryable ?? null,
+          latencyMs: view.latencyMs,
+          submissionId: view.submissionId,
+        },
+        testSendAuditOutcome(view.outcome),
+      );
     });
 
     // Diagnostics only: no recipient, content or credential is logged.
@@ -605,6 +614,42 @@ export class ProviderRegistryService {
       correlationId,
     });
     return view;
+  }
+
+  /**
+   * The actor's authority **as the database holds it now**, not as it stood
+   * when the request was authenticated.
+   *
+   * `AuthorizationService.assert` evaluates the grants `AuthGuard` resolved at
+   * the start of the request. For test-send that snapshot is up to a submission
+   * timeout old by the second transaction, so the audit write is gated on a
+   * fresh read as well: `app_has_platform_permission`, the same predicate the
+   * `provider.test_sent` RLS policy applies (migration `0020`). If the grant was
+   * revoked or the user disabled while the submission ran, the request ends
+   * with a `403` and no audit row — rather than an RLS refusal surfacing as a
+   * `500`. The submission itself was authorized when it started; its result is
+   * neither returned nor recorded.
+   */
+  private async assertAuthorityCurrent(
+    tx: Transaction,
+    permission: PermissionKey,
+    submissionId: string,
+  ): Promise<void> {
+    const { rows } = await tx.execute<{ allowed: boolean }>(
+      sql`select app_has_platform_permission(${permission}) as allowed`,
+    );
+    if (rows[0]?.allowed === true) return;
+    throw new AppException({
+      status: HttpStatus.FORBIDDEN,
+      code: ERROR_CODES.AUTHZ_SCOPE_DENIED,
+      message: 'You do not have permission to perform this action',
+      logContext: {
+        permission,
+        targetScopeType: 'platform',
+        reason: 'authority withdrawn while the test-send ran; result not recorded',
+        submissionId,
+      },
+    });
   }
 
   // --- internals -----------------------------------------------------------------------
@@ -677,6 +722,7 @@ export class ProviderRegistryService {
     providerId: string,
     before: Record<string, unknown> | null,
     after: Record<string, unknown>,
+    outcome: 'success' | 'failure' = 'success',
   ): Promise<void> {
     return this.audit.record(
       {
@@ -686,7 +732,7 @@ export class ProviderRegistryService {
         action,
         resourceType: 'Provider',
         resourceId: providerId,
-        outcome: 'success',
+        outcome,
         before,
         after,
         metadata: {},
@@ -763,6 +809,20 @@ function canonicalJson(value: unknown): string {
         )
       : v,
   );
+}
+
+/**
+ * A test-send's audit outcome (ADR-013 2.2 notes (f), revised at the Gate D.2
+ * review), in the audit trail's established sense: `success` — the operation
+ * was authorized and achieved its purpose; `failure` — it was authorized and
+ * attempted but did not; `denied` — authorization refused it before it ran
+ * (written by `AuthorizationService`, never here). A test-send's purpose is a
+ * submission the provider accepts, so `accepted` is `success` (`SUCCESS`,
+ * `SLOW_RESPONSE`) and every `rejected` answer is `failure` (`500`, `429`,
+ * `TIMEOUT`, `INVALID_CREDENTIALS`, `INVALID_REQUEST`, and any adapter error).
+ */
+export function testSendAuditOutcome(outcome: 'accepted' | 'rejected'): 'success' | 'failure' {
+  return outcome === 'accepted' ? 'success' : 'failure';
 }
 
 function lifecycleConflict(status: ProviderStatus): AppException {

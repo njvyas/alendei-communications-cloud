@@ -25,6 +25,7 @@ import { uuidv7 } from 'uuidv7';
 
 import { CredentialService } from '../src/iam/credential.service';
 import { MetricsService } from '../src/observability/metrics.service';
+import { ProviderSubmissionExecutor } from '../src/provider-adapters/submission-executor';
 import {
   PASSWORD,
   PREFIX,
@@ -393,7 +394,8 @@ describe('Phase 2.2 provider adapter test-send', () => {
             org_id: null,
             actor_user_id: people.platform!.userId,
             resource_type: 'Provider',
-            outcome: 'success',
+            // success: authorized and accepted; failure: authorized, attempted, rejected.
+            outcome: e.outcome === 'accepted' ? 'success' : 'failure',
             before: null,
           });
           expect(row.after).toMatchObject({
@@ -613,6 +615,15 @@ describe('Phase 2.2 provider adapter test-send', () => {
       ]) {
         expect(refused).toBe('42501');
       }
+      // The outcome is success or failure — never denied, which is AuthorizationService's alone.
+      await asApp(people.tester!.userId, async (c) => {
+        await c.query('SAVEPOINT a');
+        await c.query(testSentRow(people.tester!.userId).replace("'success'", "'failure'"));
+        await c.query('ROLLBACK TO SAVEPOINT a');
+        await expect(
+          c.query(testSentRow(people.tester!.userId).replace("'success'", "'denied'")),
+        ).rejects.toMatchObject({ code: '42501' });
+      });
       // A legitimate tester cannot file one in another user's name.
       await asApp(people.tester!.userId, async (c) => {
         await expect(c.query(testSentRow(people.platform!.userId))).rejects.toMatchObject({
@@ -636,6 +647,9 @@ describe('Phase 2.2 provider adapter test-send', () => {
       expect(policy.with_check).toContain(
         "app_has_platform_permission('providers.test_send'::text)",
       );
+      expect(policy.with_check).toContain(
+        "ARRAY['success'::audit_outcome, 'failure'::audit_outcome]",
+      );
       expect(policy.with_check).not.toMatch(/alendei_|is_platform_admin/);
       const { rows: definers } = await h.admin.execute<{ proname: string }>(
         sql`select proname from pg_proc where prosecdef and proname like 'app_has_platform%' order by proname`,
@@ -643,6 +657,120 @@ describe('Phase 2.2 provider adapter test-send', () => {
       expect(definers.map((d) => d.proname)).toEqual([
         'app_has_platform_permission',
         'app_has_platform_scope',
+      ]);
+    });
+  });
+
+  // ===========================================================================
+  describe('F. the boundary between the two transactions (TOCTOU)', () => {
+    /**
+     * Runs `between` while the submission is in flight — after the first
+     * transaction has authorized and released, before the second one writes —
+     * by wrapping the real executor for one call.
+     */
+    function duringSubmission(between: () => Promise<void>) {
+      const executor = h.app.get(ProviderSubmissionExecutor);
+      const original = executor.execute.bind(executor);
+      return jest.spyOn(executor, 'execute').mockImplementationOnce(async (...args) => {
+        await between();
+        return original(...args);
+      });
+    }
+    const rowsFor = async (submissionId: string) =>
+      (
+        await h.admin.execute<{ actor_user_id: string }>(
+          sql`select actor_user_id from audit_logs where action = ${AUDIT_ACTIONS.PROVIDER_TEST_SENT} and after->>'submissionId' = ${submissionId}`,
+        )
+      ).rows;
+    const testerGrant = async () =>
+      (
+        await h.admin.execute<{ role_id: string }>(
+          sql`select role_id from user_roles where user_id = ${people.tester!.userId} and scope_type = 'platform'`,
+        )
+      ).rows[0]!.role_id;
+
+    afterEach(() => jest.restoreAllMocks());
+
+    it('providers.test_send revoked while the submission runs: 403, and no provider.test_sent row is written', async () => {
+      const roleId = await testerGrant();
+      const before = await testSentRows(provider);
+      const spy = duringSubmission(async () => {
+        await h.admin.execute(
+          sql`DELETE FROM user_roles WHERE user_id = ${people.tester!.userId} AND role_id = ${roleId}`,
+        );
+      });
+      try {
+        const res = await testSend(tokens.tester!, provider, { behavior: 'SUCCESS' }).expect(403);
+        expect(res.body.error.code).toBe(ERROR_CODES.AUTHZ_SCOPE_DENIED);
+        expect(spy).toHaveBeenCalledTimes(1); // authorized when it started, so it ran
+        expect(await testSentRows(provider)).toHaveLength(before.length);
+      } finally {
+        await grant(people.tester!.userId, roleId, 'platform', null);
+      }
+    });
+
+    it('the user disabled while the submission runs: 403, and no provider.test_sent row is written', async () => {
+      const before = await testSentRows(provider);
+      duringSubmission(async () => {
+        await h.admin
+          .update(schema.users)
+          .set({ status: 'disabled' })
+          .where(eq(schema.users.id, people.tester!.userId));
+      });
+      try {
+        await testSend(tokens.tester!, provider, { behavior: 'SUCCESS' }).expect(403);
+        expect(await testSentRows(provider)).toHaveLength(before.length);
+      } finally {
+        await h.admin
+          .update(schema.users)
+          .set({ status: 'active' })
+          .where(eq(schema.users.id, people.tester!.userId));
+      }
+    });
+
+    it('the provider disabled while the submission runs: the test that ran is recorded truthfully, and the next one is refused', async () => {
+      const id = await plantProvider('active');
+      duringSubmission(async () => {
+        await h.admin
+          .update(schema.providers)
+          .set({ status: 'disabled' })
+          .where(eq(schema.providers.id, id));
+      });
+      const res = await testSend(tokens.platform!, id, { behavior: '500' }).expect(200);
+      const rows = await testSentRows(id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ outcome: 'failure', actor_user_id: people.platform!.userId });
+      expect((rows[0]!.after as { submissionId: string }).submissionId).toBe(
+        res.body.data.submissionId,
+      );
+      await testSend(tokens.platform!, id, { behavior: 'SUCCESS' }).expect(409);
+    });
+
+    it('a refused principal never reaches the executor', async () => {
+      const executor = h.app.get(ProviderSubmissionExecutor);
+      const spy = jest.spyOn(executor, 'execute');
+      for (const token of [
+        tokens.orgAdmin!,
+        tokens.reseller!,
+        tokens.support!,
+        tokens.manager!,
+        apiKey,
+      ]) {
+        await testSend(token, provider, { behavior: 'SUCCESS' }).expect(403);
+      }
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('each audit row is attributed to the user whose request ran the test, even when two run concurrently', async () => {
+      const [a, b] = await Promise.all([
+        testSend(tokens.platform!, provider, { behavior: 'SUCCESS' }).expect(200),
+        testSend(tokens.tester!, provider, { behavior: '429' }).expect(200),
+      ]);
+      expect(await rowsFor(a.body.data.submissionId)).toEqual([
+        { actor_user_id: people.platform!.userId },
+      ]);
+      expect(await rowsFor(b.body.data.submissionId)).toEqual([
+        { actor_user_id: people.tester!.userId },
       ]);
     });
   });
