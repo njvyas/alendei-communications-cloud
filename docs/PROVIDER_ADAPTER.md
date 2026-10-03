@@ -79,34 +79,155 @@ platform-owned credential (Alendei's own shared/default credential for the provi
 
 `provider_credentials.scope_type` is a **configuration** scope (`platform`, `reseller`, `organization` — it stops at organization because credentials are never workspace- or team-owned) and is a different enum from the five-value authorization scope on `user_roles` (`TENANCY.md` §1a.2). Only one credential per `(provider_id, scope_type, scope_id)` may be `is_active` at a time. Viewing/managing a credential requires a permission scoped to its own `scope_type` (an organization admin can manage only their own organization-scoped credentials, never a reseller- or platform-scoped one; a reseller admin can manage their reseller-scoped credentials but not another reseller's). **No credential's plaintext value is ever exposed to any frontend client at any scope** — only `credential_ref` metadata (a label, `rotated_at`, `scope_type`) is ever returned by the API; the raw secret is resolved server-side, at call time, directly from the secrets backend (`SECURITY.md` §3). Rotation and revocation follow `RUNBOOK.md` §"Provider credential rotation" regardless of which scope owns the credential.
 
-## 5. Provider health states
+## 5. Provider health (Phase 2.3 — canonical)
 
-| State | Meaning | Effect on routing |
+> **Status:** the model below was frozen before the 2.3 implementation was written (ADR-013 "2.3 design") and is implemented exactly as stated. Phase 2 uses only fixed platform defaults (ADR-013 F-6); no threshold is administrable.
+
+### 5.0 Three independent axes
+
+| Column(s) on `providers` | Values | Written by | Meaning |
+|---|---|---|---|
+| `status` | `active`, `disabled`, `draining` | `providers.manage` only (enable / disable / drain, 2.1) | Administrative lifecycle — an operator decision |
+| `health_state`, `health_override`, `health_changed_at` | `healthy`, `degraded`, `critical`, `offline` | derived from samples (§5c) or set by a manual override (§5d) | Observed health over a slow window |
+| `circuit_state`, `circuit_generation`, `circuit_changed_at`, `circuit_probe_token`, `circuit_probe_lease_until`, `circuit_probe_successes` | `closed`, `open`, `half_open` | the circuit breaker only (§6), from submission samples and the clock | Fast load-shedding over a short window |
+
+No axis writes another: a lifecycle transition never changes health or circuit state, and health and circuit never change `status`. `DRAINING` is not a health state (ADR-013 F-5): a draining provider is excluded from *new* routing decisions while in-flight attempts complete — applied by the router in a later phase.
+
+| Health state | Meaning | Effect on routing (later phase) |
 |---|---|---|
-| `HEALTHY` | Normal operation | Fully eligible |
-| `DEGRADED` | Elevated latency/error rate below critical threshold | Eligible but de-weighted by quality/latency-aware policies |
-| `CRITICAL` | Error/latency breach approaching automatic circuit trip | Eligible only as last resort / excluded depending on policy config |
-| `OFFLINE` | Health checks failing / manually marked down | Excluded from routing |
+| `healthy` | Normal operation, or too few observations to conclude otherwise | Fully eligible |
+| `degraded` | Elevated failure rate or latency below the critical threshold | Eligible but de-weighted by quality/latency-aware policies |
+| `critical` | Failure rate at or above the critical threshold | Eligible only as last resort / excluded depending on policy config |
+| `offline` | A run of consecutive failures, or manually marked down | Excluded from routing |
 
-Health state is derived from `provider_health` samples (automatic) or set directly by an admin action (manual), both recorded with `source` for audit clarity.
+**In Phase 2 health gates nothing**: no request is refused because of a health state. Health is recorded, audited and exported as metrics; routing eligibility (the conjunction of the three axes) is a later phase.
 
-**`DRAINING` is not a health state (ADR-013 F-5).** An earlier draft listed it here and also as a `providers.status` value. It is an administrative status only: `providers.status ∈ {active, disabled, draining}` (admin-set), `providers.health_state ∈ {healthy, degraded, critical, offline}` (observed or manually overridden), `providers.circuit_state ∈ {closed, open, half_open}` (computed). A draining provider is excluded from *new* routing decisions while in-flight attempts complete — that eligibility rule is applied by the router in a later phase.
+### 5a. Samples (`provider_health`, append-only)
 
-**Phase 2 sample sources (ADR-013 F-6).** Only explicit test-sends, explicit admin health checks against the simulator, and manual overrides produce samples. There is no scheduler, background prober or worker in Phase 2; thresholds are fixed platform defaults.
+One row per observation, written in the same transaction as the state it produced and its audit rows. Only three things produce a sample in Phase 2 (ADR-013 F-6) — there is no scheduler, prober or worker:
 
-## 6. Circuit breaker
+| `kind` | Produced by | `outcome` | `source` |
+|---|---|---|---|
+| `submission` | a test-send that reached the adapter (`POST /providers/:id/test-send`) | `accepted`, or the failure category in lower case (`timeout`, `provider_error`, `rate_limited`, `auth_error`, `invalid_request`, `invalid_recipient`, `unsupported_content`, `configuration_error`, `unknown`) | `automatic` |
+| `probe` | an explicit health check (`POST /providers/:id/health-check`) | `healthy`, `unhealthy`, `timeout` | `automatic` |
+| `override` | a manual override set or cleared (`POST /providers/:id/health`) | `manual` | `manual` |
 
-Distinct, faster-reacting signal than health state — designed to shed load quickly during a transient spike rather than wait for a slower SLO-window health recalculation.
+Each row also carries `classification` (§5b), `latency_ms` (null for `override`), `health_state` and `circuit_state` **after** the sample was applied, `circuit_generation` (the circuit episode the observation belongs to, §6d), `observed_at` (the injected clock) and `created_at` (database time). A test-send refused by the circuit (§6c) never reached the provider, so it is **not** a sample; it is audited and counted instead. A row can never be updated or deleted (append-only trigger; no `UPDATE`/`DELETE` grant).
 
-| State | Trigger | Behavior |
+### 5b. Failure classification (one table, used by health and circuit alike)
+
+| Outcome | Classification | Why |
 |---|---|---|
-| `CLOSED` | Default; error rate within threshold | Requests flow normally |
-| `OPEN` | Rolling error/timeout rate exceeds threshold within a short window | Requests short-circuit immediately to the Fallback Engine without calling the provider |
-| `HALF_OPEN` | After a cooldown period | A limited number of probe requests are allowed through; success closes the breaker, failure re-opens it |
+| `accepted` | **success** | The provider accepted the submission |
+| `timeout` | **failure** | No answer: availability |
+| `provider_error` | **failure** | The provider failed on its side (5xx, outage) |
+| `rate_limited` | **failure** | The provider is shedding load; calling it again immediately is the harm a breaker exists to stop |
+| `unknown` | **failure** | Unclassifiable — counted, so an unexplained failure mode fails safe |
+| `auth_error` | neutral | The provider answered; a credential rejection is deterministic configuration, not availability, and waiting cannot fix it |
+| `invalid_request`, `invalid_recipient`, `unsupported_content` | neutral | The request's fault, not the provider's |
+| `configuration_error` | neutral | Ours: the provider was not reached |
+| probe `healthy` | **success** | |
+| probe `unhealthy`, `timeout` | **failure** | |
+| `manual` | neutral | An override is a decision, not an observation |
 
-**Phase 2 (ADR-013 F-7):** transitions are computed from recorded samples and an injectable clock; `OPEN → HALF_OPEN` is evaluated lazily when the cooldown has elapsed (no timer); while `OPEN`, a test-send short-circuits without calling the adapter. Router integration is a later phase.
+A **neutral** sample is recorded but is neither a success nor a failure: it is excluded from every window, so a burst of bad requests can neither trip the circuit nor dilute a real provider failure rate. The classification is persisted on the sample, so history does not change meaning if the table ever does.
 
-Circuit state and health state both feed the Provider Router's eligibility filter (`ROUTING_ENGINE.md`, later phase), but are tracked and transitioned independently — a provider can be `HEALTHY` (good rolling average) while momentarily `OPEN` (a fresh burst of errors not yet reflected in the longer health window), and vice versa.
+### 5c. Automatic derivation — a pure function of the window
+
+The **health window** is the most recent 20 counted (success or failure) samples of kind `submission` or `probe` with `observed_at` in `(now − 300 s, now]`, newest first. With `n` samples, `f` failures, and `streak` the number of consecutive failures at the head, the derived state is the first rule that matches:
+
+| # | Condition | Derived state |
+|---|---|---|
+| 1 | `n < 5` | `healthy` (too few observations to conclude anything) |
+| 2 | `streak ≥ 5` | `offline` |
+| 3 | `f × 100 ≥ 50 × n` | `critical` |
+| 4 | `f × 100 ≥ 20 × n` | `degraded` |
+| 5 | at least one success, and the mean `latency_ms` of the successes `≥ 1000` | `degraded` |
+| 6 | otherwise | `healthy` |
+
+The effective state is `health_override` when one is set, otherwise the derived state. Health is therefore **not an edge-driven machine**: every change between two distinct states is permitted, and is made only by (a) recording a sample (automatic) or (b) setting or clearing an override (manual). It is re-evaluated **lazily** — only when one of those happens, never on a timer — so a stored state is the state as of its last evaluation (`health_changed_at` records when it last changed). Every change writes `provider.health_changed` (before, after, `source`, `cause`); an evaluation that changes nothing writes nothing.
+
+### 5d. Manual override
+
+`POST /providers/:id/health` (`providers.manage`) with `{ "override": "healthy" | "degraded" | "critical" | "offline" | null, "reason"?: string }`. A value pins `health_state` to it until cleared — automatic samples are still recorded but no longer move health. `null` clears the pin and the state is re-derived from the window at once. Setting the override already in force changes nothing and records nothing (naturally idempotent). A real change writes an `override` sample, `provider.health_overridden` (before/after override and state, the reason) and, if the effective state moved, `provider.health_changed`. An override never touches the circuit.
+
+### 5e. Health check (synthetic probe)
+
+`POST /providers/:id/health-check` (`providers.manage`) with `{ "behavior": "HEALTHY" | "UNHEALTHY" | "TIMEOUT" }` runs the adapter's `healthCheck()` under a 3000 ms timeout (the simulator answers deterministically per behaviour; no network, no credential). It is a diagnostic: permitted in **every** lifecycle status and **every** circuit state, it feeds health only — a probe never opens, half-opens or closes the circuit. The probe runs outside any transaction; a second transaction re-checks authority (`app_has_platform_permission('providers.manage')`, as test-send does) and writes the `probe` sample, `provider.health_checked` (`success` for `healthy`, `failure` for `unhealthy`/`timeout`) and any `provider.health_changed`.
+
+## 6. Circuit breaker (Phase 2.3 — canonical)
+
+A distinct, faster signal than health: it sheds load quickly during a burst rather than waiting for the slower health window. Circuit and health are tracked and transitioned independently — a provider can be `healthy` while `open`, and vice versa. **Only submission samples drive the circuit**; probes and overrides never do.
+
+### 6a. Parameters (fixed platform defaults, `PROVIDER_CIRCUIT_DEFAULTS`)
+
+| Parameter | Value |
+|---|---|
+| Window | counted `submission` samples of the **current generation** with `observed_at` in `(now − 60 s, now]`, most recent 20 |
+| Minimum samples | 5 |
+| Failure threshold | `failures × 100 ≥ 50 × samples` (meets-or-exceeds 50 %) |
+| Cooldown | 30 s from entering `open` |
+| Half-open probes in flight | 1 |
+| Successful probes to close | 2 (sequential) |
+| Probe lease | 10 s (the submission timeout plus margin) |
+
+All times come from an injected clock (`PROVIDER_CLOCK`); nothing reads the wall clock directly, so every boundary is testable to the millisecond.
+
+### 6b. Transition table — the only four edges
+
+| # | From → To | Event | Guard | Cause recorded |
+|---|---|---|---|---|
+| T1 | `closed → open` | a counted submission sample of the current generation is recorded | window has `≥ 5` samples and meets the failure threshold | `failure_threshold` |
+| T2 | `open → half_open` | a submission asks for admission | `now ≥ circuit_changed_at + 30 s` | `cooldown_elapsed` |
+| T3 | `half_open → open` | the current probe's sample is recorded | classified **failure** | `probe_failed` |
+| T4 | `half_open → closed` | the current probe's sample is recorded | classified **success** and it is the 2nd successful probe of this episode | `probes_succeeded` |
+
+Every edge increments `circuit_generation` by exactly 1, sets `circuit_changed_at = now`, clears the probe slot and resets `circuit_probe_successes` to 0, and writes `provider.circuit_changed` (before/after state and generation, cause, and the window figures for T1). No other change of `circuit_state` exists: `closed → half_open`, `open → closed` and every self-transition are impossible, and the database refuses them (§6e). There is no manual circuit control in Phase 2; an `open` circuit recovers only through cooldown and probes. T1 is evaluated after **every** counted sample — including a success that brings the window to its minimum size — because the rule is about the window, not the last call.
+
+### 6c. Admission (before the adapter is called)
+
+| Circuit state | Condition | Decision |
+|---|---|---|
+| `closed` | — | admitted as a normal submission (ticket: current generation) |
+| `open` | cooldown not elapsed | **refused** — `409 PROVIDER_CIRCUIT_OPEN`, `details.circuitState = "open"`, `details.retryAfterMs` |
+| `open` | cooldown elapsed | T2, then as `half_open` below |
+| `half_open` | probe slot free, or its lease expired | admitted as **the probe**: a fresh `circuit_probe_token`, `circuit_probe_lease_until = now + 10 s` (ticket: generation + token). Reclaiming an expired lease is logged and counted as an `abandoned` probe |
+| `half_open` | probe slot held, lease not expired | **refused** — `409 PROVIDER_CIRCUIT_OPEN`, `details.circuitState = "half_open"` |
+
+A refusal calls no adapter, writes no sample, and writes `provider.test_sent` with outcome `failure` and `after.outcome = "short_circuited"` (ADR-013 F-7: "recorded as such").
+
+### 6d. Recording (after the adapter answered)
+
+The sample is always inserted, tagged with the ticket's generation. Then, against the locked row:
+
+- **Stale ticket** — its generation is not the current one, or it is a probe whose token is no longer the slot's: the sample is recorded (it still informs health) and **changes nothing in the circuit**. This is what stops a slow answer from an earlier episode, or an abandoned probe, from closing a re-opened circuit, re-opening a closed one, releasing someone else's probe slot or polluting the new episode's window.
+- **`closed`**, current ticket: evaluate T1.
+- **`half_open`**, the current probe: release the slot; **failure** → T3; **success** → `circuit_probe_successes + 1`, and T4 when it reaches 2; **neutral** → nothing more (the slot is free for the next probe).
+
+### 6e. Concurrency and the database backstop
+
+- **One lock per provider.** Every write of health or circuit state — admission, recording, probe, override — happens in a transaction that first takes `SELECT … FOR UPDATE` on the provider row, and reads the state and the windows only after the lock is held. Lifecycle transitions take the same lock, so all writers of a provider serialize; no transaction locks a second provider row, so there is no lock-order deadlock.
+- **No transaction across the adapter call.** Test-send and health-check run the adapter between two short transactions; the ticket (generation, probe token) is how the second transaction recognizes that the world moved on (§6d).
+- **Single probe slot.** In `half_open` exactly one submission holds the slot; concurrent requests see it held under the lock and are refused. A slot whose holder never records (process death, authority withdrawn before the second transaction) is reclaimed when its lease expires.
+- **Database guard** (`fn_providers_state_guard`, migration `0022`, `SECURITY INVOKER`): for every principal except the owner/maintenance session, a change of `circuit_state` must be one of T1–T4 with `circuit_generation` exactly +1, and the generation never changes otherwise; administrative columns (`channel_id`, `name`, `adapter_key`, `status`) and `health_override` change only for a `providers.manage` holder. Column-level checks keep the derived columns consistent (`health_state = health_override` when set; a probe token only in `half_open`; successes only in `half_open`).
+
+### 6f. Lifecycle versus circuit — precedence
+
+For a submission the order is fixed, and each step is decided only if every earlier step passed:
+
+1. authenticated principal (`401`)
+2. `providers.test_send` at platform scope (`403`)
+3. the provider exists (`404`)
+4. **lifecycle**: `status = active` (`409 PROVIDER_LIFECYCLE_CONFLICT`)
+5. the adapter is registered (`422 PROVIDER_ADAPTER_UNKNOWN`)
+6. **circuit admission** (`409 PROVIDER_CIRCUIT_OPEN`, §6c)
+7. the adapter call
+
+Lifecycle therefore takes precedence over the circuit: a `disabled` or `draining` provider is refused on its status and **never consults the circuit** — it cannot trigger T2, claim a probe slot or be counted as a circuit refusal. Health is not consulted (§5.0). A provider disabled while a submission is in flight still has that submission's answer recorded truthfully, including its circuit effect. Re-enabling a provider leaves its circuit as it was: an `open` circuit stays open until cooldown and probes close it.
+
+### 6g. Observability
+
+Metrics (bounded labels only; `provider` is the catalogue id): `acc_provider_health_checks_total{channel, outcome}` (`healthy`/`unhealthy`/`timeout`), `acc_provider_health_state{provider, status}` and `acc_provider_circuit_state{provider, status}` (1 for the current state, 0 for the others, as last written by this instance), `acc_provider_health_transitions_total{provider, from_state, to_state}`, `acc_provider_circuit_transitions_total{provider, from_state, to_state}` (circuit-open events are `to_state="open"`), `acc_provider_circuit_rejections_total{provider, status}` and `acc_provider_circuit_probes_total{provider, outcome}` (`success`, `failure`, `neutral`, `stale`, `abandoned`). One structured log line per health check, circuit transition (`warn` on entering `open`), circuit refusal and probe reclaim — never a recipient, content or credential. Grafana: `infra/observability/grafana-dashboards/providers.json`, provisioned by Compose.
 
 ## 7. Provider simulator (development/test only)
 
