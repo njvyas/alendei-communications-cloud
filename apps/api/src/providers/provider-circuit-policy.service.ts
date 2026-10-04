@@ -13,6 +13,7 @@ import { RequestContext } from '../common/context/request-context';
 import { AppException } from '../common/errors/app.exception';
 import { TenantDatabase } from '../database/tenant-database.service';
 import { ProviderAccess } from './provider-access.service';
+import { ProviderConfigurationCache } from './provider-configuration.cache';
 import {
   circuitPolicyOf,
   circuitPolicyView,
@@ -43,6 +44,7 @@ export class ProviderCircuitPolicyService {
   constructor(
     private readonly db: TenantDatabase,
     private readonly access: ProviderAccess,
+    private readonly configuration: ProviderConfigurationCache,
   ) {}
 
   async get(principal: AuthPrincipal): Promise<CircuitPolicyView> {
@@ -105,6 +107,7 @@ export class ProviderCircuitPolicyService {
       return { view: circuitPolicyView(row!), changed: true as const };
     });
     if (view.changed) {
+      this.configuration.invalidateLocal('policy');
       this.logger.warn({
         msg: 'provider circuit policy changed',
         version: view.view.version,

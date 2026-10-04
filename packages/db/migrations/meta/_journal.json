@@ -169,6 +169,13 @@
       "when": 1791056203321,
       "tag": "0023_phase2_3_circuit_policy",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1791098815313,
+      "tag": "0024_phase2_4_configuration_revision",
+      "breakpoints": true
     }
   ]
 }

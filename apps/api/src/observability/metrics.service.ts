@@ -95,6 +95,14 @@ export class MetricsService implements OnModuleInit {
   readonly providerCircuitRejections: Counter<'provider' | 'status'>;
   /** Half-open probe results, and probe slots reclaimed after their lease (Phase 2.3). */
   readonly providerCircuitProbes: Counter<'provider' | 'outcome'>;
+  /** Phase 2.4 hot reload (`PROVIDER_ADAPTER.md` §3a.6). */
+  readonly providerConfigLocalInvalidations: Counter<'operation'>;
+  readonly providerConfigNotifications: Counter<'outcome'>;
+  readonly providerConfigReloads: Counter<'operation' | 'outcome'>;
+  readonly providerConfigRevision: Gauge<never>;
+  readonly providerConfigConvergence: Histogram<never>;
+  readonly providerConfigListenerConnected: Gauge<never>;
+  readonly providerConfigListenerEvents: Counter<'outcome'>;
 
   constructor(private readonly config: AppConfigService) {
     this.registry.setDefaultLabels({
@@ -199,6 +207,45 @@ export class MetricsService implements OnModuleInit {
       name: 'acc_provider_circuit_probes_total',
       help: 'Half-open probe results by provider: success, failure, neutral, stale (answered after the episode ended or the slot was reclaimed), or abandoned (slot reclaimed after its lease).',
       labelNames: ['provider', 'outcome'],
+    });
+
+    // Phase 2.4 hot reload (`PROVIDER_ADAPTER.md` §3a.6). The configuration
+    // snapshot is advisory; these count its convergence, never a decision.
+    this.providerConfigLocalInvalidations = this.counter({
+      name: 'acc_provider_config_local_invalidations_total',
+      help: 'Provider configuration mutations committed through this instance, each followed by a local invalidation of its advisory snapshot (the database announces the change to every instance).',
+      labelNames: ['operation'],
+    });
+    this.providerConfigNotifications = this.counter({
+      name: 'acc_provider_config_notifications_total',
+      help: 'Configuration NOTIFY messages received by this instance: applied (marked the snapshot dirty), duplicate (not newer than the installed revision), malformed.',
+      labelNames: ['outcome'],
+    });
+    this.providerConfigReloads = this.counter({
+      name: 'acc_provider_config_reloads_total',
+      help: 'Advisory configuration snapshot reloads, by cause (startup, notification, local, listener, reconcile, ttl) and outcome (success, failure, discarded = older than the installed snapshot).',
+      labelNames: ['operation', 'outcome'],
+    });
+    this.providerConfigRevision = this.gauge({
+      name: 'acc_provider_config_revision',
+      help: 'The configuration revision of the advisory snapshot installed in this instance.',
+      labelNames: [],
+    });
+    this.providerConfigConvergence = this.histogram({
+      name: 'acc_provider_config_convergence_seconds',
+      help: 'Time from the commit of a configuration revision to its installation in this instance.',
+      labelNames: [],
+      buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120],
+    });
+    this.providerConfigListenerConnected = this.gauge({
+      name: 'acc_provider_config_listener_connected',
+      help: '1 while this instance holds its LISTEN connection for configuration notifications, 0 otherwise.',
+      labelNames: [],
+    });
+    this.providerConfigListenerEvents = this.counter({
+      name: 'acc_provider_config_listener_events_total',
+      help: 'Configuration LISTEN connection events: connected, lost.',
+      labelNames: ['outcome'],
     });
   }
 

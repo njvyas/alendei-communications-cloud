@@ -1886,6 +1886,9 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
       expect(triggers.map((t) => t.tgname).sort()).toEqual([
         'trg_provider_health_append_only',
         'trg_provider_health_no_truncate',
+        // Phase 2.4 (migration 0024): the configuration revision's change triggers.
+        'trg_providers_configuration_inserted_deleted',
+        'trg_providers_configuration_updated',
         'trg_providers_state_guard',
         'trg_providers_updated_at',
       ]);

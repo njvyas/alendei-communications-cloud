@@ -34,6 +34,7 @@ import {
 import { SimulatorAdapter } from '../provider-adapters/simulator.adapter';
 import { ProviderSubmissionExecutor } from '../provider-adapters/submission-executor';
 import { ProviderAccess } from './provider-access.service';
+import { ProviderConfigurationCache } from './provider-configuration.cache';
 import { ProviderStateStore, type Admission } from './provider-state.store';
 import {
   channelCodeOf,
@@ -127,7 +128,20 @@ export class ProviderRegistryService {
     private readonly adapters: ProviderAdapterRegistry,
     private readonly executor: ProviderSubmissionExecutor,
     private readonly state: ProviderStateStore,
+    private readonly configuration: ProviderConfigurationCache,
   ) {}
+
+  /**
+   * After a configuration mutation commits: this instance's advisory snapshot
+   * is marked dirty at once (read-your-writes); every other instance learns
+   * from the database's NOTIFY or, failing that, reconciliation (§3a). Never
+   * part of the decision itself.
+   */
+  private async committed<T>(operation: string, work: Promise<T>): Promise<T> {
+    const result = await work;
+    this.configuration.invalidateLocal(operation);
+    return result;
+  }
 
   private readonly channelListSpec: ListQuerySpec = {
     sortable: {
@@ -244,54 +258,57 @@ export class ProviderRegistryService {
    * the loser waits for the winner, inserts nothing, and reads the winner's row.
    */
   async create(principal: AuthPrincipal, input: CreateProviderDto): Promise<ProviderDetailView> {
-    return this.db.withRequestTenant(async (tx) => {
-      await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
-      if (!(PROVIDER_ADAPTER_KEYS as readonly string[]).includes(input.adapterKey)) {
-        throw new AppException({
-          status: HttpStatus.UNPROCESSABLE_ENTITY,
-          code: ERROR_CODES.PROVIDER_ADAPTER_UNKNOWN,
-          message: 'adapterKey does not name a registered adapter',
-          // The registered keys are part of the published contract.
-          details: { adapterKeys: [...PROVIDER_ADAPTER_KEYS] },
-        });
-      }
-      const [channel] = await tx
-        .select()
-        .from(schema.channels)
-        .where(eq(schema.channels.id, input.channelId));
-      if (!channel) throw notFound('Channel', input.channelId);
+    return this.committed(
+      'create',
+      this.db.withRequestTenant(async (tx) => {
+        await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
+        if (!(PROVIDER_ADAPTER_KEYS as readonly string[]).includes(input.adapterKey)) {
+          throw new AppException({
+            status: HttpStatus.UNPROCESSABLE_ENTITY,
+            code: ERROR_CODES.PROVIDER_ADAPTER_UNKNOWN,
+            message: 'adapterKey does not name a registered adapter',
+            // The registered keys are part of the published contract.
+            details: { adapterKeys: [...PROVIDER_ADAPTER_KEYS] },
+          });
+        }
+        const [channel] = await tx
+          .select()
+          .from(schema.channels)
+          .where(eq(schema.channels.id, input.channelId));
+        if (!channel) throw notFound('Channel', input.channelId);
 
-      const [row] = await tx
-        .insert(schema.providers)
-        .values({ channelId: channel.id, name: input.name, adapterKey: input.adapterKey })
-        .onConflictDoNothing()
-        .returning();
-      if (!row) {
-        const [existing] = await tx
-          .select({ id: schema.providers.id })
-          .from(schema.providers)
-          .where(
-            and(
-              eq(schema.providers.channelId, channel.id),
-              sql`lower(${schema.providers.name}) = lower(${input.name})`,
-            ),
-          );
-        throw new AppException({
-          status: HttpStatus.CONFLICT,
-          code: ERROR_CODES.RESOURCE_CONFLICT,
-          message: 'A provider with this name already exists on the channel',
-          // Only a principal already authorized to administer this global
-          // catalogue (`providers.manage` at platform) reaches this line, and the
-          // conflict itself already reveals that the name is taken.
-          ...(existing ? { details: { providerId: existing.id } } : {}),
+        const [row] = await tx
+          .insert(schema.providers)
+          .values({ channelId: channel.id, name: input.name, adapterKey: input.adapterKey })
+          .onConflictDoNothing()
+          .returning();
+        if (!row) {
+          const [existing] = await tx
+            .select({ id: schema.providers.id })
+            .from(schema.providers)
+            .where(
+              and(
+                eq(schema.providers.channelId, channel.id),
+                sql`lower(${schema.providers.name}) = lower(${input.name})`,
+              ),
+            );
+          throw new AppException({
+            status: HttpStatus.CONFLICT,
+            code: ERROR_CODES.RESOURCE_CONFLICT,
+            message: 'A provider with this name already exists on the channel',
+            // Only a principal already authorized to administer this global
+            // catalogue (`providers.manage` at platform) reaches this line, and the
+            // conflict itself already reveals that the name is taken.
+            ...(existing ? { details: { providerId: existing.id } } : {}),
+          });
+        }
+        const view = providerView(row, channel.code, await loadCircuitPolicy(tx));
+        await this.access.record(tx, principal, AUDIT_ACTIONS.PROVIDER_CREATED, view.id, null, {
+          ...view,
         });
-      }
-      const view = providerView(row, channel.code, await loadCircuitPolicy(tx));
-      await this.access.record(tx, principal, AUDIT_ACTIONS.PROVIDER_CREATED, view.id, null, {
-        ...view,
-      });
-      return { ...view, capabilities: [] };
-    });
+        return { ...view, capabilities: [] };
+      }),
+    );
   }
 
   /** Renames a provider. An unchanged or absent name changes nothing and records nothing. */
@@ -300,28 +317,32 @@ export class ProviderRegistryService {
     id: string,
     input: UpdateProviderDto,
   ): Promise<ProviderDetailView> {
-    return this.db.withRequestTenant(async (tx) => {
-      await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
-      const before = await loadProvider(tx, id, { forUpdate: true });
-      if (input.name === undefined || input.name === before.name) return providerDetail(tx, before);
+    return this.committed(
+      'update',
+      this.db.withRequestTenant(async (tx) => {
+        await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
+        const before = await loadProvider(tx, id, { forUpdate: true });
+        if (input.name === undefined || input.name === before.name)
+          return providerDetail(tx, before);
 
-      const row = await this.writeUnique(() =>
-        tx
-          .update(schema.providers)
-          .set({ name: input.name })
-          .where(eq(schema.providers.id, id))
-          .returning(),
-      );
-      await this.access.record(
-        tx,
-        principal,
-        AUDIT_ACTIONS.PROVIDER_UPDATED,
-        id,
-        { name: before.name },
-        { name: row.name },
-      );
-      return providerDetail(tx, row);
-    });
+        const row = await this.writeUnique(() =>
+          tx
+            .update(schema.providers)
+            .set({ name: input.name })
+            .where(eq(schema.providers.id, id))
+            .returning(),
+        );
+        await this.access.record(
+          tx,
+          principal,
+          AUDIT_ACTIONS.PROVIDER_UPDATED,
+          id,
+          { name: before.name },
+          { name: row.name },
+        );
+        return providerDetail(tx, row);
+      }),
+    );
   }
 
   /**
@@ -335,30 +356,33 @@ export class ProviderRegistryService {
     input: ReplaceProviderCapabilitiesDto,
   ): Promise<ProviderDetailView> {
     const next = normalizeCapabilities(input.capabilities);
-    return this.db.withRequestTenant(async (tx) => {
-      await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
-      const provider = await loadProvider(tx, id, { forUpdate: true });
-      const before = await readCapabilities(tx, id);
-      if (sameCapabilities(before, next)) return providerDetail(tx, provider);
+    return this.committed(
+      'capabilities',
+      this.db.withRequestTenant(async (tx) => {
+        await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
+        const provider = await loadProvider(tx, id, { forUpdate: true });
+        const before = await readCapabilities(tx, id);
+        if (sameCapabilities(before, next)) return providerDetail(tx, provider);
 
-      await tx
-        .delete(schema.providerCapabilities)
-        .where(eq(schema.providerCapabilities.providerId, id));
-      if (next.length > 0) {
         await tx
-          .insert(schema.providerCapabilities)
-          .values(next.map((c) => ({ providerId: id, capabilityKey: c.key, value: c.value })));
-      }
-      await this.access.record(
-        tx,
-        principal,
-        AUDIT_ACTIONS.PROVIDER_CAPABILITIES_REPLACED,
-        id,
-        { capabilities: before },
-        { capabilities: next },
-      );
-      return providerDetail(tx, provider);
-    });
+          .delete(schema.providerCapabilities)
+          .where(eq(schema.providerCapabilities.providerId, id));
+        if (next.length > 0) {
+          await tx
+            .insert(schema.providerCapabilities)
+            .values(next.map((c) => ({ providerId: id, capabilityKey: c.key, value: c.value })));
+        }
+        await this.access.record(
+          tx,
+          principal,
+          AUDIT_ACTIONS.PROVIDER_CAPABILITIES_REPLACED,
+          id,
+          { capabilities: before },
+          { capabilities: next },
+        );
+        return providerDetail(tx, provider);
+      }),
+    );
   }
 
   /**
@@ -374,27 +398,30 @@ export class ProviderRegistryService {
     transition: ProviderTransition,
   ): Promise<ProviderDetailView> {
     const rule = PROVIDER_TRANSITIONS[transition];
-    return this.db.withRequestTenant(async (tx) => {
-      await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
-      const before = await loadProvider(tx, id, { forUpdate: true });
-      if (!(rule.from as readonly ProviderStatus[]).includes(before.status)) {
-        throw lifecycleConflict(before.status);
-      }
-      const [row] = await tx
-        .update(schema.providers)
-        .set({ status: rule.to })
-        .where(eq(schema.providers.id, id))
-        .returning();
-      await this.access.record(
-        tx,
-        principal,
-        TRANSITION_ACTIONS[transition],
-        id,
-        { status: before.status },
-        { status: row!.status },
-      );
-      return providerDetail(tx, row!);
-    });
+    return this.committed(
+      transition,
+      this.db.withRequestTenant(async (tx) => {
+        await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
+        const before = await loadProvider(tx, id, { forUpdate: true });
+        if (!(rule.from as readonly ProviderStatus[]).includes(before.status)) {
+          throw lifecycleConflict(before.status);
+        }
+        const [row] = await tx
+          .update(schema.providers)
+          .set({ status: rule.to })
+          .where(eq(schema.providers.id, id))
+          .returning();
+        await this.access.record(
+          tx,
+          principal,
+          TRANSITION_ACTIONS[transition],
+          id,
+          { status: before.status },
+          { status: row!.status },
+        );
+        return providerDetail(tx, row!);
+      }),
+    );
   }
 
   // --- test-send (Phase 2.2; circuit breaker, Phase 2.3) ---------------------------------

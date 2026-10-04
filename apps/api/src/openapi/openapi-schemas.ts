@@ -510,3 +510,27 @@ export class CircuitPolicySchema {
   @ApiProperty({ type: 'integer', minimum: 1 }) version!: number;
   @ApiProperty(timestamp) updatedAt!: string;
 }
+
+// --- hot reload: advisory routing candidates (Phase 2.4) ------------------------------
+
+@ApiSchema({ name: 'RoutingCandidate' })
+export class RoutingCandidateSchema {
+  @ApiProperty(uuid) providerId!: string;
+  @ApiProperty() name!: string;
+  @ApiProperty() adapterKey!: string;
+}
+
+@ApiSchema({ name: 'RoutingCandidates' })
+export class RoutingCandidatesSchema {
+  @ApiProperty(uuid) channelId!: string;
+  @ApiProperty({ enum: CHANNEL_CODES }) channelCode!: string;
+  @ApiProperty({
+    enum: [true],
+    description:
+      'Always true: advisory, from the configuration snapshot; circuit admission decides',
+  })
+  advisory!: true;
+  @ApiProperty({ type: 'integer', minimum: 1 }) configurationRevision!: number;
+  @ApiProperty({ type: 'integer', minimum: 1 }) circuitPolicyVersion!: number;
+  @ApiProperty({ type: [RoutingCandidateSchema] }) providers!: RoutingCandidateSchema[];
+}

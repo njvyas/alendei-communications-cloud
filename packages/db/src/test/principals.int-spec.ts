@@ -46,6 +46,8 @@ const TABLES = [
   'provider_capabilities',
   // Gate D.3 remediation (migration 0023): the platform circuit policy, one row.
   'provider_circuit_policy',
+  // Phase 2.4 (migration 0024): the configuration revision, one row.
+  'provider_configuration_revision',
   // Phase 2.3 (migration 0022): append-only health samples, same global posture.
   'provider_health',
   'providers',
@@ -74,6 +76,8 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
     provider_capabilities: 'DELETE,INSERT,SELECT,UPDATE',
     // Gate D.3 remediation: seeded by migration, read and replaced, never added or removed.
     provider_circuit_policy: 'SELECT,UPDATE',
+    // Phase 2.4: bumped by triggers in the writer's transaction; never added or removed.
+    provider_configuration_revision: 'SELECT,UPDATE',
     // Phase 2.3: samples are appended, never changed or removed.
     provider_health: 'INSERT,SELECT',
     providers: 'INSERT,SELECT,UPDATE',

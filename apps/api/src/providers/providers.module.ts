@@ -3,6 +3,9 @@ import { Module } from '@nestjs/common';
 import { ProviderAdaptersModule } from '../provider-adapters/provider-adapters.module';
 import { ChannelsController } from './channels.controller';
 import { ProviderAccess } from './provider-access.service';
+import { ProviderCatalogueService } from './provider-catalogue.service';
+import { ProviderConfigurationCache } from './provider-configuration.cache';
+import { ProviderConfigurationListener } from './provider-configuration.listener';
 import { ProviderCircuitPolicyController } from './provider-circuit-policy.controller';
 import { ProviderCircuitPolicyService } from './provider-circuit-policy.service';
 import { PROVIDER_CLOCK, SystemProviderClock } from './provider-clock';
@@ -26,6 +29,9 @@ import { ProvidersController } from './providers.controller';
     ProviderRegistryService,
     ProviderHealthService,
     ProviderCircuitPolicyService,
+    ProviderConfigurationCache,
+    ProviderConfigurationListener,
+    ProviderCatalogueService,
   ],
 })
 export class ProvidersModule {}

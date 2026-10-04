@@ -276,3 +276,23 @@ export const providerCircuitPolicy = pgTable(
     check('provider_circuit_policy_version_positive', sql`${table.version} >= 1`),
   ],
 );
+
+/**
+ * The provider configuration revision (Phase 2.4, `PROVIDER_ADAPTER.md` §3a.2;
+ * migration `0024`). One row. Increased only by database triggers, in the same
+ * transaction as a change to channels, provider administrative columns,
+ * capabilities or the circuit policy, which also `pg_notify` it — so it is
+ * visible exactly when the change is, and announced only on commit.
+ */
+export const providerConfigurationRevision = pgTable(
+  'provider_configuration_revision',
+  {
+    scope: text('scope').primaryKey().default('platform'),
+    revision: bigint('revision', { mode: 'number' }).notNull().default(1),
+    changedAt: tstz('changed_at').notNull().defaultNow(),
+  },
+  (table) => [
+    check('provider_configuration_revision_singleton', sql`${table.scope} = 'platform'`),
+    check('provider_configuration_revision_positive', sql`${table.revision} >= 1`),
+  ],
+);

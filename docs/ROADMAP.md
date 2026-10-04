@@ -251,7 +251,7 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 
 ## 5. Phase 2 — Provider abstraction + simulator
 
-**Status: SCOPE FROZEN (ADR-013, 02-Oct-2026). 2.1 CLOSED (migrations `0018`–`0019`; Gate D.1 approved). 2.2 CLOSED (migrations `0020`–`0021`; Gate D.2 approved). 2.3 IMPLEMENTED (migrations `0022`–`0023`; Gate D.3 not approved at first review — remediated, re-review pending). 2.4–2.6 not started.** Each increment requires its own authorization.
+**Status: SCOPE FROZEN (ADR-013, 02-Oct-2026). 2.1 CLOSED (migrations `0018`–`0019`; Gate D.1 approved). 2.2 CLOSED (migrations `0020`–`0021`; Gate D.2 approved). 2.3 CLOSED (migrations `0022`–`0023`; Gate D.3 approved). 2.4 IMPLEMENTED (migration `0024`; Gate D.4 pending review). 2.5–2.6 not started.** Each increment requires its own authorization.
 
 - **Objectives**: implement `provider-registry`, `provider-adapters` (interface + `SimulatorAdapter` only), health/circuit breaker mechanics, admin hot-reload plumbing.
 - **Dependencies**: Phase 1 (Gate C closed): `TenantDatabase` and the pre-commit authorization-coverage containment, `AuthorizationService` + `@RequiresPermission`, transactional `AuditWriter`, the OpenAPI pipeline, `/metrics`, `SecretsPort`, Redis, the `with-db-clone` mutation harness.
@@ -275,8 +275,8 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 | **2.0** | Scope freeze (this section, ADR-013) | — | ✅ frozen 02-Oct-2026 |
 | **2.1** | Channel & Provider Registry | `channels` (seeded), `providers`, `provider_capabilities`; permissions `providers.read`, `providers.manage` (and `providers.test_send` defined, unused until 2.2) | ✅ CLOSED — migrations `0018`, `0019`; Gate D.1 approved |
 | **2.2** | Adapter Contract & Simulator | none; migration `0020` adds the `provider.test_sent` audit policy (permission `providers.test_send` already defined by 2.1) | ✅ CLOSED — migrations `0020`, `0021`; Gate D.2 approved |
-| **2.3** | Health & Circuit Breaker | `provider_health`; health/circuit columns on `providers` | ✅ IMPLEMENTED — migrations `0022`, `0023` (Gate D.3 remediation); **Gate D.3 re-review pending** |
-| **2.4** | Hot Reload | none | Gate D.4 |
+| **2.3** | Health & Circuit Breaker | `provider_health`; health/circuit columns on `providers` | ✅ CLOSED — migrations `0022`, `0023`; Gate D.3 approved |
+| **2.4** | Hot Reload | `provider_configuration_revision` (migration `0024`) | ✅ IMPLEMENTED; **Gate D.4 pending review** |
 | **2.5** | Credential Reference Contract — documentation only | none | Gate D.5 |
 | **2.6** | Frontend console — separately authorized | none | Gate D.6 |
 
@@ -328,6 +328,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 - *Exclusions*: router integration and any traffic switching or failover (the routing-eligibility **contract** is defined, `PROVIDER_ADAPTER.md` §6h; no router consumes it in Phase 2), routing policies, per-provider threshold overrides (the circuit policy is platform-wide; health thresholds stay fixed), event publication.
 
 **2.4 — Hot Reload**
+- *Status*: **IMPLEMENTED** (04-Oct-2026; migration `0024`; Gate D.4 pending review). **Design amended by user decision at the 2.4 authorization** (ADR-013 "2.4 design", canonical `PROVIDER_ADAPTER.md` §3a): PostgreSQL `LISTEN/NOTIFY` emitted by database triggers on a transactional revision, revision polling (`R` = 5 s), a hard TTL (`T` = 60 s) and startup reload replace the Redis pub/sub transport below; the cache is an advisory configuration snapshot that authorizes nothing. The bullets below are the original freeze, retained for the record.
 - *Objective*: provider configuration changes take effect without restart, as **best-effort configuration invalidation with bounded convergence** — not transactional configuration propagation.
 - *Semantics*: (1) the update commits first; (2) the invalidation is published to Redis **after** commit; (3) a subscriber evicts the entry as soon as it receives the publication, and its next read reloads from the database; (4) if a publication is lost, the cache TTL bounds how long a stale entry can be served, after which the entry refreshes on its own. Outbox-backed transactional propagation remains deferred (ADR-013 PD-1).
 - *In scope*: an in-process registry/adapter cache in `provider-registry`; the Redis pub/sub publisher and subscriber; the TTL (configurable, on an injectable clock).

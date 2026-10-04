@@ -273,7 +273,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // /providers/:id/health` and `GET /providers/:id/health`, scoped and
     // deferred the same way: 57 → 60. The Gate D.3 remediation added `GET` and
     // `PUT /provider-circuit-policy`, scoped and deferred the same way: 60 → 62.
-    expect(scoped.length).toBe(62);
+    // Phase 2.4 added the advisory `GET /channels/:id/routing-candidates`: 62 → 63.
+    expect(scoped.length).toBe(63);
     expect(exempt.length).toBe(7);
     expect(open.length).toBe(6);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
@@ -286,8 +287,9 @@ describe('§6n case 30 — route authorization coverage', () => {
     // record was written at (Phase 1B.6.3). Phase 2.1's ten catalogue routes
     // all defer: each targets `platform`, never the selected organization
     // (ADR-013 F-3): 21 → 31; Phase 2.2's test-send: 31 → 32; Phase 2.3's
-    // three health routes: 32 → 35; the two circuit-policy routes: 35 → 37.
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(37);
+    // three health routes: 32 → 35; the two circuit-policy routes: 35 → 37;
+    // Phase 2.4's routing-candidates read: 37 → 38.
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(38);
   });
 });
 
