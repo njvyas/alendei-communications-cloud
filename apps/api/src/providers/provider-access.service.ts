@@ -1,5 +1,6 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
+  AUDIT_ACTIONS,
   ERROR_CODES,
   type AuditAction,
   type AuthPrincipal,
@@ -134,6 +135,34 @@ export class ProviderAccess {
    * decision was made at. Nothing secret can reach it: the catalogue holds no
    * credential, and capability keys that would name one are refused.
    */
+  /**
+   * The circuit policy change (`provider.circuit_policy_updated`), in the
+   * update's own transaction, at `platform` scope. The policy has no row id:
+   * `resource_id` is null and the versions are in before/after.
+   */
+  recordCircuitPolicy(
+    tx: Transaction,
+    principal: AuthPrincipal,
+    before: Record<string, unknown>,
+    after: Record<string, unknown>,
+  ): Promise<void> {
+    return this.audit.record(
+      {
+        scopeType: 'platform',
+        scopeId: null,
+        ...actorFromPrincipal(principal),
+        action: AUDIT_ACTIONS.PROVIDER_CIRCUIT_POLICY_UPDATED,
+        resourceType: 'ProviderCircuitPolicy',
+        resourceId: null,
+        outcome: 'success',
+        before,
+        after,
+        metadata: {},
+      },
+      tx,
+    );
+  }
+
   record(
     tx: Transaction,
     principal: AuthPrincipal,

@@ -6,14 +6,18 @@ import {
   IsIn,
   IsOptional,
   IsString,
+  IsInt,
   IsUUID,
   Matches,
+  Max,
+  Min,
   ValidateIf,
   MaxLength,
   MinLength,
   ValidateNested,
 } from 'class-validator';
 import {
+  PROVIDER_CIRCUIT_POLICY_BOUNDS as B,
   PROVIDER_CAPABILITY_KEY_PATTERN,
   PROVIDER_CAPABILITY_LIMITS,
   PROVIDER_HEALTH_OVERRIDE_REASON_MAX,
@@ -146,4 +150,78 @@ export class ProviderHealthOverrideDto {
   @MaxLength(PROVIDER_HEALTH_OVERRIDE_REASON_MAX)
   @ApiPropertyOptional({ maxLength: PROVIDER_HEALTH_OVERRIDE_REASON_MAX })
   reason?: string;
+}
+
+/**
+ * `PUT /provider-circuit-policy` (Gate D.3 remediation, `PROVIDER_ADAPTER.md`
+ * §6a, §6i): the complete policy — all eight parameters, each within its safe
+ * bounds — and the version it replaces. Nothing else is accepted.
+ * `minSamples ≤ windowMaxSamples` is checked by the service (`400`).
+ */
+export class UpdateCircuitPolicyDto {
+  @IsInt()
+  @Min(B.windowMs.min)
+  @Max(B.windowMs.max)
+  @ApiProperty({ type: 'integer', minimum: B.windowMs.min, maximum: B.windowMs.max })
+  windowMs!: number;
+
+  @IsInt()
+  @Min(B.windowMaxSamples.min)
+  @Max(B.windowMaxSamples.max)
+  @ApiProperty({
+    type: 'integer',
+    minimum: B.windowMaxSamples.min,
+    maximum: B.windowMaxSamples.max,
+  })
+  windowMaxSamples!: number;
+
+  @IsInt()
+  @Min(B.minSamples.min)
+  @Max(B.minSamples.max)
+  @ApiProperty({ type: 'integer', minimum: B.minSamples.min, maximum: B.minSamples.max })
+  minSamples!: number;
+
+  @IsInt()
+  @Min(B.failurePercent.min)
+  @Max(B.failurePercent.max)
+  @ApiProperty({ type: 'integer', minimum: B.failurePercent.min, maximum: B.failurePercent.max })
+  failurePercent!: number;
+
+  @IsInt()
+  @Min(B.cooldownMs.min)
+  @Max(B.cooldownMs.max)
+  @ApiProperty({ type: 'integer', minimum: B.cooldownMs.min, maximum: B.cooldownMs.max })
+  cooldownMs!: number;
+
+  @IsInt()
+  @Min(B.halfOpenMaxProbes.min)
+  @Max(B.halfOpenMaxProbes.max)
+  @ApiProperty({
+    type: 'integer',
+    minimum: B.halfOpenMaxProbes.min,
+    maximum: B.halfOpenMaxProbes.max,
+  })
+  halfOpenMaxProbes!: number;
+
+  @IsInt()
+  @Min(B.probeLeaseMs.min)
+  @Max(B.probeLeaseMs.max)
+  @ApiProperty({ type: 'integer', minimum: B.probeLeaseMs.min, maximum: B.probeLeaseMs.max })
+  probeLeaseMs!: number;
+
+  @IsInt()
+  @Min(B.halfOpenSuccessesToClose.min)
+  @Max(B.halfOpenSuccessesToClose.max)
+  @ApiProperty({
+    type: 'integer',
+    minimum: B.halfOpenSuccessesToClose.min,
+    maximum: B.halfOpenSuccessesToClose.max,
+  })
+  halfOpenSuccessesToClose!: number;
+
+  /** The version this update replaces; a stale one is `409` and changes nothing. */
+  @IsInt()
+  @Min(1)
+  @ApiProperty({ type: 'integer', minimum: 1 })
+  expectedVersion!: number;
 }

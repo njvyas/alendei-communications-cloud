@@ -657,6 +657,8 @@ describe('Phase 2.2 provider adapter test-send', () => {
         'audit_logs_auth_insert',
         'audit_logs_insert',
         'audit_logs_platform_self_denial_insert',
+        // Gate D.3 remediation (migration 0023), pinned in provider-circuit-policy.sec-spec.ts.
+        'audit_logs_provider_circuit_policy_insert',
         // Phase 2.3 (migration 0022), pinned in provider-health-circuit.sec-spec.ts.
         'audit_logs_provider_health_insert',
         'audit_logs_provider_insert',

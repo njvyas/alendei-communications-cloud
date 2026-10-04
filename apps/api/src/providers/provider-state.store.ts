@@ -3,11 +3,11 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import {
   AUDIT_ACTIONS,
-  PROVIDER_CIRCUIT_DEFAULTS,
   PROVIDER_CIRCUIT_STATES,
   PROVIDER_HEALTH_DEFAULTS,
   PROVIDER_HEALTH_STATES,
   type AuthPrincipal,
+  type ProviderCircuitPolicy,
   type ProviderCircuitState,
   type ProviderHealthClassification,
   type ProviderHealthSampleKind,
@@ -34,7 +34,13 @@ import {
   type CircuitTransition,
   type HealthWindowSample,
 } from './provider-state-machine';
-import { circuitSnapshot, loadProvider, type ProviderRow } from './provider-views';
+import {
+  circuitPolicyOf,
+  circuitSnapshot,
+  loadCircuitPolicy,
+  loadProvider,
+  type ProviderRow,
+} from './provider-views';
 
 export type Admission =
   | { readonly admitted: true; readonly ticket: CircuitTicket }
@@ -86,8 +92,11 @@ export class ProviderStateStore {
     provider: ProviderRow,
   ): Promise<Admission> {
     const now = this.clock.now();
+    // The policy is read after the caller took the provider row lock, and this
+    // one version governs the whole decision (§6a).
+    const policyRow = await loadCircuitPolicy(tx);
     const before = circuitSnapshot(provider);
-    const decision = admit(before, now, randomUUID);
+    const decision = admit(before, circuitPolicyOf(policyRow), now, randomUUID);
 
     if (!decision.admitted) {
       this.metrics?.providerCircuitRejections.inc({
@@ -106,13 +115,25 @@ export class ProviderStateStore {
 
     if (decision.next !== before) {
       await this.persist(tx, provider.id, { circuit: decision.next });
-      await this.recordTransitions(tx, principal, provider.id, before, decision.transitions, null);
+      await this.recordTransitions(
+        tx,
+        principal,
+        provider.id,
+        before,
+        decision.transitions,
+        null,
+        policyRow.version,
+      );
       this.setCircuitGauge(provider.id, decision.next.state);
     }
-    if (decision.reclaimedProbe) {
-      this.metrics?.providerCircuitProbes.inc({ provider: provider.id, outcome: 'abandoned' });
+    if (decision.reclaimedProbes > 0) {
+      this.metrics?.providerCircuitProbes.inc(
+        { provider: provider.id, outcome: 'abandoned' },
+        decision.reclaimedProbes,
+      );
       this.logger.warn({
-        msg: 'provider circuit probe slot reclaimed after its lease expired',
+        msg: 'provider circuit probe slots reclaimed after their lease expired',
+        reclaimed: decision.reclaimedProbes,
         providerId: provider.id,
         circuitGeneration: decision.next.generation,
         correlationId: RequestContext.correlationId(),
@@ -133,6 +154,8 @@ export class ProviderStateStore {
     const now = this.clock.now();
     const outcome = submissionOutcome(result);
     const classification = classifySubmission(outcome);
+    const policyRow = await loadCircuitPolicy(tx);
+    const policy = circuitPolicyOf(policyRow);
     const before = circuitSnapshot(provider);
 
     // The circuit window is read only where T1 can be evaluated (§6d).
@@ -144,10 +167,10 @@ export class ProviderStateStore {
     const circuitWindow = evaluates
       ? [
           { classification: classification as 'success' | 'failure' },
-          ...(await this.circuitWindow(tx, providerId, before.generation, now)),
-        ].slice(0, PROVIDER_CIRCUIT_DEFAULTS.WINDOW_MAX_SAMPLES)
+          ...(await this.circuitWindow(tx, providerId, before.generation, policy, now)),
+        ].slice(0, policy.windowMaxSamples)
       : [];
-    const decision = recordSubmission(before, ticket, classification, circuitWindow, now);
+    const decision = recordSubmission(before, ticket, classification, circuitWindow, policy, now);
 
     const healthState = effectiveHealth(
       provider.healthOverride,
@@ -163,6 +186,7 @@ export class ProviderStateStore {
       healthState,
       circuitState: decision.next.state,
       circuitGeneration: ticket.generation,
+      circuitPolicyVersion: policyRow.version,
       observedAt: now,
     });
     await this.persist(tx, providerId, {
@@ -176,6 +200,7 @@ export class ProviderStateStore {
       before,
       decision.transitions,
       decision.window,
+      policyRow.version,
     );
     await this.recordHealthChange(tx, principal, provider, healthState, 'submission');
 
@@ -199,6 +224,7 @@ export class ProviderStateStore {
   ): Promise<RecordedState> {
     const provider = await loadProvider(tx, providerId, { forUpdate: true });
     const now = this.clock.now();
+    const policyVersion = (await loadCircuitPolicy(tx)).version;
     const classification = classifyProbe(probe.outcome);
     const healthState = effectiveHealth(
       provider.healthOverride,
@@ -214,6 +240,7 @@ export class ProviderStateStore {
       healthState,
       circuitState: provider.circuitState,
       circuitGeneration: provider.circuitGeneration,
+      circuitPolicyVersion: policyVersion,
       observedAt: now,
     });
     if (healthState !== provider.healthState) {
@@ -240,6 +267,7 @@ export class ProviderStateStore {
     if (provider.healthOverride === override) return provider;
 
     const now = this.clock.now();
+    const policyVersion = (await loadCircuitPolicy(tx)).version;
     const healthState = effectiveHealth(override, await this.healthWindow(tx, providerId, now));
     await this.insertSample(tx, {
       providerId,
@@ -250,6 +278,7 @@ export class ProviderStateStore {
       healthState,
       circuitState: provider.circuitState,
       circuitGeneration: provider.circuitGeneration,
+      circuitPolicyVersion: policyVersion,
       observedAt: now,
     });
     const row = await this.persist(tx, providerId, {
@@ -280,6 +309,7 @@ export class ProviderStateStore {
     tx: Transaction,
     providerId: string,
     generation: number,
+    policy: ProviderCircuitPolicy,
     now: Date,
   ): Promise<{ classification: 'success' | 'failure' }[]> {
     const h = schema.providerHealth;
@@ -292,12 +322,12 @@ export class ProviderStateStore {
           eq(h.kind, 'submission'),
           eq(h.circuitGeneration, generation),
           ne(h.classification, 'neutral'),
-          gt(h.observedAt, new Date(now.getTime() - PROVIDER_CIRCUIT_DEFAULTS.WINDOW_MS)),
+          gt(h.observedAt, new Date(now.getTime() - policy.windowMs)),
           lte(h.observedAt, now),
         ),
       )
       .orderBy(desc(h.observedAt), desc(h.id))
-      .limit(PROVIDER_CIRCUIT_DEFAULTS.WINDOW_MAX_SAMPLES - 1);
+      .limit(Math.max(0, policy.windowMaxSamples - 1));
     return rows as { classification: 'success' | 'failure' }[];
   }
 
@@ -347,6 +377,7 @@ export class ProviderStateStore {
       healthState: ProviderHealthState;
       circuitState: ProviderCircuitState;
       circuitGeneration: number;
+      circuitPolicyVersion: number;
       observedAt: Date;
     },
   ): Promise<void> {
@@ -371,8 +402,10 @@ export class ProviderStateStore {
       set.circuitState = change.circuit.state;
       set.circuitGeneration = change.circuit.generation;
       set.circuitChangedAt = change.circuit.changedAt;
-      set.circuitProbeId = change.circuit.probeId;
-      set.circuitProbeLeaseUntil = change.circuit.probeLeaseUntil;
+      set.circuitProbes = change.circuit.probes.map((p) => ({
+        id: p.id,
+        leaseUntil: p.leaseUntil.toISOString(),
+      }));
       set.circuitProbeSuccesses = change.circuit.probeSuccesses;
     }
     if (change.health) {
@@ -398,6 +431,7 @@ export class ProviderStateStore {
     before: CircuitSnapshot,
     transitions: readonly CircuitTransition[],
     window: { samples: number; failures: number } | null,
+    policyVersion: number,
   ): Promise<void> {
     for (const t of transitions) {
       await this.access.record(
@@ -410,6 +444,7 @@ export class ProviderStateStore {
           circuitState: t.to,
           circuitGeneration: t.generation,
           cause: t.cause,
+          circuitPolicyVersion: policyVersion,
           ...(t.key === 'T1' && window ? { window } : {}),
         },
       );
@@ -424,6 +459,7 @@ export class ProviderStateStore {
         cause: t.cause,
         circuitGeneration: t.generation,
         previousGeneration: before.generation,
+        circuitPolicyVersion: policyVersion,
         correlationId: RequestContext.correlationId(),
       };
       if (t.to === 'open') this.logger.warn(line);

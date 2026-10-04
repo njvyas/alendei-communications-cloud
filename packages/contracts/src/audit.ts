@@ -64,6 +64,8 @@ export const AUDIT_ACTIONS = {
   PROVIDER_HEALTH_CHANGED: 'provider.health_changed',
   PROVIDER_HEALTH_OVERRIDDEN: 'provider.health_overridden',
   PROVIDER_CIRCUIT_CHANGED: 'provider.circuit_changed',
+  // Gate D.3 remediation: the platform circuit policy (`PROVIDER_ADAPTER.md` §6a).
+  PROVIDER_CIRCUIT_POLICY_UPDATED: 'provider.circuit_policy_updated',
 
   AUTHORIZATION_DENIED: 'authorization.denied',
 } as const;
@@ -200,6 +202,8 @@ export const SECURITY_SENSITIVE_AUDIT_ACTIONS: readonly AuditAction[] = Object.f
   AUDIT_ACTIONS.PROVIDER_HEALTH_CHANGED,
   AUDIT_ACTIONS.PROVIDER_HEALTH_OVERRIDDEN,
   AUDIT_ACTIONS.PROVIDER_CIRCUIT_CHANGED,
+  // The circuit policy decides when every provider is taken out of traffic.
+  AUDIT_ACTIONS.PROVIDER_CIRCUIT_POLICY_UPDATED,
 ]);
 
 export function isSecuritySensitiveAction(action: string): boolean {

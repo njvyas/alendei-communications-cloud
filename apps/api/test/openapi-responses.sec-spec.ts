@@ -524,6 +524,19 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
         200,
         'provider health samples',
       );
+      // Gate D.3 remediation: the circuit policy, read and re-sent unchanged (a
+      // no-op by contract), so this suite never alters the platform policy.
+      const policy = await hit('GET', 'provider-circuit-policy', credential);
+      expectStatus(policy, 200, 'circuit policy read');
+      const { version, updatedAt: _updatedAt, ...values } = policy.body.data as Json;
+      expectStatus(
+        await hit('PUT', 'provider-circuit-policy', {
+          ...credential,
+          body: { ...values, expectedVersion: version },
+        }),
+        200,
+        'circuit policy replace (unchanged)',
+      );
     });
 
     it('workspaces, teams and the deprecated tenancy aliases', async () => {

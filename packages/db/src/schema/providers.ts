@@ -94,9 +94,14 @@ export const providers = pgTable(
     circuitGeneration: bigint('circuit_generation', { mode: 'number' }).notNull().default(0),
     /** When `circuit_state` last changed (injected clock); the cooldown runs from here. */
     circuitChangedAt: tstz('circuit_changed_at'),
-    /** The holder of the single `half_open` probe slot, and its lease (§6c). */
-    circuitProbeId: uuid('circuit_probe_id'),
-    circuitProbeLeaseUntil: tstz('circuit_probe_lease_until'),
+    /**
+     * The live `half_open` probe slots, `[{ id, leaseUntil }]` — at most the
+     * policy's `halfOpenMaxProbes` admitted (§6c; migration `0023`).
+     */
+    circuitProbes: jsonb('circuit_probes')
+      .$type<{ id: string; leaseUntil: string }[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     /** Successful probes in the current `half_open` episode. */
     circuitProbeSuccesses: integer('circuit_probe_successes').notNull().default(0),
     ...timestamps(),
@@ -123,8 +128,8 @@ export const providers = pgTable(
       sql`${table.circuitState} = 'closed' OR ${table.circuitChangedAt} IS NOT NULL`,
     ),
     check(
-      'providers_circuit_probe_slot',
-      sql`(${table.circuitProbeId} IS NULL) = (${table.circuitProbeLeaseUntil} IS NULL) AND (${table.circuitProbeId} IS NULL OR ${table.circuitState} = 'half_open')`,
+      'providers_circuit_probes',
+      sql`jsonb_typeof(${table.circuitProbes}) = 'array' AND jsonb_array_length(${table.circuitProbes}) <= 10 AND (jsonb_array_length(${table.circuitProbes}) = 0 OR ${table.circuitState} = 'half_open')`,
     ),
     check(
       'providers_circuit_probe_successes',
@@ -179,6 +184,8 @@ export const providerHealth = pgTable(
     circuitState: providerCircuitState('circuit_state').notNull(),
     /** The circuit episode the observation belongs to (§6d). */
     circuitGeneration: bigint('circuit_generation', { mode: 'number' }).notNull(),
+    /** The circuit policy version the decision used (§6a; migration `0023`). */
+    circuitPolicyVersion: bigint('circuit_policy_version', { mode: 'number' }).notNull().default(1),
     source: providerHealthSource('source').notNull(),
     /** The injected clock: what every window is measured on. */
     observedAt: tstz('observed_at').notNull(),
@@ -213,5 +220,59 @@ export const providerHealth = pgTable(
       sql`(${table.latencyMs} IS NULL) = (${table.kind} = 'override') AND (${table.latencyMs} IS NULL OR ${table.latencyMs} >= 0)`,
     ),
     check('provider_health_generation_nonnegative', sql`${table.circuitGeneration} >= 0`),
+  ],
+);
+
+/**
+ * The platform circuit policy (`PROVIDER_ADAPTER.md` §6a; migration `0023`,
+ * Gate D.3 remediation). Exactly one row, seeded by the migration; changed only
+ * by `PUT /provider-circuit-policy` (`providers.manage`). Every bound is a
+ * `CHECK`, and a trigger advances `version` by exactly one per update.
+ */
+export const providerCircuitPolicy = pgTable(
+  'provider_circuit_policy',
+  {
+    scope: text('scope').primaryKey().default('platform'),
+    windowMs: integer('window_ms').notNull(),
+    windowMaxSamples: integer('window_max_samples').notNull(),
+    minSamples: integer('min_samples').notNull(),
+    failurePercent: integer('failure_percent').notNull(),
+    cooldownMs: integer('cooldown_ms').notNull(),
+    halfOpenMaxProbes: integer('half_open_max_probes').notNull(),
+    probeLeaseMs: integer('probe_lease_ms').notNull(),
+    halfOpenSuccessesToClose: integer('half_open_successes_to_close').notNull(),
+    version: bigint('version', { mode: 'number' }).notNull().default(1),
+    ...timestamps(),
+  },
+  (table) => [
+    check('provider_circuit_policy_singleton', sql`${table.scope} = 'platform'`),
+    check('provider_circuit_policy_window_ms', sql`${table.windowMs} BETWEEN 10000 AND 3600000`),
+    check(
+      'provider_circuit_policy_window_max_samples',
+      sql`${table.windowMaxSamples} BETWEEN 1 AND 200`,
+    ),
+    check('provider_circuit_policy_min_samples', sql`${table.minSamples} BETWEEN 1 AND 200`),
+    check(
+      'provider_circuit_policy_min_le_max',
+      sql`${table.minSamples} <= ${table.windowMaxSamples}`,
+    ),
+    check(
+      'provider_circuit_policy_failure_percent',
+      sql`${table.failurePercent} BETWEEN 1 AND 100`,
+    ),
+    check('provider_circuit_policy_cooldown_ms', sql`${table.cooldownMs} BETWEEN 1000 AND 3600000`),
+    check(
+      'provider_circuit_policy_half_open_max_probes',
+      sql`${table.halfOpenMaxProbes} BETWEEN 1 AND 10`,
+    ),
+    check(
+      'provider_circuit_policy_probe_lease_ms',
+      sql`${table.probeLeaseMs} BETWEEN 5000 AND 600000`,
+    ),
+    check(
+      'provider_circuit_policy_successes_to_close',
+      sql`${table.halfOpenSuccessesToClose} BETWEEN 1 AND 20`,
+    ),
+    check('provider_circuit_policy_version_positive', sql`${table.version} >= 1`),
   ],
 );

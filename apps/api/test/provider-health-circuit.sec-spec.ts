@@ -218,7 +218,7 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
     plantProvider({
       status,
       circuit: 'open',
-      changedAt: new Date(clock.now().getTime() - C.COOLDOWN_MS),
+      changedAt: new Date(clock.now().getTime() - C.cooldownMs),
     });
 
   const providerRow = async (id: string) =>
@@ -944,7 +944,7 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
       expect(detail.body.data).toMatchObject({
         circuitState: 'open',
         circuitChangedAt: clock.now().toISOString(),
-        circuitCooldownUntil: new Date(clock.now().getTime() + C.COOLDOWN_MS).toISOString(),
+        circuitCooldownUntil: new Date(clock.now().getTime() + C.cooldownMs).toISOString(),
       });
     });
 
@@ -967,7 +967,7 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
     it('only the current 60 s window counts: failures older than the window never trip it', async () => {
       const id = await plantProvider();
       for (let i = 0; i < 4; i++) await send('tester', id, '500').expect(200);
-      clock.advance(C.WINDOW_MS);
+      clock.advance(C.windowMs);
       // The four are now outside `(now − 60 s, now]`: four more make a window of four.
       for (let i = 0; i < 4; i++) await send('tester', id, '500').expect(200);
       expect((await providerRow(id)).circuitState).toBe('closed');
@@ -1020,7 +1020,7 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
       const res = await send('tester', id, 'SUCCESS').expect(409);
       expect(res.body.error).toMatchObject({
         code: ERROR_CODES.PROVIDER_CIRCUIT_OPEN,
-        details: { circuitState: 'open', retryAfterMs: C.COOLDOWN_MS - 1_000 },
+        details: { circuitState: 'open', retryAfterMs: C.cooldownMs - 1_000 },
       });
       expect(spy).not.toHaveBeenCalled();
       expect(await samples(id)).toHaveLength(0);
@@ -1045,7 +1045,7 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
 
     it('the cooldown on the injected clock: refused 1 ms before it ends; exactly at it, T2 to half_open and that submission is the probe', async () => {
       const id = await plantProvider({ circuit: 'open' });
-      clock.advance(C.COOLDOWN_MS - 1);
+      clock.advance(C.cooldownMs - 1);
       const early = await send('tester', id, 'SUCCESS').expect(409);
       expect(early.body.error.details).toEqual({ circuitState: 'open', retryAfterMs: 1 });
       clock.advance(1);
@@ -1053,15 +1053,19 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
       expect(res.body.data).toMatchObject({ circuitProbe: true, circuitState: 'half_open' });
       const changed = await audits(id, AUDIT_ACTIONS.PROVIDER_CIRCUIT_CHANGED);
       expect(changed.map((a) => a.after)).toEqual([
-        { circuitState: 'half_open', circuitGeneration: 2, cause: 'cooldown_elapsed' },
+        {
+          circuitState: 'half_open',
+          circuitGeneration: 2,
+          cause: 'cooldown_elapsed',
+          circuitPolicyVersion: expect.any(Number), // the policy this decision used (Gate D.3)
+        },
       ]);
       const row = await providerRow(id);
       expect(row).toMatchObject({
         circuitState: 'half_open',
         circuitGeneration: 2,
         circuitProbeSuccesses: 1,
-        circuitProbeId: null,
-        circuitProbeLeaseUntil: null,
+        circuitProbes: [],
       });
       const [sample] = await samples(id);
       expect(sample).toMatchObject({ circuitGeneration: 2, circuitState: 'half_open' });
@@ -1101,7 +1105,7 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
       expect(row.circuitChangedAt!.toISOString()).toBe(clock.now().toISOString());
       expect((await send('tester', id, 'SUCCESS').expect(409)).body.error.details).toEqual({
         circuitState: 'open',
-        retryAfterMs: C.COOLDOWN_MS,
+        retryAfterMs: C.cooldownMs,
       });
       expect(
         (await audits(id, AUDIT_ACTIONS.PROVIDER_CIRCUIT_CHANGED)).map(
@@ -1118,7 +1122,7 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
         circuitState: 'half_open',
         circuitGeneration: 2,
         circuitProbeSuccesses: 0,
-        circuitProbeId: null,
+        circuitProbes: [],
       });
       // The slot is free: the next submission is the probe.
       expect((await send('tester', id, 'SUCCESS').expect(200)).body.data.circuitProbe).toBe(true);
@@ -1200,9 +1204,9 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
       const probeRequest = send('tester', id, 'SUCCESS').then((r) => r);
       await until(held.isEntered, 'the probe to reach the adapter');
       const row = await providerRow(id);
-      expect(row.circuitProbeId).not.toBeNull();
-      expect(row.circuitProbeLeaseUntil!.toISOString()).toBe(
-        new Date(clock.now().getTime() + C.PROBE_LEASE_MS).toISOString(),
+      expect(row.circuitProbes).toHaveLength(1);
+      expect(row.circuitProbes[0]!.leaseUntil).toBe(
+        new Date(clock.now().getTime() + C.probeLeaseMs).toISOString(),
       );
       const refused = await Promise.all([
         send('tester', id, 'SUCCESS'),
@@ -1212,7 +1216,7 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
       expect(refused.map((r) => r.status)).toEqual([409, 409, 409]);
       held.release();
       expect((await probeRequest).body.data).toMatchObject({ circuitProbe: true });
-      expect((await providerRow(id)).circuitProbeId).toBeNull();
+      expect((await providerRow(id)).circuitProbes).toEqual([]);
       expect((await send('tester', id, 'SUCCESS').expect(200)).body.data).toMatchObject({
         circuitProbe: true,
         circuitState: 'closed',
@@ -1225,7 +1229,7 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
       const slow = send('tester', id, '500').then((r) => r); // admitted in generation 0
       await until(held.isEntered, 'the slow submission');
       for (let i = 0; i < 5; i++) await send('tester', id, '500').expect(200); // → open, gen 1
-      clock.advance(C.COOLDOWN_MS);
+      clock.advance(C.cooldownMs);
       await send('tester', id, 'SUCCESS').expect(200); // T2 → gen 2, probe 1
       await send('tester', id, 'SUCCESS').expect(200); // T4 → closed, gen 3
       for (let i = 0; i < 4; i++) await send('tester', id, '500').expect(200); // 4 in gen 3
@@ -1250,14 +1254,15 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
       const first = holdNextSubmission();
       const late = send('tester', id, '500').then((r) => r); // probe A — will fail, late
       await until(first.isEntered, 'probe A');
-      const slotA = (await providerRow(id)).circuitProbeId;
+      const slotA = (await providerRow(id)).circuitProbes[0]!.id;
       expect((await send('tester', id, 'SUCCESS')).status).toBe(409); // slot held
-      clock.advance(C.PROBE_LEASE_MS); // A's lease expires
+      clock.advance(C.probeLeaseMs); // A's lease expires
       const second = holdNextSubmission();
       const fresh = send('tester', id, 'SUCCESS').then((r) => r); // probe B — reclaims
       await until(second.isEntered, 'probe B');
-      const slotB = (await providerRow(id)).circuitProbeId;
-      expect(slotB).not.toBeNull();
+      const slots = (await providerRow(id)).circuitProbes;
+      expect(slots).toHaveLength(1); // A's expired slot was released, B holds the only one
+      const slotB = slots[0]!.id;
       expect(slotB).not.toBe(slotA);
       expect(
         await metric('acc_provider_circuit_probes_total', { provider: id, outcome: 'abandoned' }),
@@ -1272,7 +1277,7 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
       expect(await providerRow(id)).toMatchObject({
         circuitState: 'half_open',
         circuitGeneration: 2,
-        circuitProbeId: slotB,
+        circuitProbes: [expect.objectContaining({ id: slotB })],
         circuitProbeSuccesses: 0,
       });
       expect(
@@ -1281,7 +1286,7 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
       second.release();
       await fresh;
       expect(await providerRow(id)).toMatchObject({
-        circuitProbeId: null,
+        circuitProbes: [],
         circuitProbeSuccesses: 1,
       });
       expect(
@@ -1327,8 +1332,12 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
         await h.admin
           .update(schema.providers)
           .set({
-            circuitProbeId: uuidv7(),
-            circuitProbeLeaseUntil: new Date(clock.now().getTime() + C.PROBE_LEASE_MS),
+            circuitProbes: [
+              {
+                id: uuidv7(),
+                leaseUntil: new Date(clock.now().getTime() + C.probeLeaseMs).toISOString(),
+              },
+            ],
           })
           .where(eq(schema.providers.id, cases[2]!));
         for (const id of cases) {
@@ -1342,10 +1351,10 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
             details: { status },
           });
           const after = await providerRow(id);
-          expect([after.circuitState, after.circuitGeneration, after.circuitProbeId]).toEqual([
+          expect([after.circuitState, after.circuitGeneration, after.circuitProbes]).toEqual([
             before.circuitState,
             before.circuitGeneration,
-            before.circuitProbeId,
+            before.circuitProbes,
           ]);
           expect(await audits(id)).toHaveLength(0); // no T2, no short-circuit row
           expect(await samples(id)).toHaveLength(0);
@@ -1373,7 +1382,7 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
         ERROR_CODES.PROVIDER_CIRCUIT_OPEN,
       );
       // Re-enabled, past the cooldown, it recovers only through probes.
-      clock.advance(C.COOLDOWN_MS);
+      clock.advance(C.cooldownMs);
       expect((await send('tester', id, 'SUCCESS').expect(200)).body.data.circuitProbe).toBe(true);
     });
 
@@ -1758,7 +1767,7 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
       // The consistency checks hold for everyone, the owner included.
       await expect(
         h.admin.execute(
-          sql`update providers set circuit_probe_id = ${uuidv7()} where id = ${closed}`,
+          sql`update providers set circuit_probes = ${JSON.stringify([{ id: uuidv7(), leaseUntil: new Date().toISOString() }])}::jsonb where id = ${closed}`,
         ),
       ).rejects.toMatchObject({ cause: { code: '23514' } });
       await expect(
@@ -1931,7 +1940,7 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
       expect(
         await metric('acc_provider_circuit_rejections_total', { provider: id, status: 'open' }),
       ).toBe(1);
-      clock.advance(C.COOLDOWN_MS);
+      clock.advance(C.cooldownMs);
       await send('tester', id, 'SUCCESS').expect(200);
       await send('tester', id, 'SUCCESS').expect(200);
       expect(await transition('open', 'half_open')).toBe(1);

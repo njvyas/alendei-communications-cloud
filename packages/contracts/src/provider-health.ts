@@ -89,24 +89,72 @@ export const PROVIDER_HEALTH_DEFAULTS = Object.freeze({
   PROBE_TIMEOUT_MS: 3000,
 });
 
-/** The circuit breaker (`PROVIDER_ADAPTER.md` §6a). */
-export const PROVIDER_CIRCUIT_DEFAULTS = Object.freeze({
-  /** Submission samples older than this are outside the window. */
-  WINDOW_MS: 60_000,
-  /** At most this many counted submission samples, newest first. */
-  WINDOW_MAX_SAMPLES: 20,
-  /** The window must hold at least this many counted samples to open. */
-  MIN_SAMPLES: 5,
-  /** `failures × 100 ≥ this × samples` opens the circuit. */
-  FAILURE_PERCENT: 50,
-  /** Time spent `open` before the next submission may half-open it. */
-  COOLDOWN_MS: 30_000,
-  /** Probes admitted at once in `half_open`. The slot model holds exactly one. */
-  HALF_OPEN_MAX_PROBES: 1,
-  /** Successful probes, one after another, that close the circuit. */
-  HALF_OPEN_SUCCESSES_TO_CLOSE: 2,
-  /** A probe slot not released within this is reclaimable (timeout plus margin). */
-  PROBE_LEASE_MS: 10_000,
+/**
+ * The circuit policy (`PROVIDER_ADAPTER.md` §6a): the parameters every circuit
+ * decision is made with. Persisted and administrable (`provider_circuit_policy`,
+ * `PUT /provider-circuit-policy`, Gate D.3 remediation) — the circuit engine
+ * reads the stored policy, never a constant.
+ */
+export interface ProviderCircuitPolicy {
+  /** Evaluation window: samples older than this are outside it. */
+  readonly windowMs: number;
+  /** Maximum samples: at most this many counted submission samples, newest first. */
+  readonly windowMaxSamples: number;
+  /** Minimum samples: the window must hold at least this many to open. */
+  readonly minSamples: number;
+  /** Failure-rate threshold: `failures × 100 ≥ this × samples` opens the circuit. */
+  readonly failurePercent: number;
+  /** Cooldown: time spent `open` before the next submission may half-open it. */
+  readonly cooldownMs: number;
+  /** HALF_OPEN probe count: probes admitted at once. */
+  readonly halfOpenMaxProbes: number;
+  /** Probe lease: a probe slot not released within this is reclaimable. */
+  readonly probeLeaseMs: number;
+  /** Successful probes, in one half-open episode, that close the circuit. */
+  readonly halfOpenSuccessesToClose: number;
+}
+
+export const PROVIDER_CIRCUIT_POLICY_FIELDS = [
+  'windowMs',
+  'windowMaxSamples',
+  'minSamples',
+  'failurePercent',
+  'cooldownMs',
+  'halfOpenMaxProbes',
+  'probeLeaseMs',
+  'halfOpenSuccessesToClose',
+] as const satisfies readonly (keyof ProviderCircuitPolicy)[];
+
+/**
+ * The safe bounds of every policy parameter (`PROVIDER_ADAPTER.md` §6a),
+ * enforced by the API and, identically, by `CHECK` constraints (migration
+ * `0023`). Cross-field: `minSamples ≤ windowMaxSamples`. The lease's lower
+ * bound is above the submission timeout, so a live probe is never reclaimed.
+ */
+export const PROVIDER_CIRCUIT_POLICY_BOUNDS = Object.freeze({
+  windowMs: { min: 10_000, max: 3_600_000 },
+  windowMaxSamples: { min: 1, max: 200 },
+  minSamples: { min: 1, max: 200 },
+  failurePercent: { min: 1, max: 100 },
+  cooldownMs: { min: 1_000, max: 3_600_000 },
+  halfOpenMaxProbes: { min: 1, max: 10 },
+  probeLeaseMs: { min: 5_000, max: 600_000 },
+  halfOpenSuccessesToClose: { min: 1, max: 20 },
+} as const satisfies Record<keyof ProviderCircuitPolicy, { min: number; max: number }>);
+
+/**
+ * The policy migration `0023` seeds (version 1) — the values frozen before the
+ * Gate D.3 review. Not read by the circuit engine: a seed and a test fixture.
+ */
+export const PROVIDER_CIRCUIT_DEFAULTS: ProviderCircuitPolicy = Object.freeze({
+  windowMs: 60_000,
+  windowMaxSamples: 20,
+  minSamples: 5,
+  failurePercent: 50,
+  cooldownMs: 30_000,
+  halfOpenMaxProbes: 1,
+  probeLeaseMs: 10_000,
+  halfOpenSuccessesToClose: 2,
 });
 
 /** The only four changes of circuit state (`PROVIDER_ADAPTER.md` §6b). */

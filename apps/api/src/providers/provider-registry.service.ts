@@ -39,6 +39,7 @@ import {
   channelCodeOf,
   channelView,
   lifecycleConflict,
+  loadCircuitPolicy,
   loadProvider,
   notFound,
   providerDetail,
@@ -187,19 +188,20 @@ export class ProviderRegistryService {
     filter: ListProvidersFilter = {},
   ): Promise<{ items: readonly ProviderView[]; page: PageInfo }> {
     const resolved = this.lists.resolve(filter, this.providerListSpec);
-    const rows = await this.db.withRequestTenant(async (tx) => {
+    const { rows, policy } = await this.db.withRequestTenant(async (tx) => {
       await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_READ);
       const predicates: SQL[] = [];
       if (filter.channelId) predicates.push(eq(schema.providers.channelId, filter.channelId));
       if (filter.status) predicates.push(eq(schema.providers.status, filter.status));
       if (resolved.after) predicates.push(resolved.after);
-      return tx
+      const rows = await tx
         .select({ provider: schema.providers, channelCode: schema.channels.code })
         .from(schema.providers)
         .innerJoin(schema.channels, eq(schema.channels.id, schema.providers.channelId))
         .where(predicates.length > 0 ? and(...predicates) : undefined)
         .orderBy(...resolved.orderBy)
         .limit(this.lists.fetchSize(resolved));
+      return { rows, policy: await loadCircuitPolicy(tx) };
     });
     const flat = rows.map((r) => ({ ...r.provider, channelCode: r.channelCode }));
     const { items, page } = this.lists.paginate(
@@ -211,7 +213,7 @@ export class ProviderRegistryService {
     return {
       items: items.map((row) => {
         const r = row as unknown as ProviderRow & { channelCode: ChannelCode };
-        return providerView(r, r.channelCode);
+        return providerView(r, r.channelCode, policy);
       }),
       page,
     };
@@ -284,7 +286,7 @@ export class ProviderRegistryService {
           ...(existing ? { details: { providerId: existing.id } } : {}),
         });
       }
-      const view = providerView(row, channel.code);
+      const view = providerView(row, channel.code, await loadCircuitPolicy(tx));
       await this.access.record(tx, principal, AUDIT_ACTIONS.PROVIDER_CREATED, view.id, null, {
         ...view,
       });

@@ -1438,6 +1438,31 @@ The test-send answer also carries (2.3) `"circuitProbe": false` (whether this su
 }
 ```
 
+**Circuit policy (Gate D.3 remediation, `PROVIDER_ADAPTER.md` §6a, §6i)** — one platform-wide policy, `providers.manage` only:
+
+| Method | Path | Auth | Permission | Request | Success | Errors | Idempotency | Audit |
+|---|---|---|---|---|---|---|---|---|
+| `GET` | `/api/v1/provider-circuit-policy` | session only | `providers.manage` | — | `200 {data:circuitPolicy}` | `401`; `403` | safe | — |
+| `PUT` | `/api/v1/provider-circuit-policy` | session only | `providers.manage` | all eight parameters and `expectedVersion` (the version being replaced), nothing else; integers within the bounds below; `minSamples ≤ windowMaxSamples` | `200 {data:circuitPolicy}` | `400` (`details.issues[]` per field; `MIN_SAMPLES_ABOVE_MAX`); `401`; `403`; `409 RESOURCE_CONFLICT` (`details.currentVersion`) when `expectedVersion` is stale | optimistic: of two updates from one version exactly one succeeds; re-sending the policy in force changes and records nothing | `provider.circuit_policy_updated` (before/after with versions) |
+
+```jsonc
+// circuitPolicy — exhaustive
+{
+  "windowMs": 60000,              // 10000–3600000
+  "windowMaxSamples": 20,         // 1–200, ≥ minSamples
+  "minSamples": 5,                // 1–200, ≤ windowMaxSamples
+  "failurePercent": 50,           // 1–100 — opens at failures × 100 ≥ failurePercent × samples
+  "cooldownMs": 30000,            // 1000–3600000
+  "halfOpenMaxProbes": 1,         // 1–10
+  "probeLeaseMs": 10000,          // 5000–600000
+  "halfOpenSuccessesToClose": 2,  // 1–20
+  "version": 1,                   // advances by exactly one per change
+  "updatedAt": "ISO-8601"
+}
+```
+
+A change governs every circuit decision made after it commits (the provider's `circuitCooldownUntil` reflects the current `cooldownMs`).
+
 Health and circuit are **displayed by polling** these reads (ADR-013 PD-8); there is no push. Health never refuses a request in Phase 2; the circuit refuses only test-send.
 
 **There is no `DELETE /providers/:id`** — a provider is disabled, never deleted. **No credential, routing, priority or weight operation exists, and no route sets the circuit directly**. Test-send reaches only the simulator in Phase 2; it never connects to a real provider and persists no message. Every audit row is at `platform` scope and carries before/after values; none carries a credential or secret.

@@ -144,24 +144,25 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * in the module graph this configuration (test + flag) builds — one per
      * method and path; no middleware, no framework route:
      *
-     *   72 application operations (including the three health routes; Phase
+     *   74 application operations (including the three health routes; Phase
      *      2.1 added the ten provider/channel catalogue operations, Phase 2.2
      *      the provider test-send, Phase 2.3 the provider health check, the
-     *      health override and the health-sample list)
+     *      health override and the health-sample list, and its Gate D.3
+     *      remediation the circuit-policy read and replace)
      * +  1 OpenAPI document operation (`GET /api/v1/openapi.json`)
-     * = 73 documented operations
+     * = 75 documented operations
      * +  1 intentional exclusion (`GET /metrics`, the only one)
-     * = 74 handler routes
+     * = 76 handler routes
      *
      * A route added or removed on purpose changes these numbers here, in the
      * same change; the two tests below fail on any route or operation that
      * exists on only one side.
      */
-    const APPLICATION_OPERATIONS = 72;
+    const APPLICATION_OPERATIONS = 74;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 
-    it('reconciles exactly: 72 application operations + 1 document operation = 73; GET /metrics the sole exclusion', () => {
+    it('reconciles exactly: 74 application operations + 1 document operation = 75; GET /metrics the sole exclusion', () => {
       const all = routes.map(key);
       expect(new Set(all).size).toBe(all.length);
       const excluded = routes.filter(isExcluded).map(key);

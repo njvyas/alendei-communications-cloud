@@ -251,7 +251,7 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 
 ## 5. Phase 2 — Provider abstraction + simulator
 
-**Status: SCOPE FROZEN (ADR-013, 02-Oct-2026). 2.1 CLOSED (migrations `0018`–`0019`; Gate D.1 approved). 2.2 CLOSED (migrations `0020`–`0021`; Gate D.2 approved). 2.3 IMPLEMENTED (migration `0022`; Gate D.3 pending review). 2.4–2.6 not started.** Each increment requires its own authorization.
+**Status: SCOPE FROZEN (ADR-013, 02-Oct-2026). 2.1 CLOSED (migrations `0018`–`0019`; Gate D.1 approved). 2.2 CLOSED (migrations `0020`–`0021`; Gate D.2 approved). 2.3 IMPLEMENTED (migrations `0022`–`0023`; Gate D.3 not approved at first review — remediated, re-review pending). 2.4–2.6 not started.** Each increment requires its own authorization.
 
 - **Objectives**: implement `provider-registry`, `provider-adapters` (interface + `SimulatorAdapter` only), health/circuit breaker mechanics, admin hot-reload plumbing.
 - **Dependencies**: Phase 1 (Gate C closed): `TenantDatabase` and the pre-commit authorization-coverage containment, `AuthorizationService` + `@RequiresPermission`, transactional `AuditWriter`, the OpenAPI pipeline, `/metrics`, `SecretsPort`, Redis, the `with-db-clone` mutation harness.
@@ -275,7 +275,7 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 | **2.0** | Scope freeze (this section, ADR-013) | — | ✅ frozen 02-Oct-2026 |
 | **2.1** | Channel & Provider Registry | `channels` (seeded), `providers`, `provider_capabilities`; permissions `providers.read`, `providers.manage` (and `providers.test_send` defined, unused until 2.2) | ✅ CLOSED — migrations `0018`, `0019`; Gate D.1 approved |
 | **2.2** | Adapter Contract & Simulator | none; migration `0020` adds the `provider.test_sent` audit policy (permission `providers.test_send` already defined by 2.1) | ✅ CLOSED — migrations `0020`, `0021`; Gate D.2 approved |
-| **2.3** | Health & Circuit Breaker | `provider_health`; health/circuit columns on `providers` | ✅ IMPLEMENTED — migration `0022`; **Gate D.3 pending review** |
+| **2.3** | Health & Circuit Breaker | `provider_health`; health/circuit columns on `providers` | ✅ IMPLEMENTED — migrations `0022`, `0023` (Gate D.3 remediation); **Gate D.3 re-review pending** |
 | **2.4** | Hot Reload | none | Gate D.4 |
 | **2.5** | Credential Reference Contract — documentation only | none | Gate D.5 |
 | **2.6** | Frontend console — separately authorized | none | Gate D.6 |
@@ -314,7 +314,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 - *Exclusions*: delivery/webhook behaviours (Phase 3), real adapters, cost estimation, message persistence.
 
 **2.3 — Health & Circuit Breaker**
-- *Status*: **IMPLEMENTED** (03-Oct-2026; migration `0022`; Gate D.3 pending review). The model is canonical in `PROVIDER_ADAPTER.md` §5–§6 (frozen before implementation, ADR-013 "2.3 design"); evidence `TESTING.md` §6u.
+- *Status*: **IMPLEMENTED** (03-Oct-2026; migration `0022`). **Gate D.3 remediation** (04-Oct-2026; migration `0023`): the circuit parameters are a persisted, platform-wide policy administered by `providers.manage` (`GET`/`PUT /provider-circuit-policy`); the half-open probe count is configurable; the production failure classification and the routing-eligibility contract consumed by the future Provider Router are canonical (`PROVIDER_ADAPTER.md` §5b, §6a, §6h). Phase 2.3 performs no traffic switching. The model is canonical in `PROVIDER_ADAPTER.md` §5–§6 (frozen before implementation, ADR-013 "2.3 design"); evidence `TESTING.md` §6u.
 - *Objective*: the provider health state machine and the circuit breaker, deterministically testable.
 - *In scope*: health and breaker services in `provider-registry`; `provider_health`; metrics; a Grafana dashboard provisioned under `infra/observability/`.
 - *Sample sources (only)*: test-send outcomes; `POST /providers/:id/health-check` (simulator `healthCheck()`); `POST /providers/:id/health` manual override (`source = manual`). No scheduler or background prober (ADR-013 F-6).
@@ -325,7 +325,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 - *Tests*: full health transition matrix; breaker `CLOSED → OPEN → HALF_OPEN → CLOSED/OPEN` driven by an injected clock and fixed sample sequences; `OPEN` short-circuits test-send without calling the adapter; threshold boundaries; metrics.
 - *Mutation proofs*: threshold off-by-one; `HALF_OPEN` skipped; cooldown ignores the injected clock; short-circuit removed; manual override not audited; append-only trigger dropped (clone only).
 - *Acceptance*: a sequence of test-sends moves health and circuit state exactly as specified and is visible in metrics.
-- *Exclusions*: router integration, routing eligibility, routing policies, per-provider threshold administration, event publication.
+- *Exclusions*: router integration and any traffic switching or failover (the routing-eligibility **contract** is defined, `PROVIDER_ADAPTER.md` §6h; no router consumes it in Phase 2), routing policies, per-provider threshold overrides (the circuit policy is platform-wide; health thresholds stay fixed), event publication.
 
 **2.4 — Hot Reload**
 - *Objective*: provider configuration changes take effect without restart, as **best-effort configuration invalidation with bounded convergence** — not transactional configuration propagation.

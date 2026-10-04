@@ -6,12 +6,13 @@
  * source; `ProviderStateStore` supplies all three under the provider row lock.
  */
 import {
-  PROVIDER_CIRCUIT_DEFAULTS,
   PROVIDER_CIRCUIT_TRANSITIONS,
   PROVIDER_HEALTH_DEFAULTS,
   PROVIDER_PROBE_CLASSIFICATION,
   PROVIDER_SUBMISSION_CLASSIFICATION,
+  type ProviderCircuitPolicy,
   type ProviderCircuitState,
+  type ProviderStatus,
   type ProviderCircuitTransitionKey,
   type ProviderHealthClassification,
   type ProviderHealthState,
@@ -90,19 +91,24 @@ export function effectiveHealth(
 
 // --- circuit (§6) -------------------------------------------------------------------
 
+/** One live `half_open` probe slot (§6c). */
+export interface ProbeSlot {
+  readonly id: string;
+  readonly leaseUntil: Date;
+}
+
 /** The circuit columns of one provider row. */
 export interface CircuitSnapshot {
   readonly state: ProviderCircuitState;
   readonly generation: number;
   readonly changedAt: Date | null;
-  readonly probeId: string | null;
-  readonly probeLeaseUntil: Date | null;
+  readonly probes: readonly ProbeSlot[];
   readonly probeSuccesses: number;
 }
 
 /**
  * What an admitted submission carries from admission to recording (§6d): the
- * episode it was admitted in, and — for the half-open probe — the slot id.
+ * episode it was admitted in, and — for a half-open probe — its slot id.
  */
 export interface CircuitTicket {
   readonly generation: number;
@@ -118,7 +124,7 @@ export interface CircuitTransition {
   readonly generation: number;
 }
 
-/** Applies one of T1–T4: generation +1, `changedAt = now`, probe slot and successes cleared (§6b). */
+/** Applies one of T1–T4: generation +1, `changedAt = now`, every probe slot and success cleared (§6b). */
 function transition(
   snapshot: CircuitSnapshot,
   key: ProviderCircuitTransitionKey,
@@ -130,16 +136,14 @@ function transition(
   }
   const generation = snapshot.generation + 1;
   return {
-    next: {
-      state: edge.to,
-      generation,
-      changedAt: now,
-      probeId: null,
-      probeLeaseUntil: null,
-      probeSuccesses: 0,
-    },
+    next: { state: edge.to, generation, changedAt: now, probes: [], probeSuccesses: 0 },
     transition: { key, from: edge.from, to: edge.to, cause: edge.cause, generation },
   };
+}
+
+/** The probe slots whose lease has not expired at `now`. */
+function liveProbes(snapshot: CircuitSnapshot, now: Date): readonly ProbeSlot[] {
+  return snapshot.probes.filter((p) => p.leaseUntil.getTime() > now.getTime());
 }
 
 export type AdmissionDecision =
@@ -148,8 +152,8 @@ export type AdmissionDecision =
       readonly ticket: CircuitTicket;
       readonly next: CircuitSnapshot;
       readonly transitions: readonly CircuitTransition[];
-      /** An expired probe lease was taken over (§6c). */
-      readonly reclaimedProbe: boolean;
+      /** How many expired probe slots were released by this admission (§6c). */
+      readonly reclaimedProbes: number;
     }
   | {
       readonly admitted: false;
@@ -159,20 +163,20 @@ export type AdmissionDecision =
     };
 
 /**
- * Admission of one submission (§6c). `newProbeId` mints the probe-slot id; it
- * is called only when a probe is admitted.
+ * Admission of one submission (§6c), under `policy`. `newProbeId` mints a
+ * probe-slot id; it is called only when a probe is admitted.
  */
 export function admit(
   snapshot: CircuitSnapshot,
+  policy: ProviderCircuitPolicy,
   now: Date,
   newProbeId: () => string,
 ): AdmissionDecision {
-  const c = PROVIDER_CIRCUIT_DEFAULTS;
   let current = snapshot;
   const transitions: CircuitTransition[] = [];
 
   if (current.state === 'open') {
-    const cooldownEnds = current.changedAt!.getTime() + c.COOLDOWN_MS;
+    const cooldownEnds = current.changedAt!.getTime() + policy.cooldownMs;
     if (now.getTime() < cooldownEnds) {
       return { admitted: false, state: 'open', retryAfterMs: cooldownEnds - now.getTime() };
     }
@@ -183,21 +187,19 @@ export function admit(
   }
 
   if (current.state === 'half_open') {
-    const held = current.probeId !== null && current.probeLeaseUntil!.getTime() > now.getTime();
-    if (held) return { admitted: false, state: 'half_open', retryAfterMs: null };
-    const reclaimedProbe = current.probeId !== null;
-    const probeId = newProbeId();
-    current = {
-      ...current,
-      probeId,
-      probeLeaseUntil: new Date(now.getTime() + c.PROBE_LEASE_MS),
-    };
+    const live = liveProbes(current, now);
+    if (live.length >= policy.halfOpenMaxProbes) {
+      return { admitted: false, state: 'half_open', retryAfterMs: null };
+    }
+    const reclaimedProbes = current.probes.length - live.length;
+    const probe = { id: newProbeId(), leaseUntil: new Date(now.getTime() + policy.probeLeaseMs) };
+    current = { ...current, probes: [...live, probe] };
     return {
       admitted: true,
-      ticket: { generation: current.generation, probeId },
+      ticket: { generation: current.generation, probeId: probe.id },
       next: current,
       transitions,
-      reclaimedProbe,
+      reclaimedProbes,
     };
   }
 
@@ -206,7 +208,7 @@ export function admit(
     ticket: { generation: current.generation, probeId: null },
     next: current,
     transitions,
-    reclaimedProbe: false,
+    reclaimedProbes: 0,
   };
 }
 
@@ -227,24 +229,29 @@ export interface RecordingDecision {
   readonly window: { readonly samples: number; readonly failures: number } | null;
 }
 
-/** T1's guard: the window holds the minimum and meets the failure threshold (§6b). */
-export function windowTrips(window: readonly CircuitWindowSample[]): boolean {
-  const c = PROVIDER_CIRCUIT_DEFAULTS;
+/** T1's guard under `policy`: the window holds the minimum and meets the failure threshold (§6b). */
+export function windowTrips(
+  window: readonly CircuitWindowSample[],
+  policy: ProviderCircuitPolicy,
+): boolean {
   const failures = window.filter((s) => s.classification === 'failure').length;
-  return window.length >= c.MIN_SAMPLES && failures * 100 >= c.FAILURE_PERCENT * window.length;
+  return (
+    window.length >= policy.minSamples && failures * 100 >= policy.failurePercent * window.length
+  );
 }
 
 /**
- * Recording one submission's answer (§6d). `window` is the circuit window of
- * the **current** generation including this sample when it counts — newest
- * first, at most `WINDOW_MAX_SAMPLES` inside `WINDOW_MS`; it is read only for a
- * current `closed` ticket.
+ * Recording one submission's answer (§6d), under `policy`. `window` is the
+ * circuit window of the **current** generation including this sample when it
+ * counts — newest first, at most `policy.windowMaxSamples` inside
+ * `policy.windowMs`; it is read only for a current `closed` ticket.
  */
 export function recordSubmission(
   snapshot: CircuitSnapshot,
   ticket: CircuitTicket,
   classification: ProviderHealthClassification,
   window: readonly CircuitWindowSample[],
+  policy: ProviderCircuitPolicy,
   now: Date,
 ): RecordingDecision {
   const unchanged = (effect: RecordingEffect): RecordingDecision => ({
@@ -254,22 +261,25 @@ export function recordSubmission(
     window: null,
   });
 
-  // A ticket from another episode, or a probe that no longer holds the slot,
+  // A ticket from another episode, or a probe that no longer holds a slot,
   // records its sample and changes nothing in the circuit.
   if (ticket.generation !== snapshot.generation) return unchanged('stale');
 
   if (ticket.probeId !== null) {
-    if (snapshot.state !== 'half_open' || snapshot.probeId !== ticket.probeId) {
+    if (snapshot.state !== 'half_open' || !snapshot.probes.some((p) => p.id === ticket.probeId)) {
       return unchanged('stale');
     }
-    const released: CircuitSnapshot = { ...snapshot, probeId: null, probeLeaseUntil: null };
+    const released: CircuitSnapshot = {
+      ...snapshot,
+      probes: snapshot.probes.filter((p) => p.id !== ticket.probeId),
+    };
     if (classification === 'failure') {
       const t3 = transition(released, 'T3', now);
       return { next: t3.next, transitions: [t3.transition], effect: 'probe_failure', window: null };
     }
     if (classification === 'success') {
       const successes = released.probeSuccesses + 1;
-      if (successes >= PROVIDER_CIRCUIT_DEFAULTS.HALF_OPEN_SUCCESSES_TO_CLOSE) {
+      if (successes >= policy.halfOpenSuccessesToClose) {
         const t4 = transition(released, 'T4', now);
         return {
           next: t4.next,
@@ -296,15 +306,57 @@ export function recordSubmission(
     samples: window.length,
     failures: window.filter((s) => s.classification === 'failure').length,
   };
-  if (windowTrips(window)) {
+  if (windowTrips(window, policy)) {
     const t1 = transition(snapshot, 'T1', now);
     return { next: t1.next, transitions: [t1.transition], effect: 'evaluated', window: figures };
   }
   return { next: snapshot, transitions: [], effect: 'evaluated', window: figures };
 }
 
-/** When an `open` circuit's cooldown ends, or `null` when it is not `open`. */
-export function cooldownUntil(snapshot: CircuitSnapshot): Date | null {
+/** When an `open` circuit's cooldown ends under `policy`, or `null` when it is not `open`. */
+export function cooldownUntil(
+  snapshot: Pick<CircuitSnapshot, 'state' | 'changedAt'>,
+  policy: Pick<ProviderCircuitPolicy, 'cooldownMs'>,
+): Date | null {
   if (snapshot.state !== 'open' || !snapshot.changedAt) return null;
-  return new Date(snapshot.changedAt.getTime() + PROVIDER_CIRCUIT_DEFAULTS.COOLDOWN_MS);
+  return new Date(snapshot.changedAt.getTime() + policy.cooldownMs);
+}
+
+// --- the routing-eligibility contract (§6h) ------------------------------------------
+
+/**
+ * How the future Provider Router must treat a provider (`PROVIDER_ADAPTER.md`
+ * §6h), evaluated Lifecycle → Health → Circuit. Read-only: it claims nothing
+ * and applies no transition. Before sending, the router must still pass the
+ * chosen provider through `admit` under the provider row lock — the only call
+ * that claims a probe slot or applies T2 — and must never send where it
+ * refuses. Phase 2.3 performs no routing; this is the contract it hands on.
+ */
+export type RoutingEligibility =
+  | { readonly verdict: 'excluded_lifecycle'; readonly status: 'disabled' | 'draining' }
+  | { readonly verdict: 'excluded_open'; readonly retryAfterMs: number }
+  | { readonly verdict: 'probe_only'; readonly probeSlotsFree: number }
+  | { readonly verdict: 'eligible' };
+
+export function routingEligibility(
+  status: ProviderStatus,
+  snapshot: CircuitSnapshot,
+  policy: ProviderCircuitPolicy,
+  now: Date,
+): RoutingEligibility {
+  // Lifecycle first: a disabled or draining provider never consults the circuit.
+  if (status !== 'active') return { verdict: 'excluded_lifecycle', status };
+  // Health is informational in Phase 2 and never overrides the circuit.
+  if (snapshot.state === 'open') {
+    const ends = cooldownUntil(snapshot, policy)!.getTime();
+    if (now.getTime() < ends)
+      return { verdict: 'excluded_open', retryAfterMs: ends - now.getTime() };
+    // Cooldown elapsed: admission would half-open it with every slot free.
+    return { verdict: 'probe_only', probeSlotsFree: policy.halfOpenMaxProbes };
+  }
+  if (snapshot.state === 'half_open') {
+    const free = Math.max(0, policy.halfOpenMaxProbes - liveProbes(snapshot, now).length);
+    return { verdict: 'probe_only', probeSlotsFree: free };
+  }
+  return { verdict: 'eligible' };
 }

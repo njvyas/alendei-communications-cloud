@@ -3,6 +3,7 @@ import {
   AUDIT_OUTCOMES,
   CHANNEL_CODES,
   CHANNEL_STATUSES,
+  PROVIDER_CIRCUIT_POLICY_BOUNDS,
   PROVIDER_CIRCUIT_STATES,
   PROVIDER_HEALTH_CLASSIFICATIONS,
   PROVIDER_HEALTH_SAMPLE_KINDS,
@@ -486,4 +487,26 @@ export class ProviderHealthSampleSchema {
   @ApiProperty({ enum: PROVIDER_HEALTH_SOURCES }) source!: string;
   @ApiProperty(timestamp) observedAt!: string;
   @ApiProperty(timestamp) createdAt!: string;
+}
+
+// --- the circuit policy (Gate D.3 remediation) -------------------------------------
+
+const bounded = (field: keyof typeof PROVIDER_CIRCUIT_POLICY_BOUNDS) => ({
+  type: 'integer' as const,
+  minimum: PROVIDER_CIRCUIT_POLICY_BOUNDS[field].min,
+  maximum: PROVIDER_CIRCUIT_POLICY_BOUNDS[field].max,
+});
+
+@ApiSchema({ name: 'CircuitPolicy' })
+export class CircuitPolicySchema {
+  @ApiProperty(bounded('windowMs')) windowMs!: number;
+  @ApiProperty(bounded('windowMaxSamples')) windowMaxSamples!: number;
+  @ApiProperty(bounded('minSamples')) minSamples!: number;
+  @ApiProperty(bounded('failurePercent')) failurePercent!: number;
+  @ApiProperty(bounded('cooldownMs')) cooldownMs!: number;
+  @ApiProperty(bounded('halfOpenMaxProbes')) halfOpenMaxProbes!: number;
+  @ApiProperty(bounded('probeLeaseMs')) probeLeaseMs!: number;
+  @ApiProperty(bounded('halfOpenSuccessesToClose')) halfOpenSuccessesToClose!: number;
+  @ApiProperty({ type: 'integer', minimum: 1 }) version!: number;
+  @ApiProperty(timestamp) updatedAt!: string;
 }

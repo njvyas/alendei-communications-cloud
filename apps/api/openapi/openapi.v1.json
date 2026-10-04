@@ -432,6 +432,72 @@
         ],
         "type": "object"
       },
+      "CircuitPolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "cooldownMs": {
+            "maximum": 3600000,
+            "minimum": 1000,
+            "type": "integer"
+          },
+          "failurePercent": {
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "halfOpenMaxProbes": {
+            "maximum": 10,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "halfOpenSuccessesToClose": {
+            "maximum": 20,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "minSamples": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "probeLeaseMs": {
+            "maximum": 600000,
+            "minimum": 5000,
+            "type": "integer"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "windowMaxSamples": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "windowMs": {
+            "maximum": 3600000,
+            "minimum": 10000,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cooldownMs",
+          "failurePercent",
+          "halfOpenMaxProbes",
+          "halfOpenSuccessesToClose",
+          "minSamples",
+          "probeLeaseMs",
+          "updatedAt",
+          "version",
+          "windowMaxSamples",
+          "windowMs"
+        ],
+        "type": "object"
+      },
       "CreateApiKeyDto": {
         "additionalProperties": false,
         "properties": {
@@ -2381,6 +2447,67 @@
           "orgId",
           "resellerId",
           "workspaceId"
+        ],
+        "type": "object"
+      },
+      "UpdateCircuitPolicyDto": {
+        "additionalProperties": false,
+        "properties": {
+          "cooldownMs": {
+            "maximum": 3600000,
+            "minimum": 1000,
+            "type": "integer"
+          },
+          "expectedVersion": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "failurePercent": {
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "halfOpenMaxProbes": {
+            "maximum": 10,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "halfOpenSuccessesToClose": {
+            "maximum": 20,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "minSamples": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "probeLeaseMs": {
+            "maximum": 600000,
+            "minimum": 5000,
+            "type": "integer"
+          },
+          "windowMaxSamples": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "windowMs": {
+            "maximum": 3600000,
+            "minimum": 10000,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cooldownMs",
+          "expectedVersion",
+          "failurePercent",
+          "halfOpenMaxProbes",
+          "halfOpenSuccessesToClose",
+          "minSamples",
+          "probeLeaseMs",
+          "windowMaxSamples",
+          "windowMs"
         ],
         "type": "object"
       },
@@ -7646,6 +7773,345 @@
         "summary": "List permissions",
         "tags": [
           "permissions"
+        ]
+      }
+    },
+    "/api/v1/provider-circuit-policy": {
+      "get": {
+        "operationId": "ProviderCircuitPolicy_get",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
+            "$ref": "#/components/parameters/X-Causation-Id"
+          },
+          {
+            "$ref": "#/components/parameters/X-Correlation-Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/CircuitPolicy"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid credential (`AUTH_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authenticated, but not permitted here (`AUTHZ_*`, `TENANCY_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Rate limit exceeded (`RATE_LIMIT_EXCEEDED`); see `Retry-After`.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "summary": "Read the platform circuit-breaker policy",
+        "tags": [
+          "providers"
+        ]
+      },
+      "put": {
+        "description": "All eight parameters within their safe bounds, and expectedVersion. A stale version is 409 with details.currentVersion; the policy already in force changes nothing. Governs every circuit decision made after it commits.",
+        "operationId": "ProviderCircuitPolicy_update",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
+            "$ref": "#/components/parameters/X-Causation-Id"
+          },
+          {
+            "$ref": "#/components/parameters/X-Correlation-Id"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCircuitPolicyDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/CircuitPolicy"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation failed (`VALIDATION_FAILED`, `details.issues`), or another request error named by `error.code`.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid credential (`AUTH_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authenticated, but not permitted here (`AUTHZ_*`, `TENANCY_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflicts with the current state (named by `error.code`; lifecycle conflicts carry `details.status`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Rate limit exceeded (`RATE_LIMIT_EXCEEDED`); see `Retry-After`.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "summary": "Replace the platform circuit-breaker policy",
+        "tags": [
+          "providers"
         ]
       }
     },

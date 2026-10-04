@@ -3,6 +3,7 @@ import {
   ERROR_CODES,
   type ChannelCode,
   type ChannelStatus,
+  type ProviderCircuitPolicy,
   type ProviderCircuitState,
   type ProviderHealthClassification,
   type ProviderHealthSampleKind,
@@ -14,7 +15,7 @@ import { schema, type Transaction } from '@acc/db';
 import { asc, eq } from 'drizzle-orm';
 
 import { AppException } from '../common/errors/app.exception';
-import { cooldownUntil } from './provider-state-machine';
+import { cooldownUntil, type CircuitSnapshot } from './provider-state-machine';
 
 /**
  * The channel and provider resources and the lookups every provider service
@@ -83,6 +84,13 @@ export interface ProviderHealthSampleView {
 export type ChannelRow = typeof schema.channels.$inferSelect;
 export type ProviderRow = typeof schema.providers.$inferSelect;
 export type ProviderHealthRow = typeof schema.providerHealth.$inferSelect;
+export type CircuitPolicyRow = typeof schema.providerCircuitPolicy.$inferSelect;
+
+/** `GET`/`PUT /provider-circuit-policy` (`PROVIDER_ADAPTER.md` §6i). Exhaustive: no internal field. */
+export interface CircuitPolicyView extends ProviderCircuitPolicy {
+  readonly version: number;
+  readonly updatedAt: string;
+}
 
 /** Every catalogue decision is made at platform scope (ADR-013 F-3). */
 export const PLATFORM = { scopeType: 'platform', scopeId: null } as const;
@@ -98,8 +106,12 @@ export function channelView(row: ChannelRow): ChannelView {
   };
 }
 
-export function providerView(row: ProviderRow, channelCode: ChannelCode): ProviderView {
-  const cooldown = cooldownUntil(circuitSnapshot(row));
+export function providerView(
+  row: ProviderRow,
+  channelCode: ChannelCode,
+  policy: Pick<ProviderCircuitPolicy, 'cooldownMs'>,
+): ProviderView {
+  const cooldown = cooldownUntil(circuitSnapshot(row), policy);
   return {
     id: row.id,
     channelId: row.channelId,
@@ -136,15 +148,52 @@ export function healthSampleView(row: ProviderHealthRow): ProviderHealthSampleVi
 }
 
 /** The circuit columns of a provider row, as the state machine reads them. */
-export function circuitSnapshot(row: ProviderRow) {
+export function circuitSnapshot(row: ProviderRow): CircuitSnapshot {
   return {
     state: row.circuitState,
     generation: row.circuitGeneration,
     changedAt: row.circuitChangedAt,
-    probeId: row.circuitProbeId,
-    probeLeaseUntil: row.circuitProbeLeaseUntil,
+    probes: row.circuitProbes.map((p) => ({ id: p.id, leaseUntil: new Date(p.leaseUntil) })),
     probeSuccesses: row.circuitProbeSuccesses,
   };
+}
+
+/** The policy's eight parameters, as the circuit engine consumes them. */
+export function circuitPolicyOf(row: CircuitPolicyRow): ProviderCircuitPolicy {
+  return {
+    windowMs: row.windowMs,
+    windowMaxSamples: row.windowMaxSamples,
+    minSamples: row.minSamples,
+    failurePercent: row.failurePercent,
+    cooldownMs: row.cooldownMs,
+    halfOpenMaxProbes: row.halfOpenMaxProbes,
+    probeLeaseMs: row.probeLeaseMs,
+    halfOpenSuccessesToClose: row.halfOpenSuccessesToClose,
+  };
+}
+
+export function circuitPolicyView(row: CircuitPolicyRow): CircuitPolicyView {
+  return { ...circuitPolicyOf(row), version: row.version, updatedAt: row.updatedAt.toISOString() };
+}
+
+/**
+ * The platform circuit policy as this transaction sees it (§6a). Read by every
+ * circuit decision after the provider row lock is taken; `forUpdate` only by
+ * the policy update itself. Its absence is a broken installation, not a
+ * request error.
+ */
+export async function loadCircuitPolicy(
+  tx: Transaction,
+  options: { forUpdate?: boolean } = {},
+): Promise<CircuitPolicyRow> {
+  const query = tx
+    .select()
+    .from(schema.providerCircuitPolicy)
+    .where(eq(schema.providerCircuitPolicy.scope, 'platform'));
+  const [row] = options.forUpdate ? await query.for('update') : await query;
+  if (!row)
+    throw new Error('provider_circuit_policy has no platform row (migration 0023 seeds it)');
+  return row;
 }
 
 /** One provider row, optionally locked `FOR UPDATE`; `404` when it does not exist. */
@@ -187,7 +236,7 @@ export async function providerDetail(
   row: ProviderRow,
 ): Promise<ProviderDetailView> {
   return {
-    ...providerView(row, await channelCodeOf(tx, row.channelId)),
+    ...providerView(row, await channelCodeOf(tx, row.channelId), await loadCircuitPolicy(tx)),
     capabilities: await readCapabilities(tx, row.id),
   };
 }

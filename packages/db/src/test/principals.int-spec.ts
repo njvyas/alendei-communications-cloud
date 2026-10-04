@@ -44,6 +44,8 @@ const TABLES = [
   'organizations',
   'permissions',
   'provider_capabilities',
+  // Gate D.3 remediation (migration 0023): the platform circuit policy, one row.
+  'provider_circuit_policy',
   // Phase 2.3 (migration 0022): append-only health samples, same global posture.
   'provider_health',
   'providers',
@@ -70,6 +72,8 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
     organizations: 'INSERT,SELECT,UPDATE',
     permissions: 'SELECT',
     provider_capabilities: 'DELETE,INSERT,SELECT,UPDATE',
+    // Gate D.3 remediation: seeded by migration, read and replaced, never added or removed.
+    provider_circuit_policy: 'SELECT,UPDATE',
     // Phase 2.3: samples are appended, never changed or removed.
     provider_health: 'INSERT,SELECT',
     providers: 'INSERT,SELECT,UPDATE',
