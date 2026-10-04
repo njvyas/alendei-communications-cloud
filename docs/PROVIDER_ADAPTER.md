@@ -1,6 +1,6 @@
 # Provider Abstraction Architecture
 
-> **Phase 2 status (ADR-013): SCOPE FROZEN; 2.1 (migrations `0018`–`0019`) CLOSED (Gate D.1); 2.2 (migrations `0020`–`0021`) CLOSED (Gate D.2); 2.3 (health and circuit breaker, migrations `0022`–`0023`) CLOSED (Gate D.3); 2.4 (hot reload, migration `0024`, §3a) CLOSED (Gate D.4); 2.5–2.6 not implemented.**
+> **Phase 2 status (ADR-013): SCOPE FROZEN; 2.1 (migrations `0018`–`0019`) CLOSED (Gate D.1); 2.2 (migrations `0020`–`0021`) CLOSED (Gate D.2); 2.3 (health and circuit breaker, migrations `0022`–`0023`) CLOSED (Gate D.3); 2.4 (hot reload, migration `0024`, §3a) CLOSED (Gate D.4); 2.5 (credential reference contract, §4a, documentation only) — Gate D.5 pending review; 2.6 not implemented.**
 
 ## 1. Purpose
 
@@ -137,7 +137,7 @@ On every advisory read (inside the authorized transaction), at time `now` on the
 
 **Phase 2 partition (ADR-013 PD-5, PD-6).** In Phase 2: add, update, replace capabilities, enable, disable, drain (2.1); test a provider against the simulator (2.2 — **implemented**: `POST /providers/:id/test-send`, `providers.test_send` at platform scope, an `active` provider only, the adapter from the provider's catalogue row, a caller-chosen simulator behaviour and nothing else, a synthetic payload, no message persisted, `provider.test_sent` audited); run a health check and override health manually (2.3 — **implemented**: `POST /providers/:id/health-check`, `POST /providers/:id/health`, `GET /providers/:id/health`; §5–§6). **Not in Phase 2:** priority/weight, routing-policy assignment, traffic and canary migration, rollback via routing-policy versions, and per-provider health-threshold configuration (Phase 2 uses fixed platform defaults, ADR-013 F-6). Phase 2 administration is platform scope only: `AuthorizationService` enforces `providers.read`, `providers.manage` and `providers.test_send` at platform scope and RLS enforces platform-scope eligibility (ADR-013 F-3). The permissions are currently granted only to `alendei_super_admin`; that is a grant, not the boundary (F-4).
 
-All of the following are DB writes to `providers`/`provider_capabilities`/`routing_policies` plus a cache-invalidation broadcast — never a code or config-file change. **Every one of them is a privileged operation**: gated behind the `providers.manage` permission (or the narrower `providers.test_send` for test-sends specifically), and every invocation writes an `audit_logs` row with the actor, the exact before/after values, and the target provider — with no exception, since a mis-issued priority/weight/drain change can silently redirect real traffic and a test-send can incur real provider cost or generate a real customer-visible message once a real provider is connected.
+All of the following are DB writes to `providers`/`provider_capabilities`/`routing_policies` — never a code or config-file change. PostgreSQL stays authoritative: each change bumps the configuration revision in its own transaction and is announced by PostgreSQL `NOTIFY` on commit, a hint that only marks each instance's advisory snapshot dirty, with reconciliation and a hard TTL bounding staleness (§3a). **Every one of them is a privileged operation**: gated behind the `providers.manage` permission (or the narrower `providers.test_send` for test-sends specifically), and every invocation writes an `audit_logs` row with the actor, the exact before/after values, and the target provider — with no exception, since a mis-issued priority/weight/drain change can silently redirect real traffic and a test-send can incur real provider cost or generate a real customer-visible message once a real provider is connected.
 
 - Add / enable / disable a provider.
 - Drain a provider (`providers.status → draining`: stop accepting *new* messages, let in-flight attempts complete). Draining is an **administrative status**, not a health state (ADR-013 F-5).
@@ -147,21 +147,46 @@ All of the following are DB writes to `providers`/`provider_capabilities`/`routi
 - Migrate traffic between providers, including canary migration (route X% to a new provider, monitor, ramp).
 - Roll back a provider or routing change (activate a prior `routing_policy_versions` row; re-enable a disabled provider).
 
-## 4a. Credential ownership & precedence
+## 4a. Credential reference contract (Phase 2.5 — documentation only)
 
-> **NOT FROZEN — superseded pending a channel-phase ADR (ADR-013 PD-2, F-1).** This section and `DEPLOYMENT.md` §0f / `SECURITY.md` §3a described two incompatible models (a platform/reseller/organization *configuration* scope with a NULL platform `scope_id`, versus a *tenant-scoped* five-level scope with `org_id` for RLS). Neither is adopted and no hybrid is defined; `provider_credentials` is not built in Phase 2. The text below is retained as input to that ADR, not as a commitment. Binding now, because both models agree: the value is a `<backend>:<locator>` reference resolved through `SecretsPort`; the secret never enters PostgreSQL, logs, metrics, audit rows, API responses or any frontend; Alendei-, reseller- and organization-owned credentials must be able to coexist in one shared deployment. Phase 2.5 is **documentation only** — no resolver port, type, interface or resolution code (`ROADMAP.md` §5b). **Credential architecture requires a separate reviewed decision (its own ADR) before implementation.** Future integration boundary: resolution happens server-side, at call time, behind `SecretsPort`, never in adapter code.
+> **Status:** requirements recorded by Phase 2.5 (ADR-013 PD-2, F-1); **documentation only**. No credential table, column, port, type, interface, resolution code, API or UI exists, and none is defined here. **Credential architecture requires a separate reviewed decision (its own ADR) before any implementation.** §4a.1–§4a.2 are binding on that ADR; §4a.3 lists what it alone decides; §4a.4 records candidate input, adopted by nothing.
 
-Per `DATABASE.md` §3, a provider credential is owned at exactly one of three scopes, and selection at send time always prefers the most specific match:
+### 4a.1 Binding requirements
 
-```
-organization-owned credential (this org has its own contract/keys with the provider)
-        ↓ (if none active)
-reseller-owned credential (the org's reseller supplies a shared credential for its book of organizations)
-        ↓ (if none active)
-platform-owned credential (Alendei's own shared/default credential for the provider)
-```
+These hold for every ownership, scope and precedence model the future ADR may choose. None of them selects one.
 
-`provider_credentials.scope_type` is a **configuration** scope (`platform`, `reseller`, `organization` — it stops at organization because credentials are never workspace- or team-owned) and is a different enum from the five-value authorization scope on `user_roles` (`TENANCY.md` §1a.2). Only one credential per `(provider_id, scope_type, scope_id)` may be `is_active` at a time. Viewing/managing a credential requires a permission scoped to its own `scope_type` (an organization admin can manage only their own organization-scoped credentials, never a reseller- or platform-scoped one; a reseller admin can manage their reseller-scoped credentials but not another reseller's). **No credential's plaintext value is ever exposed to any frontend client at any scope** — only `credential_ref` metadata (a label, `rotated_at`, `scope_type`) is ever returned by the API; the raw secret is resolved server-side, at call time, directly from the secrets backend (`SECURITY.md` §3). Rotation and revocation follow `RUNBOOK.md` §"Provider credential rotation" regardless of which scope owns the credential.
+- **CR-1 — Reference, never value.** A provider credential is held only as a reference of the form `<backend>:<locator>` into the deployment's secrets backend (the form `SecretsPort` already accepts). The credential value is never stored by the platform.
+- **CR-2 — Resolution boundary.** A reference is resolved server-side, at call time, through `SecretsPort` and nowhere else. Adapter code never resolves or fetches a credential; it receives resolved material only for the call that needs it. Whether a resolved value may be cached at all, and for how long, is **not frozen** (§4a.3); any policy the ADR adopts must still satisfy CR-3.
+- **CR-3 — Where a value never appears.** A resolved credential value never enters PostgreSQL, logs, metrics or metric labels, audit rows, API responses, error messages or error details, any frontend, the Phase 2.4 configuration snapshot (§3a.1) or a configuration notification payload (§3a.3). Hot reload converges configuration only; it never carries, caches or announces credential material.
+- **CR-4 — Coexistence and isolation.** One shared deployment must be able to hold credentials belonging to different owners — Alendei, a reseller, an organization — side by side, with isolation between owners enforced by the database and not by application convention alone. How owners are represented, scoped and isolated is **not frozen** (§4a.3).
+- **CR-5 — No cross-owner use; fail closed.** A credential belonging to one owner is never used for another owner's traffic. If no eligible credential exists for a submission, the submission is refused; it never falls back to some other credential. Fallback across an ownership boundary is **prohibited** unless the future credential ADR explicitly defines it and it is approved. This requirement selects no precedence or selection rule.
+- **CR-6 — Rotation and revocation without restart.** Rotating or revoking a credential takes effect without a restart or a redeploy. The propagation mechanism and its bound are decided by the ADR; whatever they are, they carry no resolved value (CR-3).
+- **CR-7 — Audit, and the visibility of references.** Every change to a credential reference or its binding is audited, and the credential value never enters an audit record. **A locator or reference is itself potentially sensitive metadata** — it can reveal the secrets backend's layout, an owner's identity or a naming scheme. It is not safe to expose merely because it is not the secret: its visibility in API responses, the UI, audit rows, logs and metrics must be defined explicitly by the future credential ADR and its authorization model. Phase 2 exposes no reference on any surface.
+- **CR-8 — A credential failure is not a provider failure.** A provider's rejection of a credential is normalized as `auth_error`, which is neutral for both the circuit and health (§5b): one owner's bad credential cannot change a shared provider's health or open its circuit. A future design must preserve this.
+
+### 4a.2 The `SecretsPort` integration boundary
+
+`SecretsPort` (`apps/api/src/secrets/secrets.port.ts`: `resolve(reference)`, `backend`) is the only place a reference may be resolved. Phase 2 adds nothing to it — no port, method, type or interface — and the adapter contract (§2) carries no credential field. `SimulatorAdapter` uses no credential; `INVALID_CREDENTIALS` is a simulated behaviour only.
+
+### 4a.3 NOT FROZEN — decided only by the future credential ADR
+
+1. The credential **ownership and scope model** (including whether and how an owner maps to `org_id`, a reseller, or the platform).
+2. The credential **precedence and selection model**.
+3. **Management authority** at each scope — which principals and permissions may create, view, rotate or revoke a credential.
+4. **Selection without a tenant context** (for example, a platform-initiated health check or test-send).
+5. **Retention and deletion** semantics.
+6. The **resolved-value caching** policy (CR-2).
+7. The credential **API and UI**, including the visibility of locators and references (CR-7). The existing `SecretResolutionError` names the reference in its message — written for deployment-plane references; whether that is acceptable for a provider credential reference is part of this decision.
+8. The credential **storage implementation** (`provider_credentials` or anything else) and the revocation propagation bound (CR-6).
+
+### 4a.4 Candidate input — NOT FROZEN, adopted by nothing
+
+Two incompatible descriptions exist and are retained only as input to the ADR (ADR-013 F-1); no hybrid is defined:
+
+- **Candidate A** (`DEPLOYMENT.md` §0f, ADR-009 D-4 wording): a tenant-scoped row, a scope within the five-level hierarchy, `org_id` for RLS.
+- **Candidate B** (`DATABASE.md` §3): a configuration scope `platform | reseller | organization`, a NULL platform `scope_id`, one active credential per provider and scope, with selection preferring the most specific scope.
+
+Neither is a commitment, and nothing in Phase 2 may be read as choosing one. Rotation and revocation procedures (`RUNBOOK.md` §"Provider credential rotation") describe a future operation, not current behaviour.
 
 ## 5. Provider health (Phase 2.3 — canonical)
 

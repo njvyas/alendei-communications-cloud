@@ -1314,9 +1314,9 @@ Every route acts in the organization selected by `X-Acc-Organization` (or implic
 
 Invitation / credential delivery (users created via `POST /users` still cannot sign in until the existing bootstrap mechanism activates them — D16), reseller CRUD and reseller suspension, WebSocket consumption and subscriptions, organization deletion, workspace/team deletion, cross-organization moves of workspaces or teams, and changing an organization's reseller.
 
-## 32. Phase 2.1 provider and channel catalogue (ADR-013) — IMPLEMENTED (Gate D.1 pending review)
+## 32. Phase 2 provider and channel catalogue (ADR-013) — IMPLEMENTED (2.1–2.4 CLOSED, Gates D.1–D.4)
 
-> **Implemented** in `apps/api/src/providers/` (migration `0018`). **Platform scope only**: there is no organization, workspace, team, reseller or white-label view of this catalogue in Phase 2. The console screens are increment 2.6, separately gated; this section is the contract they will be built against.
+> **Implemented** in `apps/api/src/providers/` (migration `0018`). **Platform scope only**: there is no organization, workspace, team, reseller or white-label view of this catalogue in Phase 2. The console screens are increment 2.6, separately gated; this section is the contract they will be built against. **Configuration changes take effect on every running instance without restart** (Phase 2.4, `PROVIDER_ADAPTER.md` §3a), and every route on this page reads PostgreSQL, so a response always reflects committed state; there is no hot-reload endpoint and no credential endpoint or field.
 
 **Common rules.**
 

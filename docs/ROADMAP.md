@@ -251,7 +251,7 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 
 ## 5. Phase 2 — Provider abstraction + simulator
 
-**Status: SCOPE FROZEN (ADR-013, 02-Oct-2026). 2.1 CLOSED (migrations `0018`–`0019`; Gate D.1 approved). 2.2 CLOSED (migrations `0020`–`0021`; Gate D.2 approved). 2.3 CLOSED (migrations `0022`–`0023`; Gate D.3 approved). 2.4 CLOSED (migration `0024`; Gate D.4 approved). 2.5–2.6 not started.** Each increment requires its own authorization.
+**Status: SCOPE FROZEN (ADR-013, 02-Oct-2026). 2.1 CLOSED (migrations `0018`–`0019`; Gate D.1 approved). 2.2 CLOSED (migrations `0020`–`0021`; Gate D.2 approved). 2.3 CLOSED (migrations `0022`–`0023`; Gate D.3 approved). 2.4 CLOSED (migration `0024`; Gate D.4 approved). 2.5 (documentation only) — Gate D.5 pending review. 2.6 not started.** Each increment requires its own authorization.
 
 - **Objectives**: implement `provider-registry`, `provider-adapters` (interface + `SimulatorAdapter` only), health/circuit breaker mechanics, admin hot-reload plumbing.
 - **Dependencies**: Phase 1 (Gate C closed): `TenantDatabase` and the pre-commit authorization-coverage containment, `AuthorizationService` + `@RequiresPermission`, transactional `AuditWriter`, the OpenAPI pipeline, `/metrics`, `SecretsPort`, Redis, the `with-db-clone` mutation harness.
@@ -277,7 +277,7 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 | **2.2** | Adapter Contract & Simulator | none; migration `0020` adds the `provider.test_sent` audit policy (permission `providers.test_send` already defined by 2.1) | ✅ CLOSED — migrations `0020`, `0021`; Gate D.2 approved |
 | **2.3** | Health & Circuit Breaker | `provider_health`; health/circuit columns on `providers` | ✅ CLOSED — migrations `0022`, `0023`; Gate D.3 approved |
 | **2.4** | Hot Reload | `provider_configuration_revision` (migration `0024`) | ✅ CLOSED — migration `0024`; Gate D.4 approved |
-| **2.5** | Credential Reference Contract — documentation only | none | Gate D.5 |
+| **2.5** | Credential Reference Contract — documentation only | none | ✅ DOCUMENTED (`PROVIDER_ADAPTER.md` §4a); **Gate D.5 pending review** |
 | **2.6** | Frontend console — separately authorized | none | Gate D.6 |
 
 **Execution order:** 2.1 → 2.2 → 2.3 → 2.4; 2.5 may run alongside 2.2; 2.6 after the 2.1–2.4 contract is stable.
@@ -346,6 +346,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 - *DB / API / permissions / audit / code*: none.
 - *Tests / mutation proofs*: none of its own — 2.5 adds no code. The absence of credential persistence is proven by the Gate D cross-cutting check (§5c), implemented with 2.1 and extended by each backend increment.
 - *Acceptance*: the documentation review — requirements, invariants, the open ownership question and the `SecretsPort` boundary are recorded, and nothing in Phase 2 freezes an ownership or scope semantic.
+- *Status (04-Oct-2026)*: documented in `PROVIDER_ADAPTER.md` §4a (binding requirements CR-1–CR-8, the `SecretsPort` boundary, the NOT FROZEN list, candidate input) and reconciled in `SECURITY.md` §3–§3b; Gate D.5 pending review. **Follow-up outside 2.5, not authorized:** credential-absence test hardening (ADR-013 "2.5 notes" (b)).
 - *Exclusions*: `provider_credentials`, any ownership model, rotation, management, any real credential, any credential type in code.
 
 **2.6 — Frontend console (separately authorized and gated)**
@@ -360,7 +361,7 @@ Objectively testable; each is pass/fail. Evidence runs on disposable clones, nev
 - **Simulator matrix** — the seven submission-time behaviours are reproducible on demand through test-send with the specified normalized outcomes; no message-table row is ever written.
 - **Health state machine** — every specified transition, and no other, for automatic and manual sources.
 - **Circuit breaker** — `CLOSED/OPEN/HALF_OPEN` transitions exact at threshold boundaries under an injected clock; `OPEN` short-circuits.
-- **Hot reload** — **best-effort configuration invalidation with bounded convergence** — not transactional configuration propagation: with no restart, a change through one instance is observed by a second instance (a) immediately when the pub/sub publication arrives and (b) within the TTL, on the injected clock, when the publication is missed.
+- **Hot reload** — **best-effort configuration invalidation with bounded convergence** — not transactional configuration propagation (as built in 2.4, `PROVIDER_ADAPTER.md` §3a): PostgreSQL stays authoritative; each instance keeps an advisory in-process snapshot that authorizes nothing; a PostgreSQL `LISTEN/NOTIFY` hint, sent on commit, marks it dirty; with no restart, a change through one instance is observed by a second instance (a) on its next advisory read after the notification arrives, (b) within `R` = 5 s on the injected clock when notifications are lost (revision reconciliation), and (c) never later than the hard TTL `T` = 60 s. Snapshots and notifications carry no credential material. No Redis pub/sub.
 - **Audit coverage** — every mutation and transition writes its ADR-013 F-4 action in the same transaction, with before/after and no secret material.
 - **OpenAPI consistency** — the generated spec covers every new route and matches the route table and `FRONTEND_API_CONTRACT.md`; `openapi:check` passes.
 - **Observability** — bounded health/circuit/test-send metrics exist and are proven; the Grafana dashboard is provisioned.
