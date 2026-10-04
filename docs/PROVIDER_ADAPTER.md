@@ -49,6 +49,90 @@ interface ProviderAdapter {
 
 **Phase 2 (ADR-013).** The registry is built over `channels`, `providers` and `provider_capabilities` (2.1) and `provider_health` (2.3); **`provider_credentials` is not built** (§4a). Resolution "for a given channel + tenant" is a later-phase concern: Phase 2 has no tenant-facing resolution, because the catalogue is platform-only. **No event is published in Phase 2** — there is no outbox (ADR-013 PD-1); transitions are recorded in `audit_logs` and metrics. **Phase 2.2:** `ProviderAdapterRegistry` (`apps/api/src/provider-adapters/adapter-registry.ts`) resolves `adapter_key → adapter`, built once from code at startup. It fails at construction if a key is registered twice or if the registered set and `PROVIDER_ADAPTER_KEYS` disagree, and `resolve` throws for any unregistered key (case- and whitespace-exact; no prototype keys), which the API answers `422 PROVIDER_ADAPTER_UNKNOWN`. A provider's adapter key always comes from its catalogue row, never from a request. Redis pub/sub invalidation is built in 2.4 as **best-effort configuration invalidation with bounded convergence** — not transactional configuration propagation: the update commits first, the invalidation is published after commit, subscribers evict on receipt, and the cache TTL bounds staleness if a publication is lost. `providers.adapter_key` names an adapter registered in code; in Phase 2 the only key is `simulator` (ADR-013 F-9).
 
+## 3a. Hot reload — runtime configuration convergence (Phase 2.4 — canonical)
+
+> **Status:** frozen 04-Oct-2026, before any 2.4 code (ADR-013 "2.4 design", user decision at the 2.4 authorization). It replaces the frozen ROADMAP §5b transport (Redis pub/sub published by the application after commit) with PostgreSQL `LISTEN/NOTIFY` emitted by database triggers — no new infrastructure, and a notification that cannot be sent before commit or forgotten by an application path.
+
+**Hot reload is a performance/convergence mechanism, never an authorization mechanism.** PostgreSQL is the source of truth. The authoritative path for every decision that matters is unchanged:
+
+```
+authenticated principal → authorization (AuthorizationService) → PostgreSQL / RLS
+provider submission: … → locked provider row → lifecycle → circuit admission (§6c, §6h) → provider call
+```
+
+Nothing in this section is consulted by authorization, provider administration, tenant or scope access, lifecycle enforcement, circuit admission or a provider submission. A cached snapshot is never proof that a caller may read or change anything.
+
+### 3a.1 What is cached — the advisory configuration snapshot
+
+One process-local, immutable snapshot per application instance (`ProviderConfigurationCache`), replaced whole:
+
+| Included (administrative configuration) | Excluded (DB-authoritative, never cached) |
+|---|---|
+| channels (`id`, `code`, `display_name`, `status`) | provider health state, override, circuit state, generation, probe slots, samples |
+| providers (`id`, `channel_id`, `name`, `adapter_key`, `status`) and their capabilities | anything about principals, grants, permissions or tenants |
+| the circuit policy (eight parameters, `version`) | audit data |
+| the configuration **revision** the snapshot was read at, and when it was loaded | |
+
+**Advisory consumers only** (Phase 2): `GET /channels/:id/routing-candidates` — the read-only view the future Provider Router uses to pick candidates (active providers of a channel, and the policy version), and its in-process equivalent `ProviderCatalogueService.routingCandidates`. Every existing admin read and mutation keeps reading PostgreSQL directly. The routing contract of §6h is unchanged: a candidate list is advisory; circuit admission under the row lock remains mandatory immediately before a submission.
+
+**The snapshot is only ever read or refreshed inside an authorized request transaction** — after `AuthorizationService` has granted `providers.read` at platform scope — so loading runs under that principal's RLS. Every eligible principal sees the same catalogue rows (the catalogue RLS predicate does not vary among platform-scope principals, §F-3), so a snapshot loaded by one authorized request is safe to serve to another authorized request; it is never served before authorization, and an unauthorized request neither reads nor refreshes it. There is no background database read.
+
+### 3a.2 Revision — the authoritative change signal
+
+`provider_configuration_revision` (migration `0024`): one row, `revision bigint`, increased by exactly the database, never by the application:
+
+- **Statement-level `AFTER` triggers** (`fn_provider_configuration_changed`, `SECURITY INVOKER`) on every relevant change: `providers` insert, delete, and update **of** `channel_id`, `name`, `adapter_key`, `status` (not of health or circuit columns); `provider_capabilities` insert/update/delete; `channels` insert/update/delete; `provider_circuit_policy` update. Each bumps `revision` by one in the **same transaction** as the change and calls `pg_notify('acc_provider_configuration', revision)`.
+- **Transactional and monotonic.** The revision is visible only when the change commits; a rolled-back change leaves no revision and sends no notification. A trigger refuses any update that does not increase it. Because the revision row is updated inside the change's transaction, readers can never observe a revision whose change is not yet visible.
+- RLS: `SELECT` on `app_has_platform_scope()`; `UPDATE` on `app_has_platform_permission('providers.manage')` (the only application writers of the watched columns are `providers.manage` holders); no `INSERT`/`DELETE`; nothing to `acc_auth`/`acc_relay`. **No SECURITY DEFINER function.**
+
+### 3a.3 Notification — an accelerator, never a source of state
+
+- PostgreSQL delivers `NOTIFY` **only after commit**, in commit order; a notification can therefore never announce a change that is not yet visible.
+- Each instance holds one dedicated `LISTEN acc_provider_configuration` connection (`ProviderConfigurationListener`, application name `acc-provider-config-listener`).
+- A notification's payload is a **hint**: the revision number, used only to decide whether to mark the snapshot dirty. It is never applied as data. A payload not greater than the snapshot's revision (duplicate, out of order, stale) is ignored; a malformed payload marks the snapshot dirty (conservative); a forged payload can at most cause one extra reload from PostgreSQL.
+- The instance that commits a change also marks its own snapshot dirty immediately after commit (read-your-writes on that instance, without waiting for its own notification).
+
+### 3a.4 Reconciliation, TTL and the convergence guarantee
+
+On every advisory read (inside the authorized transaction), at time `now` on the provider clock:
+
+1. **Reload** if there is no snapshot (startup), it is dirty (notification, local change, listener loss), or it is older than **`T` = 60 s** (hard TTL).
+2. Otherwise, if the revision was last checked **`R` = 5 s** or longer ago, read the revision (one row): if it is newer than the snapshot's, reload.
+3. A reload reads the revision **first**, then the configuration, in the same transaction, so the data is never older than the revision it is labelled with. A reloaded snapshot is installed only if its revision is **not lower** than the installed one — a slow reload can never replace newer configuration with older.
+
+**Guarantee.** For every instance: a configuration change is visible to its advisory reads on the first read after its notification is delivered (normally milliseconds after commit); **if notifications are lost, no later than `R` = 5 s after commit**; and, even if the revision signal itself failed, **no snapshot older than `T` = 60 s is ever served.** Worst-case staleness of an advisory read: `R` with a working revision trigger, `T` in any case. Authoritative decisions have **zero** staleness: they never read the snapshot.
+
+### 3a.5 Failure and recovery
+
+| Failure | Behaviour |
+|---|---|
+| Notification lost (network, overflow, listener down) | Reconciliation detects the newer revision within `R` |
+| `LISTEN` connection lost / PostgreSQL restart | The snapshot is marked dirty at once (missed notifications cannot be trusted); the listener reconnects with backoff (1 s → 30 s) and re-issues `LISTEN`; meanwhile reconciliation bounds staleness by `R` |
+| Application restart | The new process starts with no snapshot: its first advisory read loads from PostgreSQL (startup reconciliation) |
+| Duplicate / out-of-order / stale / forged notification | Ignored, or one extra reload; never applied as state |
+| Reload fails (database error) | The request fails as any database error does; the old snapshot is not marked fresh, so the next read retries |
+| Revision trigger disabled or dropped | No notification and no revision change: the hard TTL still reloads within `T` |
+| Redis unavailable | Irrelevant to 2.4: Redis is not used for configuration propagation |
+| Concurrent administrators | Every change commits its own revision; changes serialize on the revision row; each instance converges to the latest committed revision |
+
+### 3a.6 Observability
+
+`acc_provider_config_changes_total{operation}` (configuration change committed by this instance), `acc_provider_config_notifications_total{outcome}` (`applied`, `duplicate`, `malformed`), `acc_provider_config_reloads_total{operation, outcome}` (operation `startup`, `notification`, `local`, `reconcile`, `ttl`; outcome `success`, `failure`, `discarded`), `acc_provider_config_revision` (installed revision), `acc_provider_config_convergence_seconds` (commit to install), `acc_provider_config_listener_connected` and `acc_provider_config_listener_events_total{outcome}` (`connected`, `lost`). One log line per listener loss/recovery, reload failure and discarded stale reload.
+
+### 3a.7 Acceptance criteria (Gate D.4)
+
+1. A provider enabled, disabled, drained, renamed or re-capabilitied, or the circuit policy changed, through instance A is reflected in instance B's advisory read before `R` elapses on B's clock (notification path), with no restart.
+2. With B's notifications suppressed, B serves the old configuration until `R` and the new one on its first read at `R` — never later.
+3. With the revision signal disabled, B serves the new configuration on its first read at `T` — never later.
+4. A provider disabled through A is refused by B's very next test-send even while B's snapshot still lists it (DB truth, §6h).
+5. Duplicate, out-of-order, malformed and forged notifications change nothing; a forged high revision cannot stop a later real change from converging.
+6. A new instance, started after a change, serves the new configuration on its first read.
+7. `LISTEN` loss marks the snapshot dirty; the listener reconnects; notifications resume.
+8. A change in an open transaction is invisible and unannounced until commit; a rollback leaves no trace.
+9. Concurrent administrators and rapid successive changes converge to the last committed state on every instance; a slow reload never installs older configuration over newer.
+10. Unauthorized, tenant, reseller, API-key and forged-scope requests are refused before the cache is read or refreshed; the revision table and the notification channel grant no capability.
+11. Structural: the cache is not reachable from authorization, administration, lifecycle, admission or submission code.
+
 ## 4. Admin operations (no deploy, no restart) — all privileged, all audited
 
 **Phase 2 partition (ADR-013 PD-5, PD-6).** In Phase 2: add, update, replace capabilities, enable, disable, drain (2.1); test a provider against the simulator (2.2 — **implemented**: `POST /providers/:id/test-send`, `providers.test_send` at platform scope, an `active` provider only, the adapter from the provider's catalogue row, a caller-chosen simulator behaviour and nothing else, a synthetic payload, no message persisted, `provider.test_sent` audited); run a health check and override health manually (2.3 — **implemented**: `POST /providers/:id/health-check`, `POST /providers/:id/health`, `GET /providers/:id/health`; §5–§6). **Not in Phase 2:** priority/weight, routing-policy assignment, traffic and canary migration, rollback via routing-policy versions, and per-provider health-threshold configuration (Phase 2 uses fixed platform defaults, ADR-013 F-6). Phase 2 administration is platform scope only: `AuthorizationService` enforces `providers.read`, `providers.manage` and `providers.test_send` at platform scope and RLS enforces platform-scope eligibility (ADR-013 F-3). The permissions are currently granted only to `alendei_super_admin`; that is a grant, not the boundary (F-4).
