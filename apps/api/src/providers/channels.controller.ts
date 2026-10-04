@@ -8,9 +8,8 @@ import { RequestContext } from '../common/context/request-context';
 import { AppException } from '../common/errors/app.exception';
 import { AcceptedCredentials } from '../openapi/accepted-credentials.decorator';
 import { ApiData, ApiErrors, ApiPaged } from '../openapi/openapi-responses';
-import { ChannelSchema, RoutingCandidatesSchema } from '../openapi/openapi-schemas';
+import { ChannelSchema } from '../openapi/openapi-schemas';
 import { ListChannelsQueryDto } from './provider.dto';
-import { ProviderCatalogueService } from './provider-catalogue.service';
 import { ProviderRegistryService } from './provider-registry.service';
 
 export const PLATFORM_CATALOGUE =
@@ -39,10 +38,7 @@ export function requestPrincipal(): AuthPrincipal {
 @ApiTags('channels')
 @Controller('channels')
 export class ChannelsController {
-  constructor(
-    private readonly registry: ProviderRegistryService,
-    private readonly catalogue: ProviderCatalogueService,
-  ) {}
+  constructor(private readonly registry: ProviderRegistryService) {}
 
   @Get()
   @OptionalTenantContext()
@@ -71,23 +67,5 @@ export class ChannelsController {
   @ApiErrors(400, 401, 403, 404, 429)
   async get(@Param('id', new ParseUUIDPipe()) id: string) {
     return { data: await this.registry.getChannel(requestPrincipal(), id) };
-  }
-
-  @Get(':id/routing-candidates')
-  @OptionalTenantContext()
-  @RequiresPermission(PERMISSIONS.PROVIDERS_READ, {
-    target: 'deferred',
-    because: PLATFORM_CATALOGUE,
-  })
-  @AcceptedCredentials('userSession')
-  @ApiOperation({
-    summary: 'Advisory routing candidates of a channel',
-    description:
-      'Phase 2.4: the lifecycle-active providers of the channel and the circuit-policy version, from this instance’s configuration snapshot (PROVIDER_ADAPTER.md §3a). Advisory: it converges within the documented bound and authorizes nothing — circuit admission decides every submission.',
-  })
-  @ApiData(RoutingCandidatesSchema)
-  @ApiErrors(400, 401, 403, 404, 429)
-  async routingCandidates(@Param('id', new ParseUUIDPipe()) id: string) {
-    return { data: await this.catalogue.routingCandidates(requestPrincipal(), id) };
   }
 }

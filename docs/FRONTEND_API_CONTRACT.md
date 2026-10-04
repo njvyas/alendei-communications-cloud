@@ -1346,26 +1346,6 @@ Invitation / credential delivery (users created via `POST /users` still cannot s
 
 The five channels are seeded by migration `0018`. **No route creates, changes or deletes a channel** (ADR-013 F-2).
 
-**Advisory routing candidates (Phase 2.4, `PROVIDER_ADAPTER.md` §3a, §6h):**
-
-| Method | Path | Auth | Permission | Request | Success | Errors |
-|---|---|---|---|---|---|---|
-| `GET` | `/api/v1/channels/:id/routing-candidates` | session only | `providers.read` at platform | — | `200 {data:routingCandidates}` | `400` malformed id; `401`; `403`; `404` |
-
-```jsonc
-// routingCandidates — exhaustive
-{
-  "channelId": "uuid",
-  "channelCode": "sms",
-  "advisory": true,                 // always: authorizes nothing; circuit admission decides every submission
-  "configurationRevision": 42,      // the configuration revision this answer was read at
-  "circuitPolicyVersion": 3,
-  "providers": [ { "providerId": "uuid", "name": "Primary SMS", "adapterKey": "simulator" } ]  // lifecycle-active, by name
-}
-```
-
-Served from the instance's configuration snapshot: it converges on a change within the documented bound — normally milliseconds, at most `R` = 5 s, never older than `T` = 60 s — and on the instance that made the change, at once. It carries no health or circuit state; use `GET /providers/:id` for those, which is always read from the database.
-
 ### 32b. Providers
 
 ```jsonc

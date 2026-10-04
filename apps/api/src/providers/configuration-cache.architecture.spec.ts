@@ -78,6 +78,14 @@ describe('advisory configuration cache — structural isolation (Phase 2.4, §3a
     expect(read).toBeGreaterThan(authorize);
   });
 
+  it('no HTTP route reaches it: no controller injects the cache or the advisory catalogue', () => {
+    for (const f of files.filter((f) => f.rel.endsWith('.controller.ts'))) {
+      expect(
+        `${f.rel}: ${/ProviderConfigurationCache|ProviderCatalogueService|configuration-snapshot-cache/.test(f.text)}`,
+      ).toBe(`${f.rel}: false`);
+    }
+  });
+
   it('a notification payload is only ever a hint', () => {
     const listener = text('providers/provider-configuration.listener.ts');
     expect(listener.match(/message\.payload/g)).toHaveLength(1);

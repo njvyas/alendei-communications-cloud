@@ -6,7 +6,7 @@ import { ProviderAccess } from './provider-access.service';
 import { ProviderConfigurationCache } from './provider-configuration.cache';
 import { notFound } from './provider-views';
 
-/** `GET /channels/:id/routing-candidates` (Phase 2.4, `FRONTEND_API_CONTRACT.md` §32a). Exhaustive. */
+/** The advisory routing-candidate view (Phase 2.4, `PROVIDER_ADAPTER.md` §3a.1). Internal: no HTTP route serves it. */
 export interface RoutingCandidatesView {
   readonly channelId: string;
   readonly channelCode: ChannelCode;
@@ -26,7 +26,8 @@ export interface RoutingCandidatesView {
 /**
  * Advisory catalogue reads served from the instance's configuration snapshot
  * (Phase 2.4, `PROVIDER_ADAPTER.md` §3a.1) — the candidate view the future
- * Provider Router consumes. **Authorize first**: the snapshot is read (and, if
+ * Provider Router consumes, in-process; it has no HTTP route and no
+ * controller injects it. **Authorize first**: the snapshot is read (and, if
  * due, refreshed) only after `providers.read` at platform scope has been
  * granted in this transaction, never before and never for anyone else.
  */

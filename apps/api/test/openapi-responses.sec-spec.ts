@@ -524,12 +524,6 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
         200,
         'provider health samples',
       );
-      // Phase 2.4: the advisory routing candidates of the provider's channel.
-      expectStatus(
-        await hit('GET', `channels/${channelId}/routing-candidates`, credential),
-        200,
-        'routing candidates',
-      );
       // Gate D.3 remediation: the circuit policy, read and re-sent unchanged (a
       // no-op by contract), so this suite never alters the platform policy.
       const policy = await hit('GET', 'provider-circuit-policy', credential);

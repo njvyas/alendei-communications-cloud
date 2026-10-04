@@ -11,6 +11,11 @@
  *
  * Hot reload is advisory: every case that matters for correctness also shows
  * the authoritative path (lifecycle, circuit admission) reading PostgreSQL.
+ *
+ * The snapshot has no HTTP route. It is read in-process through
+ * `ProviderCatalogueService.routingCandidates` — the internal consumer the
+ * future Provider Router uses — with the principal that instance's guard
+ * resolves for the caller on the existing `GET /channels/:id` read.
  */
 import { randomBytes } from 'node:crypto';
 
@@ -25,11 +30,17 @@ import { schema } from '@acc/db';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { Pool, type PoolClient } from 'pg';
 import request from 'supertest';
+import { uuidv7 } from 'uuidv7';
 
+import type { AuthPrincipal } from '@acc/contracts';
+
+import { RequestContext } from '../src/common/context/request-context';
 import { CredentialService } from '../src/iam/credential.service';
 import { MetricsService } from '../src/observability/metrics.service';
+import { ProviderCatalogueService } from '../src/providers/provider-catalogue.service';
 import { ProviderConfigurationCache } from '../src/providers/provider-configuration.cache';
 import { ProviderConfigurationListener } from '../src/providers/provider-configuration.listener';
+import { ProviderRegistryService } from '../src/providers/provider-registry.service';
 import { circuitPolicyOf } from '../src/providers/provider-views';
 import {
   ManualProviderClock,
@@ -103,16 +114,44 @@ describe('Phase 2.4 hot reload — configuration convergence across instances', 
     if (org) r = r.set('x-acc-organization', org);
     return body === undefined ? r : r.send(body);
   };
+  /**
+   * The principal instance `h` resolves for `who`: captured from the existing
+   * `GET /channels/:id` read, so the guard — not the test — builds it. `null`
+   * when the guard refuses before any service is reached (no credential).
+   */
+  async function principalOf(h: Harness, who: string | null, org?: string) {
+    const spy = jest.spyOn(h.app.get(ProviderRegistryService), 'getChannel');
+    try {
+      await call(h, 'get', who, `/channels/${sms}`, undefined, org);
+      return (spy.mock.calls[0]?.[0] ?? null) as AuthPrincipal | null;
+    } finally {
+      spy.mockRestore();
+    }
+  }
+  /** The advisory read, in-process, inside a request context as production runs it. */
+  const readCandidates = (h: Harness, principal: AuthPrincipal | null) =>
+    RequestContext.run(
+      {
+        correlationId: uuidv7(),
+        requestId: uuidv7(),
+        causationId: null,
+        traceId: null,
+        principal,
+        ip: null,
+        userAgent: null,
+      },
+      () => h.app.get(ProviderCatalogueService).routingCandidates(principal!, sms),
+    );
   /** The advisory read: lifecycle-active provider ids of the SMS channel, as instance `h` serves them. */
   async function candidates(h: Harness, who = 'reader') {
-    const res = await call(h, 'get', who, `/channels/${sms}/routing-candidates`).expect(200);
-    return res.body.data as {
-      configurationRevision: number;
-      circuitPolicyVersion: number;
-      advisory: true;
-      providers: { providerId: string; name: string; adapterKey: string }[];
-    };
+    return readCandidates(h, await principalOf(h, who));
   }
+  /** The HTTP-style status an in-process advisory read ends with. */
+  const statusOf = (work: Promise<unknown>) =>
+    work.then(
+      () => 200,
+      (e: { getStatus?: () => number }) => e.getStatus?.() ?? 500,
+    );
   const lists = async (h: Harness, id: string) =>
     (await candidates(h)).providers.some((p) => p.providerId === id);
   const nameOn = async (h: Harness, id: string) =>
@@ -845,20 +884,13 @@ describe('Phase 2.4 hot reload — configuration convergence across instances', 
         ['support', 403, undefined],
         ['apiKey', 403, undefined],
       ] as const) {
-        const res = await call(
-          b,
-          'get',
-          who,
-          `/channels/${sms}/routing-candidates`,
-          undefined,
-          org,
-        );
-        expect(`${who} → ${res.status}`).toBe(`${who} → ${status}`);
+        const got = await statusOf(readCandidates(b, await principalOf(b, who, org)));
+        expect(`${who} → ${got}`).toBe(`${who} → ${status}`);
       }
       expect(await reloads()).toBe(before);
       expect(cacheOf(b).isDirty()).toBe(true);
       // A test_send-only role holds providers.read: it may read the advisory view.
-      await call(b, 'get', 'tester', `/channels/${sms}/routing-candidates`).expect(200);
+      expect(await statusOf(readCandidates(b, await principalOf(b, 'tester')))).toBe(200);
       expect(await reloads()).toBe(before + 1);
     });
 
@@ -884,7 +916,7 @@ describe('Phase 2.4 hot reload — configuration convergence across instances', 
         .where(eq(schema.providers.id, id));
       expect(row!.status).toBe('active');
       // The advisory read itself still requires authorization.
-      await call(b, 'get', 'orgAdmin', `/channels/${sms}/routing-candidates`).expect(403);
+      expect(await statusOf(readCandidates(b, await principalOf(b, 'orgAdmin')))).toBe(403);
     });
 
     it('the revision table: platform-scope read, providers.manage update, monotonic, no insert or delete, nothing for acc_auth or acc_relay', async () => {
