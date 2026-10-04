@@ -88,7 +88,7 @@ One process-local, immutable snapshot per application instance (`ProviderConfigu
 ### 3a.3 Notification — an accelerator, never a source of state
 
 - PostgreSQL delivers `NOTIFY` **only after commit**, in commit order; a notification can therefore never announce a change that is not yet visible.
-- Each instance holds one dedicated `LISTEN acc_provider_configuration` connection (`ProviderConfigurationListener`, application name `acc-provider-config-listener`).
+- Each instance holds one dedicated `LISTEN acc_provider_configuration` connection (`ProviderConfigurationListener`, application name `acc-provider-config-listener`), opened as `acc_app` outside the request pool (`LISTEN` needs no table privilege). It never blocks or fails application start. **When it connects — the first time and after every reconnect — and when it is lost, it marks the snapshot dirty** (reload operation `listener`): anything announced while it was not listening is unknown. After a failed connect or a loss it retries with exponential backoff, 1 s doubling to at most 30 s (`PROVIDER_CONFIGURATION_CACHE.LISTENER_RECONNECT_MIN_MS`/`MAX_MS`); the retry timer does not keep the process alive.
 - A notification's payload is a **hint**: the revision number, used only to decide whether to mark the snapshot dirty. It is never applied as data. A payload not greater than the snapshot's revision (duplicate, out of order, stale) is ignored; a malformed payload marks the snapshot dirty (conservative); a forged payload can at most cause one extra reload from PostgreSQL.
 - The instance that commits a change also marks its own snapshot dirty immediately after commit (read-your-writes on that instance, without waiting for its own notification).
 
@@ -107,7 +107,7 @@ On every advisory read (inside the authorized transaction), at time `now` on the
 | Failure | Behaviour |
 |---|---|
 | Notification lost (network, overflow, listener down) | Reconciliation detects the newer revision within `R` |
-| `LISTEN` connection lost / PostgreSQL restart | The snapshot is marked dirty at once (missed notifications cannot be trusted); the listener reconnects with backoff (1 s → 30 s) and re-issues `LISTEN`; meanwhile reconciliation bounds staleness by `R` |
+| `LISTEN` connection lost / PostgreSQL restart | The snapshot is marked dirty at once (missed notifications cannot be trusted); the listener reconnects with backoff (1 s, doubling, at most 30 s), re-issues `LISTEN` and marks the snapshot dirty again on reconnect; meanwhile reconciliation bounds staleness by `R` |
 | Application restart | The new process starts with no snapshot: its first advisory read loads from PostgreSQL (startup reconciliation) |
 | Duplicate / out-of-order / stale / forged notification | Ignored, or one extra reload; never applied as state |
 | Reload fails (database error) | The request fails as any database error does; the old snapshot is not marked fresh, so the next read retries |
@@ -117,7 +117,19 @@ On every advisory read (inside the authorized transaction), at time `now` on the
 
 ### 3a.6 Observability
 
-`acc_provider_config_changes_total{operation}` (configuration change committed by this instance), `acc_provider_config_notifications_total{outcome}` (`applied`, `duplicate`, `malformed`), `acc_provider_config_reloads_total{operation, outcome}` (operation `startup`, `notification`, `local`, `reconcile`, `ttl`; outcome `success`, `failure`, `discarded`), `acc_provider_config_revision` (installed revision), `acc_provider_config_convergence_seconds` (commit to install), `acc_provider_config_listener_connected` and `acc_provider_config_listener_events_total{outcome}` (`connected`, `lost`). One log line per listener loss/recovery, reload failure and discarded stale reload.
+As implemented (`apps/api/src/observability/metrics.service.ts`; proven by `provider-hot-reload.sec-spec.ts` H):
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `acc_provider_config_local_invalidations_total` | counter | `operation` | a configuration mutation committed through this instance, followed by a local invalidation of its snapshot |
+| `acc_provider_config_notifications_total` | counter | `outcome` ∈ `applied`, `duplicate`, `malformed` | `NOTIFY` messages received |
+| `acc_provider_config_reloads_total` | counter | `operation` ∈ `startup`, `notification`, `local`, `listener`, `reconcile`, `ttl`; `outcome` ∈ `success`, `failure`, `discarded` | snapshot reloads by cause; `discarded` = older than the installed snapshot |
+| `acc_provider_config_revision` | gauge | — | the revision of the installed snapshot |
+| `acc_provider_config_convergence_seconds` | histogram | — | commit of a revision to its installation in this instance |
+| `acc_provider_config_listener_connected` | gauge | — | 1 while the `LISTEN` connection is held |
+| `acc_provider_config_listener_events_total` | counter | `outcome` ∈ `connected`, `lost` | `LISTEN` connection events |
+
+Logs: `warn` when the listener cannot connect (with the retry delay), when it is lost (snapshot marked dirty, reconnecting) and when a reload fails; `info` when a stale reload is discarded. The provisioned Grafana dashboard (`providers.json`) has no hot-reload panel; the metrics are scraped from `/metrics`.
 
 ### 3a.7 Acceptance criteria (Gate D.4)
 

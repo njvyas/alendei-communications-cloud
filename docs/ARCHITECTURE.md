@@ -212,7 +212,7 @@ Every prior attempt's outcome remains permanently on its own immutable `message_
 ## 7. Provider abstraction (summary — full detail in `PROVIDER_ADAPTER.md`)
 
 - **Provider Adapter Interface**: `send()`, `checkStatus()`, `handleWebhook()`, `capabilities()`, `healthCheck()`, `estimateCost()`.
-- **Provider Registry**: stores provider config, encrypted credentials, capabilities, and live health state; changes are hot-reloaded (DB row change + cache invalidation event), never requiring redeploy.
+- **Provider Registry**: stores provider configuration, capabilities, health and circuit state; it stores **no credential** (Phase 2 contains no credential storage; the future reference contract is `PROVIDER_ADAPTER.md` §4a). Changes take effect without redeploy or restart (Phase 2.4): PostgreSQL stays authoritative; each instance's advisory snapshot is marked dirty by a `LISTEN/NOTIFY` hint and bounded by reconciliation and a hard TTL (`PROVIDER_ADAPTER.md` §3a).
 - **Provider Health States**: `HEALTHY, DEGRADED, CRITICAL, OFFLINE`. `DRAINING` is an administrative provider status (`providers.status`: `active`, `disabled`, `draining`), not a health state (ADR-013 F-5).
 - **Circuit Breaker States**: `CLOSED, OPEN, HALF_OPEN` — a distinct, faster-reacting signal from health state; breaker state is derived from a rolling error/latency window per provider, health state can also be set manually (e.g., admin drain) or by longer-window SLO breach.
 

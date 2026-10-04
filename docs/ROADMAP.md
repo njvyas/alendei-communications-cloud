@@ -257,9 +257,9 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 - **Dependencies**: Phase 1 (Gate C closed): `TenantDatabase` and the pre-commit authorization-coverage containment, `AuthorizationService` + `@RequiresPermission`, transactional `AuditWriter`, the OpenAPI pipeline, `/metrics`, `SecretsPort`, Redis, the `with-db-clone` mutation harness.
 - **Architecture**: `PROVIDER_ADAPTER.md`, as partitioned by ADR-013.
 - **Implementation scope**: §5a/§5b. **Not** in Phase 2 (ADR-013 PD-1, PD-2, PD-6): transactional outbox, worker/job harness, SIEM export, `provider_credentials`, real vendor adapters, message lifecycle, routing/failover, billing, reseller/white-label provider administration.
-- **DB changes**: `channels`, `providers`, `provider_capabilities` (2.1); `provider_health` (2.3). **Not** `provider_credentials` (deferred, ADR-013 F-1).
-- **API changes**: `/channels` (read-only), `/providers` (2.1–2.3). Platform scope only.
-- **Frontend changes**: provider list/detail and basic admin actions, polling — increment 2.6, separately authorized and gated.
+- **DB changes**: `channels`, `providers`, `provider_capabilities` (2.1, migrations `0018`–`0019`); the `provider.test_sent` audit policy (2.2, `0020`–`0021`); `provider_health` and the health/circuit columns on `providers` (2.3, `0022`); `provider_circuit_policy` and the `circuit_probes` slots (Gate D.3 remediation, `0023`); `provider_configuration_revision` and its change triggers (2.4, `0024`). **Not** `provider_credentials` (deferred, ADR-013 F-1).
+- **API changes**: `/channels` (read-only, 2.1); `/providers` — catalogue and lifecycle (2.1), test-send (2.2), health check, health override and health-sample history (2.3); `/provider-circuit-policy` (`GET`/`PUT`, Gate D.3 remediation). 2.4 and 2.5 add no route. Platform scope only; 74 application operations in the OpenAPI document.
+- **Frontend changes**: the provider console over the whole Phase 2 contract (§5b 2.6), polling — increment 2.6, implemented by the frontend track (Gemini) and gated by D.6.
 - **Tests**: the submission-time simulator matrix, health state machine, circuit breaker, hot reload without restart (`TESTING.md` §6u).
 - **Security checks**: platform-only access proven at the application and RLS layers; no credential or secret value persisted anywhere (`SECURITY.md` §3b).
 - **Observability**: bounded Prometheus health/circuit/test-send metrics and a provisioned Grafana dashboard; console polling. No live WebSocket dashboard (ADR-013 PD-8).
@@ -280,7 +280,7 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 | **2.5** | Credential Reference Contract — documentation only | none | ✅ CLOSED — documentation only (`PROVIDER_ADAPTER.md` §4a); Gate D.5 approved |
 | **2.6** | Frontend console — separately authorized | none | Gate D.6 |
 
-**Execution order:** 2.1 → 2.2 → 2.3 → 2.4; 2.5 may run alongside 2.2; 2.6 after the 2.1–2.4 contract is stable.
+**Execution order:** 2.1 → 2.2 → 2.3 → 2.4; 2.5 may run alongside 2.2; 2.6 after the 2.1–2.4 contract is stable. **Phase 2 closes as a whole (user decision, 05-Oct-2026): Gate D (backend, §5c) and Gate D.6 (console).**
 
 ### 5b. Increment specifications
 
@@ -328,7 +328,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 - *Exclusions*: router integration and any traffic switching or failover (the routing-eligibility **contract** is defined, `PROVIDER_ADAPTER.md` §6h; no router consumes it in Phase 2), routing policies, per-provider threshold overrides (the circuit policy is platform-wide; health thresholds stay fixed), event publication.
 
 **2.4 — Hot Reload**
-- *Status*: **CLOSED** (04-Oct-2026; migration `0024`; Gate D.4 approved after one remediation, `be71c6f`). **Design amended by user decision at the 2.4 authorization** (ADR-013 "2.4 design", canonical `PROVIDER_ADAPTER.md` §3a): PostgreSQL `LISTEN/NOTIFY` emitted by database triggers on a transactional revision, revision polling (`R` = 5 s), a hard TTL (`T` = 60 s) and startup reload replace the Redis pub/sub transport below; the cache is an advisory configuration snapshot that authorizes nothing. The bullets below are the original freeze, retained for the record.
+- *Status*: **CLOSED** (04-Oct-2026; migration `0024`; Gate D.4 approved after one remediation, `be71c6f`). **Design amended by user decision at the 2.4 authorization** (ADR-013 "2.4 design", canonical `PROVIDER_ADAPTER.md` §3a): PostgreSQL `LISTEN/NOTIFY` emitted by database triggers on a transactional revision, revision polling (`R` = 5 s), a hard TTL (`T` = 60 s) and startup reload replace the Redis pub/sub transport below; the cache is an advisory configuration snapshot that authorizes nothing. The bullets below are the original freeze, **superseded** by that decision and retained only for the record — they do not describe the implementation (no Redis pub/sub exists).
 - *Objective*: provider configuration changes take effect without restart, as **best-effort configuration invalidation with bounded convergence** — not transactional configuration propagation.
 - *Semantics*: (1) the update commits first; (2) the invalidation is published to Redis **after** commit; (3) a subscriber evicts the entry as soon as it receives the publication, and its next read reloads from the database; (4) if a publication is lost, the cache TTL bounds how long a stale entry can be served, after which the entry refreshes on its own. Outbox-backed transactional propagation remains deferred (ADR-013 PD-1).
 - *In scope*: an in-process registry/adapter cache in `provider-registry`; the Redis pub/sub publisher and subscriber; the TTL (configurable, on an injectable clock).
@@ -349,8 +349,12 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 - *Status (04-Oct-2026)*: documented in `PROVIDER_ADAPTER.md` §4a (binding requirements CR-1–CR-8, the `SecretsPort` boundary, the NOT FROZEN list, candidate input) and reconciled in `SECURITY.md` §3–§3b and `RUNBOOK.md` §5, §7; **PASS / CLOSED — documentation-only Credential Reference Contract** (Gate D.5 approved). **Follow-up outside 2.5:** credential-absence test hardening (ADR-013 "2.5 notes" (b)) — done 04-Oct-2026 (`TESTING.md` §6u, "D-2 hardening").
 - *Exclusions*: `provider_credentials`, any ownership model, rotation, management, any real credential, any credential type in code.
 
-**2.6 — Frontend console (separately authorized and gated)**
-- Provider list/detail, enable/disable/drain, test-send, health/circuit display by polling, against the frozen 2.1–2.4 contract; follows the 1C.4b precedent. No backend change.
+**2.6 — Frontend console (separately authorized and gated; implemented by Gemini)**
+- *Objective*: a platform administrator can do in the console everything the Phase 2 acceptance line names — add, disable and drain a simulated provider, test-send to it, and see its health and circuit state change — with no deploy and no restart.
+- *Scope* (the whole Phase 2 contract, `FRONTEND_API_CONTRACT.md` §32; scope widened to the full acceptance surface by user decision, 05-Oct-2026): channels list and detail (read-only); provider list (channel and status filters, keyset pagination) and detail with capabilities; create (`disabled` on creation); rename; capability-set replacement; enable, disable, drain; test-send with a chosen simulator behaviour; health check; manual health override (set and clear); health-sample history; circuit-policy read and update (`expectedVersion`). Health and circuit are shown by polling (ADR-013 PD-8). No credential field, routing control or hot-reload control exists anywhere.
+- *Authorization in the UI*: actions are shown or enabled from the capability hints in `GET /auth/me/authorization`; the server stays the authority, and every documented refusal is handled — `401`, `403`, `404`, `409` (`PROVIDER_LIFECYCLE_CONFLICT`, `PROVIDER_CIRCUIT_OPEN`, `RESOURCE_CONFLICT`), `422` (`PROVIDER_ADAPTER_UNKNOWN`), `400` validation details, `429`.
+- *Fixture*: `fixture:dev` provides representative providers and the platform administrator, `providers.read`-only, `providers.test_send`-only and denied principals for browser tests (`TESTING.md` §6r) — development tooling only.
+- *No backend change*: `apps/api` and `packages` unchanged; the OpenAPI document unchanged. Follows the 1C.4b precedent.
 
 ### 5c. Gate D — Phase 2 acceptance
 
@@ -372,6 +376,16 @@ Objectively testable; each is pass/fail. Evidence runs on disposable clones, nev
 - **Regression** — the full backend suite (1,577 at Gate C, plus the Phase 2 suites) is green with zero skipped tests; lint, typecheck, build, dependency audit and non-frontend formatting pass; migrations apply from empty, re-run as a no-op and leave no drift.
 - **Documentation** — `PROVIDER_ADAPTER.md`, `DATABASE.md`, `API.md`, `FRONTEND_API_CONTRACT.md`, `SECURITY.md`, `TESTING.md`, `OBSERVABILITY.md` and this roadmap describe exactly what exists.
 - **Explicitly not required at Gate D:** everything excluded by ADR-013; 2.6 is gated separately (D.6).
+
+**Gate D.6 — the provider console (2.6).** Phase 2 is closed only when Gate D **and** Gate D.6 pass. Each is pass/fail:
+
+- **Coverage** — every operation in the 2.6 scope (§5b) is reachable in the console, against the unchanged `FRONTEND_API_CONTRACT.md` §32 contract.
+- **Polling** — health and circuit state refresh by polling at a bounded interval; no WebSocket.
+- **Authorization** — actions are hidden or disabled for a principal without the permission; a refusal from the server is shown, never retried silently. Browser tests for the platform administrator, a `providers.read`-only principal, a `providers.test_send`-only principal and a denied principal (no `providers.*`).
+- **Error handling** — each documented status and error code of §32 has a defined presentation.
+- **No credential surface** — no field, label or stored value for a credential or secret reference.
+- **No backend change** — `git diff` of `apps/api` and `packages` is empty; `openapi:check` passes unchanged.
+- **Quality** — web lint, typecheck, build and format pass; Playwright E2E against `fixture:dev` passes repeatably.
 
 ## 6. Phase 3 — WhatsApp
 
