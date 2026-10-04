@@ -15,6 +15,7 @@ import {
 
 import { ProviderAdapterNotRegistered, ProviderAdapterRegistry } from './adapter-registry';
 import { ProviderAdapterUnsupportedOperation, SimulatorAdapter } from './simulator.adapter';
+import { CircuitAdmissionRequired, CircuitAdmissions } from './circuit-admission';
 import { ProviderSubmissionExecutor } from './submission-executor';
 import type { SubmissionTimer } from './submission-timer';
 
@@ -71,6 +72,30 @@ const flush = async () => {
   for (let i = 0; i < 10; i++) await Promise.resolve();
 };
 
+/**
+ * An executor with its own admission registry. `admit()` stands in for the
+ * circuit's admission (`ProviderStateStore.admit`, not under test here) — the
+ * executor itself refuses any call without one (`PROVIDER_ADAPTER.md` §6h).
+ */
+function newExecutor(timer: SubmissionTimer) {
+  const admissions = new CircuitAdmissions(timer);
+  const executor = new ProviderSubmissionExecutor(timer, admissions);
+  return Object.assign(executor, {
+    admit: (providerId = context().providerId) =>
+      admissions.issue(providerId, { generation: 0, probeId: null }),
+  });
+}
+const executeAdmitted =
+  (timer: SubmissionTimer) =>
+  (
+    ...args: Parameters<ProviderSubmissionExecutor['execute']> extends [unknown, ...infer R]
+      ? R
+      : never
+  ) => {
+    const executor = newExecutor(timer);
+    return executor.execute(executor.admit(), ...args);
+  };
+
 const context = (overrides: Partial<ProviderAdapterContext> = {}): ProviderAdapterContext => ({
   providerId: '01900000-0000-7000-8000-000000000001',
   adapterKey: 'simulator',
@@ -95,10 +120,10 @@ async function run(
 ): Promise<{ result: ProviderSubmissionResult; timer: VirtualTimer }> {
   const timer = new VirtualTimer();
   const simulator = new SimulatorAdapter(timer);
-  const executor = new ProviderSubmissionExecutor(timer);
+  const executor = newExecutor(timer);
   let settled: ProviderSubmissionResult | undefined;
   void executor
-    .execute(simulator.forBehavior(behavior), context(), submission(), timeoutMs)
+    .execute(executor.admit(), simulator.forBehavior(behavior), context(), submission(), timeoutMs)
     .then((r) => (settled = r));
   await timer.advance(timeoutMs + 1000);
   return { result: settled!, timer };
@@ -294,7 +319,7 @@ describe('ProviderSubmissionExecutor — normalization', () => {
 
   it('an adapter that throws becomes rejected / UNKNOWN, not an error and never a success', async () => {
     const timer = new VirtualTimer();
-    const result = await new ProviderSubmissionExecutor(timer).execute(
+    const result = await executeAdmitted(timer)(
       adapterReturning(() => Promise.reject(new Error('boom: secret-looking detail'))),
       context(),
       submission(),
@@ -309,7 +334,7 @@ describe('ProviderSubmissionExecutor — normalization', () => {
 
   it('a result outside the contract becomes rejected / UNKNOWN', async () => {
     const timer = new VirtualTimer();
-    const executor = new ProviderSubmissionExecutor(timer);
+    const executor = newExecutor(timer);
     for (const bogus of [
       { outcome: 'delivered' },
       { outcome: 'accepted' }, // no providerMessageId
@@ -317,6 +342,7 @@ describe('ProviderSubmissionExecutor — normalization', () => {
       null,
     ]) {
       const result = await executor.execute(
+        executor.admit(),
         adapterReturning(() => Promise.resolve(bogus as never)),
         context(),
         submission(),
@@ -328,7 +354,7 @@ describe('ProviderSubmissionExecutor — normalization', () => {
 
   it('retryability and identifiers are the executor’s, not the adapter’s', async () => {
     const timer = new VirtualTimer();
-    const result = await new ProviderSubmissionExecutor(timer).execute(
+    const result = await executeAdmitted(timer)(
       adapterReturning(() =>
         Promise.resolve({
           outcome: 'rejected',
@@ -397,7 +423,7 @@ describe('health check — simulator behaviours and the executor probe (Phase 2.
     timeoutMs = PROVIDER_HEALTH_DEFAULTS.PROBE_TIMEOUT_MS,
   ) {
     const timer = new VirtualTimer();
-    const executor = new ProviderSubmissionExecutor(timer);
+    const executor = newExecutor(timer);
     let settled: { outcome: string; latencyMs: number } | undefined;
     void executor.probe(adapter, context(), timeoutMs).then((r) => (settled = r));
     await timer.advance(timeoutMs + 1000);
@@ -421,7 +447,7 @@ describe('health check — simulator behaviours and the executor probe (Phase 2.
   it('TIMEOUT never answers: the executor reports timeout at exactly the probe timeout, and leaves no waiter behind', async () => {
     const timer = new VirtualTimer();
     const sim = new SimulatorAdapter(timer);
-    const executor = new ProviderSubmissionExecutor(timer);
+    const executor = newExecutor(timer);
     let settled: { outcome: string; latencyMs: number } | undefined;
     void executor
       .probe(sim.forHealthBehavior('TIMEOUT'), context(), PROVIDER_HEALTH_DEFAULTS.PROBE_TIMEOUT_MS)
@@ -458,5 +484,99 @@ describe('health check — simulator behaviours and the executor probe (Phase 2.
       .forHealthBehavior('HEALTHY')
       .send(context(), submission(), { timeoutMs: 10 });
     expect(result.outcome === 'rejected' && result.failure.category).toBe('CONFIGURATION_ERROR');
+  });
+});
+
+describe('circuit admission is mandatory before any provider call (Gate D.3, PROVIDER_ADAPTER.md §6h)', () => {
+  const recordingAdapter = () => {
+    const send = jest.fn(async (_c: ProviderAdapterContext, sub: ProviderSubmission) => ({
+      outcome: 'accepted' as const,
+      submissionId: sub.submissionId,
+      correlationId: sub.correlationId,
+      providerMessageId: 'p',
+      latencyMs: 0,
+    }));
+    const adapter: ProviderAdapter = {
+      adapterKey: 'test',
+      capabilities: () => ({ channels: ['sms'] }),
+      healthCheck: async () => ({ healthy: true, latencyMs: 0 }),
+      send,
+      estimateCost: () => Promise.reject(new Error('n/a')),
+      checkStatus: () => Promise.reject(new Error('n/a')),
+      parseWebhook: () => Promise.reject(new Error('n/a')),
+    };
+    return { adapter, send };
+  };
+
+  it('a genuine admission for this provider is redeemed once, and the adapter is called', async () => {
+    const executor = newExecutor(new VirtualTimer());
+    const { adapter, send } = recordingAdapter();
+    const result = await executor.execute(executor.admit(), adapter, context(), submission(), 1000);
+    expect(result.outcome).toBe('accepted');
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('no admission, a routing-eligibility verdict, or a forged copy of an admission: refused, the adapter never called', async () => {
+    const executor = newExecutor(new VirtualTimer());
+    const { adapter, send } = recordingAdapter();
+    const genuine = executor.admit();
+    for (const fake of [
+      undefined,
+      null,
+      {},
+      { verdict: 'eligible' },
+      { verdict: 'probe_only', probeSlotsFree: 1 },
+      { ...genuine },
+      JSON.parse(JSON.stringify(genuine)),
+      Object.freeze({ providerId: context().providerId, generation: 0, probeId: null }),
+    ]) {
+      await expect(
+        executor.execute(fake, adapter, context(), submission(), 1000),
+      ).rejects.toBeInstanceOf(CircuitAdmissionRequired);
+    }
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('an admission is single-use, bound to its provider, and issued by this registry only', async () => {
+    const executor = newExecutor(new VirtualTimer());
+    const other = newExecutor(new VirtualTimer());
+    const { adapter, send } = recordingAdapter();
+    const once = executor.admit();
+    await executor.execute(once, adapter, context(), submission(), 1000);
+    await expect(executor.execute(once, adapter, context(), submission(), 1000)).rejects.toThrow(
+      'admission already used',
+    );
+    const foreign = executor.admit('01900000-0000-7000-8000-0000000000ff');
+    await expect(executor.execute(foreign, adapter, context(), submission(), 1000)).rejects.toThrow(
+      'another provider',
+    );
+    // Issued by another registry (another process, in effect): not redeemable here.
+    await expect(
+      executor.execute(other.admit(), adapter, context(), submission(), 1000),
+    ).rejects.toThrow('not an admission issued by the circuit');
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('an admission must be redeemed immediately: at exactly MAX_AGE_MS it is accepted, one millisecond later it is refused', async () => {
+    const timer = new VirtualTimer();
+    const executor = newExecutor(timer);
+    const { adapter, send } = recordingAdapter();
+    const fresh = executor.admit();
+    const stale = executor.admit();
+    await timer.advance(CircuitAdmissions.MAX_AGE_MS);
+    await executor.execute(fresh, adapter, context(), submission(), 1000);
+    await timer.advance(1);
+    await expect(executor.execute(stale, adapter, context(), submission(), 1000)).rejects.toThrow(
+      'admission expired',
+    );
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('a health-check probe is a diagnostic, not a submission, and needs no admission', async () => {
+    const executor = newExecutor(new VirtualTimer());
+    const { adapter } = recordingAdapter();
+    await expect(executor.probe(adapter, context(), 1000)).resolves.toMatchObject({
+      outcome: 'healthy',
+    });
   });
 });

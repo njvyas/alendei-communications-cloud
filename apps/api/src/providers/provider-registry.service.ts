@@ -475,7 +475,10 @@ export class ProviderRegistryService {
       recipient: 'simulator:test-recipient',
       content: { text: 'ACC provider test-send' },
     };
+    // Circuit admission is mandatory and redeemed by the executor before the
+    // adapter is called (PROVIDER_ADAPTER.md §6h).
     const result = await this.executor.execute(
+      gate.admission.admission,
       adapter.forBehavior(behavior),
       { providerId: provider.id, adapterKey: provider.adapterKey, channel, capabilities },
       submission,

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { PROVIDER_ADAPTERS, ProviderAdapterRegistry } from './adapter-registry';
+import { CircuitAdmissions } from './circuit-admission';
 import { SimulatorAdapter } from './simulator.adapter';
 import { ProviderSubmissionExecutor } from './submission-executor';
 import { RealSubmissionTimer, SUBMISSION_TIMER } from './submission-timer';
@@ -19,8 +20,14 @@ import { RealSubmissionTimer, SUBMISSION_TIMER } from './submission-timer';
       inject: [SimulatorAdapter],
     },
     ProviderAdapterRegistry,
+    CircuitAdmissions,
     ProviderSubmissionExecutor,
   ],
-  exports: [ProviderAdapterRegistry, ProviderSubmissionExecutor, SimulatorAdapter],
+  exports: [
+    ProviderAdapterRegistry,
+    ProviderSubmissionExecutor,
+    SimulatorAdapter,
+    CircuitAdmissions,
+  ],
 })
 export class ProviderAdaptersModule {}

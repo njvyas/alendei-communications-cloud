@@ -10,6 +10,7 @@ import {
 } from '@acc/contracts';
 
 import { MetricsService } from '../observability/metrics.service';
+import { CircuitAdmissionRequired, CircuitAdmissions } from './circuit-admission';
 import { SUBMISSION_TIMER, type SubmissionTimer } from './submission-timer';
 
 /**
@@ -33,16 +34,41 @@ export class ProviderSubmissionExecutor {
 
   constructor(
     @Inject(SUBMISSION_TIMER) private readonly timer: SubmissionTimer,
+    private readonly admissions: CircuitAdmissions,
     @Optional() private readonly metrics?: MetricsService,
   ) {}
 
-  /** Runs the submission and counts it, once, by channel and normalized outcome. */
+  /**
+   * Runs the submission and counts it, once, by channel and normalized outcome.
+   *
+   * **Circuit admission is mandatory** (`PROVIDER_ADAPTER.md` §6h): the first
+   * argument must be the admission the circuit issued for this submission to
+   * `context.providerId`, unused and fresh. It is redeemed before the adapter is
+   * touched; anything else — a routing-eligibility verdict, a copy, a reused or
+   * foreign admission — throws `CircuitAdmissionRequired` and nothing is sent.
+   * This is the only path to an adapter's `send()`.
+   */
   async execute(
+    admission: unknown,
     adapter: ProviderAdapter,
     context: ProviderAdapterContext,
     submission: ProviderSubmission,
     timeoutMs: number,
   ): Promise<ProviderSubmissionResult> {
+    try {
+      this.admissions.consume(admission, context.providerId);
+    } catch (error) {
+      if (error instanceof CircuitAdmissionRequired) {
+        this.logger.error({
+          msg: 'provider submission refused: no valid circuit admission',
+          reason: error.reason,
+          providerId: context.providerId,
+          submissionId: submission.submissionId,
+          correlationId: submission.correlationId,
+        });
+      }
+      throw error;
+    }
     const result = await this.run(adapter, context, submission, timeoutMs);
     this.metrics?.providerSubmissions.inc({
       channel: context.channel,

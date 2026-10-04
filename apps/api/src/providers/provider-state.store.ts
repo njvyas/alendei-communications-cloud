@@ -19,6 +19,7 @@ import { schema, type Transaction } from '@acc/db';
 import { and, desc, eq, gt, inArray, lte, ne } from 'drizzle-orm';
 
 import { RequestContext } from '../common/context/request-context';
+import { CircuitAdmissions, type CircuitAdmission } from '../provider-adapters/circuit-admission';
 import { MetricsService } from '../observability/metrics.service';
 import { ProviderAccess } from './provider-access.service';
 import { PROVIDER_CLOCK, type ProviderClock } from './provider-clock';
@@ -43,7 +44,12 @@ import {
 } from './provider-views';
 
 export type Admission =
-  | { readonly admitted: true; readonly ticket: CircuitTicket }
+  | {
+      readonly admitted: true;
+      readonly ticket: CircuitTicket;
+      /** The token the provider call must redeem (§6h). Issued only here. */
+      readonly admission: CircuitAdmission;
+    }
   | {
       readonly admitted: false;
       readonly state: 'open' | 'half_open';
@@ -77,6 +83,7 @@ export class ProviderStateStore {
 
   constructor(
     private readonly access: ProviderAccess,
+    private readonly admissions: CircuitAdmissions,
     @Inject(PROVIDER_CLOCK) private readonly clock: ProviderClock,
     @Optional() private readonly metrics?: MetricsService,
   ) {}
@@ -139,7 +146,13 @@ export class ProviderStateStore {
         correlationId: RequestContext.correlationId(),
       });
     }
-    return { admitted: true, ticket: decision.ticket };
+    // The only place an admission is issued: the circuit has just admitted this
+    // submission under the provider row lock (§6h).
+    return {
+      admitted: true,
+      ticket: decision.ticket,
+      admission: this.admissions.issue(provider.id, decision.ticket),
+    };
   }
 
   /** Records a submission the adapter answered (§6d), and its effect on health (§5c). */

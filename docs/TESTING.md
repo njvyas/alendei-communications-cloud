@@ -646,6 +646,25 @@ The read-only Gate C audit (01-Oct-2026) found the Observability and Regression 
 | Y15 | policy audit policy loses its permission requirement | 2 |
 | X06–X08 | transition locking (recording, admission) and HALF_OPEN protection removed — re-run | 2, 2, 7 of 72; X08 also 3 unit |
 
+**Gate D.3 final remediation — the Provider Router cannot bypass circuit admission (04-Oct-2026).** The invariant is `PROVIDER_ADAPTER.md` §6h: *Provider Router eligibility is advisory; circuit admission is authoritative and mandatory immediately before provider submission.* It is enforced at runtime by `CircuitAdmissions` (single-use, provider-bound, process-local, redeemable within 5 s) and `ProviderSubmissionExecutor.execute`, which redeems the admission before the adapter is called.
+
+- `apps/api/test/provider-router-contract.sec-spec.ts` — **6 cases**, counting provider calls at the simulator itself and attempting every bypass a router could try against the real executor in the real container: **OPEN → zero normal submissions** (8 concurrent requests all `409`, no admission issued; no admission, the eligibility verdict, or an admission-shaped object reaches the provider); **HALF_OPEN → no more than `halfOpenMaxProbes`** (with 2, of 6 routing requests parked on the provider row lock exactly 2 are admitted and reach the provider call while held in flight, 4 are refused; re-presenting each spent admission twice, concurrently, sends nothing); **CLOSED → permitted**, one admission per submission; **the eligibility read alone cannot authorize** a submission, even when it says `eligible` or `probe_only`, and reading it claims no slot; **admission is mandatory before the provider call** — missing, copied, serialized, spent, and a genuine unspent admission for another provider (its own submission held in flight) are each refused, and the genuine one still redeems for its own provider; **concurrent routing requests that skip admission** cannot ride along with admitted ones (5 bypass attempts refused while exactly 1 probe goes through). Repeated 5 times in a row: identical results.
+- `provider-adapters.spec.ts` — **+5 unit cases**: a genuine admission redeems once; no admission, an eligibility verdict, a spread copy, a serialized copy or a hand-built object are refused with the adapter never called; single-use, provider binding, another registry's admission refused; accepted at exactly `MAX_AGE_MS`, refused 1 ms later (virtual clock); a health-check probe needs no admission. Every existing executor case now presents an admission.
+- `circuit-admission.architecture.spec.ts` — **6 unit cases**: only `ProviderStateStore` issues an admission; only the declared submission paths call `executor.execute` (today: test-send); each passes `….admission` obtained from `this.state.admit`; the executor redeems before `run`, and `run` is the only place `send` is called; `routingEligibility` never issues or returns an admission.
+
+**Admission mutation proofs** (Z01–Z08, run in the full 53-mutant suite on disposable clones):
+
+| # | Mutation | Failing |
+|---|---|---|
+| Z01 | the provider call no longer redeems the admission | 5 of 6 contract, 3 unit |
+| Z02 | admissions not single-use | 2 of 6 contract, 1 unit |
+| Z03 | admissions not bound to their provider | 1 of 6 contract (the held, unspent foreign admission), 1 unit |
+| Z04 | admissions never expire | 1 unit (the submission clock is real over HTTP; expiry is proven on the virtual clock) |
+| Z05 | an object with an admission's fields accepted as one | 3 of 6 contract, 2 unit |
+| Z06 | a routing-eligibility verdict accepted as an admission | 1 of 6 contract, 1 unit |
+| Z07 | the submission path hands the provider call its own copy instead of the issued admission | 4 of 6 contract, 1 unit (architecture) |
+| Z08 | a second provider-call path that never goes through admission | 1 unit (architecture) — it is never exercised at runtime, which is exactly why the structural test exists |
+
 **Scope-creep checks (Gate D).** A static assertion that no outbox table, worker harness, SIEM export, routing/failover, billing, real adapter, message-lifecycle or WebSocket code is introduced by Phase 2, in the style of `authorization-boundary.spec.ts`.
 
 ### 6i. WebSocket authorization
