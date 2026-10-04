@@ -693,6 +693,33 @@ The read-only Gate C audit (01-Oct-2026) found the Observability and Regression 
 | W15 | a reload clears dirty although a newer notification arrived during it | 1 unit |
 | W16 | a hint kept as a high-water mark (a forged hint keeps every read reloading — the defect found and fixed during testing, ADR-013 2.4 notes (a)) | 6; 4 unit |
 
+**D-2 hardening — Phase 2 has no provider credential storage or runtime credential implementation (04-Oct-2026; separately authorized after Gate D.5; test code only).**
+
+- `apps/api/test/provider-registry.sec-spec.ts` — the credential-absence case now covers all six Phase 2 provider tables (`channels`, `providers`, `provider_capabilities`, `provider_health`, `provider_circuit_policy`, `provider_configuration_revision`), asserts that each is actually inspected, and that `api_keys` is the only table in the schema with a credential-like name. **New case:** the circuit policy and configuration revision hold numbers and timestamps only; their one text column, `scope`, is pinned by a `CHECK` to `'platform'`, and even the owner's `UPDATE` to a reference-shaped value is refused (`23514`).
+- `apps/api/src/providers/credential-absence.architecture.spec.ts` — **6 unit cases**, comments stripped (documentation may discuss credentials; code may not): the scan covers `apps/api/src`, `packages/contracts/src`, `packages/db/src`; only five pinned deployment-plane files reach the secrets module (JWT, cursor key, bootstrap and fixture passwords, module registration), and no provider code does; every secret resolution outside `apps/api/src/secrets/` is one of five pinned deployment-plane calls; no credential- or secret-named type, interface, class, enum or exported symbol exists beyond the pinned user-authentication ones; provider code names no credential or secret beyond the pinned refusals, request-credential plumbing and the simulated rejection; no code or migration names `provider_credentials`, and no Phase 2 migration (`0018`+) declares a credential-shaped identifier.
+
+| # | Mutation (D: clone DDL, provider-registry suite; S: source, static check) | Caught by |
+|---|---|---|
+| D01 | `api_secret` column on `provider_circuit_policy` | 2 (name check; column pin) |
+| D02 | `credential_ref` column on `provider_configuration_revision` | 2 |
+| D03 | innocently named `jsonb` column on `provider_circuit_policy` | 1 (column pin) |
+| D04 | singleton `CHECK` dropped on `provider_configuration_revision` | 1 |
+| D05 | singleton `CHECK` dropped on `provider_circuit_policy` | 1 |
+| D06 | `provider_credentials` table created | 1 |
+| D07 | a credential store under another name | 1 |
+| D08 | `auth_token` column on `provider_health` | 1 |
+| S01 | a `ProviderCredential` interface in contracts | 3 unit |
+| S02 | `credentialRef` on the adapter context | 1 unit |
+| S03 | a new `secrets.resolve(...)` path in the registry | 2 unit |
+| S04 | a resolver module outside `apps/api/src/secrets/` | 1 unit |
+| S05 | a credential column in the catalogue schema | 1 unit |
+| S06 | a new migration adding a token-shaped column | 1 unit |
+| S07 | the simulator reading a vendor API key from the environment | 1 unit |
+| S08 | `SecretsPort` injected into the health service | 2 unit |
+| S09 | `provider_credentials` named in code | 2 unit |
+
+17/17 caught on disposable clones; source restored and verified after each.
+
 **Scope-creep checks (Gate D).** A static assertion that no outbox table, worker harness, SIEM export, routing/failover, billing, real adapter, message-lifecycle or WebSocket code is introduced by Phase 2, in the style of `authorization-boundary.spec.ts`.
 
 ### 6i. WebSocket authorization

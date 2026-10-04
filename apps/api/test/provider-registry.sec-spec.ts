@@ -936,10 +936,24 @@ describe('Phase 2.1 provider and channel registry', () => {
     });
 
     it('no catalogue table can hold a credential, and provider_credentials does not exist', async () => {
+      // Every Phase 2 provider table: the 2.1 catalogue, 2.3 health and circuit
+      // policy, 2.4 configuration revision (D-2 hardening).
+      const phase2Tables = [
+        'channels',
+        'providers',
+        'provider_capabilities',
+        'provider_health',
+        'provider_circuit_policy',
+        'provider_configuration_revision',
+      ];
       const { rows } = await h.admin.execute<{ table_name: string; column_name: string }>(
-        sql`select table_name, column_name from information_schema.columns where table_schema = 'public' and table_name in ('channels','providers','provider_capabilities','provider_health')`,
+        sql`select table_name, column_name from information_schema.columns where table_schema = 'public' and table_name in (${sql.join(
+          phase2Tables.map((t) => sql`${t}`),
+          sql`, `,
+        )})`,
       );
-      expect(rows.length).toBeGreaterThan(0);
+      // Each table is inspected — a renamed or missing one cannot drop out silently.
+      expect([...new Set(rows.map((r) => r.table_name))].sort()).toEqual([...phase2Tables].sort());
       for (const r of rows) {
         expect(r.column_name).not.toMatch(
           /secret|password|passwd|token|credential|api_?key|private/,
@@ -949,6 +963,68 @@ describe('Phase 2.1 provider and channel registry', () => {
         sql`select count(*)::int n from information_schema.tables where table_name = 'provider_credentials'`,
       );
       expect(t[0]!.n).toBe(0);
+      // No provider credential store under any other name either; `api_keys`
+      // (the platform's own client credentials, Phase 1B.6.2) is the only match.
+      const { rows: named } = await h.admin.execute<{ table_name: string }>(
+        sql`select table_name from information_schema.tables where table_schema = 'public' and table_name ~* '(credential|secret|password|token|api_?key)' order by table_name`,
+      );
+      expect(named.map((r) => r.table_name)).toEqual(['api_keys']);
+    });
+
+    it('the circuit policy (2.3) and configuration revision (2.4) cannot contain credential material: numbers and timestamps only, and their one text column is pinned to the literal platform', async () => {
+      const { rows } = await h.admin.execute<{
+        table_name: string;
+        column_name: string;
+        data_type: string;
+      }>(
+        sql`select table_name, column_name, data_type from information_schema.columns where table_schema = 'public' and table_name in ('provider_circuit_policy', 'provider_configuration_revision') order by table_name, column_name`,
+      );
+      const TIMESTAMP = 'timestamp with time zone';
+      expect(rows.map((r) => `${r.table_name}.${r.column_name}:${r.data_type}`)).toEqual([
+        `provider_circuit_policy.cooldown_ms:integer`,
+        `provider_circuit_policy.created_at:${TIMESTAMP}`,
+        `provider_circuit_policy.failure_percent:integer`,
+        `provider_circuit_policy.half_open_max_probes:integer`,
+        `provider_circuit_policy.half_open_successes_to_close:integer`,
+        `provider_circuit_policy.min_samples:integer`,
+        `provider_circuit_policy.probe_lease_ms:integer`,
+        `provider_circuit_policy.scope:text`,
+        `provider_circuit_policy.updated_at:${TIMESTAMP}`,
+        `provider_circuit_policy.version:bigint`,
+        `provider_circuit_policy.window_max_samples:integer`,
+        `provider_circuit_policy.window_ms:integer`,
+        `provider_configuration_revision.changed_at:${TIMESTAMP}`,
+        `provider_configuration_revision.revision:bigint`,
+        `provider_configuration_revision.scope:text`,
+      ]);
+      const { rows: checks } = await h.admin.execute<{ rel: string; def: string }>(
+        sql`select conrelid::regclass::text as rel, pg_get_constraintdef(oid) as def from pg_constraint where contype = 'c' and conrelid in ('provider_circuit_policy'::regclass, 'provider_configuration_revision'::regclass) and pg_get_constraintdef(oid) like '%scope%'`,
+      );
+      expect(checks.map((c) => `${c.rel}: ${c.def}`).sort()).toEqual([
+        "provider_circuit_policy: CHECK ((scope = 'platform'::text))",
+        "provider_configuration_revision: CHECK ((scope = 'platform'::text))",
+      ]);
+      // Enforced, not only declared: even the owner cannot put a reference or a
+      // value in the text column (the transaction is rolled back either way).
+      for (const table of ['provider_circuit_policy', 'provider_configuration_revision']) {
+        let code: string | undefined;
+        try {
+          await h.admin.transaction(async (tx) => {
+            await tx.execute(
+              sql`update ${sql.identifier(table)} set scope = ${'env:PROVIDER_API_SECRET'}`,
+            );
+          });
+        } catch (e) {
+          code =
+            (e as { cause?: { code?: string }; code?: string }).cause?.code ??
+            (e as { code?: string }).code;
+        }
+        expect(`${table}: ${code}`).toBe(`${table}: 23514`);
+      }
+      const { rows: scopes } = await h.admin.execute<{ s: string }>(
+        sql`select scope as s from provider_circuit_policy union all select scope from provider_configuration_revision`,
+      );
+      expect(scopes.map((r) => r.s)).toEqual(['platform', 'platform']);
     });
   });
 

@@ -346,7 +346,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 - *DB / API / permissions / audit / code*: none.
 - *Tests / mutation proofs*: none of its own — 2.5 adds no code. The absence of credential persistence is proven by the Gate D cross-cutting check (§5c), implemented with 2.1 and extended by each backend increment.
 - *Acceptance*: the documentation review — requirements, invariants, the open ownership question and the `SecretsPort` boundary are recorded, and nothing in Phase 2 freezes an ownership or scope semantic.
-- *Status (04-Oct-2026)*: documented in `PROVIDER_ADAPTER.md` §4a (binding requirements CR-1–CR-8, the `SecretsPort` boundary, the NOT FROZEN list, candidate input) and reconciled in `SECURITY.md` §3–§3b and `RUNBOOK.md` §5, §7; **PASS / CLOSED — documentation-only Credential Reference Contract** (Gate D.5 approved). **Follow-up outside 2.5, not authorized:** credential-absence test hardening (ADR-013 "2.5 notes" (b)).
+- *Status (04-Oct-2026)*: documented in `PROVIDER_ADAPTER.md` §4a (binding requirements CR-1–CR-8, the `SecretsPort` boundary, the NOT FROZEN list, candidate input) and reconciled in `SECURITY.md` §3–§3b and `RUNBOOK.md` §5, §7; **PASS / CLOSED — documentation-only Credential Reference Contract** (Gate D.5 approved). **Follow-up outside 2.5:** credential-absence test hardening (ADR-013 "2.5 notes" (b)) — done 04-Oct-2026 (`TESTING.md` §6u, "D-2 hardening").
 - *Exclusions*: `provider_credentials`, any ownership model, rotation, management, any real credential, any credential type in code.
 
 **2.6 — Frontend console (separately authorized and gated)**
