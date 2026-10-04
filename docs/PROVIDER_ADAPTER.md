@@ -128,7 +128,7 @@ Each row also carries `classification` (§5b), `latency_ms` (null for `override`
 | Provider rate limiting, HTTP 429, throughput cap | `rate_limited` | The provider is shedding load; continuing to send is the harm the breaker prevents |
 | Other provider-side transient errors (e.g. "temporarily unavailable", queue full) | `provider_error` | Transient provider-side unavailability |
 | Any other provider availability failure an adapter explicitly classifies | `provider_error` | Same reason, by explicit classification |
-| An answer no adapter could classify | `unknown` | Not in the frozen list, deliberately counted: an unexplained failure mode fails **safe** (it can open the circuit) rather than silently keeping a failing provider in traffic. Flagged for review at Gate D.3 |
+| An answer no adapter could classify | `unknown` | Not in the frozen list, deliberately counted: an unexplained failure mode fails **safe** (it can open the circuit) rather than silently keeping a failing provider in traffic. Approved at the Gate D.3 re-review |
 
 **Does not count as provider failure** — the provider answered and is working; the rejection is about *this* request, credential or configuration, would be identical on any retry or any provider, and waiting cannot fix it. Counting it would let one bad client or bad template open the circuit and take a healthy provider out of traffic for everyone:
 
@@ -271,6 +271,15 @@ Two rules bind the router:
 
 1. **One authority.** `routingEligibility()` (`provider-state-machine.ts`) is the read-only predicate a router uses to filter candidates: `excluded_lifecycle`, `excluded_open`, `probe_only` (with the free probe slots), or `eligible`. It claims nothing. Before sending, the router must still pass the chosen provider through the **same admission** the test-send uses (`ProviderStateStore.admit`, §6c), under the provider row lock: that call — and only that call — claims a probe slot or applies T2. The router never re-implements the breaker, never reads the thresholds itself, and never sends to a provider whose admission refused.
 2. **Every outcome is recorded.** Each real submission's normalized outcome is recorded through the same recording (§6d) with its ticket, so the circuit sees production traffic exactly as it sees test-sends today.
+
+**Hard architectural invariant — Provider Router eligibility is advisory; circuit admission is authoritative and mandatory immediately before provider submission.** It is enforced in code, not by convention:
+
+- **Admission issues a token.** `ProviderStateStore.admit` — and nothing else — issues a `CircuitAdmission` (`CircuitAdmissions.issue`) when, and only when, the circuit admits the submission under the provider row lock (§6c). A refusal issues nothing.
+- **The provider call demands it.** `ProviderSubmissionExecutor.execute` — the only code path that calls an adapter's `send()` — takes the admission as its first argument and redeems it (`CircuitAdmissions.consume`) **before** the adapter is touched. It refuses (`CircuitAdmissionRequired`, no adapter call, no sample) anything that is not a genuine, unconsumed admission, issued in this process for **this** provider, no more than `CircuitAdmissions.MAX_AGE_MS` (5 s, on the submission clock) ago. An admission is single-use: a second call with it is refused.
+- **Eligibility cannot stand in for it.** `routingEligibility()` returns a plain verdict; it is not an admission and cannot be redeemed. A verdict of `eligible` or `probe_only`, a copied or forged object with an admission's fields, an admission for another provider, a reused or an expired one — each is refused before the provider call.
+- **Therefore the probe-slot limit cannot be bypassed.** Each `HALF_OPEN` admission holds one of `halfOpenMaxProbes` slots under the row lock, and each provider call consumes exactly one admission, so concurrent routing requests can never place more submissions on a half-open provider than the policy admits, and an `OPEN` provider receives none.
+- **Structurally guarded.** An architecture test fails if anything other than `ProviderStateStore` issues an admission, or if any code other than the declared submission paths calls `ProviderSubmissionExecutor.execute` (today only test-send; the future router must be added to that list, and must pass the admission the same way). Health-check probes (`executor.probe`) are diagnostics, not submissions, and need no admission (§5e).
+- **Process-local by design.** An admission lives in the issuing process and cannot be serialized, cached or carried to another instance: admission and provider call happen in the same request.
 
 What this contract deliberately does not define: routing weights, priorities, policies, multi-provider selection and failover orchestration (later phases, ADR-013 PD-6).
 
