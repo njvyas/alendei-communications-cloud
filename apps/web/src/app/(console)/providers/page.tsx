@@ -3,12 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
-import {
-  ApiError,
-  channelsApi,
-  providersApi,
-  type ListProvidersParams,
-} from '@/lib/api-client';
+import { ApiError, channelsApi, providersApi, type ListProvidersParams } from '@/lib/api-client';
 import { useCanManageProviders, useCanReadProviders } from '@/lib/session-store';
 import {
   ProviderCircuitBadge,
@@ -102,7 +97,8 @@ export default function ProvidersPage() {
             Communication Providers
           </h1>
           <p className="text-xs text-[var(--color-ink-muted)]">
-            Global provider registry, lifecycle status, circuit breaker states, and health monitoring.
+            Global provider registry, lifecycle status, circuit breaker states, and health
+            monitoring.
           </p>
         </div>
 
@@ -338,10 +334,7 @@ export default function ProvidersPage() {
         defaultChannelId={selectedChannelId === 'all' ? undefined : selectedChannelId}
       />
 
-      <CircuitPolicyDialog
-        open={isCircuitPolicyOpen}
-        onOpenChange={setIsCircuitPolicyOpen}
-      />
+      <CircuitPolicyDialog open={isCircuitPolicyOpen} onOpenChange={setIsCircuitPolicyOpen} />
     </div>
   );
 }

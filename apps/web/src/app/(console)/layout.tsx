@@ -104,7 +104,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   if (status === 'zero_organizations') {
     const isPermittedNavigation =
       (isNavigatingOrganizations && canReadOrganizations) ||
-      isNavigatingCatalogue;
+      (isNavigatingCatalogue && canReadProviders);
     if (!isPermittedNavigation) {
       return (
         <div className="mx-auto flex min-h-dvh max-w-6xl flex-col px-4 py-6 sm:px-6">

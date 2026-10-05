@@ -75,8 +75,14 @@ export function ProviderTransitionDialog({
           setErrorMessage(
             `Cannot transition provider: it is currently ${currentStatus}, which conflicts with this operation.`,
           );
-        } else if (err.status === 403 || err.code === 'AUTHZ_SCOPE_DENIED' || err.code === 'AUTHZ_FORBIDDEN') {
-          setErrorMessage('Authorization refused (403): You do not have permission (providers.manage) to transition provider status.');
+        } else if (
+          err.status === 403 ||
+          err.code === 'AUTHZ_SCOPE_DENIED' ||
+          err.code === 'AUTHZ_FORBIDDEN'
+        ) {
+          setErrorMessage(
+            'Authorization refused (403): You do not have permission (providers.manage) to transition provider status.',
+          );
         } else {
           setErrorMessage(err.message);
         }
@@ -93,7 +99,8 @@ export function ProviderTransitionDialog({
       <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl">
         <h2 className="text-base font-semibold text-[var(--color-ink)]">{details.title}</h2>
         <p className="mt-2 text-xs text-[var(--color-ink-muted)]">
-          Target provider: <strong>{provider.name}</strong> (currently <strong>{provider.status}</strong>)
+          Target provider: <strong>{provider.name}</strong> (currently{' '}
+          <strong>{provider.status}</strong>)
         </p>
         <p className="mt-2 text-xs text-[var(--color-ink)] leading-relaxed">
           {details.description}

@@ -180,7 +180,8 @@ export default function ChannelDetailPage({ params }: { params: Promise<{ id: st
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold text-[var(--color-ink)]">Configured Providers</h2>
           <span className="text-xs text-[var(--color-ink-muted)]">
-            {providers.length} provider{providers.length === 1 ? '' : 's'} serving {channel.displayName}
+            {providers.length} provider{providers.length === 1 ? '' : 's'} serving{' '}
+            {channel.displayName}
           </span>
         </div>
 

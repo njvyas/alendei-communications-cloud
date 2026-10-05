@@ -2,11 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  ApiError,
-  providerCircuitPolicyApi,
-  type CircuitPolicyView,
-} from '@/lib/api-client';
+import { ApiError, providerCircuitPolicyApi } from '@/lib/api-client';
 import { PROVIDER_CIRCUIT_POLICY_BOUNDS as B } from '@acc/contracts';
 
 interface CircuitPolicyDialogProps {
@@ -107,8 +103,14 @@ export function CircuitPolicyDialog({ open, onOpenChange }: CircuitPolicyDialogP
           setErrorMessage(
             `Concurrency conflict (409): The policy was modified by another operator (current version: ${currentVersion}). Form values have been reconciled with the latest policy. Please verify and submit again.`,
           );
-        } else if (err.status === 403 || err.code === 'AUTHZ_SCOPE_DENIED' || err.code === 'AUTHZ_FORBIDDEN') {
-          setErrorMessage('Authorization refused (403): You do not have permission (providers.manage) to update circuit policy.');
+        } else if (
+          err.status === 403 ||
+          err.code === 'AUTHZ_SCOPE_DENIED' ||
+          err.code === 'AUTHZ_FORBIDDEN'
+        ) {
+          setErrorMessage(
+            'Authorization refused (403): You do not have permission (providers.manage) to update circuit policy.',
+          );
         } else {
           setErrorMessage(err.message);
         }
@@ -129,7 +131,8 @@ export function CircuitPolicyDialog({ open, onOpenChange }: CircuitPolicyDialogP
               Platform Circuit Breaker Policy
             </h2>
             <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-              Governs circuit breaker trips, cooldown windows, and probe recovery across all providers.
+              Governs circuit breaker trips, cooldown windows, and probe recovery across all
+              providers.
             </p>
           </div>
           {currentPolicy && (
@@ -342,7 +345,8 @@ export function CircuitPolicyDialog({ open, onOpenChange }: CircuitPolicyDialogP
                   required
                 />
                 <span className="text-[10px] text-[var(--color-ink-muted)]">
-                  Consecutive successes to close ({B.halfOpenSuccessesToClose.min} – {B.halfOpenSuccessesToClose.max})
+                  Consecutive successes to close ({B.halfOpenSuccessesToClose.min} –{' '}
+                  {B.halfOpenSuccessesToClose.max})
                 </span>
               </div>
             </div>

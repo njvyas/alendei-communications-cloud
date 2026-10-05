@@ -1,13 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import {
-  ApiError,
-  providersApi,
-  type ProviderCapabilityView,
-  type ProviderDetailView,
-} from '@/lib/api-client';
+import { ApiError, providersApi, type ProviderDetailView } from '@/lib/api-client';
 import {
   PROVIDER_CAPABILITY_FORBIDDEN_KEY_FRAGMENTS,
   PROVIDER_CAPABILITY_KEY_PATTERN,
@@ -145,8 +140,14 @@ export function ProviderCapabilitiesDialog({
       onOpenChange(false);
     } catch (err) {
       if (err instanceof ApiError) {
-        if (err.status === 403 || err.code === 'AUTHZ_SCOPE_DENIED' || err.code === 'AUTHZ_FORBIDDEN') {
-          setErrorMessage('Authorization refused (403): You do not have permission (providers.manage) to update provider capabilities.');
+        if (
+          err.status === 403 ||
+          err.code === 'AUTHZ_SCOPE_DENIED' ||
+          err.code === 'AUTHZ_FORBIDDEN'
+        ) {
+          setErrorMessage(
+            'Authorization refused (403): You do not have permission (providers.manage) to update provider capabilities.',
+          );
         } else {
           setErrorMessage(err.message);
         }

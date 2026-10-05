@@ -8,14 +8,8 @@ import {
   type ProviderDetailView,
   type ProviderHealthCheckResult,
 } from '@/lib/api-client';
-import {
-  SIMULATOR_HEALTH_BEHAVIORS,
-  type SimulatorHealthBehavior,
-} from '@acc/contracts';
-import {
-  ProviderCircuitBadge,
-  ProviderHealthBadge,
-} from './provider-status-badge';
+import { SIMULATOR_HEALTH_BEHAVIORS, type SimulatorHealthBehavior } from '@acc/contracts';
+import { ProviderCircuitBadge, ProviderHealthBadge } from './provider-status-badge';
 
 interface ProviderHealthProbeDialogProps {
   open: boolean;
@@ -49,8 +43,14 @@ export function ProviderHealthProbeDialog({
       await queryClient.invalidateQueries({ queryKey: ['providers'] });
     } catch (err) {
       if (err instanceof ApiError) {
-        if (err.status === 403 || err.code === 'AUTHZ_SCOPE_DENIED' || err.code === 'AUTHZ_FORBIDDEN') {
-          setErrorMessage('Authorization refused (403): You do not have permission (providers.manage) to execute health check probes.');
+        if (
+          err.status === 403 ||
+          err.code === 'AUTHZ_SCOPE_DENIED' ||
+          err.code === 'AUTHZ_FORBIDDEN'
+        ) {
+          setErrorMessage(
+            'Authorization refused (403): You do not have permission (providers.manage) to execute health check probes.',
+          );
         } else {
           setErrorMessage(err.message);
         }
@@ -75,7 +75,8 @@ export function ProviderHealthProbeDialog({
           Run Health Probe — {provider.name}
         </h2>
         <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-          Triggers a synchronous health probe against the adapter. Records a probe sample that moves health state.
+          Triggers a synchronous health probe against the adapter. Records a probe sample that moves
+          health state.
         </p>
 
         {errorMessage && (

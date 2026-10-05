@@ -298,10 +298,7 @@ test.describe('Phase 2.6 — Providers & Channels Console (Gate D.6)', () => {
   // ---------------------------------------------------------------------------
   // E2E-PROV-08: Low-privilege persona authorization boundaries
   // ---------------------------------------------------------------------------
-  test('E2E-PROV-08: Low-privilege persona authorization boundaries', async ({
-    page,
-    context,
-  }) => {
+  test('E2E-PROV-08: Low-privilege persona authorization boundaries', async ({ page, context }) => {
     // 1. Reader persona (providers.read only)
     await context.clearCookies();
     await loginAsPersona(

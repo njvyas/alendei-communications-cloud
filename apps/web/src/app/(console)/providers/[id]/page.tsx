@@ -3,11 +3,7 @@
 import { use, useState } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
-import {
-  ApiError,
-  providersApi,
-  type ListProviderHealthParams,
-} from '@/lib/api-client';
+import { ApiError, providersApi, type ListProviderHealthParams } from '@/lib/api-client';
 import {
   useCanManageProviders,
   useCanReadProviders,
@@ -42,9 +38,7 @@ export default function ProviderDetailPage({ params }: { params: Promise<{ id: s
   // Health samples pagination cursor stack
   const [sampleCursorStack, setSampleCursorStack] = useState<string[]>([]);
   const currentSampleCursor =
-    sampleCursorStack.length > 0
-      ? sampleCursorStack[sampleCursorStack.length - 1]
-      : undefined;
+    sampleCursorStack.length > 0 ? sampleCursorStack[sampleCursorStack.length - 1] : undefined;
 
   // Provider Detail Query
   const {
@@ -115,7 +109,9 @@ export default function ProviderDetailPage({ params }: { params: Promise<{ id: s
           Failed to load provider details.
         </p>
         <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-          {providerError instanceof ApiError ? providerError.message : 'Unknown communication error'}
+          {providerError instanceof ApiError
+            ? providerError.message
+            : 'Unknown communication error'}
         </p>
         <div className="mt-4 flex justify-center gap-2">
           <Link
@@ -170,7 +166,8 @@ export default function ProviderDetailPage({ params }: { params: Promise<{ id: s
             />
           </div>
           <p className="mt-1 font-mono text-xs text-[var(--color-ink-muted)]">
-            Channel: <span className="uppercase">{provider.channelCode}</span> • Adapter: {provider.adapterKey}
+            Channel: <span className="uppercase">{provider.channelCode}</span> • Adapter:{' '}
+            {provider.adapterKey}
           </p>
         </div>
 
@@ -342,9 +339,7 @@ export default function ProviderDetailPage({ params }: { params: Promise<{ id: s
               <div className="max-h-[220px] overflow-y-auto divide-y divide-[var(--color-border-subtle)] pr-1">
                 {provider.capabilities.map((c) => (
                   <div key={c.key} className="py-2 text-xs flex justify-between items-start gap-2">
-                    <span className="font-mono font-medium text-[var(--color-ink)]">
-                      {c.key}
-                    </span>
+                    <span className="font-mono font-medium text-[var(--color-ink)]">{c.key}</span>
                     <pre className="font-mono text-[11px] text-[var(--color-ink-muted)] max-w-[200px] overflow-x-auto text-right">
                       {JSON.stringify(c.value)}
                     </pre>
@@ -367,7 +362,8 @@ export default function ProviderDetailPage({ params }: { params: Promise<{ id: s
               Health Sample History
             </h2>
             <p className="text-xs text-[var(--color-ink-muted)]">
-              Recent test-send submissions, health-check probes, and manual overrides (newest first).
+              Recent test-send submissions, health-check probes, and manual overrides (newest
+              first).
             </p>
           </div>
           <button
@@ -437,8 +433,8 @@ export default function ProviderDetailPage({ params }: { params: Promise<{ id: s
                             s.classification === 'success'
                               ? 'bg-[var(--color-ok-subtle,rgba(16,185,129,0.1))] text-[var(--color-ok,#10b981)]'
                               : s.classification === 'failure'
-                              ? 'bg-[var(--color-bad-subtle,rgba(239,68,68,0.1))] text-[var(--color-bad,#ef4444)]'
-                              : 'bg-[var(--color-surface-raised)] text-[var(--color-ink-muted)]'
+                                ? 'bg-[var(--color-bad-subtle,rgba(239,68,68,0.1))] text-[var(--color-bad,#ef4444)]'
+                                : 'bg-[var(--color-surface-raised)] text-[var(--color-ink-muted)]'
                           }`}
                         >
                           {s.classification}

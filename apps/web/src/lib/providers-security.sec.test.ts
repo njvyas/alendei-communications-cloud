@@ -1,13 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-  channelsApi,
-  providersApi,
-  providerCircuitPolicyApi,
-  ApiError,
-  setSelectedOrganization,
-} from './api-client';
+import { channelsApi, providersApi, providerCircuitPolicyApi, ApiError } from './api-client';
 import {
   canManageProviders,
   canReadProviders,

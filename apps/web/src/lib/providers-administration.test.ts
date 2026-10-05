@@ -7,7 +7,6 @@ import {
   providerCircuitPolicyApi,
   type ChannelView,
   type ProviderDetailView,
-  type ProviderView,
   type CircuitPolicyView,
   type ProviderTestSendResult,
   type ProviderHealthCheckResult,

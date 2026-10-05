@@ -49,7 +49,8 @@ export function ProviderTestSendPanel({ provider, canTestSend }: ProviderTestSen
       if (err instanceof ApiError) {
         if (err.code === 'PROVIDER_CIRCUIT_OPEN') {
           // Use details.retryAfterMs when present for countdown; do not use generic retryable flag
-          const retryAfterMs = typeof err.details?.retryAfterMs === 'number' ? err.details.retryAfterMs : null;
+          const retryAfterMs =
+            typeof err.details?.retryAfterMs === 'number' ? err.details.retryAfterMs : null;
           if (retryAfterMs !== null && retryAfterMs > 0) {
             setCircuitCountdown(Math.ceil(retryAfterMs / 1000));
           } else {
@@ -66,8 +67,14 @@ export function ProviderTestSendPanel({ provider, canTestSend }: ProviderTestSen
           setErrorMessage(
             `Lifecycle refusal (409): Provider must be active to process test-sends (current status: ${status}).`,
           );
-        } else if (err.status === 403 || err.code === 'AUTHZ_SCOPE_DENIED' || err.code === 'AUTHZ_FORBIDDEN') {
-          setErrorMessage('Authorization refused (403): You do not have permission (providers.test_send) to execute test submissions.');
+        } else if (
+          err.status === 403 ||
+          err.code === 'AUTHZ_SCOPE_DENIED' ||
+          err.code === 'AUTHZ_FORBIDDEN'
+        ) {
+          setErrorMessage(
+            'Authorization refused (403): You do not have permission (providers.test_send) to execute test submissions.',
+          );
         } else {
           setErrorMessage(err.message);
         }
@@ -84,10 +91,12 @@ export function ProviderTestSendPanel({ provider, canTestSend }: ProviderTestSen
       <Card>
         <CardTitle>Simulator Test-Send</CardTitle>
         <CardDescription>
-          Execute synthetic test submissions through the provider’s adapter to verify dispatch behavior, latency, and circuit reactions.
+          Execute synthetic test submissions through the provider’s adapter to verify dispatch
+          behavior, latency, and circuit reactions.
         </CardDescription>
         <div className="mt-4 rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)]/30 p-4 text-center text-xs text-[var(--color-ink-muted)]">
-          You do not hold permission (<code>providers.test_send</code>) to execute synthetic test submissions.
+          You do not hold permission (<code>providers.test_send</code>) to execute synthetic test
+          submissions.
         </div>
       </Card>
     );
@@ -99,7 +108,8 @@ export function ProviderTestSendPanel({ provider, canTestSend }: ProviderTestSen
         <div>
           <CardTitle>Simulator Test-Send</CardTitle>
           <CardDescription>
-            Execute synthetic test submissions through the provider’s adapter to verify dispatch behavior, latency, and circuit reactions.
+            Execute synthetic test submissions through the provider’s adapter to verify dispatch
+            behavior, latency, and circuit reactions.
           </CardDescription>
         </div>
         <span className="font-mono text-[10px] rounded px-2 py-0.5 border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] text-[var(--color-ink-muted)]">
@@ -172,7 +182,8 @@ export function ProviderTestSendPanel({ provider, canTestSend }: ProviderTestSen
 
             <div className="flex items-center gap-3 text-xs text-[var(--color-ink-muted)]">
               <span>
-                Latency: <strong className="font-mono text-[var(--color-ink)]">{result.latencyMs} ms</strong>
+                Latency:{' '}
+                <strong className="font-mono text-[var(--color-ink)]">{result.latencyMs} ms</strong>
               </span>
               {result.circuitProbe && (
                 <span className="rounded bg-[var(--color-warn-subtle,rgba(245,158,11,0.1))] text-[var(--color-warn,#f59e0b)] px-1.5 py-0.5 text-[10px] font-mono">
@@ -185,7 +196,10 @@ export function ProviderTestSendPanel({ provider, canTestSend }: ProviderTestSen
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
             <div>
               <span className="text-[var(--color-ink-muted)]">Submission ID</span>
-              <p className="font-mono text-[11px] text-[var(--color-ink)] truncate" title={result.submissionId}>
+              <p
+                className="font-mono text-[11px] text-[var(--color-ink)] truncate"
+                title={result.submissionId}
+              >
                 {result.submissionId}
               </p>
             </div>
@@ -193,7 +207,9 @@ export function ProviderTestSendPanel({ provider, canTestSend }: ProviderTestSen
             <div>
               <span className="text-[var(--color-ink-muted)]">Provider Message ID</span>
               <p className="font-mono text-[11px] text-[var(--color-ink)]">
-                {result.providerMessageId ?? <span className="italic text-[var(--color-ink-muted)]">none</span>}
+                {result.providerMessageId ?? (
+                  <span className="italic text-[var(--color-ink-muted)]">none</span>
+                )}
               </p>
             </div>
 

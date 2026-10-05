@@ -4,7 +4,6 @@ import type {
   ApiPagedResponse,
   ChannelCode,
   ChannelStatus,
-  ProviderAdapterKey,
   ProviderCircuitPolicy,
   ProviderCircuitState,
   ProviderFailureCategory,
@@ -1817,4 +1816,3 @@ export const providerCircuitPolicyApi = {
     });
   },
 };
-

@@ -22,9 +22,7 @@ export function ProviderHealthOverrideDialog({
 }: ProviderHealthOverrideDialogProps) {
   const queryClient = useQueryClient();
 
-  const [overrideState, setOverrideState] = useState<string>(
-    provider.healthOverride ?? 'clear',
-  );
+  const [overrideState, setOverrideState] = useState<string>(provider.healthOverride ?? 'clear');
   const [reason, setReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -57,8 +55,14 @@ export function ProviderHealthOverrideDialog({
       onOpenChange(false);
     } catch (err) {
       if (err instanceof ApiError) {
-        if (err.status === 403 || err.code === 'AUTHZ_SCOPE_DENIED' || err.code === 'AUTHZ_FORBIDDEN') {
-          setErrorMessage('Authorization refused (403): You do not have permission (providers.manage) to set health overrides.');
+        if (
+          err.status === 403 ||
+          err.code === 'AUTHZ_SCOPE_DENIED' ||
+          err.code === 'AUTHZ_FORBIDDEN'
+        ) {
+          setErrorMessage(
+            'Authorization refused (403): You do not have permission (providers.manage) to set health overrides.',
+          );
         } else {
           setErrorMessage(err.message);
         }
@@ -77,8 +81,8 @@ export function ProviderHealthOverrideDialog({
           Manual Health Override — {provider.name}
         </h2>
         <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-          Manually pin health state or clear back to automatic sample-based derivation.
-          Does not directly modify the circuit breaker state.
+          Manually pin health state or clear back to automatic sample-based derivation. Does not
+          directly modify the circuit breaker state.
         </p>
 
         {errorMessage && (
@@ -130,7 +134,8 @@ export function ProviderHealthOverrideDialog({
               className="mt-1 block w-full rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-3 py-1.5 text-xs text-[var(--color-ink)] shadow-xs focus:border-[var(--color-accent)] focus:outline-hidden"
             />
             <span className="mt-1 block text-[10px] text-[var(--color-ink-muted)]">
-              Max {PROVIDER_HEALTH_OVERRIDE_REASON_MAX} characters. Recorded in the provider health history and audit trail.
+              Max {PROVIDER_HEALTH_OVERRIDE_REASON_MAX} characters. Recorded in the provider health
+              history and audit trail.
             </span>
           </div>
 

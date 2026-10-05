@@ -68,8 +68,14 @@ export function ProviderCreateDialog({
       if (err instanceof ApiError) {
         if (err.code === 'RESOURCE_CONFLICT' || err.status === 409) {
           setErrorMessage('A provider with this name already exists for the selected channel.');
-        } else if (err.status === 403 || err.code === 'AUTHZ_SCOPE_DENIED' || err.code === 'AUTHZ_FORBIDDEN') {
-          setErrorMessage('Authorization refused (403): You do not have permission (providers.manage) to create providers.');
+        } else if (
+          err.status === 403 ||
+          err.code === 'AUTHZ_SCOPE_DENIED' ||
+          err.code === 'AUTHZ_FORBIDDEN'
+        ) {
+          setErrorMessage(
+            'Authorization refused (403): You do not have permission (providers.manage) to create providers.',
+          );
         } else {
           setErrorMessage(err.message);
         }
