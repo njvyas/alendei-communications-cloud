@@ -89,12 +89,26 @@ export function CircuitPolicyDialog({ open, onOpenChange }: CircuitPolicyDialogP
       await queryClient.invalidateQueries({ queryKey: ['providers'] });
     } catch (err) {
       if (err instanceof ApiError) {
-        if (err.status === 409) {
-          const currentVersion = err.details?.currentVersion ?? 'unknown';
+        if (err.code === 'RESOURCE_CONFLICT' || err.status === 409) {
+          // Re-fetch the current policy and reconcile form values before presenting the error
+          const refetchResult = await refetch();
+          const latest = refetchResult.data?.data;
+          if (latest) {
+            setWindowMs(latest.windowMs);
+            setWindowMaxSamples(latest.windowMaxSamples);
+            setMinSamples(latest.minSamples);
+            setFailurePercent(latest.failurePercent);
+            setCooldownMs(latest.cooldownMs);
+            setHalfOpenMaxProbes(latest.halfOpenMaxProbes);
+            setProbeLeaseMs(latest.probeLeaseMs);
+            setHalfOpenSuccessesToClose(latest.halfOpenSuccessesToClose);
+          }
+          const currentVersion = err.details?.currentVersion ?? latest?.version ?? 'unknown';
           setErrorMessage(
-            `Concurrency conflict (409): The policy was modified by another operator (current version: ${currentVersion}). Your changes were rejected. Please refresh to load the latest policy.`,
+            `Concurrency conflict (409): The policy was modified by another operator (current version: ${currentVersion}). Form values have been reconciled with the latest policy. Please verify and submit again.`,
           );
-          void refetch();
+        } else if (err.status === 403 || err.code === 'AUTHZ_SCOPE_DENIED' || err.code === 'AUTHZ_FORBIDDEN') {
+          setErrorMessage('Authorization refused (403): You do not have permission (providers.manage) to update circuit policy.');
         } else {
           setErrorMessage(err.message);
         }

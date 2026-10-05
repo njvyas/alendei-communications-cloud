@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   ApiError,
@@ -22,8 +22,17 @@ export function ProviderTestSendPanel({ provider, canTestSend }: ProviderTestSen
 
   const [behavior, setBehavior] = useState<SimulatorBehavior>('SUCCESS');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [circuitCountdown, setCircuitCountdown] = useState<number | null>(null);
   const [result, setResult] = useState<ProviderTestSendResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (circuitCountdown === null || circuitCountdown <= 0) return;
+    const timer = setInterval(() => {
+      setCircuitCountdown((prev) => (prev !== null && prev > 1 ? prev - 1 : null));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [circuitCountdown]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,7 +47,30 @@ export function ProviderTestSendPanel({ provider, canTestSend }: ProviderTestSen
       await queryClient.invalidateQueries({ queryKey: ['providers'] });
     } catch (err) {
       if (err instanceof ApiError) {
-        setErrorMessage(err.message);
+        if (err.code === 'PROVIDER_CIRCUIT_OPEN') {
+          // Use details.retryAfterMs when present for countdown; do not use generic retryable flag
+          const retryAfterMs = typeof err.details?.retryAfterMs === 'number' ? err.details.retryAfterMs : null;
+          if (retryAfterMs !== null && retryAfterMs > 0) {
+            setCircuitCountdown(Math.ceil(retryAfterMs / 1000));
+          } else {
+            setCircuitCountdown(null);
+          }
+          const stateDesc = err.details?.circuitState ? String(err.details.circuitState) : 'open';
+          setErrorMessage(
+            `Circuit refusal (409): Provider circuit is ${stateDesc}; submission was not sent.${
+              retryAfterMs !== null ? ` Retry allowed in ${Math.ceil(retryAfterMs / 1000)}s.` : ''
+            }`,
+          );
+        } else if (err.code === 'PROVIDER_LIFECYCLE_CONFLICT') {
+          const status = err.details?.status ? String(err.details.status) : 'inactive';
+          setErrorMessage(
+            `Lifecycle refusal (409): Provider must be active to process test-sends (current status: ${status}).`,
+          );
+        } else if (err.status === 403 || err.code === 'AUTHZ_SCOPE_DENIED' || err.code === 'AUTHZ_FORBIDDEN') {
+          setErrorMessage('Authorization refused (403): You do not have permission (providers.test_send) to execute test submissions.');
+        } else {
+          setErrorMessage(err.message);
+        }
       } else {
         setErrorMessage('Failed to execute test submission. Please check your network connection.');
       }
@@ -93,7 +125,7 @@ export function ProviderTestSendPanel({ provider, canTestSend }: ProviderTestSen
             id="test-send-behavior"
             value={behavior}
             onChange={(e) => setBehavior(e.target.value as SimulatorBehavior)}
-            disabled={isSubmitting}
+            disabled={isSubmitting || (circuitCountdown !== null && circuitCountdown > 0)}
             className="mt-1 block w-full rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-3 py-1.5 text-xs text-[var(--color-ink)] shadow-xs focus:border-[var(--color-accent)] focus:outline-hidden"
           >
             {SIMULATOR_BEHAVIORS.map((b) => (
@@ -106,10 +138,14 @@ export function ProviderTestSendPanel({ provider, canTestSend }: ProviderTestSen
 
         <button
           type="submit"
-          disabled={isSubmitting}
+          disabled={isSubmitting || (circuitCountdown !== null && circuitCountdown > 0)}
           className="rounded-md bg-[var(--color-accent)] px-4 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
         >
-          {isSubmitting ? 'Sending…' : 'Execute Test Send'}
+          {isSubmitting
+            ? 'Sending…'
+            : circuitCountdown !== null && circuitCountdown > 0
+              ? `Circuit Cooldown (${circuitCountdown}s)`
+              : 'Execute Test Send'}
         </button>
       </form>
 

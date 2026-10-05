@@ -57,7 +57,11 @@ export function ProviderHealthOverrideDialog({
       onOpenChange(false);
     } catch (err) {
       if (err instanceof ApiError) {
-        setErrorMessage(err.message);
+        if (err.status === 403 || err.code === 'AUTHZ_SCOPE_DENIED' || err.code === 'AUTHZ_FORBIDDEN') {
+          setErrorMessage('Authorization refused (403): You do not have permission (providers.manage) to set health overrides.');
+        } else {
+          setErrorMessage(err.message);
+        }
       } else {
         setErrorMessage('Failed to update health override. Please check your network connection.');
       }

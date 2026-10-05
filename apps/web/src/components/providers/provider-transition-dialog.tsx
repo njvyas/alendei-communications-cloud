@@ -70,10 +70,13 @@ export function ProviderTransitionDialog({
       onOpenChange(false);
     } catch (err) {
       if (err instanceof ApiError) {
-        if (err.status === 409) {
+        if (err.code === 'PROVIDER_LIFECYCLE_CONFLICT' || err.status === 409) {
+          const currentStatus = err.details?.status ? String(err.details.status) : provider.status;
           setErrorMessage(
-            `Cannot transition provider: it is currently ${provider.status}, which conflicts with this operation.`,
+            `Cannot transition provider: it is currently ${currentStatus}, which conflicts with this operation.`,
           );
+        } else if (err.status === 403 || err.code === 'AUTHZ_SCOPE_DENIED' || err.code === 'AUTHZ_FORBIDDEN') {
+          setErrorMessage('Authorization refused (403): You do not have permission (providers.manage) to transition provider status.');
         } else {
           setErrorMessage(err.message);
         }

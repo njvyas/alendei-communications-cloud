@@ -49,7 +49,11 @@ export function ProviderHealthProbeDialog({
       await queryClient.invalidateQueries({ queryKey: ['providers'] });
     } catch (err) {
       if (err instanceof ApiError) {
-        setErrorMessage(err.message);
+        if (err.status === 403 || err.code === 'AUTHZ_SCOPE_DENIED' || err.code === 'AUTHZ_FORBIDDEN') {
+          setErrorMessage('Authorization refused (403): You do not have permission (providers.manage) to execute health check probes.');
+        } else {
+          setErrorMessage(err.message);
+        }
       } else {
         setErrorMessage('Failed to execute health check probe.');
       }

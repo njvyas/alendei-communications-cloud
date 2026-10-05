@@ -325,7 +325,6 @@ export function useCanManagePlatformTenants(): boolean {
 export function canReadProviders(): boolean {
   const { authorization } = useSession.getState();
   if (!authorization) return false;
-  if (authorization.isPlatformAdmin) return true;
   return authorization.grants.some(
     (g) => g.scopeType === 'platform' && g.permissions.includes('providers.read'),
   );
@@ -334,7 +333,6 @@ export function canReadProviders(): boolean {
 export function useCanReadProviders(): boolean {
   return useSession((state) => {
     if (!state.authorization) return false;
-    if (state.authorization.isPlatformAdmin) return true;
     return state.authorization.grants.some(
       (g) => g.scopeType === 'platform' && g.permissions.includes('providers.read'),
     );
@@ -343,12 +341,12 @@ export function useCanReadProviders(): boolean {
 
 /**
  * Evaluates whether the actor can administer providers or the circuit policy.
- * Requires platform admin or holding `providers.manage` at platform scope.
+ * Requires holding `providers.manage` at platform scope.
+ * Platform admin flag alone does NOT substitute for the explicit platform grant.
  */
 export function canManageProviders(): boolean {
   const { authorization } = useSession.getState();
   if (!authorization) return false;
-  if (authorization.isPlatformAdmin) return true;
   return authorization.grants.some(
     (g) => g.scopeType === 'platform' && g.permissions.includes('providers.manage'),
   );
@@ -357,7 +355,6 @@ export function canManageProviders(): boolean {
 export function useCanManageProviders(): boolean {
   return useSession((state) => {
     if (!state.authorization) return false;
-    if (state.authorization.isPlatformAdmin) return true;
     return state.authorization.grants.some(
       (g) => g.scopeType === 'platform' && g.permissions.includes('providers.manage'),
     );
@@ -366,12 +363,12 @@ export function useCanManageProviders(): boolean {
 
 /**
  * Evaluates whether the actor can execute simulator test-sends.
- * Requires platform admin or holding `providers.test_send` at platform scope.
+ * Requires holding `providers.test_send` at platform scope.
+ * Platform admin flag alone does NOT substitute for the explicit platform grant.
  */
 export function canTestSendProviders(): boolean {
   const { authorization } = useSession.getState();
   if (!authorization) return false;
-  if (authorization.isPlatformAdmin) return true;
   return authorization.grants.some(
     (g) => g.scopeType === 'platform' && g.permissions.includes('providers.test_send'),
   );
@@ -380,7 +377,6 @@ export function canTestSendProviders(): boolean {
 export function useCanTestSendProviders(): boolean {
   return useSession((state) => {
     if (!state.authorization) return false;
-    if (state.authorization.isPlatformAdmin) return true;
     return state.authorization.grants.some(
       (g) => g.scopeType === 'platform' && g.permissions.includes('providers.test_send'),
     );

@@ -119,6 +119,11 @@ export function ProviderCapabilitiesDialog({
         return;
       }
 
+      if (parsedValue === null) {
+        setErrorMessage(`Row ${i + 1}: capability value cannot be null.`);
+        return;
+      }
+
       const serializedSize = new TextEncoder().encode(JSON.stringify(parsedValue)).length;
       if (serializedSize > PROVIDER_CAPABILITY_LIMITS.MAX_VALUE_BYTES) {
         setErrorMessage(
@@ -140,7 +145,11 @@ export function ProviderCapabilitiesDialog({
       onOpenChange(false);
     } catch (err) {
       if (err instanceof ApiError) {
-        setErrorMessage(err.message);
+        if (err.status === 403 || err.code === 'AUTHZ_SCOPE_DENIED' || err.code === 'AUTHZ_FORBIDDEN') {
+          setErrorMessage('Authorization refused (403): You do not have permission (providers.manage) to update provider capabilities.');
+        } else {
+          setErrorMessage(err.message);
+        }
       } else {
         setErrorMessage('Failed to update capabilities. Please check your network connection.');
       }

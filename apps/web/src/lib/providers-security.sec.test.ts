@@ -374,4 +374,67 @@ describe('Channels & Providers Security Invariants & Boundary Enforcement', () =
     const body = JSON.parse(call.options.body as string);
     assert.strictEqual(body.override, null);
   });
+
+  it('SEC-8: isPlatformAdmin flag alone without platform-scoped grant does NOT confer provider permissions', () => {
+    // Session has isPlatformAdmin = true, but NO platform grants
+    useSession.getState().setSession({
+      accessToken: 'platform-admin-nogrants-token',
+      user: {
+        userId: 'admin-nogrants',
+        actorType: 'user',
+        authMethod: 'session',
+        sessionId: 'sess-nogrants',
+        authenticatedAt: new Date().toISOString(),
+        tenant: { orgId: null, workspaceId: null, resellerId: null, isPlatformAdmin: true },
+        authorizedOrganizationIds: [],
+        roles: [],
+        permissions: [],
+      },
+      authorization: {
+        actorType: 'user',
+        userId: 'admin-nogrants',
+        apiKeyId: null,
+        grants: [], // ZERO platform grants
+        organizationIds: [],
+        isPlatformAdmin: true,
+      },
+    });
+
+    // Rule 1: A permission is valid for D.6 only when the authorization grant has scopeType === 'platform'.
+    // Do NOT use isPlatformAdmin as a substitute for permission checking.
+    assert.equal(canReadProviders(), false);
+    assert.equal(canManageProviders(), false);
+    assert.equal(canTestSendProviders(), false);
+  });
+
+  it('SEC-9: 409 PROVIDER_CIRCUIT_OPEN preserves retryAfterMs and circuitState in details', async () => {
+    mockHandlers.push({
+      match: () => true,
+      handle: () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'PROVIDER_CIRCUIT_OPEN',
+              message: "This provider's circuit is open; the submission was not sent",
+              correlationId: 'corr-open',
+              retryable: false,
+              details: { circuitState: 'open', retryAfterMs: 30000 },
+            },
+          }),
+          { status: 409, headers: { 'Content-Type': 'application/json' } },
+        ),
+    });
+
+    await assert.rejects(
+      async () => providersApi.testSend(PROVIDER_ID, { behavior: 'SUCCESS' }),
+      (err: unknown) => {
+        assert.ok(err instanceof ApiError);
+        assert.equal(err.status, 409);
+        assert.equal(err.code, 'PROVIDER_CIRCUIT_OPEN');
+        assert.equal(err.details?.circuitState, 'open');
+        assert.equal(err.details?.retryAfterMs, 30000);
+        return true;
+      },
+    );
+  });
 });
