@@ -389,9 +389,11 @@ Objectively testable; each is pass/fail. Evidence runs on disposable clones, nev
 
 ## 6. Phase 3 — WhatsApp
 
+**Status: architecture partially frozen by ADR-014 (`ADR-014-PHASE-3-WHATSAPP-ORCHESTRATION.md`, 06-Oct-2026); open decisions in `PHASE-3-OPEN-DECISIONS.md` require approval before Phase 3.1 implementation. Not started.** Frozen by ADR-014: WhatsApp first; `SimulatorAdapter` only; no real credentials or vendor calls; **provider-to-provider fallback on the same channel is Phase 3 scope**; no cross-channel fallback; PostgreSQL is the correctness boundary with polling and recovery, Redis advisory only; durable simulator invocation fencing; Phase 1C idempotency reused; Phase 2 CircuitAdmission authoritative; no Kafka/outbox, no WebSocket execution, no campaigns, journeys or billing; routing weights, routing-policy CRUD, optimization, canary and advanced routing strategy stay out of Phase 3. Where the bullets below conflict with ADR-014, ADR-014 governs; unresolved conflicts are listed in `PHASE-3-OPEN-DECISIONS.md` §B.
+
 - **Objectives**: first real channel's routing/eligibility path built end-to-end (still against the simulator, unless/until explicit separate authorization is given to connect a real provider).
 - **Dependencies**: Phase 2.
-- **Architecture**: `ROUTING_ENGINE.md`, `EVENTS.md` message lifecycle events, `contacts`/`consents`/`suppressions`.
+- **Architecture**: `ADR-014-PHASE-3-WHATSAPP-ORCHESTRATION.md`; `ROUTING_ENGINE.md` (provider selection on one channel; no routing-policy CRUD); `EVENTS.md` message lifecycle events — recorded in PostgreSQL, **not** published to Kafka in Phase 3 (no Kafka/outbox, ADR-014 F11); `contacts`/`consents`/`suppressions`.
 - **Implementation scope**: `comms-api`, `orchestrator`, `channel-router`, `eligibility` for a single channel; `contacts` module; template model with WhatsApp-specific approval-status handling.
 - **DB changes**: `contacts, contact_identities, consents, suppressions, conversations, messages, message_attempts, message_events, templates`.
 - **API changes**: `/messages`, `/contacts`, `/templates`.
@@ -402,7 +404,7 @@ Objectively testable; each is pass/fail. Evidence runs on disposable clones, nev
 - **Documentation**: `ARCHITECTURE.md` §§5–6, `EVENTS.md` catalogue refined against real implementation.
 - **Acceptance criteria**: a message can be sent, tracked through lifecycle states, and appear correctly in `message_events`/`audit_logs`, entirely via the simulator.
 - **Deployment requirements**: Dev + Staging.
-- **Rollback strategy**: standard; no financial/fallback complexity yet (single channel, single attempt).
+- **Rollback strategy**: standard; no financial complexity (no billing, ADR-014 F14). Single channel (WhatsApp), but **not** single attempt: provider-to-provider fallback is Phase 3 scope (ADR-014 F4); its rules are open decisions P3-D13–P3-D16.
 - **Handed forward by ADR-013 (for Phase 3's own scope freeze to decide, not committed here)**: the delivery/webhook simulator behaviours (`DELIVERY_DELAY`, `DELIVERY_FAILURE` webhook, `DUPLICATE_WEBHOOK`, `OUT_OF_ORDER_WEBHOOK`); `provider_credentials` and the ADR that freezes its ownership model (ADR-013 F-1); the transactional outbox and worker/job tenant-context harness if Phase 3's consumers require them (ADR-013 PD-1); the meaning of "Dev + Staging" while no deployment artifact exists (ADR-013 PD-7).
 
 ## 7. Phase 4 — SMS + RCS
@@ -421,6 +423,8 @@ Objectively testable; each is pass/fail. Evidence runs on disposable clones, nev
 - **Rollback strategy**: standard.
 
 ## 8. Phase 5 — Provider/channel failover
+
+**Amended by ADR-014 (06-Oct-2026):** basic provider-to-provider fallback within one channel is delivered by **Phase 3**, not here. Phase 5 retains cross-channel fallback and the remaining fallback-engine scope below; exactly which fallback-engine components Phase 3 builds first is open decision P3-D30. Routing weights, routing-policy CRUD and canary stay outside Phase 3 (ADR-014 F18).
 
 - **Objectives**: implement `fallback-engine` in full, including delayed-timer scheduling and its PostgreSQL conditional-transaction escalation guard (the correctness boundary, `FALLBACK_ENGINE.md` §4); Redis MAY be added purely as an optional fast-path accelerator to reduce contention/duplicate scheduler work, never as a required correctness mechanism (`ARCHITECTURE.md` §9c).
 - **Dependencies**: Phase 4 (needs ≥2 channels and ≥2 simulated providers per channel to exercise real chains).

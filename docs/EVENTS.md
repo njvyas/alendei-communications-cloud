@@ -1,5 +1,7 @@
 # Event-Driven Architecture
 
+> **Phase note (ADR-014, 06-Oct-2026):** Phase 3 publishes nothing to Kafka and has no transactional outbox (ADR-014 F11); message lifecycle work is found and recovered by PostgreSQL polling (F9). The transport below remains the target design. Which event types Phase 3 records in `message_events` is open decision P3-D12.
+
 ## 1. Transport
 
 A Kafka-wire-compatible event bus (Apache Kafka or Redpanda; abstracted so either satisfies the same producer/consumer contract) carries all domain events. Postgres is the source of truth; events are notifications *about* committed Postgres state, published via the **transactional outbox pattern** — a service writes its state change and an `outbox_events` row in the same DB transaction, and a separate relay process publishes outbox rows to Kafka and marks them sent. This guarantees an event is never published for a state change that didn't actually commit, and never lost if the broker is briefly unavailable.

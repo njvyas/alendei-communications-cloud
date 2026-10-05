@@ -1,5 +1,7 @@
 # Routing Engine Architecture
 
+> **Phase note (ADR-014, 06-Oct-2026):** Phase 3 selects among providers of one channel (WhatsApp) only. Routing weights, routing-policy CRUD, optimization, canary routing and advanced routing strategy are outside Phase 3; how Phase 3 orders candidate providers is open decision P3-D03 (`PHASE-3-OPEN-DECISIONS.md`).
+
 Covers the **Channel Router** and **Provider Router** stages of the request flow in `ARCHITECTURE.md` §2, plus the Eligibility Engine that sits between them.
 
 ## 1. Channel Router

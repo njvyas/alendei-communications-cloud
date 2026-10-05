@@ -1,5 +1,7 @@
 # Fallback Engine Architecture
 
+> **Phase note (ADR-014, 06-Oct-2026):** Phase 3 delivers provider-to-provider fallback on one channel (WhatsApp), against the simulator, with no cross-channel fallback and no routing-policy CRUD. This document is the full target design; where it differs from ADR-014 (delivery-outcome triggers, `fallback_steps`, routing-policy resolution, adapter retry), the difference is an open decision in `PHASE-3-OPEN-DECISIONS.md` (§B C1, C2, C6), not resolved here.
+
 ## 1. Core principle
 
 Fallback is triggered by **delivery outcome**, not API acceptance. A provider returning HTTP 200 / "accepted" means only that the provider has queued the message for delivery attempt — it is not evidence the recipient received anything. The Fallback Engine's job is to hold each attempt to account against an actual delivery confirmation (or explicit failure) within a bounded window, and escalate when that doesn't happen.
