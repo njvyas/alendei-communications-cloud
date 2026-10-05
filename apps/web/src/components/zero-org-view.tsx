@@ -2,12 +2,13 @@
 
 import Link from 'next/link';
 import { authApi } from '@/lib/api-client';
-import { useCanReadOrganizations, useSession } from '@/lib/session-store';
+import { useCanReadOrganizations, useCanReadProviders, useSession } from '@/lib/session-store';
 import { Card, CardDescription, CardTitle } from '@/components/ui/card';
 
 export function ZeroOrgView() {
   const clearSession = useSession((state) => state.clearSession);
   const canReadOrganizations = useCanReadOrganizations();
+  const canReadProviders = useCanReadProviders();
 
   const handleSignOut = async () => {
     try {
@@ -25,15 +26,25 @@ export function ZeroOrgView() {
           Your account is successfully authenticated, but you do not hold active grants in any
           organization. Tenant-scoped operations are not available.
         </CardDescription>
-        <div className="mt-6 flex items-center justify-between gap-3">
-          {canReadOrganizations && (
-            <Link
-              href="/organizations"
-              className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
-            >
-              Manage Organizations
-            </Link>
-          )}
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap gap-2">
+            {canReadOrganizations && (
+              <Link
+                href="/organizations"
+                className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+              >
+                Manage Organizations
+              </Link>
+            )}
+            {canReadProviders && (
+              <Link
+                href="/providers"
+                className="rounded-md bg-[var(--color-surface-raised)] border border-[var(--color-border-subtle)] px-3 py-1.5 text-xs font-medium text-[var(--color-ink)] hover:bg-[var(--color-surface)]"
+              >
+                View Providers
+              </Link>
+            )}
+          </div>
           <button
             type="button"
             onClick={handleSignOut}

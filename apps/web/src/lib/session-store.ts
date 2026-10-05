@@ -319,6 +319,75 @@ export function useCanManagePlatformTenants(): boolean {
 }
 
 /**
+ * Evaluates whether the actor can view the provider/channel catalogue.
+ * Requires platform admin or holding `providers.read` at platform scope.
+ */
+export function canReadProviders(): boolean {
+  const { authorization } = useSession.getState();
+  if (!authorization) return false;
+  if (authorization.isPlatformAdmin) return true;
+  return authorization.grants.some(
+    (g) => g.scopeType === 'platform' && g.permissions.includes('providers.read'),
+  );
+}
+
+export function useCanReadProviders(): boolean {
+  return useSession((state) => {
+    if (!state.authorization) return false;
+    if (state.authorization.isPlatformAdmin) return true;
+    return state.authorization.grants.some(
+      (g) => g.scopeType === 'platform' && g.permissions.includes('providers.read'),
+    );
+  });
+}
+
+/**
+ * Evaluates whether the actor can administer providers or the circuit policy.
+ * Requires platform admin or holding `providers.manage` at platform scope.
+ */
+export function canManageProviders(): boolean {
+  const { authorization } = useSession.getState();
+  if (!authorization) return false;
+  if (authorization.isPlatformAdmin) return true;
+  return authorization.grants.some(
+    (g) => g.scopeType === 'platform' && g.permissions.includes('providers.manage'),
+  );
+}
+
+export function useCanManageProviders(): boolean {
+  return useSession((state) => {
+    if (!state.authorization) return false;
+    if (state.authorization.isPlatformAdmin) return true;
+    return state.authorization.grants.some(
+      (g) => g.scopeType === 'platform' && g.permissions.includes('providers.manage'),
+    );
+  });
+}
+
+/**
+ * Evaluates whether the actor can execute simulator test-sends.
+ * Requires platform admin or holding `providers.test_send` at platform scope.
+ */
+export function canTestSendProviders(): boolean {
+  const { authorization } = useSession.getState();
+  if (!authorization) return false;
+  if (authorization.isPlatformAdmin) return true;
+  return authorization.grants.some(
+    (g) => g.scopeType === 'platform' && g.permissions.includes('providers.test_send'),
+  );
+}
+
+export function useCanTestSendProviders(): boolean {
+  return useSession((state) => {
+    if (!state.authorization) return false;
+    if (state.authorization.isPlatformAdmin) return true;
+    return state.authorization.grants.some(
+      (g) => g.scopeType === 'platform' && g.permissions.includes('providers.test_send'),
+    );
+  });
+}
+
+/**
  * Initializes the session on application startup via silent refresh.
  * Transitions to 'unauthenticated' if no active session exists.
  */

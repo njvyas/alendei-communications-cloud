@@ -74,6 +74,19 @@ export const TEST_CREDENTIALS = {
     email: 'multi-org@acc-fixture.test',
     password: fixturePassword,
   },
+  // Phase 2 provider console personas
+  providersReader: {
+    email: 'providers-reader@acc-fixture.test',
+    password: fixturePassword,
+  },
+  providersTester: {
+    email: 'providers-tester@acc-fixture.test',
+    password: fixturePassword,
+  },
+  platformSupport: {
+    email: 'platform-support@acc-fixture.test',
+    password: fixturePassword,
+  },
 
   // Backward-compatibility aliases for existing test cases
   email: 'a1-admin@acc-fixture.test',

@@ -6,7 +6,12 @@ import { useEffect, type ReactNode } from 'react';
 
 import { authApi } from '@/lib/api-client';
 import { cn } from '@/lib/cn';
-import { bootstrapSession, useCanReadOrganizations, useSession } from '@/lib/session-store';
+import {
+  bootstrapSession,
+  useCanReadOrganizations,
+  useCanReadProviders,
+  useSession,
+} from '@/lib/session-store';
 import { OrgSelectionView } from '@/components/org-selection-view';
 import { OrgSwitcher } from '@/components/org-switcher';
 import { SessionBadge } from '@/components/session-badge';
@@ -18,12 +23,14 @@ import ConsoleLoading from './loading';
  *
  * Implements protected-route invariant:
  * - Unauthenticated users are redirected to `/login` without flashing protected content.
- * - Authenticated users with zero organizations see an explicit access empty state, unless viewing /organizations with appropriate read permissions.
+ * - Authenticated users with zero organizations see an explicit access empty state, unless viewing /organizations or platform catalogue with appropriate read permissions.
  * - Authenticated users with multiple organizations must select an organization before accessing console views.
  * - Active organization is exposed in the shell header with switching capability.
  */
 const SECTIONS = [
   { href: '/', label: 'Overview' },
+  { href: '/channels', label: 'Channels' },
+  { href: '/providers', label: 'Providers' },
   { href: '/organizations', label: 'Organizations' },
   { href: '/workspaces', label: 'Workspaces' },
   { href: '/teams', label: 'Teams' },
@@ -40,8 +47,14 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const user = useSession((state) => state.user);
   const clearSession = useSession((state) => state.clearSession);
   const canReadOrganizations = useCanReadOrganizations();
+  const canReadProviders = useCanReadProviders();
   const isNavigatingOrganizations =
     pathname === '/organizations' || pathname.startsWith('/organizations/');
+  const isNavigatingCatalogue =
+    pathname === '/channels' ||
+    pathname.startsWith('/channels/') ||
+    pathname === '/providers' ||
+    pathname.startsWith('/providers/');
 
   useEffect(() => {
     if (status === 'idle') {
@@ -89,7 +102,10 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
 
   // 3. Authenticated, but holding zero authorized organizations
   if (status === 'zero_organizations') {
-    if (!isNavigatingOrganizations || !canReadOrganizations) {
+    const isPermittedNavigation =
+      (isNavigatingOrganizations && canReadOrganizations) ||
+      isNavigatingCatalogue;
+    if (!isPermittedNavigation) {
       return (
         <div className="mx-auto flex min-h-dvh max-w-6xl flex-col px-4 py-6 sm:px-6">
           <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--color-border-subtle)] pb-4">

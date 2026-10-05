@@ -1,4 +1,22 @@
-import type { ApiDataResponse, ApiErrorResponse, ApiPagedResponse } from '@acc/contracts';
+import type {
+  ApiDataResponse,
+  ApiErrorResponse,
+  ApiPagedResponse,
+  ChannelCode,
+  ChannelStatus,
+  ProviderAdapterKey,
+  ProviderCircuitPolicy,
+  ProviderCircuitState,
+  ProviderFailureCategory,
+  ProviderHealthClassification,
+  ProviderHealthSampleKind,
+  ProviderHealthSource,
+  ProviderHealthState,
+  ProviderProbeOutcome,
+  ProviderStatus,
+  SimulatorBehavior,
+  SimulatorHealthBehavior,
+} from '@acc/contracts';
 
 /**
  * Browser-side API client for Alendei Communications Cloud.
@@ -1421,3 +1439,382 @@ export const auditLogsApi = {
     });
   },
 };
+
+// =============================================================================
+// Channels & Providers Catalogue API (Phase 2.1 - 2.3)
+// Platform scope only; skipTenant is true on all calls.
+// =============================================================================
+
+export interface ChannelView {
+  readonly id: string;
+  readonly code: ChannelCode;
+  readonly displayName: string;
+  readonly status: ChannelStatus;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface ListChannelsParams {
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: string;
+}
+
+export const channelsApi = {
+  async list(
+    params: ListChannelsParams = {},
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<ChannelView>> {
+    const query = new URLSearchParams();
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.sort) query.set('sort', params.sort);
+
+    const queryString = query.toString();
+    const endpoint = queryString ? `/channels?${queryString}` : '/channels';
+
+    return apiFetch<ApiPagedResponse<ChannelView>>(endpoint, {
+      method: 'GET',
+      signal,
+      skipTenant: true,
+    });
+  },
+
+  async get(id: string, signal?: AbortSignal): Promise<ApiDataResponse<ChannelView>> {
+    return apiFetch<ApiDataResponse<ChannelView>>(`/channels/${encodeURIComponent(id)}`, {
+      method: 'GET',
+      signal,
+      skipTenant: true,
+    });
+  },
+};
+
+export interface ProviderCapabilityView {
+  readonly key: string;
+  readonly value: unknown;
+}
+
+export interface ProviderView {
+  readonly id: string;
+  readonly channelId: string;
+  readonly channelCode: ChannelCode;
+  readonly name: string;
+  readonly adapterKey: string;
+  readonly status: ProviderStatus;
+  readonly healthState: ProviderHealthState;
+  readonly healthOverride: ProviderHealthState | null;
+  readonly healthChangedAt: string | null;
+  readonly circuitState: ProviderCircuitState;
+  readonly circuitChangedAt: string | null;
+  readonly circuitCooldownUntil: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface ProviderDetailView extends ProviderView {
+  readonly capabilities: readonly ProviderCapabilityView[];
+}
+
+export interface ListProvidersParams {
+  readonly channelId?: string;
+  readonly status?: ProviderStatus;
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: string;
+}
+
+export interface CreateProviderParams {
+  readonly channelId: string;
+  readonly name: string;
+  readonly adapterKey: string;
+}
+
+export interface UpdateProviderParams {
+  readonly name?: string;
+}
+
+export interface ReplaceProviderCapabilitiesParams {
+  readonly capabilities: Array<{ key: string; value: unknown }>;
+}
+
+export interface ProviderTestSendParams {
+  readonly behavior: SimulatorBehavior;
+}
+
+export interface ProviderTestSendResult {
+  readonly providerId: string;
+  readonly adapterKey: string;
+  readonly channelCode: ChannelCode;
+  readonly behavior: SimulatorBehavior;
+  readonly submissionId: string;
+  readonly correlationId: string;
+  readonly outcome: 'accepted' | 'rejected';
+  readonly providerMessageId: string | null;
+  readonly failure: {
+    readonly category: ProviderFailureCategory;
+    readonly retryable: boolean;
+    readonly providerCode: string | null;
+    readonly message: string;
+  } | null;
+  readonly latencyMs: number;
+  readonly circuitProbe: boolean;
+  readonly healthState: ProviderHealthState;
+  readonly circuitState: ProviderCircuitState;
+}
+
+export interface ProviderHealthCheckParams {
+  readonly behavior: SimulatorHealthBehavior;
+}
+
+export interface ProviderHealthCheckResult {
+  readonly providerId: string;
+  readonly adapterKey: string;
+  readonly channelCode: ChannelCode;
+  readonly behavior: SimulatorHealthBehavior;
+  readonly outcome: ProviderProbeOutcome;
+  readonly latencyMs: number;
+  readonly correlationId: string;
+  readonly healthState: ProviderHealthState;
+  readonly circuitState: ProviderCircuitState;
+}
+
+export interface ProviderHealthOverrideParams {
+  readonly override: ProviderHealthState | null;
+  readonly reason?: string;
+}
+
+export interface ProviderHealthSampleView {
+  readonly id: string;
+  readonly providerId: string;
+  readonly kind: ProviderHealthSampleKind;
+  readonly outcome: string;
+  readonly classification: ProviderHealthClassification;
+  readonly latencyMs: number | null;
+  readonly healthState: ProviderHealthState;
+  readonly circuitState: ProviderCircuitState;
+  readonly circuitGeneration: number;
+  readonly source: ProviderHealthSource;
+  readonly observedAt: string;
+  readonly createdAt: string;
+}
+
+export interface ListProviderHealthParams {
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: string;
+}
+
+export const providersApi = {
+  async list(
+    params: ListProvidersParams = {},
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<ProviderView>> {
+    const query = new URLSearchParams();
+    if (params.channelId) query.set('channelId', params.channelId);
+    if (params.status) query.set('status', params.status);
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.sort) query.set('sort', params.sort);
+
+    const queryString = query.toString();
+    const endpoint = queryString ? `/providers?${queryString}` : '/providers';
+
+    return apiFetch<ApiPagedResponse<ProviderView>>(endpoint, {
+      method: 'GET',
+      signal,
+      skipTenant: true,
+    });
+  },
+
+  async get(id: string, signal?: AbortSignal): Promise<ApiDataResponse<ProviderDetailView>> {
+    return apiFetch<ApiDataResponse<ProviderDetailView>>(`/providers/${encodeURIComponent(id)}`, {
+      method: 'GET',
+      signal,
+      skipTenant: true,
+    });
+  },
+
+  async create(
+    params: CreateProviderParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<ProviderDetailView>> {
+    return apiFetch<ApiDataResponse<ProviderDetailView>>('/providers', {
+      method: 'POST',
+      body: params,
+      signal,
+      skipTenant: true,
+    });
+  },
+
+  async update(
+    id: string,
+    params: UpdateProviderParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<ProviderDetailView>> {
+    return apiFetch<ApiDataResponse<ProviderDetailView>>(`/providers/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: params,
+      signal,
+      skipTenant: true,
+    });
+  },
+
+  async replaceCapabilities(
+    id: string,
+    params: ReplaceProviderCapabilitiesParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<ProviderDetailView>> {
+    return apiFetch<ApiDataResponse<ProviderDetailView>>(
+      `/providers/${encodeURIComponent(id)}/capabilities`,
+      {
+        method: 'PUT',
+        body: params,
+        signal,
+        skipTenant: true,
+      },
+    );
+  },
+
+  async enable(id: string, signal?: AbortSignal): Promise<ApiDataResponse<ProviderDetailView>> {
+    return apiFetch<ApiDataResponse<ProviderDetailView>>(
+      `/providers/${encodeURIComponent(id)}/enable`,
+      {
+        method: 'POST',
+        signal,
+        skipTenant: true,
+      },
+    );
+  },
+
+  async disable(id: string, signal?: AbortSignal): Promise<ApiDataResponse<ProviderDetailView>> {
+    return apiFetch<ApiDataResponse<ProviderDetailView>>(
+      `/providers/${encodeURIComponent(id)}/disable`,
+      {
+        method: 'POST',
+        signal,
+        skipTenant: true,
+      },
+    );
+  },
+
+  async drain(id: string, signal?: AbortSignal): Promise<ApiDataResponse<ProviderDetailView>> {
+    return apiFetch<ApiDataResponse<ProviderDetailView>>(
+      `/providers/${encodeURIComponent(id)}/drain`,
+      {
+        method: 'POST',
+        signal,
+        skipTenant: true,
+      },
+    );
+  },
+
+  async testSend(
+    id: string,
+    params: ProviderTestSendParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<ProviderTestSendResult>> {
+    return apiFetch<ApiDataResponse<ProviderTestSendResult>>(
+      `/providers/${encodeURIComponent(id)}/test-send`,
+      {
+        method: 'POST',
+        body: params,
+        signal,
+        skipTenant: true,
+      },
+    );
+  },
+
+  async healthCheck(
+    id: string,
+    params: ProviderHealthCheckParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<ProviderHealthCheckResult>> {
+    return apiFetch<ApiDataResponse<ProviderHealthCheckResult>>(
+      `/providers/${encodeURIComponent(id)}/health-check`,
+      {
+        method: 'POST',
+        body: params,
+        signal,
+        skipTenant: true,
+      },
+    );
+  },
+
+  async overrideHealth(
+    id: string,
+    params: ProviderHealthOverrideParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<ProviderDetailView>> {
+    return apiFetch<ApiDataResponse<ProviderDetailView>>(
+      `/providers/${encodeURIComponent(id)}/health`,
+      {
+        method: 'POST',
+        body: params,
+        signal,
+        skipTenant: true,
+      },
+    );
+  },
+
+  async listHealth(
+    id: string,
+    params: ListProviderHealthParams = {},
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<ProviderHealthSampleView>> {
+    const query = new URLSearchParams();
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.sort) query.set('sort', params.sort);
+
+    const queryString = query.toString();
+    const endpoint = queryString
+      ? `/providers/${encodeURIComponent(id)}/health?${queryString}`
+      : `/providers/${encodeURIComponent(id)}/health`;
+
+    return apiFetch<ApiPagedResponse<ProviderHealthSampleView>>(endpoint, {
+      method: 'GET',
+      signal,
+      skipTenant: true,
+    });
+  },
+};
+
+export interface CircuitPolicyView extends ProviderCircuitPolicy {
+  readonly version: number;
+  readonly updatedAt: string;
+}
+
+export interface UpdateCircuitPolicyParams {
+  readonly windowMs: number;
+  readonly windowMaxSamples: number;
+  readonly minSamples: number;
+  readonly failurePercent: number;
+  readonly cooldownMs: number;
+  readonly halfOpenMaxProbes: number;
+  readonly probeLeaseMs: number;
+  readonly halfOpenSuccessesToClose: number;
+  readonly expectedVersion: number;
+}
+
+export const providerCircuitPolicyApi = {
+  async get(signal?: AbortSignal): Promise<ApiDataResponse<CircuitPolicyView>> {
+    return apiFetch<ApiDataResponse<CircuitPolicyView>>('/provider-circuit-policy', {
+      method: 'GET',
+      signal,
+      skipTenant: true,
+    });
+  },
+
+  async update(
+    params: UpdateCircuitPolicyParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<CircuitPolicyView>> {
+    return apiFetch<ApiDataResponse<CircuitPolicyView>>('/provider-circuit-policy', {
+      method: 'PUT',
+      body: params,
+      signal,
+      skipTenant: true,
+    });
+  },
+};
+
