@@ -21,6 +21,7 @@
  */
 process.env.AUTH_MAX_SESSIONS_PER_USER = '3';
 
+import { randomBytes } from 'node:crypto';
 import { AUDIT_ACTIONS, ERROR_CODES, PLATFORM_ROLE_KEYS, TENANT_ROLE_KEYS } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
@@ -412,7 +413,7 @@ describe('Phase 1C.2 session policy', () => {
       .where(eq(schema.organizations.id, s.orgId));
 
     // An API key of A1's administrator, asking for both session permissions.
-    const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+    const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
     const secret = `s${uuidv7().replace(/-/g, '')}${uuidv7().replace(/-/g, '')}`;
     await h.admin.insert(schema.apiKeys).values({
       orgId: a1.orgId,
@@ -1414,7 +1415,7 @@ describe('Phase 1C.2 session policy', () => {
       platform = await login(p.platform!);
 
       // The target's key works while it is active — a positive control.
-      const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+      const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
       const secret = `s${uuidv7().replace(/-/g, '')}${uuidv7().replace(/-/g, '')}`;
       await h.admin.insert(schema.apiKeys).values({
         orgId: a2.orgId,

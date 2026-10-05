@@ -20,6 +20,7 @@
  * does — and runs unfiltered queries as `acc_app` under it, so the resolver
  * and RLS are proven together with no application filter in the way.
  */
+import { randomBytes } from 'node:crypto';
 import { ERROR_CODES, PLATFORM_ROLE_KEYS, TENANT_ROLE_KEYS } from '@acc/contracts';
 import { schema, type TenantSession, type Transaction } from '@acc/db';
 import { and, eq, isNull, sql } from 'drizzle-orm';
@@ -164,7 +165,7 @@ describe('shared-reseller isolation (application + acc_app)', () => {
       .values({
         orgId,
         name: `Key ${slug}`,
-        keyPrefix: `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`,
+        keyPrefix: `ak_test_${randomBytes(8).toString('hex')}`,
         keyHash: 'not-a-real-hash',
         scopes: ['workspaces.read'],
         createdBy: admin.userId,

@@ -25,6 +25,7 @@
  * under concurrency (ADR-005 D-7) — a service check alone would look like an
  * invariant while losing under exactly the conditions it exists for.
  */
+import { randomBytes } from 'node:crypto';
 import { ERROR_CODES, PERMISSIONS, type ScopeType } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { and, eq, sql } from 'drizzle-orm';
@@ -957,7 +958,7 @@ describe('role-assignment administration', () => {
   describe('I. API-key binding scope', () => {
     /** Issues a key bound to the organization, carrying `scopes`. */
     async function issueKey(scopes: string[]): Promise<{ credential: string; prefix: string }> {
-      const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+      const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
       const secret = uuidv7();
       await h.admin.insert(schema.apiKeys).values({
         orgId: orgA.orgId,

@@ -17,6 +17,7 @@
  *
  * Every case drives real HTTP with real tokens against the real database.
  */
+import { randomBytes } from 'node:crypto';
 import { ERROR_CODES, PLATFORM_ROLE_KEYS, TENANT_ROLE_KEYS } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
@@ -110,7 +111,7 @@ describe('target-organization lifecycle (Gate C M-1, ADR-012 F-5)', () => {
   }
 
   async function plantKey(orgId: string, createdBy: string): Promise<string> {
-    const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+    const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
     const [key] = await h.admin
       .insert(schema.apiKeys)
       .values({

@@ -22,6 +22,7 @@
  * And for an API key, the grants are the key's *effective* authority — the
  * Phase 1B.5.1 binding-scope intersection, not its creator's wider reach.
  */
+import { randomBytes } from 'node:crypto';
 import { PERMISSIONS, PLATFORM_ROLE_KEYS, type ScopeType } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { eq, sql } from 'drizzle-orm';
@@ -323,7 +324,7 @@ describe('GET /auth/me/authorization', () => {
   // ===========================================================================
   describe('C. API-key principals', () => {
     async function issueKey(scopes: string[]): Promise<{ credential: string; prefix: string }> {
-      const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+      const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
       const secret = uuidv7();
       await h.admin.insert(schema.apiKeys).values({
         orgId: orgA.orgId,

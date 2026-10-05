@@ -423,41 +423,46 @@ describe('Gate D.3 remediation — the administrable circuit policy', () => {
   });
 
   afterAll(async () => {
-    await restoreSeeded();
-    await h.clearRateLimits();
-    await purgeAudit(h.admin, sql`action = ${AUDIT_ACTIONS.PROVIDER_CIRCUIT_POLICY_UPDATED}`);
-    if (createdProviders.length > 0) {
-      await purgeAudit(h.admin, sql`resource_id IN (${list(createdProviders)})`);
-      await purgeProviderHealth(h.admin, sql`provider_id IN (${list(createdProviders)})`);
-      await h.admin.execute(sql`DELETE FROM providers WHERE id IN (${list(createdProviders)})`);
-    }
-    await purgeAudit(
-      h.admin,
-      sql`actor_user_id IN (${list(createdUsers)}) OR actor_api_key_id = ${apiKeyId}`,
-    );
-    await h.admin.execute(sql`DELETE FROM api_keys WHERE id = ${apiKeyId}`);
-    await h.admin.transaction(async (tx) => {
-      await tx.execute(sql`select set_config('app.provisioning','on',true)`);
-      await tx.execute(
-        sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
-      );
-      try {
-        await tx.execute(sql`DELETE FROM user_roles WHERE user_id IN (${list(createdUsers)})`);
-        await tx.execute(
-          sql`DELETE FROM role_permissions WHERE role_id IN (${list(createdRoles)})`,
-        );
-        await tx.execute(sql`DELETE FROM roles WHERE id IN (${list(createdRoles)})`);
-      } finally {
-        await tx.execute(
-          sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
-        );
+    try {
+      await restoreSeeded();
+      await h.clearRateLimits();
+      await purgeAudit(h.admin, sql`action = ${AUDIT_ACTIONS.PROVIDER_CIRCUIT_POLICY_UPDATED}`);
+      if (createdProviders.length > 0) {
+        await purgeAudit(h.admin, sql`resource_id IN (${list(createdProviders)})`);
+        await purgeProviderHealth(h.admin, sql`provider_id IN (${list(createdProviders)})`);
+        await h.admin.execute(sql`DELETE FROM providers WHERE id IN (${list(createdProviders)})`);
       }
-    });
-    await h.admin.execute(sql`DELETE FROM sessions WHERE user_id IN (${list(createdUsers)})`);
-    await h.admin.delete(schema.users).where(inArray(schema.users.id, createdUsers));
-    await destroyTenant(h.admin, tenant);
-    await Promise.all([appPool.end(), authPool.end(), relayPool.end(), lockPool.end()]);
-    await h.close();
+      await purgeAudit(
+        h.admin,
+        sql`actor_user_id IN (${list(createdUsers)}) OR actor_api_key_id = ${apiKeyId}`,
+      );
+      await h.admin.execute(sql`DELETE FROM api_keys WHERE id = ${apiKeyId}`);
+      await h.admin.transaction(async (tx) => {
+        await tx.execute(sql`select set_config('app.provisioning','on',true)`);
+        await tx.execute(
+          sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
+        );
+        try {
+          await tx.execute(sql`DELETE FROM user_roles WHERE user_id IN (${list(createdUsers)})`);
+          await tx.execute(
+            sql`DELETE FROM role_permissions WHERE role_id IN (${list(createdRoles)})`,
+          );
+          await tx.execute(sql`DELETE FROM roles WHERE id IN (${list(createdRoles)})`);
+        } finally {
+          await tx.execute(
+            sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
+          );
+        }
+      });
+      await h.admin.execute(sql`DELETE FROM sessions WHERE user_id IN (${list(createdUsers)})`);
+      await h.admin.delete(schema.users).where(inArray(schema.users.id, createdUsers));
+      await destroyTenant(h.admin, tenant);
+    } finally {
+      // Always release connections, even when a cleanup step fails (for
+      // example on a mutated clone), so the run ends instead of hanging.
+      await Promise.all([appPool.end(), authPool.end(), relayPool.end(), lockPool.end()]);
+      await h.close();
+    }
   }, 180_000);
 
   // ===========================================================================
@@ -929,11 +934,14 @@ describe('Gate D.3 remediation — the administrable circuit policy', () => {
       await until(() => gate.calls === 2, 'two probes in flight');
       await setPolicy({ halfOpenMaxProbes: 1 });
       expect((await send('tester', id, 'SUCCESS')).status).toBe(409); // 2 live ≥ 1
+      // The gate releases the probe that reached it first, which may be either
+      // request: wait for whichever settles, not for `a` in particular (waiting
+      // on the wrong one left it parked until the test timed out).
       gate.releaseOne();
-      await a;
+      await Promise.race([a, b]);
       expect((await send('tester', id, 'SUCCESS')).status).toBe(409); // 1 live ≥ 1
       gate.releaseOne();
-      await b;
+      await Promise.all([a, b]);
       jest.restoreAllMocks();
       expect((await send('tester', id, 'SUCCESS').expect(200)).body.data.circuitProbe).toBe(true);
     });

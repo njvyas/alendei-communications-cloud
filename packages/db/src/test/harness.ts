@@ -11,6 +11,7 @@
  *   `app`   the RLS-enforced application role every business query uses
  *   `auth`  the identity-resolution role used before tenant context exists
  */
+import { randomBytes } from 'node:crypto';
 import { config as loadEnv } from 'dotenv';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { sql } from 'drizzle-orm';
@@ -143,7 +144,7 @@ export async function createTenant(
     .values({
       orgId: org!.id,
       name: `Key ${slug}`,
-      keyPrefix: `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`,
+      keyPrefix: `ak_test_${randomBytes(8).toString('hex')}`,
       keyHash: 'not-a-real-hash',
     })
     .returning({ id: schema.apiKeys.id });

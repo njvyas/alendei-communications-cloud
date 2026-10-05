@@ -15,6 +15,7 @@
  * Every case here drives the real application over HTTP with real keys, real
  * grants and the real guard.
  */
+import { randomBytes } from 'node:crypto';
 import { PERMISSIONS } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { eq, sql } from 'drizzle-orm';
@@ -63,7 +64,7 @@ describe('API-key creator authority at the binding scope', () => {
     scopes?: string[];
   }): Promise<string> => {
     const secret = `secret-${uuidv7()}`;
-    const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+    const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
     await h.admin.insert(schema.apiKeys).values({
       orgId: options.tenant.orgId,
       workspaceId: options.workspaceId ?? null,

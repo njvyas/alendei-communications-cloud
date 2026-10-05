@@ -17,6 +17,7 @@
  *   Z  totals: nothing undocumented was observed; every operation succeeded
  *      with every documented credential
  */
+import { randomBytes } from 'node:crypto';
 import { createDatabase, createPool, schema, type Database } from '@acc/db';
 import { PERMISSIONS, TENANT_ROLE_DEFINITIONS, TENANT_ROLE_KEYS } from '@acc/contracts';
 import { eq, inArray, sql } from 'drizzle-orm';
@@ -251,7 +252,7 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
 
     const orgAdmin = TENANT_ROLE_DEFINITIONS.find((r) => r.key === TENANT_ROLE_KEYS.ORG_ADMIN)!;
     const secret = `secret-${uuidv7()}`;
-    const keyPrefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+    const keyPrefix = `ak_test_${randomBytes(8).toString('hex')}`;
     await db.insert(schema.apiKeys).values({
       orgId,
       name: `oa-${keyPrefix}`,

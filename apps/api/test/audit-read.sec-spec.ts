@@ -20,6 +20,7 @@
  * Filters are checked for the property that matters: they narrow inside what
  * the policy already allows and can never reach past it.
  */
+import { randomBytes } from 'node:crypto';
 import { ERROR_CODES, PERMISSIONS, PLATFORM_ROLE_KEYS } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { and, eq, sql } from 'drizzle-orm';
@@ -486,7 +487,7 @@ describe('audit read', () => {
       const orgRow = await plantAudit({ scopeType: 'organization', scopeId: orgA.orgId });
 
       const secret = `secret-${uuidv7()}`;
-      const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+      const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
       await h.admin.insert(schema.apiKeys).values({
         orgId: orgA.orgId,
         name: `aud-res-key-${prefix}`,
@@ -722,7 +723,7 @@ describe('audit read', () => {
 
     it('case 6 — an API key without audit scopes cannot read', async () => {
       const secret = `secret-${uuidv7()}`;
-      const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+      const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
       await h.admin.insert(schema.apiKeys).values({
         orgId: orgA.orgId,
         name: `aud-key-${prefix}`,
@@ -745,7 +746,7 @@ describe('audit read', () => {
     it('case 6 — an API key carrying `audit.read` within its binding may read', async () => {
       const row = await plantAudit({ scopeType: 'organization', scopeId: orgA.orgId });
       const secret = `secret-${uuidv7()}`;
-      const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+      const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
       await h.admin.insert(schema.apiKeys).values({
         orgId: orgA.orgId,
         name: `aud-key-ok-${prefix}`,
@@ -974,8 +975,14 @@ describe('audit read', () => {
 
       expect(new Set(seen).size).toBe(seen.length);
       for (const id of planted) expect(seen).toContain(id);
-      // Newest first: the last planted row leads.
-      expect(seen[0]).toBe(planted[planted.length - 1]);
+      // Newest first, in the documented order: by id descending (API.md §3f). The
+      // database's UUIDv7 is chronological to the millisecond and random within
+      // one, so rows planted in the same millisecond need not follow insertion
+      // order — asserting insertion order was the flake. The order is total.
+      const descending = (ids: string[]) => [...ids].sort().reverse();
+      expect(seen).toEqual(descending(seen));
+      expect(new Set(seen.slice(0, planted.length))).toEqual(new Set(planted));
+      expect(seen.slice(0, planted.length)).toEqual(descending(planted));
     });
 
     it('filters narrow the caller’s own trail', async () => {

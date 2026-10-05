@@ -28,6 +28,7 @@
  * state rather than responses and need a suite that owns the platform-admin
  * population outright.
  */
+import { randomBytes } from 'node:crypto';
 import { ERROR_CODES, PERMISSIONS, PLATFORM_ROLE_KEYS, type ScopeType } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { and, eq, inArray, sql } from 'drizzle-orm';
@@ -1144,7 +1145,7 @@ describe('user administration', () => {
       scopes: string[];
     }): Promise<string> => {
       const secret = `secret-${uuidv7()}`;
-      const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+      const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
       await h.admin.insert(schema.apiKeys).values({
         orgId: options.tenant.orgId,
         workspaceId: options.workspaceId ?? null,

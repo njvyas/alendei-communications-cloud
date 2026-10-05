@@ -25,6 +25,7 @@
  *   4. deleting the role         already closed by `ON DELETE RESTRICT` (0004)
  *                                and by platform roles being unmodifiable
  */
+import { randomBytes } from 'node:crypto';
 import { ERROR_CODES, PERMISSIONS, PLATFORM_ROLE_KEYS } from '@acc/contracts';
 import { PLATFORM_ADMIN_LOCK_KEY, schema } from '@acc/db';
 import { eq, inArray, sql } from 'drizzle-orm';
@@ -693,7 +694,7 @@ describe('last-platform-admin invariant', () => {
       const only = await plantAdmin('e-key');
       const assignmentId = await assignmentIdFor(only.userId);
 
-      const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+      const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
       const secret = uuidv7();
       await h.admin.insert(schema.apiKeys).values({
         orgId: orgA.orgId,

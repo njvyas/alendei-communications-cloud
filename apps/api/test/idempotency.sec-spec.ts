@@ -20,6 +20,7 @@
  *      `4xx` and `5xx` all roll the claim back with the transaction, so a
  *      transient failure can never poison a key.
  */
+import { randomBytes } from 'node:crypto';
 import { ERROR_CODES, PERMISSIONS } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { and, eq, sql } from 'drizzle-orm';
@@ -378,7 +379,7 @@ describe('HTTP idempotency', () => {
       const k = key();
       await createRole(tokenA, roleBody('apikey'), k).expect(201);
 
-      const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+      const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
       const secret = uuidv7();
       await h.admin.insert(schema.apiKeys).values({
         orgId: orgA.orgId,

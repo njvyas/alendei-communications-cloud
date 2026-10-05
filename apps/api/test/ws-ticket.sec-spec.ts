@@ -14,6 +14,7 @@
  * ticket recorded a scope the caller could not reach over HTTP, the gateway
  * would faithfully honour it.
  */
+import { randomBytes } from 'node:crypto';
 import { ERROR_CODES, PERMISSIONS } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { and, eq, sql } from 'drizzle-orm';
@@ -385,7 +386,7 @@ describe('websocket ticket issuance', () => {
     // unrepresentable. Refused with a reason rather than producing a ticket
     // bound to nobody.
     const secret = `secret-${uuidv7()}`;
-    const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+    const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
     await h.admin.insert(schema.apiKeys).values({
       orgId: orgA.orgId,
       name: `ws-key-${prefix}`,

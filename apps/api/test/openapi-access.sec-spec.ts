@@ -24,6 +24,7 @@
  * alternate spelling, alias, UI script and static artifact is proven absent,
  * and no refusal body ever carries the document.
  */
+import { randomBytes } from 'node:crypto';
 import { createDatabase, createPool, schema, type Database } from '@acc/db';
 import { eq, inArray, sql } from 'drizzle-orm';
 import request from 'supertest';
@@ -251,7 +252,7 @@ describe('Phase 1C.3 — OpenAPI exposure and access (real bootstrap)', () => {
       .where(eq(schema.users.id, disabled!.id));
 
     const secret = `secret-${uuidv7()}`;
-    const keyPrefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+    const keyPrefix = `ak_test_${randomBytes(8).toString('hex')}`;
     await admin.insert(schema.apiKeys).values({
       orgId: tenant.orgId,
       name: `openapi-${keyPrefix}`,

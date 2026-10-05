@@ -15,6 +15,7 @@
  * Every case would pass with its limiter removed only if it asserted nothing;
  * each ends on the `429` the limiter alone can produce.
  */
+import { randomBytes } from 'node:crypto';
 import { ERROR_CODES } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { sql } from 'drizzle-orm';
@@ -50,7 +51,7 @@ describe('unauthenticated-path abuse controls', () => {
 
     // A working API key, planted by the owner: the tenant's own administrator
     // created it, and it asks only for what that administrator holds.
-    const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+    const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
     const secret = `s${uuidv7().replace(/-/g, '')}`;
     await h.admin.insert(schema.apiKeys).values({
       orgId: tenant.orgId,
@@ -137,7 +138,7 @@ describe('unauthenticated-path abuse controls', () => {
   it('3. garbage API keys are refused with 429 once the address is over its allowance', async () => {
     const statuses: number[] = [];
     for (let i = 0; i < 21; i += 1) {
-      const garbage = `ak_live_${uuidv7().replace(/-/g, '').slice(0, 16)}.${'x'.repeat(40)}`;
+      const garbage = `ak_live_${randomBytes(8).toString('hex')}.${'x'.repeat(40)}`;
       statuses.push((await withKey(garbage)).status);
     }
     // 20 failures per window by default, each a real Argon2id verification

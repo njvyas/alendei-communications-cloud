@@ -6,6 +6,7 @@
  * grant for `PermissionEvaluator` to evaluate coverage against. The whole method
  * had no test coverage, which is why a green suite reported it working.
  */
+import { randomBytes } from 'node:crypto';
 import { AUDIT_ACTIONS, ERROR_CODES } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { eq, sql } from 'drizzle-orm';
@@ -48,7 +49,7 @@ describe('API-key authentication', () => {
     } = {},
   ): Promise<IssuedKey> => {
     const secret = `secret-${uuidv7()}`;
-    const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+    const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
     const [row] = await h.admin
       .insert(schema.apiKeys)
       .values({
@@ -251,7 +252,7 @@ describe('API-key authentication', () => {
       const [prefix] = key.credential.split('.');
       const unknown = await get(
         '/auth/me',
-        `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}.whatever`,
+        `ak_test_${randomBytes(8).toString('hex')}.whatever`,
       ).expect(401);
       const wrongSecret = await get('/auth/me', `${prefix}.the-wrong-secret`).expect(401);
       // Existence of a key must not be disclosed by the response.

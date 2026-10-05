@@ -310,35 +310,40 @@ describe('Gate D.3 — the Provider Router cannot bypass circuit admission', () 
   });
 
   afterAll(async () => {
-    await restoreSeeded();
-    await h.clearRateLimits();
-    if (createdProviders.length > 0) {
-      await purgeAudit(h.admin, sql`resource_id IN (${list(createdProviders)})`);
-      await purgeProviderHealth(h.admin, sql`provider_id IN (${list(createdProviders)})`);
-      await h.admin.execute(sql`DELETE FROM providers WHERE id IN (${list(createdProviders)})`);
-    }
-    await purgeAudit(h.admin, sql`actor_user_id = ${userId}`);
-    await h.admin.transaction(async (tx) => {
-      await tx.execute(sql`select set_config('app.provisioning','on',true)`);
-      await tx.execute(
-        sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
-      );
-      try {
-        await tx.execute(sql`DELETE FROM user_roles WHERE user_id = ${userId}`);
-        await tx.execute(
-          sql`DELETE FROM role_permissions WHERE role_id IN (${list(createdRoles)})`,
-        );
-        await tx.execute(sql`DELETE FROM roles WHERE id IN (${list(createdRoles)})`);
-      } finally {
-        await tx.execute(
-          sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
-        );
+    try {
+      await restoreSeeded();
+      await h.clearRateLimits();
+      if (createdProviders.length > 0) {
+        await purgeAudit(h.admin, sql`resource_id IN (${list(createdProviders)})`);
+        await purgeProviderHealth(h.admin, sql`provider_id IN (${list(createdProviders)})`);
+        await h.admin.execute(sql`DELETE FROM providers WHERE id IN (${list(createdProviders)})`);
       }
-    });
-    await h.admin.execute(sql`DELETE FROM sessions WHERE user_id = ${userId}`);
-    await h.admin.execute(sql`DELETE FROM users WHERE id = ${userId}`);
-    await lockPool.end();
-    await h.close();
+      await purgeAudit(h.admin, sql`actor_user_id = ${userId}`);
+      await h.admin.transaction(async (tx) => {
+        await tx.execute(sql`select set_config('app.provisioning','on',true)`);
+        await tx.execute(
+          sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
+        );
+        try {
+          await tx.execute(sql`DELETE FROM user_roles WHERE user_id = ${userId}`);
+          await tx.execute(
+            sql`DELETE FROM role_permissions WHERE role_id IN (${list(createdRoles)})`,
+          );
+          await tx.execute(sql`DELETE FROM roles WHERE id IN (${list(createdRoles)})`);
+        } finally {
+          await tx.execute(
+            sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
+          );
+        }
+      });
+      await h.admin.execute(sql`DELETE FROM sessions WHERE user_id = ${userId}`);
+      await h.admin.execute(sql`DELETE FROM users WHERE id = ${userId}`);
+    } finally {
+      // Always release connections, even when a cleanup step fails (for
+      // example on a mutated clone), so the run ends instead of hanging.
+      await lockPool.end();
+      await h.close();
+    }
   }, 180_000);
 
   // ===========================================================================

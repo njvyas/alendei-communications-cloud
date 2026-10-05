@@ -409,45 +409,50 @@ describe('Phase 2.4 hot reload — configuration convergence across instances', 
   });
 
   afterAll(async () => {
-    await restoreSeededPolicy();
-    await a.clearRateLimits();
-    if (createdProviders.length > 0) {
-      await purgeAudit(a.admin, sql`resource_id IN (${list(createdProviders)})`);
-      await purgeProviderHealth(a.admin, sql`provider_id IN (${list(createdProviders)})`);
-      await a.admin.execute(
-        sql`DELETE FROM provider_capabilities WHERE provider_id IN (${list(createdProviders)})`,
-      );
-      await a.admin.execute(sql`DELETE FROM providers WHERE id IN (${list(createdProviders)})`);
-    }
-    await purgeAudit(a.admin, sql`action = 'provider.circuit_policy_updated'`);
-    await purgeAudit(
-      a.admin,
-      sql`actor_user_id IN (${list(createdUsers)}) OR actor_api_key_id = ${apiKeyId}`,
-    );
-    await a.admin.execute(sql`DELETE FROM api_keys WHERE id = ${apiKeyId}`);
-    await a.admin.transaction(async (tx) => {
-      await tx.execute(sql`select set_config('app.provisioning','on',true)`);
-      await tx.execute(
-        sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
-      );
-      try {
-        await tx.execute(sql`DELETE FROM user_roles WHERE user_id IN (${list(createdUsers)})`);
-        await tx.execute(
-          sql`DELETE FROM role_permissions WHERE role_id IN (${list(createdRoles)})`,
+    try {
+      await restoreSeededPolicy();
+      await a.clearRateLimits();
+      if (createdProviders.length > 0) {
+        await purgeAudit(a.admin, sql`resource_id IN (${list(createdProviders)})`);
+        await purgeProviderHealth(a.admin, sql`provider_id IN (${list(createdProviders)})`);
+        await a.admin.execute(
+          sql`DELETE FROM provider_capabilities WHERE provider_id IN (${list(createdProviders)})`,
         );
-        await tx.execute(sql`DELETE FROM roles WHERE id IN (${list(createdRoles)})`);
-      } finally {
-        await tx.execute(
-          sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
-        );
+        await a.admin.execute(sql`DELETE FROM providers WHERE id IN (${list(createdProviders)})`);
       }
-    });
-    await a.admin.execute(sql`DELETE FROM sessions WHERE user_id IN (${list(createdUsers)})`);
-    await a.admin.delete(schema.users).where(inArray(schema.users.id, createdUsers));
-    await destroyTenant(a.admin, tenant);
-    await Promise.all([appPool.end(), authPool.end(), relayPool.end(), ownerPool.end()]);
-    await b.close();
-    await a.close();
+      await purgeAudit(a.admin, sql`action = 'provider.circuit_policy_updated'`);
+      await purgeAudit(
+        a.admin,
+        sql`actor_user_id IN (${list(createdUsers)}) OR actor_api_key_id = ${apiKeyId}`,
+      );
+      await a.admin.execute(sql`DELETE FROM api_keys WHERE id = ${apiKeyId}`);
+      await a.admin.transaction(async (tx) => {
+        await tx.execute(sql`select set_config('app.provisioning','on',true)`);
+        await tx.execute(
+          sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
+        );
+        try {
+          await tx.execute(sql`DELETE FROM user_roles WHERE user_id IN (${list(createdUsers)})`);
+          await tx.execute(
+            sql`DELETE FROM role_permissions WHERE role_id IN (${list(createdRoles)})`,
+          );
+          await tx.execute(sql`DELETE FROM roles WHERE id IN (${list(createdRoles)})`);
+        } finally {
+          await tx.execute(
+            sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
+          );
+        }
+      });
+      await a.admin.execute(sql`DELETE FROM sessions WHERE user_id IN (${list(createdUsers)})`);
+      await a.admin.delete(schema.users).where(inArray(schema.users.id, createdUsers));
+      await destroyTenant(a.admin, tenant);
+    } finally {
+      // Always release connections, even when a cleanup step fails (for
+      // example on a mutated clone), so the run ends instead of hanging.
+      await Promise.all([appPool.end(), authPool.end(), relayPool.end(), ownerPool.end()]);
+      await b.close();
+      await a.close();
+    }
   }, 180_000);
 
   // ===========================================================================

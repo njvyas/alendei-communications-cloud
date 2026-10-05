@@ -6,6 +6,7 @@
  * to do. Mirrors `packages/db/src/test/harness.ts`; kept local because that
  * harness is not part of `@acc/db`'s public surface.
  */
+import { randomBytes } from 'node:crypto';
 import { createDatabase, createPool, schema, type Database } from '@acc/db';
 import { sql } from 'drizzle-orm';
 import type { Pool } from 'pg';
@@ -70,7 +71,7 @@ export async function createTenant(admin: Database, label: string): Promise<Tena
     .values({
       orgId: org!.id,
       name: `Key ${slug}`,
-      keyPrefix: `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`,
+      keyPrefix: `ak_test_${randomBytes(8).toString('hex')}`,
       keyHash: 'not-a-real-hash',
     })
     .returning({ id: schema.apiKeys.id });

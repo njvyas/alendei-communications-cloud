@@ -21,6 +21,7 @@
  * deny and nothing to record — auditing it would also make the trail an
  * existence oracle for anyone who can read it.
  */
+import { randomBytes } from 'node:crypto';
 import { PERMISSIONS, type AuthPrincipal, type RoleGrant, type ScopeType } from '@acc/contracts';
 import { createDatabase, createPool, schema, type Database, type TenantSession } from '@acc/db';
 import { sql } from 'drizzle-orm';
@@ -107,7 +108,7 @@ describe('authorization.denied auditing', () => {
       .values({
         orgId: orgA.orgId,
         name: 'denial-key',
-        keyPrefix: `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`,
+        keyPrefix: `ak_test_${randomBytes(8).toString('hex')}`,
         keyHash: await credentials.hash('a-secret-value-never-audited'),
         createdBy: orgA.userId,
         scopes: [READ],

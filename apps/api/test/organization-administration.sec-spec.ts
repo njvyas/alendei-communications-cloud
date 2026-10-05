@@ -12,6 +12,7 @@
  * Every case drives real HTTP with real tokens against the real database; the
  * rollback cases inject a failure into the production services mid-transaction.
  */
+import { randomBytes } from 'node:crypto';
 import { AUDIT_ACTIONS, ERROR_CODES, PLATFORM_ROLE_KEYS, TENANT_ROLE_KEYS } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
@@ -212,7 +213,7 @@ describe('organization administration and lifecycle (1C.1a)', () => {
     );
 
     // A working API key bound to L1, created by L1's administrator.
-    const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+    const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
     const secret = `s${uuidv7().replace(/-/g, '')}`;
     await h.admin.insert(schema.apiKeys).values({
       orgId: l1.orgId,

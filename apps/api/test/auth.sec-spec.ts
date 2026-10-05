@@ -6,6 +6,7 @@
  * CSRF, rate limiting and credential leakage. They run against the real
  * application over HTTP, because that is the surface an attacker reaches.
  */
+import { randomBytes } from 'node:crypto';
 import { ERROR_CODES } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { sql } from 'drizzle-orm';
@@ -643,7 +644,7 @@ describe('Phase 1B.3 security', () => {
     it('refuses an API key presented in a query parameter', async () => {
       const hasher = h.app.get(CredentialService);
       const secret = `secret-${uuidv7()}`;
-      const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+      const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
       await h.admin.insert(schema.apiKeys).values({
         orgId: orgA.orgId,
         name: `qtok-${prefix}`,

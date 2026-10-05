@@ -305,58 +305,63 @@ describe('Phase 2.1 provider and channel registry', () => {
   }, 180_000);
 
   afterAll(async () => {
-    await h.clearRateLimits();
-    await h.admin.transaction(async (tx) => {
-      await tx.execute(sql`DELETE FROM provider_capabilities`);
-    });
-    const ids = (await h.admin.select({ id: schema.providers.id }).from(schema.providers)).map(
-      (r) => r.id,
-    );
-    if (ids.length > 0) {
-      const idList = sql.join(
-        ids.map((id) => sql`${id}`),
-        sql`, `,
+    try {
+      await h.clearRateLimits();
+      await h.admin.transaction(async (tx) => {
+        await tx.execute(sql`DELETE FROM provider_capabilities`);
+      });
+      const ids = (await h.admin.select({ id: schema.providers.id }).from(schema.providers)).map(
+        (r) => r.id,
       );
-      await purgeAudit(h.admin, sql`resource_id IN (${idList})`);
-      await purgeProviderHealth(h.admin, sql`provider_id IN (${idList})`);
-      await h.admin.delete(schema.providers).where(inArray(schema.providers.id, ids));
-    }
-    const list = (values: string[]) =>
-      sql.join(
-        values.map((v) => sql`${v}`),
-        sql`, `,
-      );
-    await purgeAudit(
-      h.admin,
-      sql`actor_user_id IN (${list(createdUsers)}) OR actor_api_key_id = ${apiKeyId}`,
-    );
-    await h.admin.execute(sql`DELETE FROM api_keys WHERE id = ${apiKeyId}`);
-    await h.admin.transaction(async (tx) => {
-      await tx.execute(sql`select set_config('app.provisioning','on',true)`);
-      await tx.execute(
-        sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
-      );
-      try {
-        await tx.execute(sql`DELETE FROM user_roles WHERE user_id IN (${list(createdUsers)})`);
-        if (createdRoles.length > 0) {
-          await tx.execute(
-            sql`DELETE FROM role_permissions WHERE role_id IN (${list(createdRoles)})`,
-          );
-          await tx.execute(sql`DELETE FROM roles WHERE id IN (${list(createdRoles)})`);
-        }
-      } finally {
-        await tx.execute(
-          sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
+      if (ids.length > 0) {
+        const idList = sql.join(
+          ids.map((id) => sql`${id}`),
+          sql`, `,
         );
+        await purgeAudit(h.admin, sql`resource_id IN (${idList})`);
+        await purgeProviderHealth(h.admin, sql`provider_id IN (${idList})`);
+        await h.admin.delete(schema.providers).where(inArray(schema.providers.id, ids));
       }
-    });
-    await h.admin.execute(sql`DELETE FROM sessions WHERE user_id IN (${list(createdUsers)})`);
-    await h.admin.delete(schema.users).where(inArray(schema.users.id, createdUsers));
-    await destroyTenant(h.admin, tenant);
-    await appPool.end();
-    await authPool.end();
-    await relayPool.end();
-    await h.close();
+      const list = (values: string[]) =>
+        sql.join(
+          values.map((v) => sql`${v}`),
+          sql`, `,
+        );
+      await purgeAudit(
+        h.admin,
+        sql`actor_user_id IN (${list(createdUsers)}) OR actor_api_key_id = ${apiKeyId}`,
+      );
+      await h.admin.execute(sql`DELETE FROM api_keys WHERE id = ${apiKeyId}`);
+      await h.admin.transaction(async (tx) => {
+        await tx.execute(sql`select set_config('app.provisioning','on',true)`);
+        await tx.execute(
+          sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
+        );
+        try {
+          await tx.execute(sql`DELETE FROM user_roles WHERE user_id IN (${list(createdUsers)})`);
+          if (createdRoles.length > 0) {
+            await tx.execute(
+              sql`DELETE FROM role_permissions WHERE role_id IN (${list(createdRoles)})`,
+            );
+            await tx.execute(sql`DELETE FROM roles WHERE id IN (${list(createdRoles)})`);
+          }
+        } finally {
+          await tx.execute(
+            sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
+          );
+        }
+      });
+      await h.admin.execute(sql`DELETE FROM sessions WHERE user_id IN (${list(createdUsers)})`);
+      await h.admin.delete(schema.users).where(inArray(schema.users.id, createdUsers));
+      await destroyTenant(h.admin, tenant);
+    } finally {
+      // Always release connections, even when a cleanup step fails (for
+      // example on a mutated clone), so the run ends instead of hanging.
+      await appPool.end();
+      await authPool.end();
+      await relayPool.end();
+      await h.close();
+    }
   }, 180_000);
 
   // ===========================================================================

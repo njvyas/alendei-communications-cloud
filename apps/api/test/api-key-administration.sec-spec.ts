@@ -20,6 +20,7 @@
  * the existing credential path: a revoked or expired key, and a disabled
  * creator, must all stop working.
  */
+import { randomBytes } from 'node:crypto';
 import { ERROR_CODES, PERMISSIONS, PLATFORM_ROLE_KEYS } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { and, eq, sql } from 'drizzle-orm';
@@ -1169,7 +1170,7 @@ describe('api-key administration', () => {
           tx.insert(schema.apiKeys).values({
             orgId: orgB.orgId,
             name: 'forged',
-            keyPrefix: `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`,
+            keyPrefix: `ak_test_${randomBytes(8).toString('hex')}`,
             keyHash: 'x',
             scopes: [],
           }),

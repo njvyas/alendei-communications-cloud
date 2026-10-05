@@ -14,6 +14,7 @@
  * shape genuinely is the property under test, the key is discovered from Redis
  * rather than hardcoded, so the assertion cannot quietly stop matching.
  */
+import { randomBytes } from 'node:crypto';
 import { ERROR_CODES, PERMISSIONS } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { eq, sql } from 'drizzle-orm';
@@ -346,7 +347,7 @@ describe('general rate limiting', () => {
   // ===========================================================================
   it('case G — an API key is bucketed by its own identity, not its creator’s', async () => {
     const secret = `secret-${uuidv7()}`;
-    const prefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+    const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
     await h.admin.insert(schema.apiKeys).values({
       orgId: orgA.orgId,
       name: `rl-key-${prefix}`,

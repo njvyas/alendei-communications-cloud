@@ -25,6 +25,7 @@
  * that column its value; enforcing it at grant time is Phase 1B.5.5's, and there
  * is no grant API here to enforce it through.
  */
+import { randomBytes } from 'node:crypto';
 import { ERROR_CODES, PERMISSIONS, TENANT_ROLE_DEFINITIONS } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { and, eq, sql } from 'drizzle-orm';
@@ -683,7 +684,7 @@ describe('role administration', () => {
   // ===========================================================================
   describe('H. API-key-scoped role administration', () => {
     it('an API key carrying no role permissions cannot administer roles', async () => {
-      const keyPrefix = `ak_test_${uuidv7().replace(/-/g, '').slice(0, 16)}`;
+      const keyPrefix = `ak_test_${randomBytes(8).toString('hex')}`;
       const secret = uuidv7();
       await h.admin.insert(schema.apiKeys).values({
         orgId: orgA.orgId,
