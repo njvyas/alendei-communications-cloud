@@ -720,7 +720,26 @@ The read-only Gate C audit (01-Oct-2026) found the Observability and Regression 
 
 17/17 caught on disposable clones; source restored and verified after each.
 
-**Scope-creep checks (Gate D).** A static assertion that no outbox table, worker harness, SIEM export, routing/failover, billing, real adapter, message-lifecycle or WebSocket code is introduced by Phase 2, in the style of `authorization-boundary.spec.ts`.
+**Scope-creep checks (Gate D) — implemented 05-Oct-2026 (R1).** `apps/api/src/scope-creep.architecture.spec.ts`, 14 unit cases over the backend source with comments stripped: one pattern per forbidden category — outbox and event publication, worker/job infrastructure, SIEM export, routing/failover, billing/rating, real adapters and outbound network calls, the message lifecycle, reseller/white-label provider administration (provider code), a WebSocket gateway — with every pre-existing match pinned per file and its reason recorded in the spec (Phase 0/1 relay and Kafka configuration, the `acc_relay` role, organization billing fields, the `estimateCost`/`checkStatus`/`parseWebhook` stubs, the routing-eligibility contract, the deferred WebSocket ticket, the two fixture API clients); plus structural pins: the API module list, the adapter files and `PROVIDER_ADAPTER_KEYS = ['simulator']`, the exact set of tables the migrations create, and every declared dependency (`kafkajs` and `@nestjs/schedule` are pre-existing declarations imported nowhere). Mutants C01–C14 (one or more per category) are each caught by their own case.
+
+### 6v. Phase 2.6 support — the provider-console fixture (`fixture:providers`; Gate D.6 preparation, 05-Oct-2026)
+
+An **opt-in extension**, run after `fixture:dev` (§6r), for the provider console and its browser tests; it leaves the Phase 1C.4a fixture, its fingerprint and its 57 tests unchanged (user decision: a separate extension). `npm run fixture:providers --workspace @acc/api`, under the same environment gate and `SecretsPort` inputs as §6r (`APP_ENV` development or test; the operator and fixture-user password references). Idempotent; conflicting state is refused, never corrected.
+
+| Object | How it is made | Natural key |
+|---|---|---|
+| SMS provider, `active`, capability `max_segments = 10` | real API as the platform administrator (create, enable, capabilities) | `ACC Fixture SMS Primary` |
+| SMS provider, `draining` | real API (create, enable, drain) | `ACC Fixture SMS Secondary` |
+| Email provider, `disabled` | real API (create) | `ACC Fixture Email` |
+| Platform role `providers.read` | **owner-level exception 3** (platform roles have no API, D22) | `acc_fixture_providers_reader` |
+| Platform role `providers.read` + `providers.test_send` | owner-level exception 3 | `acc_fixture_providers_tester` |
+| Persona: read-only | **owner-level exception 4**, as the bootstrap makes a platform grant (`RBAC.md` §5b) | `providers-reader@acc-fixture.test` |
+| Persona: test_send-only | owner-level exception 4 | `providers-tester@acc-fixture.test` |
+| Persona: denied (`alendei_support`, no `providers.*`) | owner-level exception 4 | `platform-support@acc-fixture.test` |
+
+The platform administrator is the §6r operator. Personas sign in with the fixture-user password. No persona holds `providers.manage`, `alendei_super_admin`, a tenant or a reseller grant. The owner-level writes run in their own transactions, elevated only by the transaction-local `app.is_platform_admin` the bootstrap and seed use (no trigger disabled, no policy changed), and are audited through the committed `AuditWriter` with `actor_label = provider_fixture` (`role.created`, `user.invited`, `user_role.granted`); every provider change is the operator's own audited API call.
+
+`apps/api/test/provider-fixture.sec-spec.ts` — **23 cases**: refusal outside development/test and without `fixture:dev`, nothing written; the providers exactly, made through the API and audited as the operator; the two roles' exact permissions (never `providers.manage`) and their `role.created` rows; each persona active with exactly one platform grant, the operator still the only platform administrator, the personas' audit rows; over HTTP — the read-only persona reads and is refused every write, test-send and probe, the test_send-only persona test-sends and is refused administration, the denied persona is refused the catalogue; a second run byte-identical; `fixture:dev` still a no-op; a provider in another status or past its target, a role with an extra permission and a persona with an extra grant are each refused with nothing changed; the owner write set (`INSERT INTO roles`, `role_permissions`, `user_roles`; lifecycle `invite`/`activate`; only `app.is_platform_admin`) and the import closure pinned. Mutants F01–F04 (reader role gains `providers.manage`; a persona made platform administrator; an extra owner write; inspection accepting any status) are each caught.
 
 ### 6i. WebSocket authorization
 

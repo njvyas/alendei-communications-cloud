@@ -185,12 +185,13 @@ const CATEGORIES: Category[] = [
     key: 'network',
     forbids: 'real provider adapters or outbound network calls (ADR-013 F-9)',
     exceptions:
-      "Pre-existing: the dev fixture's client for the local API, and the Express route registration of the dev-only Swagger UI. No provider-facing network call exists; the only adapter key is `simulator` (pinned below).",
+      "Pre-existing: the dev fixtures' clients for the local in-process API (Phase 1C.4a, and the Phase 2.6 provider-console fixture), and the Express route registration of the dev-only Swagger UI. No provider-facing network call exists; the only adapter key is `simulator` (pinned below).",
     pattern:
       /(?:\bfetch\s*\(|axios|undici|\bhttps?\.(?:request|get)\s*\(|XMLHttpRequest|net\.connect|tls\.connect|dgram|twilio|gupshup|karix|sendgrid|infobip|vonage|plivo|msg91|kaleyra|nodemailer|smtp|graph\.facebook)/gi,
     providerCodeOnly: false,
     pinned: {
       'apps/api/src/cli/dev-fixture/api-client.ts': ['fetch('],
+      'apps/api/src/cli/provider-fixture/api-client.ts': ['fetch('],
       'apps/api/src/openapi/openapi-dev-ui.ts': ['http.get('],
     },
   },
