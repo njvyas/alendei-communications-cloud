@@ -18,6 +18,9 @@ import { AppModule } from '../src/app.module';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
 import { validationPipe } from '../src/common/http/validation.pipe';
 import { AccessTokenService } from '../src/auth/jwt.service';
+import { ScopeChainResolver } from '../src/auth/scope-chain-resolver.service';
+import { AppConfigService } from '../src/config/app-config.service';
+import { CredentialService } from '../src/iam/credential.service';
 import { PROVIDER_CLOCK, type ProviderClock } from '../src/providers/provider-clock';
 import { REDIS_CLIENT } from '../src/redis/redis.module';
 
@@ -68,6 +71,107 @@ export interface HarnessOptions {
    * exactly, with no wall-clock sleeps. Nothing else is overridden.
    */
   readonly providerClock?: ProviderClock;
+  /**
+   * Parks every Argon2 verification at a gate the suite opens and closes
+   * (ADR-015 R-1 evidence): `CredentialService.verify` — which `verifyDummy`
+   * also goes through — waits at `gate.pass()` before the real verification.
+   * Lets a suite hold sign-in and API-key authentication *inside* step V and
+   * observe what is held meanwhile. Nothing else about the service changes.
+   */
+  readonly credentialGate?: ArrivalGate;
+  /**
+   * Parks every authorization ancestry read at a gate (ADR-015 R-12
+   * evidence): `ScopeChainResolver.resolve` — which `AuthorizationService.assert`
+   * calls inside the caller's tenant transaction — waits at `gate.pass()`, so a
+   * suite can hold many requests inside their transactions at once.
+   */
+  readonly scopeChainGate?: ArrivalGate;
+}
+
+/**
+ * A gate a suite closes to park callers and opens to release them, counting
+ * every arrival (ADR-015 R-1 / R-12 evidence). Open by default, so a harness
+ * built with one behaves normally until the suite closes it.
+ */
+export class ArrivalGate {
+  private closed = false;
+  private arrivals = 0;
+  private parked: (() => void)[] = [];
+  private watchers: { count: number; resolve: () => void }[] = [];
+
+  get arrived(): number {
+    return this.arrivals;
+  }
+
+  close(): void {
+    this.closed = true;
+    this.arrivals = 0;
+  }
+
+  open(): void {
+    this.closed = false;
+    const parked = this.parked;
+    this.parked = [];
+    parked.forEach((release) => release());
+  }
+
+  async pass(): Promise<void> {
+    if (!this.closed) return;
+    this.arrivals += 1;
+    this.watchers = this.watchers.filter((w) => {
+      if (this.arrivals < w.count) return true;
+      w.resolve();
+      return false;
+    });
+    await new Promise<void>((release) => this.parked.push(release));
+  }
+
+  /** Resolves once `count` callers are parked; rejects after `timeoutMs`. */
+  untilArrived(count: number, timeoutMs = 10_000): Promise<void> {
+    if (this.arrivals >= count) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`gate: ${this.arrivals} of ${count} arrived`)),
+        timeoutMs,
+      );
+      this.watchers.push({
+        count,
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+      });
+    });
+  }
+}
+
+/** `CredentialService` whose verification waits at a gate first (test-only). */
+class GatedCredentialService extends CredentialService {
+  constructor(
+    config: AppConfigService,
+    private readonly gate: ArrivalGate,
+  ) {
+    super(config);
+  }
+
+  override async verify(digest: string, plaintext: string): Promise<boolean> {
+    await this.gate.pass();
+    return super.verify(digest, plaintext);
+  }
+}
+
+/** `ScopeChainResolver` whose ancestry read waits at a gate first (test-only). */
+class GatedScopeChainResolver extends ScopeChainResolver {
+  constructor(private readonly gate: ArrivalGate) {
+    super();
+  }
+
+  override async resolve(
+    ...args: Parameters<ScopeChainResolver['resolve']>
+  ): ReturnType<ScopeChainResolver['resolve']> {
+    await this.gate.pass();
+    return super.resolve(...args);
+  }
 }
 
 /**
@@ -97,6 +201,18 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   });
   if (options.providerClock) {
     builder = builder.overrideProvider(PROVIDER_CLOCK).useValue(options.providerClock);
+  }
+  const { credentialGate, scopeChainGate } = options;
+  if (credentialGate) {
+    builder = builder.overrideProvider(CredentialService).useFactory({
+      factory: (config: AppConfigService) => new GatedCredentialService(config, credentialGate),
+      inject: [AppConfigService],
+    });
+  }
+  if (scopeChainGate) {
+    builder = builder
+      .overrideProvider(ScopeChainResolver)
+      .useFactory({ factory: () => new GatedScopeChainResolver(scopeChainGate) });
   }
   const moduleRef = await builder.compile();
   const app = moduleRef.createNestApplication({ logger: false });

@@ -1,0 +1,309 @@
+{
+  "step": "ADR-015 remediation step 1 \u2014 HIGH-1 (R-1, R-12)",
+  "usage": "source the DATABASE_* environment of a test template database, then: node scripts/mutation/run.mjs scripts/mutation/catalogue/step1-high1.json --out <dir>",
+  "commands": {
+    "architecture": {
+      "cwd": "apps/api",
+      "db": false,
+      "argv": [
+        "npx",
+        "jest",
+        "--selectProjects",
+        "unit",
+        "--testPathPatterns",
+        "pool-discipline\\.architecture"
+      ]
+    },
+    "pool-isolation": {
+      "cwd": "apps/api",
+      "db": true,
+      "argv": [
+        "npx",
+        "jest",
+        "--selectProjects",
+        "security",
+        "--runInBand",
+        "--testPathPatterns",
+        "auth-pool-isolation"
+      ]
+    },
+    "denial-audit": {
+      "cwd": "apps/api",
+      "db": true,
+      "argv": [
+        "npx",
+        "jest",
+        "--selectProjects",
+        "security",
+        "--runInBand",
+        "--testPathPatterns",
+        "authorization-denial-audit"
+      ]
+    },
+    "db-pool-guard": {
+      "cwd": "packages/db",
+      "db": true,
+      "argv": [
+        "npx",
+        "jest",
+        "--selectProjects",
+        "integration",
+        "--runInBand",
+        "--testPathPatterns",
+        "pool-guard"
+      ]
+    }
+  },
+  "mutants": [
+    {
+      "id": "M1",
+      "title": "login failure record written tx-less while an identity transaction is held (unknown address)",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/auth.service.ts",
+          "search": "      await this.credentials.verifyDummy(password);\n      await this.recordLoginFailure(meta, null, 'unknown_identity');\n      throw invalid();",
+          "replace": "      await this.credentials.verifyDummy(password);\n      await this.db.auth.transaction(() => this.recordLoginFailure(meta, null, 'unknown_identity'));\n      throw invalid();"
+        }
+      ],
+      "commands": ["pool-isolation"]
+    },
+    {
+      "id": "M1b",
+      "title": "race-refused failure record moved back inside the success transaction",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/auth.service.ts",
+          "search": "        const current = await this.users.findById(tx, user.id);",
+          "replace": "        const current = await this.users.findById(tx, user.id);\n        await this.recordLoginFailure(meta, user.id, 'account_not_active');"
+        },
+        {
+          "file": "apps/api/src/auth/auth.service.ts",
+          "search": "    if (started.kind === 'refused') {\n      await this.recordLoginFailure(meta, started.userId, started.reason);\n      throw invalid();\n    }",
+          "replace": "    if (started.kind === 'refused') {\n      throw invalid();\n    }"
+        }
+      ],
+      "commands": ["pool-isolation"]
+    },
+    {
+      "id": "M2",
+      "title": "post-release failure record for the race-refused case deleted",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/auth.service.ts",
+          "search": "    if (started.kind === 'refused') {\n      await this.recordLoginFailure(meta, started.userId, started.reason);\n      throw invalid();\n    }",
+          "replace": "    if (started.kind === 'refused') {\n      throw invalid();\n    }"
+        }
+      ],
+      "commands": ["pool-isolation"]
+    },
+    {
+      "id": "M3",
+      "title": "password verification moved inside a held identity connection",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/auth.service.ts",
+          "search": "    const passwordOk = digest\n      ? await this.credentials.verify(digest, password)\n      : await this.credentials.verifyDummy(password);",
+          "replace": "    const passwordOk = await this.db.auth.transaction(async () =>\n      digest ? this.credentials.verify(digest, password) : this.credentials.verifyDummy(password),\n    );"
+        }
+      ],
+      "commands": ["architecture", "pool-isolation"]
+    },
+    {
+      "id": "M4",
+      "title": "status = 'active' dropped from the success UPDATE",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/auth.service.ts",
+          "search": "            eq(schema.users.status, 'active'),\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["pool-isolation"]
+    },
+    {
+      "id": "M5",
+      "title": "password_hash = verified digest dropped from the success UPDATE",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/auth.service.ts",
+          "search": "            eq(schema.users.passwordHash, digest),\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["pool-isolation"]
+    },
+    {
+      "id": "M6",
+      "title": "unknown address skips verifyDummy",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/auth.service.ts",
+          "search": "      await this.credentials.verifyDummy(password);\n      await this.recordLoginFailure(meta, null, 'unknown_identity');\n      throw invalid();",
+          "replace": "      await this.recordLoginFailure(meta, null, 'unknown_identity');\n      throw invalid();"
+        }
+      ],
+      "commands": ["pool-isolation"]
+    },
+    {
+      "id": "M6b",
+      "title": "unknown address skips the failure record (F)",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/auth.service.ts",
+          "search": "      await this.credentials.verifyDummy(password);\n      await this.recordLoginFailure(meta, null, 'unknown_identity');\n      throw invalid();",
+          "replace": "      await this.credentials.verifyDummy(password);\n      throw invalid();"
+        }
+      ],
+      "commands": ["pool-isolation"]
+    },
+    {
+      "id": "M7",
+      "title": "re-hash on sign-in dropped",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/auth.service.ts",
+          "search": "    const rehashed = this.credentials.needsRehash(digest)\n      ? await this.credentials.hash(password)\n      : null;",
+          "replace": "    const rehashed: string | null = null;"
+        }
+      ],
+      "commands": ["pool-isolation"]
+    },
+    {
+      "id": "M7b",
+      "title": "re-hash moved inside the success transaction",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/auth.service.ts",
+          "search": "    const rehashed = this.credentials.needsRehash(digest)\n      ? await this.credentials.hash(password)\n      : null;",
+          "replace": "    const rehashed = this.credentials.needsRehash(digest);"
+        },
+        {
+          "file": "apps/api/src/auth/auth.service.ts",
+          "search": "          ...(rehashed ? { passwordHash: rehashed, passwordUpdatedAt: now } : {}),",
+          "replace": "          ...(rehashed\n            ? { passwordHash: await this.credentials.hash(password), passwordUpdatedAt: now }\n            : {}),"
+        }
+      ],
+      "commands": ["architecture", "pool-isolation"]
+    },
+    {
+      "id": "M8",
+      "title": "pool guard connect() refusal removed",
+      "edits": [
+        {
+          "file": "packages/db/src/pool-guard.ts",
+          "search": "    if (refused) return callback ? callback(refused) : Promise.reject(refused);\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["db-pool-guard", "pool-isolation"]
+    },
+    {
+      "id": "M9",
+      "title": "API-key secret verified inside the authenticating transaction",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/auth.guard.ts",
+          "search": "    if (!(await this.credentials.verify(key.keyHash, secret!))) throw invalid();\n\n    return this.db.auth.transaction(async (raw) => {\n      const tx = raw as Transaction;\n",
+          "replace": "    return this.db.auth.transaction(async (raw) => {\n      const tx = raw as Transaction;\n      if (!(await this.credentials.verify(key.keyHash, secret!))) throw invalid();\n"
+        }
+      ],
+      "commands": ["architecture", "pool-isolation"]
+    },
+    {
+      "id": "M10",
+      "title": "API-key re-validation UPDATE no longer checks revocation",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/auth.guard.ts",
+          "search": "            isNull(schema.apiKeys.revokedAt),\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["pool-isolation"]
+    },
+    {
+      "id": "M10b",
+      "title": "API-key re-validation UPDATE no longer checks expiry",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/auth.guard.ts",
+          "search": "            or(isNull(schema.apiKeys.expiresAt), sql`${schema.apiKeys.expiresAt} > now()`),\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["pool-isolation"]
+    },
+    {
+      "id": "M11",
+      "title": "denial record written while the caller's transaction is held (pre-R-12 behaviour)",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/authorization.service.ts",
+          "search": "    await this.db.whenReleased(async () => {",
+          "replace": "    await (async (work: () => Promise<void>) => work())(async () => {"
+        }
+      ],
+      "commands": ["pool-isolation", "denial-audit"]
+    },
+    {
+      "id": "M12",
+      "title": "denial record failure swallowed by the release flush (no fail-closed)",
+      "edits": [
+        {
+          "file": "apps/api/src/database/tenant-database.service.ts",
+          "search": "    for (const pending of scope.pending) await pending();",
+          "replace": "    for (const pending of scope.pending) await pending().catch(() => undefined);"
+        }
+      ],
+      "commands": ["pool-isolation", "denial-audit"]
+    },
+    {
+      "id": "M12b",
+      "title": "denial record failure swallowed in recordDenial (no fail-closed)",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/authorization.service.ts",
+          "search": "        throw failure;\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["pool-isolation", "denial-audit"]
+    },
+    {
+      "id": "M13",
+      "title": "pool guard allows acc_auth -> acc_app",
+      "edits": [
+        {
+          "file": "packages/db/src/pool-guard.ts",
+          "search": "  if (requested === 'app' && heldRoles.includes('auth')) {",
+          "replace": "  if (false as boolean) {"
+        }
+      ],
+      "commands": ["db-pool-guard", "pool-isolation"]
+    },
+    {
+      "id": "M14",
+      "title": "pending denial flushed only when the transaction committed",
+      "edits": [
+        {
+          "file": "apps/api/src/database/tenant-database.service.ts",
+          "search": "    for (const pending of scope.pending) await pending();\n",
+          "replace": "    if (outcome.ok) for (const pending of scope.pending) await pending();\n"
+        }
+      ],
+      "commands": ["pool-isolation", "denial-audit"]
+    },
+    {
+      "id": "M15",
+      "title": "API-key success audit written tx-less while the authenticating transaction is held",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/auth.guard.ts",
+          "search": "          metadata: { orgId: key.orgId, scopeType: grantScope.scopeType },\n        },\n        tx,\n      );",
+          "replace": "          metadata: { orgId: key.orgId, scopeType: grantScope.scopeType },\n        },\n      );"
+        }
+      ],
+      "commands": ["architecture", "pool-isolation"]
+    }
+  ]
+}
