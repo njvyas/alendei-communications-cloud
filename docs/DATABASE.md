@@ -160,6 +160,7 @@ Isolation depends on the application never connecting as a principal that can by
 | `acc_app` | every tenant-scoped business query | `SELECT/INSERT/UPDATE` on tenancy/IAM/RBAC tables; `DELETE` only on `teams`, `roles`, `role_permissions`, `user_roles`, `idempotency_keys`; `SELECT` only on `permissions` | **enforced** — non-owner, non-superuser |
 | `acc_auth` | identity resolution *before* any tenant context exists: credential verification, API-key lookup, WebSocket ticket consumption | `SELECT` on the identity and RBAC-read tables; `INSERT/UPDATE` on `sessions`; `UPDATE` on `users`, `api_keys`, `ws_tickets`; `INSERT` only on `audit_logs`, bounded as below | enforced, but its policies are identity-shaped rather than org-shaped — its reach is bounded by *table grants* instead |
 | `acc_relay` | the transactional-outbox publisher, cross-tenant by necessity (`EVENTS.md` §1) — **DEFERRED: no outbox table and no relay exist** | `SELECT` on `audit_logs` only (granted in advance for the SIEM projection, `EVENTS.md` §4) | enforced — and **no policy targets it**, so it currently reads zero rows of `audit_logs` (asserted in `principals.int-spec.ts`) |
+| `acc_dispatch` | **PLANNED (ADR-014 D06, Phase 3; not created)** — the message dispatcher only, never an HTTP request | column-level `SELECT`/`UPDATE` on the dispatch queue, messages, attempts and events of the claimed message; `SELECT` of active assignments and assigned providers; `UPDATE` of the eight provider observation columns; `INSERT` of `submission` health samples; `SELECT (id, status)` of the claimed message's organization; nothing else (ADR-014 §9.2) | enforced — every policy requires a database-generated claim token for the exact message, its organization and an unexpired lease; `NOINHERIT`, no memberships |
 
 **`acc_auth` and the audit log.** `acc_auth` must be able to record authentication outcomes — a failed login is, by definition, an event that happens before any tenant context exists, so it cannot be bounded by `org_id` the way every other write is. It is instead bounded by *vocabulary and shape*, which is what keeps that exception narrow (ADR-002). Its INSERT policy admits a row only when all three hold:
 
@@ -217,11 +218,13 @@ Roles are created `NOLOGIN` and passwordless by the migration; the migration run
 
 **`contact_identities`** — `id, contact_id FK, channel_id FK, address (phone/email/etc.), verified_at NULL, is_primary BOOL`.
 
-**`consents`** — `id, contact_id FK, channel_id FK, consent_type ENUM(marketing,transactional,otp), granted_at NULL, revoked_at NULL, source (how consent was captured)`.
+**`consent_events`** (replaces the earlier mutable `consents` row; ADR-014 D23, frozen 06-Oct-2026; PLANNED, Phase 3) — append-only: `id, org_id, workspace_id, contact_id (composite FK (contact_id, org_id) → contacts(id, org_id)), channel_id FK channels, consent_type ENUM(marketing,transactional,otp), event ENUM(grant,revoke), seq, occurred_at, recorded_at, source (how consent was captured), recorded_by`. Current consent for `(contact_id, channel_id, consent_type)` exists only if the event with the highest `seq` is a `grant`; every row is retained. `UNIQUE (contact_id, channel_id, consent_type, seq)`; a trigger requires `seq = max + 1` per key; lookup index `(contact_id, channel_id, consent_type, seq DESC)`; an append-only trigger refuses `UPDATE`, `DELETE` and `TRUNCATE`. Which consent a send requires is a product/compliance decision (ADR-014 §11).
 
 **`suppressions`** — `id, org_id FK, contact_id NULL, address NULL (supports suppression by raw address before a contact record exists), channel_id NULL (NULL = all channels), reason ENUM(opt_out,bounce,complaint,dlt_block,manual), created_at`.
 
 ## 6. Domain: Messaging Core
+
+> **Phase 3 (ADR-014, frozen 06-Oct-2026; PLANNED, not built):** new structures `organization_provider_assignments` (organization-owned, `active|disabled`, unique `(org_id, provider_id)`), `message_dispatch_queue` (content-free claim table: `message_id, org_id, available_at, dispatch_epoch, claim_token, claimed_until, claimed_by`), `message_attempts` additions (`org_id`, `fencing_epoch`, `claim_token`, composite FKs `(message_id, org_id) → messages` and `(org_id, provider_id) → organization_provider_assignments`), and `provider_health.attempt_id` (composite FK `(attempt_id, provider_id) → message_attempts(id, provider_id)`, one `submission` sample per attempt). The routing-policy, pricing, campaign and journey columns below are not part of Phase 3 (ADR-014 F13, F14, F18); exact Phase 3 message and attempt columns are increment decisions D10/D11.
 
 **`conversations`** — `id, org_id FK, workspace_id FK, contact_id FK, channel_id FK, status ENUM(open,closed), last_message_at`.
 
@@ -338,7 +341,7 @@ Mitigations, in order of preference:
 
 ## 8. Domain: Templates & Campaigns
 
-**`templates`** — `id, org_id FK, name, channel_id FK, body, variables JSONB, provider_template_map JSONB (per-provider template id mapping), approval_status ENUM(draft,pending,approved,rejected), deleted_at NULL`.
+**`templates`** — `id, org_id FK, name, channel_id FK, body, variables JSONB, provider_template_map JSONB (per-provider template id mapping), approval_status ENUM(draft,pending,approved,rejected), deleted_at NULL`. *Phase 3 (ADR-014 D21): `approval_status` is a simulated, internal state, never Meta or provider approval; `provider_template_map` is not used in Phase 3.*
 
 **`campaigns`** — `id, org_id FK, workspace_id FK, name, template_id FK, routing_policy_id FK NULL, schedule JSONB, throttle_config JSONB, status ENUM(draft,scheduled,running,paused,completed,cancelled), created_by FK users`.
 

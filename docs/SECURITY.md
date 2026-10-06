@@ -84,6 +84,19 @@ The rows below are the Phase 2 requirements. Those that govern the registry — 
 | Adapter binding | `adapter_key` must name an adapter registered in code (`simulator` only); unknown keys are refused, and no code branches on vendor names |
 
 
+### 3c. Phase 3 security controls (ADR-014 — architecture frozen 06-Oct-2026; NOT implemented)
+
+| Control | Requirement |
+|---|---|
+| Dispatch principal | A dedicated `acc_dispatch` role (`NOSUPERUSER NOBYPASSRLS NOINHERIT`, no memberships, no new SECURITY DEFINER), used only by the dispatcher, never by an HTTP request; every `acc_app` policy unchanged (ADR-014 §9.2) |
+| Token-bound per-message access | Every dispatch read and write of a message, its attempts and events, its organization's assignments and the assigned providers requires a database-generated claim token for that exact message, its organization and an unexpired lease; cross-organization discovery exposes identifiers only (`message_dispatch_queue`) |
+| Assignment proof | A provider is usable only if actively assigned to the claimed message's organization (RLS) and an attempt cannot reference an unassigned provider (composite FK) |
+| Circuit writes | Only through the existing `ProviderStateStore` path; database guard: observation columns only, legal edges, generation +1, per-attempt `provider_health` evidence in the same transaction bound to the exact attempt, provider, claim and fencing epoch; `health_override` and administrative columns refused. Cooldown timing is enforced by the store on the injected `ProviderClock`, not by PostgreSQL `now()` (ADR-014 §9.3) |
+| Duplicate safety | Durable `submitting` attempt before invocation; claim token and epoch fencing; `OUTCOME_UNKNOWN` terminal, never retried or used for fallback (ADR-014 §7) |
+| Organization lifecycle | Phase 1C F-5 unchanged for `acc_app`; the narrow `acc_dispatch` exception and the advisory-lock serialization of ADR-014 §12 |
+| Accepted residual | A compromised dispatcher can influence shared provider health/circuit state through fabricated submission results and advance `open → half_open` early; accepted for the simulator-only Phase 3; **re-review before any real provider is connected** (ADR-014 §9.5) |
+| Evidence | Required at Gate E.3 (ADR-014 §14); none claimed |
+
 ## 4. Audit architecture
 
 `audit_logs` (see `DATABASE.md` §12) is append-only and captures actor, actor scope, action, resource, outcome, before/after state, correlation id, causation id, and timestamp for every privileged mutation across every module — not just security-relevant actions. A refused action is recorded as deliberately as a successful one: `outcome='denied'` exists precisely so that a rejected privilege escalation leaves a record (`RBAC.md` §7).
@@ -498,10 +511,10 @@ Anyone strengthening this should target that outer layer (export lag, SIEM alert
 
 | Framework | Relevance | Approach |
 |---|---|---|
-| India DPDP Act | Contact PII, consent | `consents`/`suppressions` as first-class, queried on every send; data subject request handling is a Phase-scoped feature (tracked in `ROADMAP.md`), not yet built |
+| India DPDP Act | Contact PII, consent | Append-only consent events (ADR-014 D23) and `suppressions` as first-class, checked on every send; data subject request handling is a Phase-scoped feature (tracked in `ROADMAP.md`), not yet built |
 | TRAI / DLT (India SMS) | SMS template/sender registration | Eligibility Engine checks DLT registration status before SMS routing (`ROUTING_ENGINE.md` §2); current DLT rules must be verified against the latest TRAI notification before Phase 3/4 SMS work begins |
-| Meta / WhatsApp Business Policy | Template approval, messaging windows, opt-in requirements | `templates.approval_status` models provider approval state; policy-window logic (24-hour session window etc.) is enforced in the Eligibility Engine once WhatsApp adapters are built (Phase 3) |
-| GDPR (where applicable to EU contacts) | Lawful basis, right to erasure | Same `consents` model extends to GDPR bases where an org has EU contacts; erasure support is a tracked future requirement, not yet designed in detail |
+| Meta / WhatsApp Business Policy | Template approval, messaging windows, opt-in requirements | In Phase 3, `templates.approval_status` is an **internal, simulated approval state** (ADR-014 D21): it does not represent and must not be presented as Meta or provider approval; no vendor approval integration exists. Policy-window logic (24-hour session window etc.) is not implemented in Phase 3 and belongs with real WhatsApp adapters. Consent is recorded as append-only consent events (ADR-014 D23); the category-to-consent policy is a product/compliance decision, not yet made |
+| GDPR (where applicable to EU contacts) | Lawful basis, right to erasure | The same consent-event model extends to GDPR bases where an org has EU contacts; erasure support is a tracked future requirement, not yet designed in detail |
 | OWASP | Application security baseline | §6 above |
 | SOC 2 / ISO 27001 | Control objectives (not certification) | This document's controls map to common Trust Services Criteria / Annex A domains; formal certification is a separate business/audit process outside this repository's scope |
 

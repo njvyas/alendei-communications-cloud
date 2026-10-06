@@ -188,6 +188,8 @@ Every send — API, campaign, or journey — produces exactly one canonical `mes
 
 ## 6. Message lifecycle state machine
 
+> **Phase 3 note (ADR-014, 06-Oct-2026):** Phase 3 has no delivery or webhook processing (D20), so `DELIVERED`, `READ`, `EXPIRED` and `DELIVERY_TIMEOUT` do not exist in Phase 3. Phase 3 messages end at a terminal **submission** outcome — provider accepted, failed, or `OUTCOME_UNKNOWN` (D16: never retried, never a fallback trigger); provider fallback re-queues the message. Exact Phase 3 state names are increment decision D10. The machine below remains the full target design.
+
 ```
 CREATED → VALIDATED → QUEUED → ROUTING → PROVIDER_ACCEPTED → SENT
    → DELIVERED (terminal, success)
@@ -286,7 +288,7 @@ Journeys are versioned graphs (`journeys` + `journey_versions`) of steps: send, 
 
 ## 14. Customer data architecture
 
-`contacts` is the canonical end-customer record per tenant; `contact_identities` holds channel-specific addresses (phone, email, WhatsApp ID) many-to-one against a contact, enabling cross-channel recognition of "the same person." `consents` and `suppressions` are first-class, queried by the Eligibility Engine on every send — never assumed. PII fields are flagged at the column level for masking in logs/exports (see `SECURITY.md`).
+`contacts` is the canonical end-customer record per tenant; `contact_identities` holds channel-specific addresses (phone, email, WhatsApp ID) many-to-one against a contact, enabling cross-channel recognition of "the same person." Consent (append-only `consent_events`; current consent is the latest event per contact, channel and type — ADR-014 D23) and `suppressions` are first-class, checked on every send — never assumed. PII fields are flagged at the column level for masking in logs/exports (see `SECURITY.md`).
 
 ## 15. Billing architecture (summary — full detail in `BILLING.md`)
 

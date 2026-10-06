@@ -1,8 +1,9 @@
 # Phase 3 — API contract requirements register
 
-Companion to `ADR-014-PHASE-3-WHATSAPP-ORCHESTRATION.md` (06-Oct-2026). **No Phase 3 endpoint exists and the OpenAPI document is unchanged.** This register lists what each Phase 3 resource's contract must settle before implementation, and marks only what is already established.
+Companion to `ADR-014-PHASE-3-WHATSAPP-ORCHESTRATION.md` (06-Oct-2026; updated at the Phase 3.0 freeze). **No Phase 3 endpoint exists and the OpenAPI document is unchanged.** This register lists what each Phase 3 resource's contract must settle before implementation, and marks only what is already established.
 
 - **EXISTING** — an established repository convention that applies to every new endpoint (cited).
+- **FROZEN** — decided at the Phase 3.0 freeze (ADR-014 section in brackets).
 - **UNRESOLVED — DO NOT IMPLEMENT** — must be frozen first (open decision id in brackets).
 
 ## 1. Conventions every Phase 3 endpoint inherits (EXISTING)
@@ -21,10 +22,9 @@ Companion to `ADR-014-PHASE-3-WHATSAPP-ORCHESTRATION.md` (06-Oct-2026). **No Pha
 
 ## 2. Resources
 
-For every resource below, the following are **UNRESOLVED — DO NOT IMPLEMENT** unless the row says otherwise:
+**FROZEN for every resource:** the permission keys and allowed scopes (ADR-014 §6, D09); sends and tenant mutations in a suspended or closed organization answer `409 ORGANIZATION_LIFECYCLE_CONFLICT` (existing Phase 1C F-5; ADR-014 §12). For every resource below, the following are **UNRESOLVED — DO NOT IMPLEMENT** unless the row says otherwise:
 
 - the endpoint list
-- the permission key [P3-D09]
 - the scope and workspace context [P3-D07, P3-D08]
 - the request and response shapes
 - resource-specific errors
@@ -35,14 +35,14 @@ For every resource below, the following are **UNRESOLVED — DO NOT IMPLEMENT** 
 |---|---|---|
 | Contacts | `/contacts` (`ROADMAP.md` §6) | Ownership is workspace per the planned table (`DATABASE.md` §3) [P3-D07]; deletion semantics (`deleted_at`) |
 | Contact identities | none | Normalization and uniqueness [P3-D25]; nested or top-level path |
-| Consent | none | Semantics and defaults [P3-D23] |
-| Suppressions | none | Organization-only ownership per the planned table; address-only suppressions [P3-D23]; who may lift [P3-D09] |
-| Templates | `/templates` (`ROADMAP.md` §6) | Ownership, approval under the simulator, use in sends [P3-D21] |
-| Messages | `/messages` (`ROADMAP.md` §6) | Synchronous or asynchronous, idempotency requirement, API-key use, rate limit [P3-D24]; refusal behaviour [P3-D22]; state model [P3-D10]; simulator selection [P3-D19] |
+| Consent | none | **FROZEN mechanism:** append-only `consent_events` (grant/revoke), current state = latest event per `(contact, channel, consent_type)` (ADR-014 §11). Endpoint shapes UNRESOLVED; category/consent policy is a product/compliance decision |
+| Suppressions | none | **FROZEN:** organization-owned; created and lifted under `suppressions.manage` at organization scope (D09). UNRESOLVED: address-only suppressions and uniqueness detail; precedence against consent, template and provider eligibility [P3-D22] |
+| Templates | `/templates` (`ROADMAP.md` §6) | **FROZEN:** organization-owned; `approval_status` is a simulated, internal state moved by an audited `templates.manage` action — never Meta or provider approval (ADR-014 §11, D21). Use in sends UNRESOLVED [P3-D22, P3-D24] |
+| Messages | `/messages` (`ROADMAP.md` §6) | **FROZEN:** no simulator field or header in any message request — simulator behaviour is provider-level (ADR-014 §10, D19); terminal `OUTCOME_UNKNOWN` (D16); no delivery state (D20). UNRESOLVED: synchronous or asynchronous, idempotency requirement, API-key use, rate limit [P3-D24]; refusal behaviour [P3-D22]; state names [P3-D10] |
 | Message attempts | none (read-only by nature) | Shape and states [P3-D11]; nested under message or not |
 | Message events | none (read-only by nature) | Types, ordering and pagination order [P3-D12] |
-| Organization provider assignments | none | Every point [P3-D01–P3-D06] |
+| Organization provider assignments | none | **FROZEN:** organization-owned, `active`/`disabled`, no `DELETE` (ADR-014 §4, D01, D02). UNRESOLVED: priority [P3-D03]; administration and route [P3-D05] |
 
 ## 3. What is explicitly not a Phase 3 endpoint (ADR-014)
 
-Routing-policy or fallback-policy CRUD, routing weights, canary (F18); campaigns, journeys (F13); billing (F14); credential management (F3); WebSocket subscriptions (F12); event-stream endpoints (F11). `POST /providers/:id/test-send` stays the Phase 2 direct, non-persisted test path and is not a messaging endpoint (ADR-014 §7).
+Routing-policy or fallback-policy CRUD, routing weights, canary (F18); campaigns, journeys (F13); billing (F14); credential management (F3); WebSocket subscriptions (F12); event-stream endpoints (F11). `POST /providers/:id/test-send` stays the Phase 2 direct, non-persisted test path and is not a messaging endpoint (ADR-014 §10). No delivery or webhook endpoint exists in Phase 3 (D20). The simulator behaviour of a provider is set through the existing `PUT /providers/:id/capabilities` (`simulator_behavior`, platform `providers.manage`; D19) — no new endpoint.

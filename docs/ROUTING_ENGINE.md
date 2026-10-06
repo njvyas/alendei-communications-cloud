@@ -34,7 +34,7 @@ If `requested_channel_id IS NULL`, there is no constraint to speak of: the Chann
 
 For each candidate channel (in order), filters the provider set down to those that are actually usable for *this* message:
 
-1. Consent check (`consents`) — is the contact opted in for this channel/message type.
+1. Consent check (`consent_events` — the latest event per contact, channel and consent type, ADR-014 D23) — is the contact opted in for this channel/message type. Which consent a message requires is a product/compliance decision.
 2. Suppression check (`suppressions`) — not on a DND/opt-out/bounce/DLT-block list.
 3. Regulatory check — e.g. India DLT template registration for SMS (flagged for verification against current TRAI/DLT rules — see `SECURITY.md` compliance note).
 4. Provider capability check (`provider_capabilities`) — e.g. media support, template approval status.

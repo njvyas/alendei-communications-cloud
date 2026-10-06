@@ -1,8 +1,18 @@
-# Phase 3 — open architecture decisions
+# Phase 3 — architecture decisions register
 
-Companion to `ADR-014-PHASE-3-WHATSAPP-ORCHESTRATION.md` (06-Oct-2026). Each entry is a decision the ADR-014/v9 statements available at the freeze do not settle. **Nothing here is decided; nothing here may be implemented until approved.** "Recommended" is given only where a frozen v9 decision (F-number, ADR-014 §1) already strongly implies the answer; otherwise it is "none".
+Companion to `ADR-014-PHASE-3-WHATSAPP-ORCHESTRATION.md`. Opened 06-Oct-2026 as the list of questions the stated ADR-014/v9 decisions did not settle; **updated at the Phase 3.0 freeze (06-Oct-2026)**. The ADR governs: for every decision marked FROZEN below, its text in the ADR supersedes the question and options recorded in §A. Analysis and proofs: `PHASE-3-ARCHITECTURE-DECISION-PROPOSAL.md`.
 
-Every decision: **Status: `REQUIRES USER APPROVAL`.**
+## Status at the Phase 3.0 freeze
+
+| Status | Decisions |
+|---|---|
+| **FROZEN — approved** | D02, D06, D09, D16, D18, D19, D20, D21, D23 (mechanism only), D29 |
+| **FROZEN — approved with the architecture** (derived; the approved proofs depend on them) | D01, D04, D13, D14, D15, D17, D27, D30 |
+| **OPEN — increment-level, `REQUIRES USER APPROVAL`** (not freeze blockers) | D03, D05, D07, D08, D10, D11, D12, D22, D24, D25, D26, D28 |
+| **OPEN — product/compliance, not architecture** | D23: template category set; category-to-consent mapping; workspace versus organization consent; withdrawal window (ADR-014 §11) |
+| **OPEN — scope** | Target phase of delivery and webhook behaviours (excluded from Phase 3 by D20) |
+
+The questions below are kept as the historical record; "Recommended: none" in an entry that is now FROZEN is superseded by the ADR.
 
 ## A. Decisions
 
@@ -195,20 +205,24 @@ Every decision: **Status: `REQUIRES USER APPROVAL`.**
 - *Why:* Needed to keep ROADMAP §6 and §8 consistent.
 - *Recommended:* none, beyond F4, F5 and F18.
 
-## B. Conflicts between v9 and existing documents (reported, not resolved)
+## B. Conflicts between v9 and existing documents
 
-| # | Existing text | Conflict with frozen v9 | Decision |
+| # | Existing text | Conflict | Status at the freeze |
 |---|---|---|---|
-| C1 | `FALLBACK_ENGINE.md` §1: fallback is triggered by **delivery outcome**, not acceptance | v9 bases fallback on the failure taxonomy (F6); no delivery behaviour is frozen | P3-D13, P3-D20 |
-| C2 | `FALLBACK_ENGINE.md` §2, `ROUTING_ENGINE.md` §4: order from `fallback_steps` re-resolved through routing policies | Routing-policy CRUD excluded (F18); order source not frozen | P3-D03, P3-D30 |
-| C3 | `DATABASE.md` §6: `message_attempts.routing_policy_id`, `routing_policy_version_id`, `pricing_evaluation_id`; `messages.cost`, `customer_charge`, `campaign_id`, `journey_id` | Routing policies, billing, campaigns and journeys are excluded (F13, F14, F18) | P3-D10, P3-D11 |
-| C4 | `ARCHITECTURE.md` §6: message terminal states `DELIVERED`, `READ`, `EXPIRED` | Delivery events not frozen | P3-D10, P3-D20 |
-| C5 | `EVENTS.md` §1, §4–§5: Kafka-transported event catalogue and consumers | No Kafka/outbox (F11). **Resolved in part by a note in `EVENTS.md`**: Phase 3 does not publish to Kafka; which event types are recorded in `message_events` remains open | P3-D12 |
-| C6 | `FALLBACK_ENGINE.md` §3: adapter-level retry with `retry_count` | Phase 2 executes once; retry not frozen | P3-D15 |
-| C7 | ADR-013 2.4 residual (e)(4): a tenant-context router cannot read the platform catalogue under RLS | The Phase 3 send path is tenant-context | P3-D06 |
-| C8 | `ROADMAP.md` §6: webhook dedup/replay tests, webhook signature review | Webhooks not frozen | P3-D20 |
-| C9 | `DATABASE.md` §3 `contacts`: workspace-owned; no client workspace mechanism exists | — | P3-D07 |
-| C10 | `TESTING.md` §3 critical scenario: cross-channel chain, Phase 5 gate | Consistent (cross-channel stays out of Phase 3, F5). No change | — |
+| C1 | `FALLBACK_ENGINE.md` §1: fallback triggered by delivery outcome | Phase 3 fallback is submission-outcome-driven | **Resolved** by D13, D20, D30 (delivery-outcome fallback is Phase 5) |
+| C2 | `FALLBACK_ENGINE.md` §2, `ROUTING_ENGINE.md` §4: order from `fallback_steps` and routing policies | Excluded from Phase 3 (F18, D30) | **Resolved in scope**; the Phase 3 candidate order remains OPEN (D03) |
+| C3 | `DATABASE.md` §6 routing-policy, pricing, campaign and journey columns | Excluded (F13, F14, F18) | **Resolved in scope**; exact Phase 3 columns OPEN (D10, D11) |
+| C4 | `ARCHITECTURE.md` §6 terminal `DELIVERED`, `READ`, `EXPIRED` | No delivery in Phase 3 | **Resolved** by D20 and D16 (Phase 3 note added to `ARCHITECTURE.md` §6) |
+| C5 | `EVENTS.md` Kafka transport and consumers | No Kafka/outbox (F11) | **Resolved** for transport (note in `EVENTS.md`); event types OPEN (D12) |
+| C6 | `FALLBACK_ENGINE.md` §3 adapter retry (`retry_count`) | No same-provider retry | **Resolved** by D15 |
+| C7 | ADR-013 2.4 residual (e)(4): tenant context cannot read the catalogue | — | **Resolved** by D06 (`acc_dispatch`) |
+| C8 | `ROADMAP.md` §6 webhook tests and signature review | No webhooks in Phase 3 | **Resolved** by D20 (`ROADMAP.md` §6 corrected) |
+| C9 | `DATABASE.md` §3 workspace-owned contacts; no client workspace mechanism | — | OPEN (D07) |
+| C10 | `TESTING.md` §3 critical scenario (cross-channel, Phase 5 gate) | Consistent | — |
+| C11 | `TESTING.md` §2 and ADR-013 PD-3: delivery behaviours "are Phase 3" | Excluded by D20 | **Resolved** (`TESTING.md` §2 corrected; PD-3 note) |
+| C12 | `DATABASE.md` §3 `consents` with mutable `revoked_at` | Append-only consent events (D23) | **Resolved** (`DATABASE.md` updated) |
+| C13 | `SECURITY.md` §7: `approval_status` "models provider approval state" | Simulated, internal state (D21) | **Resolved** (`SECURITY.md` §7 corrected) |
+| C14 | Phase 1C F-5: no tenant-data mutation in a non-active organization | Dispatch must finalize in-flight work | **Resolved** by D29's narrow `acc_dispatch` exception; F-5 unchanged for `acc_app` (note in `TENANCY.md` §1c and ADR-012) |
 
 ## C. Resolved by the freeze (documentation changed)
 

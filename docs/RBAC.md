@@ -185,6 +185,17 @@ The recurring pattern: **an actor may administer downward, never its own level's
 
 **The first two guards are `(permission, scope)` pairs, not permission sets**, and the distinction is the whole of §2 restated as an escalation rule. A guard written as "does the actor hold every permission in this role?" against `AuthPrincipal.permissions` reproduces the cross-product defect exactly: an actor holding a permission only at a workspace would pass the check for a grant at organization scope, and the guard meant to prevent escalation would itself become the escalation path. The actor's **effective grant authority** — the set of pairs it may confer — is `{(P, s) : ∃ coherent grant g, P ∈ permissions(g) ∧ scopeCovers(g.scope, s)}`, computed per grant and never from the flattened union.
 
+### 4c. Phase 3 permissions (ADR-014 D09 — frozen 06-Oct-2026; not yet in `PERMISSIONS`)
+
+| Permission | Resource | Allowed grant scopes |
+|---|---|---|
+| `contacts.read`, `contacts.manage` | contacts, identities, consent events | organization, workspace |
+| `templates.read`, `templates.manage` | templates (organization-owned; `manage` includes the simulated approve/reject) | organization |
+| `suppressions.read`, `suppressions.manage` | suppressions (organization-owned) | organization |
+| `messages.read`, `messages.send` | messages, attempts, events; `POST /messages` | organization, workspace |
+
+No platform, reseller or team grant covers these keys; coverage is downward only, so a workspace grant never covers an organization-owned resource. A workspace sender may use an approved template of its organization through `messages.send`. Assignment administration (`organization_provider_assignments`) is open decision D05.
+
 ## 5. Authentication architecture
 
 | Mechanism | Use case | Notes |
