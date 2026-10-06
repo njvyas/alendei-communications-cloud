@@ -2,6 +2,8 @@
 
 **Status: FROZEN — Phase 3.0 architecture (approved by the user, 06-Oct-2026).** Documentation only: no Phase 3 code, migration, API or OpenAPI change exists. Phase 3.1 starts only on the user's explicit approval. The increment-level decisions listed in §15 remain open by design and are decided at their increment; they are not blockers to this architecture freeze.
 
+**Amended by ADR-015 (06-Oct-2026, approved by the user):** §17 records the amendments made by the pre-Phase-3 foundation remediation (`DECISIONS.md` §1o). Where §17 and an earlier section differ, **§17 governs**.
+
 **Source of authority.** The approved architecture is referred to as ADR-014/v9. The full v9 text was not supplied; §1 records exactly the v9 decisions the user stated explicitly (F1–F19). §3–§13 record the decisions approved at the Phase 3.0 review (06-Oct-2026), whose analysis, alternatives and proofs are in `PHASE-3-ARCHITECTURE-DECISION-PROPOSAL.md`. Where that proposal and this ADR differ, **this ADR governs**. If the full v9 text is later supplied, this ADR is to be re-checked against it.
 
 Markers: **FROZEN (v9)** — a v9 decision; **APPROVED (D-n)** — approved at the Phase 3.0 review; **ESTABLISHED (D-n)** — not approved as a separate decision, but established by an explicit prior approval or user requirement that is cited in §3 (governance correction, 06-Oct-2026: the label "approved with the architecture" was withdrawn; points with no such basis were moved back to OPEN); **EXISTING CONTRACT** — implemented in Phases 1–2; **OPEN (D-n)** — an increment-level decision, `PHASE-3-OPEN-DECISIONS.md`.
@@ -40,7 +42,7 @@ Markers: **FROZEN (v9)** — a v9 decision; **APPROVED (D-n)** — approved at t
 | Provider lifecycle (`active`, `disabled`, `draining`), health and circuit state machines, the platform-wide circuit policy | `PROVIDER_ADAPTER.md` §5–§6 |
 | Hot reload: advisory configuration snapshot, never an authorization or admission source | `PROVIDER_ADAPTER.md` §3a |
 | Credential reference contract CR-1–CR-8 (documentation only) | `PROVIDER_ADAPTER.md` §4a |
-| Tenancy: five-scope hierarchy, downward-only inheritance, RLS isolates to the organization and the application layer enforces workspace and team | `TENANCY.md` §1a, §1a.4; `RBAC.md` |
+| Tenancy: five-scope hierarchy, downward-only inheritance, RLS isolates to the organization and the application layer enforces workspace and team. **Amended (§17.1):** tenancy-record tables use `app_org_in_scope` (reseller- and platform-aware); tenant-content tables use the Model B content predicate, which is not | `TENANCY.md` §1a, §1a.4; `RBAC.md` |
 | Organization selection by `X-Acc-Organization`, validated server-side (`TENANCY_CONTEXT_MISMATCH` on a mismatch) | `API.md`; `FRONTEND_API_CONTRACT.md`; `scope-resolver.service.ts` |
 | Workspace context derived only from a grant that names a workspace — no client workspace selector exists | `scope-resolver.service.ts` (Phase 1C) |
 | Permission keys are `{domain}.{action}`; authorization never depends on a role name | `packages/contracts/src/permissions.ts`; `RBAC.md` |
@@ -55,7 +57,7 @@ Markers: **FROZEN (v9)** — a v9 decision; **APPROVED (D-n)** — approved at t
 | D01 | Assignments are organization-owned, reference one platform `providers` row, unique `(org_id, provider_id)` | ESTABLISHED — basis: F19 (the entity name); approved D06 (composite FK `message_attempts(org_id, provider_id) → organization_provider_assignments(org_id, provider_id)`, "keep the dedicated `acc_dispatch` design"); approved D02 (status on the assignment). **"No reseller/platform defaults": OPEN** | §4 |
 | D02 | Assignment `active`/`disabled` status; no hard delete | APPROVED | §4 |
 | D04 | Assignment configuration never confers authority to send | ESTABLISHED — basis: the user's stated requirement "provider assignment inheritance must not accidentally become authorization inheritance" (decision-set request, 06-Oct-2026) and approved D09 (`messages.send`). **"Applies unchanged to every workspace and team; no overrides": OPEN** | §4 |
-| D06 | Dedicated `acc_dispatch` principal; token-bound per-message RLS; evidence-bound circuit writes | APPROVED | §9 |
+| D06 | Dedicated `acc_dispatch` principal; token-bound per-message RLS; evidence-bound circuit writes | APPROVED; **amended by ADR-015** (acc_app content predicate, §17.1; structural admission, §17.3) | §9, §17 |
 | D09 | Eight permission keys; scopes as tabled; reseller, team and platform excluded | APPROVED | §6 |
 | D13 | Fallback triggers | Excluded triggers ESTABLISHED — basis: approved D16 (`OUTCOME_UNKNOWN` never used for fallback) and the user's stated requirement that customer, business, configuration, authentication and invalid-request failures must not be treated as provider outage to trigger fallback. **Positive triggers (`provider_error`, `rate_limited`, pre-submission skips): OPEN** | §8 |
 | D14 | Deterministic termination | **OPEN** — no prior approval basis | §8 |
@@ -85,7 +87,7 @@ EXISTING CONTRACT: organization by `X-Acc-Organization`, validated server-side; 
 
 ## 6. Permissions (D09)
 
-Authorization uses permissions only, never role names; inheritance is downward only (PLATFORM → RESELLER → ORGANIZATION → WORKSPACE → TEAM). No platform grant covers these keys.
+Authorization uses permissions only, never role names; inheritance is downward only (PLATFORM → RESELLER → ORGANIZATION → WORKSPACE → TEAM). No platform grant covers these keys. **Mechanism (ADR-015 R-5, §17.2):** each key carries an explicit allowed-scope set; these eight are tenant content and never grantable at PLATFORM or RESELLER scope.
 
 | Permission | Resource | Action | Allowed scopes | Reseller | Organization | Workspace | Team |
 |---|---|---|---|---|---|---|---|
@@ -98,7 +100,7 @@ Authorization uses permissions only, never role names; inheritance is downward o
 | `messages.read` | messages, attempts, events | read | organization, workspace | no | yes | yes | no |
 | `messages.send` | `POST /messages` | send | organization, workspace | no | yes | yes | no |
 
-Reseller grants are excluded: reseller administration covers tenancy records, not end-customer content, and no reseller-aware tenant-data RLS exists (a reseller suppression list is a possible later feature with its own ownership model). Team grants are excluded because no Phase 3 resource is team-owned. A workspace sender may use an approved template of its organization through `messages.send`; using a template is not reading it.
+Reseller grants are excluded: reseller administration covers tenancy records, not end-customer content, and the content predicate (§17.1) has no reseller or platform arm (a reseller suppression list is a possible later feature with its own ownership model). Team grants are excluded because no Phase 3 resource is team-owned. A workspace sender may use an approved template of its organization through `messages.send`; using a template is not reading it.
 
 ## 7. Message lifecycle invariants (D16)
 
@@ -136,7 +138,7 @@ The circuit classification is unchanged (timeout and unknown still count as circ
 
 ### 9.2 `acc_dispatch` (D06)
 
-- **Role:** `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION CONNECTION LIMIT n`; no role membership; owns nothing; credential through `SecretsPort`; host-restricted (`pg_hba`). Used only by the dispatcher, never by an HTTP request. **Every `acc_app` policy is unchanged.**
+- **Role:** `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION CONNECTION LIMIT n`; no role membership; owns nothing; credential through `SecretsPort`; host-restricted (`pg_hba`). Used only by the dispatcher, never by an HTTP request. **Every existing `acc_app` policy is unchanged; `acc_app` policies on tenant-content tables use the §17.1 content predicate; `acc_dispatch` never calls `app_content_context_valid()`.**
 - **Functions:** `app_current_org_id`, `app_dispatch_message_id`, `app_dispatch_claim_token` (plain `STABLE` SQL), `uuidv7`, and the existing `app_session_bypasses_rls` (required by the guard). **No new `SECURITY DEFINER` function.** No sequences exist.
 - **Per-message predicate:** `claim_valid(msg)` = a queue row for `msg` whose `message_id = app_dispatch_message_id()`, `org_id = app_current_org_id()`, `claim_token = app_dispatch_claim_token()` and `claimed_until > now()`.
 - **Assignment proof:** `assignment_ok(org, provider)` = an `active` assignment for the pair; plus the composite FK `message_attempts(org_id, provider_id) → organization_provider_assignments(org_id, provider_id)`.
@@ -158,7 +160,7 @@ The circuit classification is unchanged (timeout and unknown still count as circ
 
 Provider health and circuit state are **platform-global**, shared by every organization using the provider (Phase 2 design).
 
-- **Only through the authoritative path.** The dispatcher changes circuit and health state only by calling the existing `ProviderStateStore` (`admit`, `recordSubmission`) under the provider row lock, and reaches the adapter only through `ProviderSubmissionExecutor.execute(admission, …)`. The failure-threshold arithmetic stays in the TypeScript state machine; it is not reimplemented in SQL. Structural tests pin that no file other than `provider-state.store.ts` writes the observation columns and that the dispatcher calls `this.state.admit(` and `this.state.recordSubmission(` (§14).
+- **Only through the authoritative path.** The dispatcher changes circuit and health state only by calling the existing `ProviderStateStore` (`admit`, `recordSubmission`) under the provider row lock, and reaches the adapter only through `ProviderSubmissionExecutor.execute(admission, …)`. **Amended (§17.3):** the signatures change to the structural capability form, and the regex pins are replaced by import, type and runtime tests; dispatcher transitions write no `audit_logs` row (§17.4). The failure-threshold arithmetic stays in the TypeScript state machine; it is not reimplemented in SQL. Structural tests pin that no file other than `provider-state.store.ts` writes the observation columns and that the dispatcher calls `this.state.admit(` and `this.state.recordSubmission(` (§14).
 - **Database enforcement (`fn_providers_state_guard`, `SECURITY INVOKER`, an `acc_dispatch` branch):** administrative columns and `health_override` are refused (also by column privileges); only the four legal edges with the generation advancing by exactly one; every failure or success edge, every `health_state` change and every `circuit_probe_successes` increment requires a `provider_health` `submission` sample inserted **in the same transaction** (`created_at = now()`) for that provider, tagged with the pre-transition `circuit_generation` — so one sample can drive at most one transition; `circuit_probes` may only gain or lose the slot whose id is the session's claim token, or drop expired slots.
 - **Evidence is bound to the exact attempt:** `provider_health.attempt_id` with a composite FK `(attempt_id, provider_id) → message_attempts(id, provider_id)`, one `submission` sample per attempt (partial unique index), and an `INSERT` check requiring the attempt's organization, claim token, `submitting` status and fencing epoch to be current. A sample for another claim, provider, organization, or a stale or terminal attempt is rejected.
 - **Cooldown:** `open → half_open` timing is enforced by the authoritative `ProviderStateStore` on the injected `ProviderClock` (as in Phase 2), **not by PostgreSQL `now()`** — a database clock check would contradict the injected clock the circuit runs on.
@@ -210,8 +212,34 @@ Categories: horizontal and vertical isolation; scope substitution; enumeration; 
 
 ## 15. Open increment-level decisions (not freeze blockers)
 
-D01 (reseller/platform defaults for assignments), D03 (candidate order), D04 (workspace/team use of assignments), D05 (assignment administration), D13 (positive fallback triggers), D14 (termination), D15 (same-provider retry), D27 (conversations), D07 and D08 (workspace context), D10–D12 (state names, attempt fields, event types), D22 (refusal order and persistence), D24 (send API shape), D25 (contact identities), D26 (audit versus events), D28 (increments and gates); the D23 product/compliance decisions; the target phase of delivery and webhook behaviours. Recorded in `PHASE-3-OPEN-DECISIONS.md`.
+D01 (reseller/platform defaults for assignments), D03 (candidate order), D04 (workspace/team use of assignments), D05 (assignment administration), D13 (positive fallback triggers), D14 (termination), D15 (same-provider retry), D27 (conversations), D07 and D08 (workspace context), D10–D12 (state names, attempt fields, event types), D22 (refusal order and persistence), D24 (send API shape), D25 (contact identities), D28 (increments and gates) — D26 **APPROVED by ADR-015 R-14** (§17.4); the D23 product/compliance decisions; the target phase of delivery and webhook behaviours. Recorded in `PHASE-3-OPEN-DECISIONS.md`.
 
 ## 16. Documentation reconciled by this ADR
 
 `ROADMAP.md` §6 and §8; `TESTING.md` §2; `DECISIONS.md` (ADR-012 F-5 note, ADR-013 PD-3 note, ADR-014 entry); `TENANCY.md` §1c; `ARCHITECTURE.md` §6; `SECURITY.md` §3c and §7; `DATABASE.md` (principals, templates, consent events, Phase 3 planned tables); `PROVIDER_ADAPTER.md` §6e; `RBAC.md`; `FALLBACK_ENGINE.md`, `ROUTING_ENGINE.md`, `EVENTS.md` phase notes; `PHASE-3-OPEN-DECISIONS.md`; `PHASE-3-API-CONTRACT-REGISTER.md`.
+
+## 17. Amendments by ADR-015 — pre-Phase-3 foundation remediation (approved by the user, 06-Oct-2026)
+
+Decision record: `DECISIONS.md` §1o (R-1 … R-15). This section governs where it differs from §1–§16. Implementation is the remediation increment, not Phase 3.1.
+
+### 17.1 Tenant-content RLS — Model B (R-7 … R-10)
+
+- **Two predicates, by table class.** Tenancy-record tables (organizations, workspaces, teams, users, roles, grants, API keys, audit, idempotency) keep `app_org_in_scope` — reseller- and platform-aware, the documented administration hierarchy. **Tenant-content tables** (contacts and identities, consent events, templates, suppressions, messages, attempts, events) use, for `acc_app`: `org_id = app_current_org_id() AND (SELECT app_content_context_valid())`.
+- **`app_content_context_valid()`** — `STABLE SECURITY DEFINER`, `search_path = public, pg_temp`, EXECUTE for `acc_app` only (never PUBLIC, `acc_auth`, `acc_relay` or `acc_dispatch`). True only when `app.current_org_id` is set **and** either (a) `app.current_user_id` is an active user holding an organization-, workspace- or team-scope grant in that organization, or (b) `app.current_api_key_id` names an unrevoked, unexpired API key of that organization. **No reseller, platform or break-glass arm.** Workspace and team isolation remain application-layer (ADR-011 D-4).
+- **Context.** A seventh transaction-local claim `app.current_api_key_id` is written on every transaction (empty when absent). Reseller and platform claims are not cleared in content transactions; content policies ignore them.
+- **No support or break-glass content access (R-8).** **Content side channels (R-9):** audit `before`/`after`/`metadata` and idempotency `response_snapshot` of content routes carry identifiers and status only.
+- **Classification (R-10):** `organization_provider_assignments` is tenancy/control-plane data; `message_dispatch_queue` is not tenant content provided it stays content-free (identifiers, state, claim, fencing only).
+- **Residual (unchanged, SECURITY §4b):** `app.current_user_id` is set by `acc_app` and is the trust anchor; a compromised `acc_app` that forges it can reach the content of the single organization in context, never several and never by reseller or platform reach.
+
+### 17.2 Tenant-content permissions (R-5, R-6)
+
+Each permission key carries an explicit classification and allowed-scope set (single source `packages/contracts`, projected into `permissions`, enforced by the evaluator, the API-key path and the database). The §6 keys are never grantable at PLATFORM or RESELLER scope; platform roles never hold them. Appointment of predefined tenant-system roles that carry them is by a narrow, audited delegation whose exact mechanism is approved by the user before implementation.
+
+### 17.3 Structural CircuitAdmission (R-13)
+
+The existing admission/circuit architecture remains the single mechanism. No supported raw `ProviderAdapter.send()` path exists; the registry never exposes a raw adapter; admissions cannot be forged; the executor derives provider, adapter, context and timeout from the redeemed admission; `recordSubmission` accepts only the settled admission capability. §9.3 and §14 regex pins are replaced by import-boundary, type and runtime tests. The dispatcher (later) uses the same capability API.
+
+### 17.4 Dispatcher audit (R-14, D26 APPROVED)
+
+Dispatcher-caused circuit and health transitions write **no** `audit_logs` row. `provider_health` samples, attempts/events and claim/fencing evidence are the authoritative dispatcher evidence. `ProviderAccess` gains no generic system actor. The `ProviderStateStore` changes this requires (HIGH-6, MEDIUM-7) are implemented immediately before the dispatcher increment (R-15).
+

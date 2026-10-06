@@ -6,9 +6,9 @@ Companion to `ADR-014-PHASE-3-WHATSAPP-ORCHESTRATION.md`. Opened 06-Oct-2026 as 
 
 | Status | Decisions |
 |---|---|
-| **FROZEN — approved** | D02, D06, D09, D16, D18, D19, D20, D21, D23 (mechanism only), D29 |
+| **FROZEN — approved** | D02, D06 (amended by ADR-015, ADR-014 §17), D09 (mechanism: ADR-014 §17.2), D16, D18, D19, D20, D21, D23 (mechanism only), D26 (**approved by ADR-015 R-14, 06-Oct-2026**: dispatcher circuit transitions write no `audit_logs` row), D29 |
 | **ESTABLISHED** by an explicit prior approval or stated user requirement (cited in ADR-014 §3) | D01 (organization ownership, catalogue reference, uniqueness), D04 (configuration never authority), D13 (excluded triggers only), D17, D30 |
-| **OPEN — increment-level, `REQUIRES USER APPROVAL`** (not freeze blockers) | D03, D05, D07, D08, D10, D11, D12, D22, D24, D25, D26, D28; **moved back to OPEN by the governance correction of 06-Oct-2026 (no prior approval basis):** D01 (reseller/platform defaults), D04 (workspace/team use of assignments unchanged or overridable), D13 (positive fallback triggers: `provider_error`, `rate_limited`, pre-submission skips), D14 (termination), D15 (same-provider retry), D27 (conversations) |
+| **OPEN — increment-level, `REQUIRES USER APPROVAL`** (not freeze blockers) | D03, D05, D07, D08, D10, D11, D12, D22, D24, D25, D28; **moved back to OPEN by the governance correction of 06-Oct-2026 (no prior approval basis):** D01 (reseller/platform defaults), D04 (workspace/team use of assignments unchanged or overridable), D13 (positive fallback triggers: `provider_error`, `rate_limited`, pre-submission skips), D14 (termination), D15 (same-provider retry), D27 (conversations) |
 | **OPEN — product/compliance, not architecture** | D23: template category set; category-to-consent mapping; workspace versus organization consent; withdrawal window (ADR-014 §11) |
 | **OPEN — scope** | Target phase of delivery and webhook behaviours (excluded from Phase 3 by D20) |
 
@@ -184,7 +184,7 @@ The questions below are kept as the historical record; "Recommended: none" in an
 - *Question:* Address normalization (E.164 for WhatsApp), uniqueness scope (per workspace or organization), primary identity rules, verification.
 - *Recommended:* none.
 
-**P3-D26 — Audit versus message events.**
+**P3-D26 — Audit versus message events.** *(APPROVED by ADR-015 R-14, 06-Oct-2026: dispatcher circuit transitions write no `audit_logs` row; `provider_health`, attempts/events and claim/fencing evidence are authoritative. ADR-014 §17.4 governs.)*
 - *Question:* Which messaging actions write `audit_logs` (security-sensitive actions per `SECURITY.md` §4) and which only `message_events`?
 - *Recommended:* none.
 
