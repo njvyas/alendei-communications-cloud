@@ -14,8 +14,12 @@
  * waited for a connection" from the five-second acquisition timeout.
  *
  * The pools are small on purpose (`DATABASE_POOL_MAX=4`: `acc_app` 4,
- * `acc_auth` 2), so each burst is larger than the pool it would have pinned.
+ * `acc_auth` 2, set by `pool-isolation.env.ts` before the application module
+ * loads), so each burst is larger than the pool it would have pinned.
  */
+// First, before anything that imports `AppModule`: it sets the pool size.
+import { AUTH_POOL_MAX, POOL_MAX, PREVIOUS_DATABASE_POOL_MAX } from './pool-isolation.env';
+
 import { randomBytes } from 'node:crypto';
 import { hash as argon2Hash } from '@node-rs/argon2';
 import { AUDIT_ACTIONS, ERROR_CODES } from '@acc/contracts';
@@ -56,7 +60,6 @@ jest.setTimeout(30_000);
 describe('pool isolation of authentication and authorization refusals (ADR-015 R-1, R-12)', () => {
   const credentialGate = new ArrivalGate();
   const scopeChainGate = new ArrivalGate();
-  let previousPoolMax: string | undefined;
 
   let h: Harness;
   let authPool: Pool;
@@ -68,12 +71,13 @@ describe('pool isolation of authentication and authorization refusals (ADR-015 R
   const extraUsers: string[] = [];
 
   beforeAll(async () => {
-    // Read by configuration when the application boots, so it is set first.
-    previousPoolMax = process.env.DATABASE_POOL_MAX;
-    process.env.DATABASE_POOL_MAX = '4';
     h = await startHarness({ credentialGate, scopeChainGate });
     authPool = h.app.get<Pool>(AUTH_POOL);
     appPool = h.app.get<Pool>(APP_POOL);
+    // Every burst below is sized against these; a pool that silently kept the
+    // `.env` size would make them prove nothing.
+    expect(appPool.options.max).toBe(POOL_MAX);
+    expect(authPool.options.max).toBe(AUTH_POOL_MAX);
     credentials = h.app.get(CredentialService);
     orgA = await createTenant(h.admin, 'pool-a', credentials);
     raceUser = await createScopedUser(
@@ -102,8 +106,8 @@ describe('pool isolation of authentication and authorization refusals (ADR-015 R
     }
     await destroyTenant(h.admin, orgA);
     await h.close();
-    if (previousPoolMax === undefined) delete process.env.DATABASE_POOL_MAX;
-    else process.env.DATABASE_POOL_MAX = previousPoolMax;
+    if (PREVIOUS_DATABASE_POOL_MAX === undefined) delete process.env.DATABASE_POOL_MAX;
+    else process.env.DATABASE_POOL_MAX = PREVIOUS_DATABASE_POOL_MAX;
   }, 60_000);
 
   beforeEach(() => h.clearRateLimits());
@@ -177,8 +181,7 @@ describe('pool isolation of authentication and authorization refusals (ADR-015 R
 
   // ---------------------------------------------------------------------------
   describe('1. sign-in bursts never pin the identity pool', () => {
-    const authPoolMax = 2;
-    const N = authPoolMax * 2 + 1;
+    const N = AUTH_POOL_MAX * 2 + 1;
 
     const burst = async (attempts: (() => Promise<Outcome>)[]) => {
       const meToken = await tokenFor(orgA.email);
@@ -537,7 +540,7 @@ describe('pool isolation of authentication and authorization refusals (ADR-015 R
 
   // ---------------------------------------------------------------------------
   describe('6. concurrent denials never deadlock the application pool', () => {
-    const appPoolMax = 4;
+    const appPoolMax = POOL_MAX;
 
     it('every denied request is a recorded 403 while the pool is saturated, and an authorized one still succeeds', async () => {
       const deniedToken = await tokenFor(workspaceUser.email);

@@ -9,8 +9,8 @@
  * edits — file, search string (which must occur exactly once), replacement —
  * and the commands expected to FAIL with it applied. For every mutant the
  * runner
- *   1. adds a detached git worktree of HEAD in a temporary directory, so the
- *      main working tree is never touched,
+ *   1. adds a detached git worktree of HEAD under <out>/worktrees, so the main
+ *      working tree is never touched (removed again on exit or interrupt),
  *   2. links the main tree's node_modules into it,
  *   3. applies the edits and runs each command there — a command marked `db`
  *      through scripts/with-db-clone.mjs, so it runs on a disposable clone of
@@ -89,8 +89,18 @@ const needsDb = Object.values(commands).some((c) => c.db);
 if (needsDb) for (const name of DB_VARIABLES) if (!process.env[name]) fail(`${name} is not set`);
 
 /** A detached worktree of HEAD, with the main tree's dependencies linked in. */
+const worktreeRoot = join(outDir, 'worktrees');
+mkdirSync(worktreeRoot, { recursive: true });
+let activeWorktree = null;
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    if (activeWorktree) removeWorktree(activeWorktree);
+    process.exit(130);
+  });
+}
+
 function createWorktree(label) {
-  const dir = mkdtempSync(join(tmpdir(), `acc-mut-${label}-`));
+  const dir = mkdtempSync(join(worktreeRoot, `${label}-`));
   rmSync(dir, { recursive: true, force: true });
   git(['worktree', 'add', '--detach', '--quiet', dir, head]);
   for (const relative of NODE_MODULES) {
@@ -102,6 +112,7 @@ function createWorktree(label) {
 }
 
 function removeWorktree(dir) {
+  activeWorktree = null;
   spawnSync('git', ['worktree', 'remove', '--force', dir], { cwd: ROOT });
   rmSync(dir, { recursive: true, force: true });
   spawnSync('git', ['worktree', 'prune'], { cwd: ROOT });
