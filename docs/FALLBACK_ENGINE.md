@@ -1,6 +1,6 @@
 # Fallback Engine Architecture
 
-> **Phase note (ADR-014, frozen 06-Oct-2026):** Phase 3 delivers same-channel (WhatsApp) provider-to-provider fallback against the simulator: triggered only by submission outcomes (`provider_error`, `rate_limited`, pre-submission skips), never by `timeout`/`unknown` (`OUTCOME_UNKNOWN` is terminal) or by customer, request, configuration or authentication failures; one deterministic pass over the organization's assignments; no same-provider retry; no timers, wait windows, `fallback_steps` or routing policies (ADR-014 §8). Delivery-outcome fallback, wait windows, `fallback_policies`/`fallback_steps` and cross-channel chains below remain Phase 5.
+> **Phase note (ADR-014, frozen 06-Oct-2026):** Phase 3 delivers same-channel (WhatsApp) provider-to-provider fallback against the simulator, with no cross-channel fallback, no delivery-outcome fallback and no routing policies. Frozen: `OUTCOME_UNKNOWN` (`timeout`, `unknown`) never triggers fallback, and customer, request, configuration and authentication failures are never treated as provider outage to trigger fallback. Open: the positive triggers, termination and same-provider retry (ADR-014 D13–D15). Delivery-outcome fallback, wait windows, `fallback_policies`/`fallback_steps` and cross-channel chains below remain Phase 5.
 
 ## 1. Core principle
 

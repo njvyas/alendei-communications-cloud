@@ -4,7 +4,7 @@
 
 **Source of authority.** The approved architecture is referred to as ADR-014/v9. The full v9 text was not supplied; §1 records exactly the v9 decisions the user stated explicitly (F1–F19). §3–§13 record the decisions approved at the Phase 3.0 review (06-Oct-2026), whose analysis, alternatives and proofs are in `PHASE-3-ARCHITECTURE-DECISION-PROPOSAL.md`. Where that proposal and this ADR differ, **this ADR governs**. If the full v9 text is later supplied, this ADR is to be re-checked against it.
 
-Markers: **FROZEN (v9)** — a v9 decision; **APPROVED (D-n)** — approved at the Phase 3.0 review; **APPROVED with the architecture (D-n)** — a derived decision the approved proofs depend on, frozen by the user's approval of the Phase 3.0 architecture as a whole; **EXISTING CONTRACT** — implemented in Phases 1–2; **OPEN (D-n)** — an increment-level decision, `PHASE-3-OPEN-DECISIONS.md`.
+Markers: **FROZEN (v9)** — a v9 decision; **APPROVED (D-n)** — approved at the Phase 3.0 review; **ESTABLISHED (D-n)** — not approved as a separate decision, but established by an explicit prior approval or user requirement that is cited in §3 (governance correction, 06-Oct-2026: the label "approved with the architecture" was withdrawn; points with no such basis were moved back to OPEN); **EXISTING CONTRACT** — implemented in Phases 1–2; **OPEN (D-n)** — an increment-level decision, `PHASE-3-OPEN-DECISIONS.md`.
 
 ## 1. Decisions frozen from ADR-014/v9
 
@@ -15,7 +15,7 @@ Markers: **FROZEN (v9)** — a v9 decision; **APPROVED (D-n)** — approved at t
 | F3 | **No real credentials and no vendor network calls.** Credential architecture stays governed by the documentation-only contract of Phase 2.5 (`PROVIDER_ADAPTER.md` §4a). | FROZEN (v9); contract EXISTING |
 | F4 | **Provider-to-provider fallback is in Phase 3** — between providers of the same channel. | FROZEN (v9) |
 | F5 | **No cross-channel fallback** in Phase 3. | FROZEN (v9) |
-| F6 | **Fallback principle:** provider-to-provider only; deterministic; subject to provider-assignment eligibility, provider lifecycle, health and circuit state, and authoritative CircuitAdmission; no unsafe duplicate submission. | FROZEN (v9); rules frozen in §8 (D13–D16) |
+| F6 | **Fallback principle:** provider-to-provider only; deterministic; subject to provider-assignment eligibility, provider lifecycle, health and circuit state, and authoritative CircuitAdmission; no unsafe duplicate submission. | FROZEN (v9); D16 and the excluded triggers frozen in §8; the positive fallback triggers (D13), termination (D14) and same-provider retry (D15) are OPEN |
 | F7 | **PostgreSQL is the correctness boundary.** | FROZEN (v9); consistent with `ARCHITECTURE.md` §9c, `FALLBACK_ENGINE.md` §4 |
 | F8 | **Redis is advisory only** — never required for correctness. | FROZEN (v9); consistent with `ARCHITECTURE.md` §9c |
 | F9 | **PostgreSQL polling and recovery** — work is found and recovered by polling PostgreSQL. | FROZEN (v9); mechanism frozen in §9 (D17, D18) |
@@ -28,7 +28,7 @@ Markers: **FROZEN (v9)** — a v9 decision; **APPROVED (D-n)** — approved at t
 | F16 | **Phase 2 CircuitAdmission is authoritative** before every provider submission. | FROZEN (v9); EXISTING (`PROVIDER_ADAPTER.md` §6h) |
 | F17 | **Canonical hierarchy: PLATFORM → RESELLER → ORGANIZATION → WORKSPACE → TEAM.** | FROZEN (v9); EXISTING (`TENANCY.md` §1a) |
 | F18 | **Advanced routing stays out of Phase 3:** dynamic routing weights, routing-policy CRUD, optimization, canary routing, advanced routing strategy. | FROZEN (v9) |
-| F19 | A provider-assignment entity named **`organization_provider_assignments`** is part of Phase 3. | FROZEN (v9); ownership, status and isolation frozen in §4 (D01, D02, D04, D06); priority and administration open (D03, D05) |
+| F19 | A provider-assignment entity named **`organization_provider_assignments`** is part of Phase 3. | FROZEN (v9); ownership, status and isolation in §4 (D01, D02, D04, D06); reseller/platform defaults, workspace/team overrides, priority and administration open (D01, D04, D03, D05) |
 
 ## 2. Existing contracts Phase 3 inherits unchanged
 
@@ -50,32 +50,32 @@ Markers: **FROZEN (v9)** — a v9 decision; **APPROVED (D-n)** — approved at t
 
 ## 3. Approved decisions — index
 
-| Id | Decision | Status | Section |
+| Id | Decision | Status and approval basis | Section |
 |---|---|---|---|
-| D01 | Assignments are organization-owned and reference the platform catalogue | APPROVED with the architecture | §4 |
+| D01 | Assignments are organization-owned, reference one platform `providers` row, unique `(org_id, provider_id)` | ESTABLISHED — basis: F19 (the entity name); approved D06 (composite FK `message_attempts(org_id, provider_id) → organization_provider_assignments(org_id, provider_id)`, "keep the dedicated `acc_dispatch` design"); approved D02 (status on the assignment). **"No reseller/platform defaults": OPEN** | §4 |
 | D02 | Assignment `active`/`disabled` status; no hard delete | APPROVED | §4 |
-| D04 | Assignments apply unchanged to every workspace and team of the organization; configuration, never authority | APPROVED with the architecture | §4 |
+| D04 | Assignment configuration never confers authority to send | ESTABLISHED — basis: the user's stated requirement "provider assignment inheritance must not accidentally become authorization inheritance" (decision-set request, 06-Oct-2026) and approved D09 (`messages.send`). **"Applies unchanged to every workspace and team; no overrides": OPEN** | §4 |
 | D06 | Dedicated `acc_dispatch` principal; token-bound per-message RLS; evidence-bound circuit writes | APPROVED | §9 |
 | D09 | Eight permission keys; scopes as tabled; reseller, team and platform excluded | APPROVED | §6 |
-| D13 | Fallback triggers | APPROVED with the architecture | §8 |
-| D14 | Deterministic termination | APPROVED with the architecture | §8 |
-| D15 | No same-provider retry | APPROVED with the architecture | §8 |
+| D13 | Fallback triggers | Excluded triggers ESTABLISHED — basis: approved D16 (`OUTCOME_UNKNOWN` never used for fallback) and the user's stated requirement that customer, business, configuration, authentication and invalid-request failures must not be treated as provider outage to trigger fallback. **Positive triggers (`provider_error`, `rate_limited`, pre-submission skips): OPEN** | §8 |
+| D14 | Deterministic termination | **OPEN** — no prior approval basis | §8 |
+| D15 | Same-provider retry | **OPEN** — no prior approval basis | §8 |
 | D16 | `OUTCOME_UNKNOWN` is terminal; never retried, never a fallback trigger | APPROVED | §7 |
-| D17 | Durable fencing: claim token and epoch; `submitting` attempt written before invocation | APPROVED with the architecture | §9 |
+| D17 | Durable fencing: claim token and epoch; `submitting` attempt written before invocation | ESTABLISHED — basis: F10; approved D06 ("keep … the token-bound per-message RLS model"); approved D18 ("provided … the stale-worker fencing is explicit"); the D06/D29 final proofs approved with "Phase 3.0 architecture is APPROVED" (predicates on claim token, fencing epoch and `submitting`) | §9 |
 | D18 | Poll 1 s, batch 10, lease 30 s — operational configuration | APPROVED | §9 |
 | D19 | `simulator_behavior` capability on simulator providers, platform-administered | APPROVED | §10 |
 | D20 | No delivery or webhook processing in Phase 3 | APPROVED | §10 |
 | D21 | `templates.approval_status` is a simulated, internal state only | APPROVED | §11 |
 | D23 | Consent mechanism (append-only events); category/consent policy left to product/compliance | APPROVED (mechanism) | §11 |
-| D27 | No conversations in Phase 3 | APPROVED with the architecture | §7 |
+| D27 | Conversations in Phase 3 | **OPEN** — no prior approval basis | §7 |
 | D29 | Suspended organizations hold queued work; closed organizations fail it; narrow `acc_dispatch` exception; advisory-lock serialization | APPROVED | §12 |
-| D30 | Phase 3 / Phase 5 boundary | APPROVED with the architecture | §8 |
+| D30 | Phase 3 / Phase 5 boundary | ESTABLISHED — basis: F4, F5, F18; the user's instruction that Phase 5 must not claim basic provider-to-provider fallback while advanced routing stays outside Phase 3; approved D20 (no delivery, hence no delivery-outcome fallback in Phase 3); the existing `ROADMAP.md` §8 Phase 5 scope (`fallback_policies`/`fallback_steps`, cross-channel chains). The "single pass, no timers" qualifier belongs to D14 (OPEN) | §8 |
 
 ## 4. Organization provider assignments (F19; D01, D02, D04)
 
-- **Ownership (D01):** `organization_provider_assignments(org_id NOT NULL → organizations, provider_id NOT NULL → providers, …)`, unique `(org_id, provider_id)`; organization-owned, referencing one platform `providers` row. No reseller or platform defaults.
+- **Ownership (D01, ESTABLISHED):** `organization_provider_assignments(org_id NOT NULL → organizations, provider_id NOT NULL → providers, …)`, unique `(org_id, provider_id)`; organization-owned, referencing one platform `providers` row. Whether reseller- or platform-level defaults exist: OPEN (D01).
 - **Status (D02):** `active | disabled`; unassigning sets `disabled`; there is no hard delete and no `DELETE` route. A disabled assignment is never a candidate.
-- **Inheritance (D04):** every send of the organization, in any workspace or team, uses the organization's active assignments unchanged; no workspace or team overrides. Inheriting configuration confers **no authority**: the right to send comes only from `messages.send` (§6).
+- **Configuration is never authority (D04, ESTABLISHED):** assignments confer no authority; the right to send comes only from `messages.send` (§6). Whether every workspace and team uses the organization's assignments unchanged, or may narrow or override them: OPEN (D04).
 - **Isolation:** tenant RLS by organization for HTTP; the dispatcher's access is defined in §9.
 - **Priority and order:** OPEN (D03). **Administration (who creates, updates, disables; route):** OPEN (D05).
 
@@ -100,29 +100,29 @@ Authorization uses permissions only, never role names; inheritance is downward o
 
 Reseller grants are excluded: reseller administration covers tenancy records, not end-customer content, and no reseller-aware tenant-data RLS exists (a reseller suppression list is a possible later feature with its own ownership model). Team grants are excluded because no Phase 3 resource is team-owned. A workspace sender may use an approved template of its organization through `messages.send`; using a template is not reading it.
 
-## 7. Message lifecycle invariants (D16, D27)
+## 7. Message lifecycle invariants (D16)
 
 The exact state names, transitions, attempt fields and event types are OPEN (D10, D11, D12). The following invariants are frozen and bind any D10–D12 answer; working state names below follow the proposal.
 
 - **Terminal outcome-unknown (D16):** a `timeout`, an `unknown` outcome, an absent acknowledgement, or a crash between writing a `submitting` attempt and recording its result makes the attempt `outcome_unknown` and the message terminal `OUTCOME_UNKNOWN`. It is **never retried, never re-submitted and never a fallback trigger** in Phase 3: the poller selects only queued work or `ROUTING` with an expired lease; a new attempt requires a conditional `QUEUED → ROUTING` claim that affects no terminal row; recovery maps `submitting` only to `outcome_unknown`; a database transition guard rejects every transition out of a terminal state; no provider call is possible without a CircuitAdmission, which only a successful claim issues.
 - **Terminal states never transition again**, for any non-owner principal.
 - **Message-level fallback re-queues:** a fallback-eligible failure returns the message to `QUEUED`, so every attempt has its own claim, epoch and lease.
-- **No conversations (D27):** there is no inbound path in Phase 3; conversations are deferred to the inbox phase.
+- **Conversations:** OPEN (D27). Re-queue on a fallback-eligible failure is established by the approved D29 text (`ROUTING → QUEUED`).
 
-## 8. Provider fallback (D13, D14, D15, D30)
+## 8. Provider fallback (D13–D16, D30)
 
 | Outcome (Phase 2 taxonomy, `PROVIDER_ADAPTER.md` §5b) | Fallback to the next provider? |
 |---|---|
-| `provider_error`, `rate_limited` | yes — definite non-acceptance |
-| pre-submission skip: lifecycle not `active`, circuit `open`, half-open slots full | yes — no submission happened |
-| `timeout`, `unknown` | **no** — `OUTCOME_UNKNOWN` (§7) |
-| `auth_error`, `configuration_error`, `invalid_request`, `invalid_recipient`, `unsupported_content` | **no** — the message fails; never treated as provider outage |
+| `provider_error`, `rate_limited` | **OPEN (D13)** — proposed: yes (definite non-acceptance) |
+| pre-submission skip: lifecycle not `active`, circuit `open`, half-open slots full | **OPEN (D13)** — proposed: skip to the next candidate (no submission happened) |
+| `timeout`, `unknown` | **no** — `OUTCOME_UNKNOWN` (§7; approved D16) |
+| `auth_error`, `configuration_error`, `invalid_request`, `invalid_recipient`, `unsupported_content` | **no** — never treated as provider outage to trigger fallback (ESTABLISHED by the user's stated requirement); what happens to the message then is part of OPEN D13/D14 |
 
 The circuit classification is unchanged (timeout and unknown still count as circuit failures); fallback and circuit are separate rules.
 
-- **Termination (D14):** at the first of accepted, non-fallback outcome, ambiguous outcome, or no remaining candidate; one pass over the ordered candidates, each provider at most once per message; no waiting and no timers.
-- **No same-provider retry (D15).**
-- **Boundary (D30):** Phase 3 = same-channel (WhatsApp), submission-outcome-driven, single-pass provider-to-provider fallback over the organization's assignments. Phase 5 = cross-channel fallback, delivery-outcome fallback with wait windows (`deadline_at`), `fallback_policies`/`fallback_steps`, combined chains. Routing policies, weights, canary and optimization stay out of Phase 3 (F18). Candidate order: OPEN (D03).
+- **Termination (D14): OPEN** — proposal in `PHASE-3-ARCHITECTURE-DECISION-PROPOSAL.md` (one pass, each provider at most once, no timers); F6 requires it to be deterministic.
+- **Same-provider retry (D15): OPEN** — proposal: none.
+- **Boundary (D30, ESTABLISHED):** Phase 3 = same-channel (WhatsApp) provider-to-provider fallback over the organization's assignments, driven by submission outcomes (no delivery, D20); its termination rule is OPEN (D14). Phase 5 = cross-channel fallback, delivery-outcome fallback with wait windows (`deadline_at`), `fallback_policies`/`fallback_steps`, combined chains. Routing policies, weights, canary and optimization stay out of Phase 3 (F18). Candidate order: OPEN (D03).
 
 ## 9. Dispatch execution, fencing and the `acc_dispatch` principal (D06, D17, D18)
 
@@ -210,7 +210,7 @@ Categories: horizontal and vertical isolation; scope substitution; enumeration; 
 
 ## 15. Open increment-level decisions (not freeze blockers)
 
-D03 (candidate order), D05 (assignment administration), D07 and D08 (workspace context), D10–D12 (state names, attempt fields, event types), D22 (refusal order and persistence), D24 (send API shape), D25 (contact identities), D26 (audit versus events), D28 (increments and gates); the D23 product/compliance decisions; the target phase of delivery and webhook behaviours. Recorded in `PHASE-3-OPEN-DECISIONS.md`.
+D01 (reseller/platform defaults for assignments), D03 (candidate order), D04 (workspace/team use of assignments), D05 (assignment administration), D13 (positive fallback triggers), D14 (termination), D15 (same-provider retry), D27 (conversations), D07 and D08 (workspace context), D10–D12 (state names, attempt fields, event types), D22 (refusal order and persistence), D24 (send API shape), D25 (contact identities), D26 (audit versus events), D28 (increments and gates); the D23 product/compliance decisions; the target phase of delivery and webhook behaviours. Recorded in `PHASE-3-OPEN-DECISIONS.md`.
 
 ## 16. Documentation reconciled by this ADR
 

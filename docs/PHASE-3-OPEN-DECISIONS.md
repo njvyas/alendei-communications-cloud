@@ -7,8 +7,8 @@ Companion to `ADR-014-PHASE-3-WHATSAPP-ORCHESTRATION.md`. Opened 06-Oct-2026 as 
 | Status | Decisions |
 |---|---|
 | **FROZEN — approved** | D02, D06, D09, D16, D18, D19, D20, D21, D23 (mechanism only), D29 |
-| **FROZEN — approved with the architecture** (derived; the approved proofs depend on them) | D01, D04, D13, D14, D15, D17, D27, D30 |
-| **OPEN — increment-level, `REQUIRES USER APPROVAL`** (not freeze blockers) | D03, D05, D07, D08, D10, D11, D12, D22, D24, D25, D26, D28 |
+| **ESTABLISHED** by an explicit prior approval or stated user requirement (cited in ADR-014 §3) | D01 (organization ownership, catalogue reference, uniqueness), D04 (configuration never authority), D13 (excluded triggers only), D17, D30 |
+| **OPEN — increment-level, `REQUIRES USER APPROVAL`** (not freeze blockers) | D03, D05, D07, D08, D10, D11, D12, D22, D24, D25, D26, D28; **moved back to OPEN by the governance correction of 06-Oct-2026 (no prior approval basis):** D01 (reseller/platform defaults), D04 (workspace/team use of assignments unchanged or overridable), D13 (positive fallback triggers: `provider_error`, `rate_limited`, pre-submission skips), D14 (termination), D15 (same-provider retry), D27 (conversations) |
 | **OPEN — product/compliance, not architecture** | D23: template category set; category-to-consent mapping; workspace versus organization consent; withdrawal window (ADR-014 §11) |
 | **OPEN — scope** | Target phase of delivery and webhook behaviours (excluded from Phase 3 by D20) |
 
@@ -209,12 +209,12 @@ The questions below are kept as the historical record; "Recommended: none" in an
 
 | # | Existing text | Conflict | Status at the freeze |
 |---|---|---|---|
-| C1 | `FALLBACK_ENGINE.md` §1: fallback triggered by delivery outcome | Phase 3 fallback is submission-outcome-driven | **Resolved** by D13, D20, D30 (delivery-outcome fallback is Phase 5) |
+| C1 | `FALLBACK_ENGINE.md` §1: fallback triggered by delivery outcome | Phase 3 has no delivery, so no delivery-outcome fallback | **Resolved** by D20 and D30 (delivery-outcome fallback is Phase 5); which submission outcomes trigger fallback is OPEN (D13) |
 | C2 | `FALLBACK_ENGINE.md` §2, `ROUTING_ENGINE.md` §4: order from `fallback_steps` and routing policies | Excluded from Phase 3 (F18, D30) | **Resolved in scope**; the Phase 3 candidate order remains OPEN (D03) |
 | C3 | `DATABASE.md` §6 routing-policy, pricing, campaign and journey columns | Excluded (F13, F14, F18) | **Resolved in scope**; exact Phase 3 columns OPEN (D10, D11) |
 | C4 | `ARCHITECTURE.md` §6 terminal `DELIVERED`, `READ`, `EXPIRED` | No delivery in Phase 3 | **Resolved** by D20 and D16 (Phase 3 note added to `ARCHITECTURE.md` §6) |
 | C5 | `EVENTS.md` Kafka transport and consumers | No Kafka/outbox (F11) | **Resolved** for transport (note in `EVENTS.md`); event types OPEN (D12) |
-| C6 | `FALLBACK_ENGINE.md` §3 adapter retry (`retry_count`) | No same-provider retry | **Resolved** by D15 |
+| C6 | `FALLBACK_ENGINE.md` §3 adapter retry (`retry_count`) | Same-provider retry undecided | OPEN (D15) |
 | C7 | ADR-013 2.4 residual (e)(4): tenant context cannot read the catalogue | — | **Resolved** by D06 (`acc_dispatch`) |
 | C8 | `ROADMAP.md` §6 webhook tests and signature review | No webhooks in Phase 3 | **Resolved** by D20 (`ROADMAP.md` §6 corrected) |
 | C9 | `DATABASE.md` §3 workspace-owned contacts; no client workspace mechanism | — | OPEN (D07) |
