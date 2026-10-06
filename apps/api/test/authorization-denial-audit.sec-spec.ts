@@ -6,9 +6,10 @@
  * tested as one. Three properties carry the weight:
  *
  *   1. **It exists.** The record commits in its own transaction *before* the
- *      refusal is thrown. Written into the caller's transaction it would be
- *      rolled back by that very throw, and the control would report nothing
- *      while appearing to work.
+ *      refusal reaches the caller — once the caller's transaction has
+ *      released its connection (ADR-015 R-12). Written into the caller's
+ *      transaction it would be rolled back by that very throw, and the control
+ *      would report nothing while appearing to work.
  *   2. **It says where the actor legitimately was**, never where it tried to
  *      reach. The database derives the row's tenancy from that pair, so naming
  *      the attempted target would file the record under a tenant the actor was
@@ -23,7 +24,14 @@
  */
 import { randomBytes } from 'node:crypto';
 import { PERMISSIONS, type AuthPrincipal, type RoleGrant, type ScopeType } from '@acc/contracts';
-import { createDatabase, createPool, schema, type Database, type TenantSession } from '@acc/db';
+import {
+  createDatabase,
+  createPool,
+  guardPool,
+  schema,
+  type Database,
+  type TenantSession,
+} from '@acc/db';
 import { sql } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 
@@ -599,45 +607,45 @@ describe('authorization.denied auditing', () => {
   });
 
   // ---------------------------------------------------------------------------
-  describe('O. an exhausted connection pool', () => {
-    // The denial record is written on a *second* connection, checked out of the
-    // same pool the caller's transaction already holds one from. That is what
-    // makes the record survive the caller's rollback — and it is also the one
-    // place the design can deadlock: with `DATABASE_POOL_MAX=1` the caller holds
-    // the only connection, so the audit write can never obtain one.
-    //
-    // The outcome must be a bounded, loud failure, never a quiet 403. `pg`
-    // bounds a queued acquisition with `connectionTimeoutMillis` (defaulted to
-    // five seconds by `createPool`), which is what turns an otherwise indefinite
-    // wait into an error. A short timeout is used here so the case stays fast;
-    // the mechanism is identical at the production default.
+  describe('O. a single-connection pool (ADR-015 R-12)', () => {
+    // The denial record is written only once the caller's transaction has
+    // released its connection (ADR-005 D-6 as amended). Before R-12 it was
+    // written on a *second* connection while the caller still held one, so on a
+    // `max: 1` pool it could never obtain one and every denial became a `500`
+    // after `connectionTimeoutMillis` — and under enough concurrent denials any
+    // pool size deadlocked the same way. The pool here is guarded exactly as the
+    // application's is, so a regression to the nested write fails at once with
+    // `NestedPoolAcquisitionError` rather than waiting out the timeout.
     const ACQUIRE_TIMEOUT_MS = 750;
 
-    it('fails closed and bounded rather than hanging or returning a plain 403', async () => {
-      const pool = createPool({
-        connectionString: process.env.DATABASE_URL!,
-        max: 1,
-        connectionTimeoutMillis: ACQUIRE_TIMEOUT_MS,
-        applicationName: 'acc-test-denial-pool-1',
-      });
+    it('records the denial and refuses with 403, without waiting for a connection', async () => {
+      const pool = guardPool(
+        createPool({
+          connectionString: process.env.DATABASE_URL!,
+          max: 1,
+          connectionTimeoutMillis: ACQUIRE_TIMEOUT_MS,
+          applicationName: 'acc-test-denial-pool-1',
+        }),
+        'app',
+      );
       const constrainedDb: Database = createDatabase(pool);
       const constrained = new TenantDatabase(constrainedDb, h.app.get<Database>(AUTH_DB));
       // The real resolver, evaluator and writer; only the pool is constrained.
+      // The writer is rebuilt on the constrained database so the record, too,
+      // must come out of the one connection.
+      const writer = new AuditWriter(constrained);
       const service = new AuthorizationService(
         h.app.get(ScopeChainResolver),
         h.app.get(PermissionEvaluator),
-        audit,
+        writer,
         constrained,
       );
       const principal = userPrincipal([grant('organization', orgA.orgId, [])]);
 
       const startedAt = Date.now();
-      let outcome: 'allowed' | 'refused' = 'allowed';
       let failure: unknown;
       try {
         await inRequest(principal, () =>
-          // The caller's transaction holds the pool's only connection for as
-          // long as the denial path runs inside it.
           constrained.withTenant(sessionFor(orgA), (tx) =>
             service.assert(tx, {
               principal,
@@ -648,62 +656,16 @@ describe('authorization.denied auditing', () => {
           ),
         );
       } catch (error) {
-        outcome = 'refused';
         failure = error;
       } finally {
         await pool.end();
       }
 
-      // No bypass: the request did not proceed.
-      expect(outcome).toBe('refused');
-      // And it was not the 403 — an unrecorded denial must not be reported as a
-      // cleanly audited one. The exception filter renders this as a 500.
-      expect(failure).not.toBeInstanceOf(AppException);
-      expect(String((failure as Error).message)).toMatch(
-        /timeout exceeded when trying to connect/i,
-      );
-      // Bounded, not an indefinite hang.
-      expect(Date.now() - startedAt).toBeLessThan(ACQUIRE_TIMEOUT_MS * 8);
-      // Nothing was recorded, so nothing claims the denial was audited.
-      expect(await auditRowCount()).toBe(0);
-    }, 20_000);
-
-    it('recovers once a connection is available again', async () => {
-      // The exhaustion is a resource condition, not a poisoned code path: the
-      // same service on the same constrained pool records normally as soon as
-      // the pool can serve two connections.
-      const pool = createPool({
-        connectionString: process.env.DATABASE_URL!,
-        max: 2,
-        connectionTimeoutMillis: ACQUIRE_TIMEOUT_MS,
-        applicationName: 'acc-test-denial-pool-2',
-      });
-      const constrained = new TenantDatabase(createDatabase(pool), h.app.get<Database>(AUTH_DB));
-      const service = new AuthorizationService(
-        h.app.get(ScopeChainResolver),
-        h.app.get(PermissionEvaluator),
-        audit,
-        constrained,
-      );
-      const principal = userPrincipal([grant('organization', orgA.orgId, [])]);
-
-      try {
-        await expect(
-          inRequest(principal, () =>
-            constrained.withTenant(sessionFor(orgA), (tx) =>
-              service.assert(tx, {
-                principal,
-                permission: READ,
-                target: { scopeType: 'workspace', scopeId: orgA.workspaceId },
-                resourceType: 'Workspace',
-              }),
-            ),
-          ),
-        ).rejects.toBeInstanceOf(AppException);
-      } finally {
-        await pool.end();
-      }
-
+      // The refusal the caller was always going to get — the audited 403.
+      expect(failure).toBeInstanceOf(AppException);
+      expect((failure as AppException).getStatus()).toBe(403);
+      // Never queued behind its own caller's connection.
+      expect(Date.now() - startedAt).toBeLessThan(ACQUIRE_TIMEOUT_MS);
       expect(await denialRows()).toHaveLength(1);
     }, 20_000);
   });

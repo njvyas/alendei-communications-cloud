@@ -48,7 +48,8 @@ export interface SessionSummary {
  * Authentication orchestration (`RBAC.md` §5a).
  *
  * Every mutation here runs inside one `acc_auth` transaction together with its
- * audit row, so the two share a fate (ADR-003 D-2). `acc_auth` is the right
+ * audit row, so the two share a fate (ADR-003 D-2); a refused sign-in, which
+ * mutates nothing, is recorded on its own (`recordLoginFailure`). `acc_auth` is the right
  * principal because all of this happens before a tenant context exists — and it
  * is the same principal that owns `sessions`, which is what makes the coupling
  * possible at all.
@@ -73,6 +74,21 @@ export class AuthService {
    * address still pays for a full Argon2id verification through `verifyDummy`.
    * A response that returned faster for an unknown email would be a user
    * enumeration oracle regardless of what the body said.
+   *
+   * **No connection is held across Argon2 (ADR-015 R-1).** Hashing takes far
+   * longer than any query here, and a connection pinned for its duration lets a
+   * burst of sign-in attempts — unknown addresses included — exhaust the
+   * identity pool that every authenticated request also needs. So sign-in is
+   * four steps, and only two of them touch the database:
+   *
+   *   R  one autocommit read of identity, status and digest; released at once
+   *   V  verification (and, when due, the re-hash) with nothing held
+   *   S  the success transaction, which re-checks what R read before it writes
+   *   F  every refusal: one `auth.login.failed` row, on a fresh connection with
+   *      nothing else held; if it cannot be written the request fails closed
+   *
+   * Unknown, wrong-password and not-active attempts all take R, V and F — the
+   * same steps and the same number of identity-pool checkouts.
    */
   async login(email: string, password: string, meta: RequestMeta): Promise<AuthTokens> {
     const invalid = (): AppException =>
@@ -82,76 +98,89 @@ export class AuthService {
         message: 'Email or password is incorrect',
       });
 
+    // R
+    const user = await this.users.findCredentialByEmail(this.db.auth, email);
+
+    // V
+    if (!user) {
+      await this.credentials.verifyDummy(password);
+      await this.recordLoginFailure(meta, null, 'unknown_identity');
+      throw invalid();
+    }
+
+    const digest = user.passwordHash;
+    const passwordOk = digest
+      ? await this.credentials.verify(digest, password)
+      : await this.credentials.verifyDummy(password);
+
+    // Status is checked independently of the digest: a disabled account whose
+    // password still verifies must not authenticate.
+    if (!digest || !passwordOk || !this.users.canAuthenticate(user)) {
+      await this.recordLoginFailure(
+        meta,
+        user.id,
+        passwordOk ? 'account_not_active' : 'invalid_password',
+      );
+      throw invalid();
+    }
+
+    // Transparent upgrade when the configured cost has since increased —
+    // computed here, before S, because hashing is Argon2 work too.
+    const rehashed = this.credentials.needsRehash(digest)
+      ? await this.credentials.hash(password)
+      : null;
+
+    // S
     let evictedCount = 0;
-    const outcome = await this.db.auth.transaction(async (tx) => {
-      const user = await this.users.findByEmail(tx as Transaction, email);
+    const started = await this.db.auth.transaction(async (raw) => {
+      const tx = raw as Transaction;
 
-      if (!user) {
-        await this.credentials.verifyDummy(password);
-        await this.recordAnonymousFailure(tx as Transaction, meta, 'unknown_identity');
-        return null;
-      }
-
-      const digest = await this.users.passwordDigest(tx as Transaction, user.id);
-      const passwordOk = digest
-        ? await this.credentials.verify(digest, password)
-        : await this.credentials.verifyDummy(password);
-
-      // Status is checked independently of the digest: a disabled account whose
-      // password still verifies must not authenticate.
-      if (!passwordOk || !this.users.canAuthenticate(user)) {
-        await this.audit.record(
-          {
-            scopeType: 'platform',
-            scopeId: null,
-            actorType: 'user',
-            actorUserId: user.id,
-            actorApiKeyId: null,
-            actorLabel: null,
-            action: AUDIT_ACTIONS.AUTH_LOGIN_FAILED,
-            resourceType: 'auth',
-            resourceId: user.id,
-            outcome: 'failure',
-            before: null,
-            after: null,
-            metadata: { reason: passwordOk ? 'account_not_active' : 'invalid_password' },
-            correlationId: meta.correlationId,
-            ip: meta.ip,
-            userAgent: meta.userAgent,
-          },
-          tx as Transaction,
-        );
-        return null;
-      }
-
+      // Nothing R read is trusted here without being re-checked. The `UPDATE`
+      // matches only while the account is still `active` *and* still holds
+      // the digest V verified: a disable or a password change committing
+      // between R and S makes it match nothing, and this sign-in is refused
+      // instead of minting a session on stale state. The predicate is
+      // re-evaluated after waiting on a concurrent writer's row lock.
+      //
       // The `users` row is written *before* the per-user session lock is taken
       // (`createWithinCap`), the same order the disable path uses, so the two
       // can never wait on each other in a cycle (`SessionService`, Phase 1C.2).
-      //
-      // Conditional on `status = 'active'`: the status read above is not locked,
-      // and a disable committing in between would otherwise let this login mint a
-      // session for a disabled account. The `UPDATE` re-evaluates the predicate
-      // after waiting on the disable's row lock, so it refuses instead.
-      const stillActive = await tx
+      const now = new Date();
+      const won = await tx
         .update(schema.users)
-        .set({ lastLoginAt: new Date() })
-        .where(and(eq(schema.users.id, user.id), eq(schema.users.status, 'active')))
+        .set({
+          lastLoginAt: now,
+          ...(rehashed ? { passwordHash: rehashed, passwordUpdatedAt: now } : {}),
+        })
+        .where(
+          and(
+            eq(schema.users.id, user.id),
+            eq(schema.users.status, 'active'),
+            eq(schema.users.passwordHash, digest),
+          ),
+        )
         .returning({ id: schema.users.id });
-      if (stillActive.length === 0) return null;
-
-      // Transparent upgrade when the configured cost has since increased.
-      if (digest && this.credentials.needsRehash(digest)) {
-        const rehashed = await this.credentials.hash(password);
-        await tx
-          .update(schema.users)
-          .set({ passwordHash: rehashed, passwordUpdatedAt: new Date() })
-          .where(eq(schema.users.id, user.id));
+      if (won.length === 0) {
+        // Read on this same connection, to name the refusal: a missing row is
+        // an identity that no longer exists, a non-active one a disabled
+        // account. An active account whose digest changed since R presented a
+        // password that was never verified against its current credential.
+        const current = await this.users.findById(tx, user.id);
+        return {
+          kind: 'refused' as const,
+          userId: current ? user.id : null,
+          reason: !current
+            ? ('unknown_identity' as const)
+            : this.users.canAuthenticate(current)
+              ? ('invalid_password' as const)
+              : ('account_not_active' as const),
+        };
       }
 
       // ADR-012 F-11: at `AUTH_MAX_SESSIONS_PER_USER` live sessions the oldest
       // are evicted so the new one fits — serialized per user, in this
       // transaction, each eviction audited in it too.
-      const { session, refresh, evicted } = await this.sessions.createWithinCap(tx as Transaction, {
+      const { session, refresh, evicted } = await this.sessions.createWithinCap(tx, {
         userId: user.id,
         ip: meta.ip,
         userAgent: meta.userAgent,
@@ -172,7 +201,7 @@ export class AuthService {
             ip: meta.ip,
             userAgent: meta.userAgent,
           },
-          tx as Transaction,
+          tx,
         );
       }
 
@@ -195,46 +224,63 @@ export class AuthService {
           ip: meta.ip,
           userAgent: meta.userAgent,
         },
-        tx as Transaction,
+        tx,
       );
 
-      const issued = this.tokens.issue({ userId: user.id, sessionId: session.id });
-      return {
-        accessToken: issued.token,
-        expiresIn: issued.expiresIn,
-        refreshToken: refresh.token,
-        sessionId: session.id,
-        userId: user.id,
-      } satisfies AuthTokens;
+      return { kind: 'started' as const, session, refresh };
     });
 
-    if (!outcome) throw invalid();
+    // F, for the refusal S discovered — after S has committed and released.
+    if (started.kind === 'refused') {
+      await this.recordLoginFailure(meta, started.userId, started.reason);
+      throw invalid();
+    }
+
     // Counted only once the login transaction has committed, so a rolled-back
     // sign-in never reports an eviction that did not happen.
     if (evictedCount > 0) this.metrics.sessionCapEvictions.inc(evictedCount);
-    return outcome;
+
+    const issued = this.tokens.issue({ userId: user.id, sessionId: started.session.id });
+    return {
+      accessToken: issued.token,
+      expiresIn: issued.expiresIn,
+      refreshToken: started.refresh.token,
+      sessionId: started.session.id,
+      userId: user.id,
+    };
   }
 
   /**
-   * Records a failure that cannot be attributed to a real identity (ADR-003 R4).
+   * F — the single writer of `auth.login.failed` (ADR-003 R4, ADR-015 R-1).
    *
-   * A separate transaction, because the caller's transaction may itself be
-   * rolled back and this record must survive: an unknown-address attempt has no
-   * business mutation to be atomic with, and losing it would make credential
-   * stuffing invisible.
+   * Called with nothing held, and passes no transaction: the row commits on a
+   * fresh identity connection of its own, because there is no business
+   * mutation to be atomic with and losing the record would make credential
+   * stuffing invisible. Its failure propagates — the attempt is refused with a
+   * `500` rather than a `401` that was never recorded.
+   *
+   * An attempt that cannot be attributed to a real identity is recorded with
+   * the anonymous actor; any other is attributed to the account it named.
    */
-  private async recordAnonymousFailure(
-    _tx: Transaction,
+  private async recordLoginFailure(
     meta: RequestMeta,
-    reason: string,
+    userId: string | null,
+    reason: 'unknown_identity' | 'invalid_password' | 'account_not_active',
   ): Promise<void> {
     await this.audit.record({
       scopeType: 'platform',
       scopeId: null,
-      ...anonymousLoginFailureActor(),
+      ...(userId === null
+        ? anonymousLoginFailureActor()
+        : {
+            actorType: 'user' as const,
+            actorUserId: userId,
+            actorApiKeyId: null,
+            actorLabel: null,
+          }),
       action: AUDIT_ACTIONS.AUTH_LOGIN_FAILED,
       resourceType: 'auth',
-      resourceId: null,
+      resourceId: userId,
       outcome: 'failure',
       before: null,
       after: null,

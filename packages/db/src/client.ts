@@ -1,6 +1,7 @@
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool, type PoolConfig } from 'pg';
 
+import { holdingPool } from './pool-guard';
 import * as schema from './schema';
 import { tenantContextStatements, type TenantSession } from './tenant-context';
 
@@ -32,8 +33,17 @@ export function createPool(options: PoolOptions): Pool {
   return new Pool(config);
 }
 
+/**
+ * A Drizzle database over `pool` whose transactions mark the pool as held for
+ * the duration of their callback (ADR-015 R-1), so a guarded pool
+ * (`guardPool`) can refuse a nested acquisition from inside one.
+ */
 export function createDatabase(pool: Pool): Database {
-  return drizzle(pool, { schema, casing: 'snake_case' });
+  const db = drizzle(pool, { schema, casing: 'snake_case' });
+  const transaction = db.transaction.bind(db);
+  db.transaction = ((work, config) =>
+    transaction((tx) => holdingPool(pool, () => work(tx)), config)) as Database['transaction'];
+  return db;
 }
 
 /**

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { schema, type Transaction } from '@acc/db';
+import { schema, type Database, type Transaction } from '@acc/db';
 import { eq, sql } from 'drizzle-orm';
 
 import { CredentialService } from './credential.service';
@@ -8,6 +8,11 @@ export interface UserRecord {
   readonly id: string;
   readonly email: string;
   readonly status: 'active' | 'invited' | 'disabled';
+}
+
+/** A user with the stored digest, as sign-in reads it (`findCredentialByEmail`). */
+export interface UserSignInRecord extends UserRecord {
+  readonly passwordHash: string | null;
 }
 
 /**
@@ -39,6 +44,28 @@ export class UserLifecycleService {
   async findByEmail(tx: Transaction, email: string): Promise<UserRecord | null> {
     const [row] = await tx
       .select({ id: schema.users.id, email: schema.users.email, status: schema.users.status })
+      .from(schema.users)
+      .where(sql`lower(${schema.users.email}) = lower(${email})`);
+    return row ?? null;
+  }
+
+  /**
+   * Everything sign-in needs about an address — identity, status and stored
+   * digest — in one statement outside any transaction (ADR-015 R-1). The
+   * identity connection it uses is back in the pool before the caller starts
+   * any Argon2 work, which must never run while a connection is held.
+   */
+  async findCredentialByEmail(
+    reader: Database,
+    email: string,
+  ): Promise<UserSignInRecord | null> {
+    const [row] = await reader
+      .select({
+        id: schema.users.id,
+        email: schema.users.email,
+        status: schema.users.status,
+        passwordHash: schema.users.passwordHash,
+      })
       .from(schema.users)
       .where(sql`lower(${schema.users.email}) = lower(${email})`);
     return row ?? null;

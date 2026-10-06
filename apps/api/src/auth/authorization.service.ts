@@ -126,7 +126,9 @@ export class AuthorizationService {
         target: { scope: request.target, chain },
       });
     } catch (denial) {
-      // Record first, refuse second. The evaluator remains the sole author of
+      // Record first, refuse second: the record is committed once the caller's
+      // transaction has released its connection and before the refusal
+      // leaves it (`recordDenial`). The evaluator remains the sole author of
       // the refusal — it is rethrown untouched — so there is still exactly one
       // definition of what a denial looks like to a caller.
       await this.recordDenial(request);
@@ -136,25 +138,34 @@ export class AuthorizationService {
 
   /**
    * Writes the `authorization.denied` record, in its own transaction, before
-   * the refusal is raised (ADR-005 D-6).
+   * the refusal reaches the client (ADR-005 D-6, amended by ADR-015 R-12).
    *
    * **Why not the caller's transaction.** The refusal is thrown out of the very
    * transaction the caller opened, which rolls it back — so a denial record
    * written there would be discarded every time, and the control would report
    * nothing while appearing to work. A denial has no business mutation to
    * commit alongside in any case: the request was never going to change
-   * anything. Committing separately, before the throw, is what makes the record
-   * exist.
+   * anything.
    *
-   * The consequence is deliberate: the record survives a later rollback of the
+   * **Why after the caller's transaction (R-12).** Opening the record's
+   * transaction while the caller's still holds an `acc_app` connection is a
+   * nested acquisition from the same pool: under enough concurrent denials
+   * every caller holds one connection and waits for a second that only another
+   * caller can release. So the write is handed to `TenantDatabase.whenReleased`,
+   * which runs it once the caller's transaction has settled and returned its
+   * connection, and before the refusal propagates past `withTenant` — the
+   * record still commits before the client sees the `403`.
+   *
+   * The consequence is deliberate: the record survives the rollback of the
    * surrounding request. That is correct for a security event — the attempt
    * happened, and whether the request went on to fail for some other reason
    * does not unmake it.
    *
    * **Fail closed.** Nothing here is caught. If the record cannot be written,
-   * that failure propagates instead of the `403`, the request still does not
-   * proceed, and the operator sees why. Reporting a plain refusal while
-   * silently losing its record is the one outcome this must never produce.
+   * that failure propagates instead of the `403` (`whenReleased` replaces the
+   * transaction's outcome with it), the request still does not proceed, and the
+   * operator sees why. Reporting a plain refusal while silently losing its
+   * record is the one outcome this must never produce.
    */
   private async recordDenial(
     request: AuthorizationCheck,
@@ -170,58 +181,60 @@ export class AuthorizationService {
     const { principal } = request;
     const actorScope = this.actorScope(principal);
 
-    try {
-      await this.db.withTenant(
-        {
-          orgId: principal.tenant.orgId,
-          workspaceId: principal.tenant.workspaceId,
-          resellerId: principal.tenant.resellerId,
-          userId: principal.userId,
-          isPlatformAdmin: principal.tenant.isPlatformAdmin,
-        },
-        (auditTx) =>
-          this.audit.record(
-            {
-              // The actor's own legitimate scope — never the scope it tried to
-              // reach. The database derives this row's tenancy from this pair,
-              // so naming the attempted target here would file the record under
-              // a tenant the actor was never in (ADR-005 D-6).
-              scopeType: actorScope.scopeType,
-              scopeId: actorScope.scopeId,
-              ...actorFromPrincipal(principal),
-              action: AUDIT_ACTIONS.AUTHORIZATION_DENIED,
-              // The attempted target, kept separate from the actor's scope.
-              resourceType: attempted.resourceType,
-              resourceId: attempted.resourceId,
-              outcome: 'denied',
-              before: null,
-              after: null,
-              // Structured and minimal. Enough to answer "who tried to do what,
-              // where, and why were they refused" — and deliberately not the
-              // request, the headers, the principal or the token, none of which
-              // an append-only row should ever carry.
-              metadata: {
-                permission: request.permission,
-                ...attempted.metadata,
-                denialReason: ERROR_CODES.AUTHZ_SCOPE_DENIED,
+    await this.db.whenReleased(async () => {
+      try {
+        await this.db.withTenant(
+          {
+            orgId: principal.tenant.orgId,
+            workspaceId: principal.tenant.workspaceId,
+            resellerId: principal.tenant.resellerId,
+            userId: principal.userId,
+            isPlatformAdmin: principal.tenant.isPlatformAdmin,
+          },
+          (auditTx) =>
+            this.audit.record(
+              {
+                // The actor's own legitimate scope — never the scope it tried to
+                // reach. The database derives this row's tenancy from this pair,
+                // so naming the attempted target here would file the record under
+                // a tenant the actor was never in (ADR-005 D-6).
+                scopeType: actorScope.scopeType,
+                scopeId: actorScope.scopeId,
+                ...actorFromPrincipal(principal),
+                action: AUDIT_ACTIONS.AUTHORIZATION_DENIED,
+                // The attempted target, kept separate from the actor's scope.
+                resourceType: attempted.resourceType,
+                resourceId: attempted.resourceId,
+                outcome: 'denied',
+                before: null,
+                after: null,
+                // Structured and minimal. Enough to answer "who tried to do what,
+                // where, and why were they refused" — and deliberately not the
+                // request, the headers, the principal or the token, none of which
+                // an append-only row should ever carry.
+                metadata: {
+                  permission: request.permission,
+                  ...attempted.metadata,
+                  denialReason: ERROR_CODES.AUTHZ_SCOPE_DENIED,
+                },
               },
-            },
-            auditTx,
-          ),
-        // A refusal record, not a mutation: committed even when the refused
-        // check was a precondition and the route's declared one never ran.
-        { coverageExempt: DENIAL_RECORD },
-      );
-    } catch (failure) {
-      // Observable to the operator, opaque to the requester: the exception
-      // filter renders an unrecognized error as a generic `500` carrying only
-      // the correlation id (`API.md` §7).
-      this.logger.error(
-        `failed to record ${AUDIT_ACTIONS.AUTHORIZATION_DENIED} for ${String(request.permission)} at ${request.target.scopeType}`,
-        failure instanceof Error ? failure.stack : String(failure),
-      );
-      throw failure;
-    }
+              auditTx,
+            ),
+          // A refusal record, not a mutation: committed even when the refused
+          // check was a precondition and the route's declared one never ran.
+          { coverageExempt: DENIAL_RECORD },
+        );
+      } catch (failure) {
+        // Observable to the operator, opaque to the requester: the exception
+        // filter renders an unrecognized error as a generic `500` carrying only
+        // the correlation id (`API.md` §7).
+        this.logger.error(
+          `failed to record ${AUDIT_ACTIONS.AUTHORIZATION_DENIED} for ${String(request.permission)} at ${request.target.scopeType}`,
+          failure instanceof Error ? failure.stack : String(failure),
+        );
+        throw failure;
+      }
+    });
   }
 
   /**

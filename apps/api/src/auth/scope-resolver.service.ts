@@ -6,7 +6,7 @@ import {
   type ScopeType,
   type TenantContext,
 } from '@acc/contracts';
-import { schema, type Transaction } from '@acc/db';
+import { schema, type Database, type Transaction } from '@acc/db';
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 
 import { AppException } from '../common/errors/app.exception';
@@ -357,9 +357,14 @@ export class ScopeResolver {
     };
   }
 
-  /** Active, unexpired, unrevoked API key matching a presented prefix. */
-  async findApiKeyByPrefix(tx: Transaction, prefix: string) {
-    const [row] = await tx
+  /**
+   * Active, unexpired, unrevoked API key matching a presented prefix — read in
+   * one statement outside any transaction, so no identity connection is held
+   * while the caller verifies the secret (ADR-015 R-1). The caller re-checks
+   * revocation and expiry inside its own transaction before trusting the row.
+   */
+  async findApiKeyByPrefix(reader: Database, prefix: string) {
+    const [row] = await reader
       .select({
         id: schema.apiKeys.id,
         orgId: schema.apiKeys.orgId,

@@ -6,7 +6,13 @@ import {
   type OnApplicationShutdown,
   type OnModuleInit,
 } from '@nestjs/common';
-import { assertRlsBoundPrincipal, createDatabase, createPool, type Database } from '@acc/db';
+import {
+  assertRlsBoundPrincipal,
+  createDatabase,
+  createPool,
+  guardPool,
+  type Database,
+} from '@acc/db';
 import type { Pool } from 'pg';
 
 import { AppConfigService } from '../config/app-config.service';
@@ -25,6 +31,11 @@ import { TenantDatabase } from './tenant-database.service';
  *
  * The schema-owner connection is deliberately absent: the running API has no
  * principal that can bypass RLS.
+ *
+ * Both pools carry the nested-acquisition guard (ADR-015 R-1, `guardPool`): a
+ * context holding a connection may not take a second from the same pool, and
+ * may take an `acc_auth` connection under an `acc_app` one but never the
+ * reverse. A violation fails at acquisition instead of deadlocking the pool.
  */
 @Global()
 @Module({
@@ -33,14 +44,17 @@ import { TenantDatabase } from './tenant-database.service';
       provide: APP_POOL,
       inject: [AppConfigService],
       useFactory: (config: AppConfigService): Pool =>
-        createPool({
-          connectionString: config.database.appUrl,
-          max: config.database.poolMax,
-          idleTimeoutMillis: config.database.idleTimeoutMs,
-          statementTimeoutMillis: config.database.statementTimeoutMs,
-          ssl: config.database.ssl,
-          applicationName: `${config.serviceName}-app`,
-        }),
+        guardPool(
+          createPool({
+            connectionString: config.database.appUrl,
+            max: config.database.poolMax,
+            idleTimeoutMillis: config.database.idleTimeoutMs,
+            statementTimeoutMillis: config.database.statementTimeoutMs,
+            ssl: config.database.ssl,
+            applicationName: `${config.serviceName}-app`,
+          }),
+          'app',
+        ),
     },
     {
       provide: APP_DB,
@@ -51,16 +65,22 @@ import { TenantDatabase } from './tenant-database.service';
       provide: AUTH_POOL,
       inject: [AppConfigService],
       useFactory: (config: AppConfigService): Pool =>
-        createPool({
-          connectionString: config.database.authUrl,
-          // Identity resolution is a small fraction of traffic and must never
-          // starve the application pool.
-          max: Math.max(2, Math.floor(config.database.poolMax / 2)),
-          idleTimeoutMillis: config.database.idleTimeoutMs,
-          statementTimeoutMillis: config.database.statementTimeoutMs,
-          ssl: config.database.ssl,
-          applicationName: `${config.serviceName}-auth`,
-        }),
+        guardPool(
+          createPool({
+            connectionString: config.database.authUrl,
+            // Identity resolution runs on every authenticated request (session
+            // and API-key checks) as well as on sign-in, so this pool is on the
+            // request path, not a side channel. It is sized separately so it
+            // cannot starve the application pool; its connections are never
+            // held across password hashing (ADR-015 R-1).
+            max: Math.max(2, Math.floor(config.database.poolMax / 2)),
+            idleTimeoutMillis: config.database.idleTimeoutMs,
+            statementTimeoutMillis: config.database.statementTimeoutMs,
+            ssl: config.database.ssl,
+            applicationName: `${config.serviceName}-auth`,
+          }),
+          'auth',
+        ),
     },
     {
       provide: AUTH_DB,

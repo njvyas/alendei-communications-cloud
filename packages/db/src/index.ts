@@ -4,3 +4,4 @@ export * from './client';
 export * from './tenant-context';
 export * from './constants';
 export * from './principal-guard';
+export * from './pool-guard';

@@ -9,7 +9,7 @@ import {
   type ScopeChain,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import type { Request } from 'express';
 
 import { AppException } from '../common/errors/app.exception';
@@ -331,16 +331,40 @@ export class AuthGuard implements CanActivate {
 
     const [, prefix, secret] = parts;
 
+    // The same shape as password sign-in (ADR-015 R-1): read the key row
+    // outside any transaction, verify with no connection held, and only then
+    // open the transaction — which re-validates what the read saw before it
+    // trusts it. Argon2 never runs while an identity connection is pinned.
+    const key = await this.scopes.findApiKeyByPrefix(this.db.auth, prefix!);
+    if (!key) {
+      // Spend comparable work so a valid prefix with a wrong secret and an
+      // unknown prefix are not distinguishable by timing.
+      await this.credentials.verifyDummy(secret!);
+      throw invalid();
+    }
+    if (!(await this.credentials.verify(key.keyHash, secret!))) throw invalid();
+
     return this.db.auth.transaction(async (raw) => {
       const tx = raw as Transaction;
-      const key = await this.scopes.findApiKeyByPrefix(tx, prefix!);
-      if (!key) {
-        // Spend comparable work so a valid prefix with a wrong secret and an
-        // unknown prefix are not distinguishable by timing.
-        await this.credentials.verifyDummy(secret!);
-        throw invalid();
-      }
-      if (!(await this.credentials.verify(key.keyHash, secret!))) throw invalid();
+
+      // Re-validation and bookkeeping in one statement. The read above was not
+      // locked: a revocation or expiry landing between it and here makes this
+      // match nothing, and the key is refused exactly as if the read had seen
+      // it. Its audit row shares this transaction, so the record of an
+      // authentication cannot commit without the authentication's own state
+      // change, or vice versa (ADR-003 D-2).
+      const live = await tx
+        .update(schema.apiKeys)
+        .set({ lastUsedAt: new Date() })
+        .where(
+          and(
+            eq(schema.apiKeys.id, key.id),
+            isNull(schema.apiKeys.revokedAt),
+            or(isNull(schema.apiKeys.expiresAt), sql`${schema.apiKeys.expiresAt} > now()`),
+          ),
+        )
+        .returning({ id: schema.apiKeys.id });
+      if (live.length === 0) throw invalid();
 
       // ADR-012 F-4: a key bound to a suspended or closed organization stops
       // working on its next use. Checked only after the secret verified, so the
@@ -396,14 +420,6 @@ export class AuthGuard implements CanActivate {
        * no permissions at all, not to its requested scopes.
        */
       const effective = requested.filter((s) => creatorAuthority.includes(s));
-
-      // Bookkeeping and its audit row share this transaction, so the record of
-      // an authentication cannot commit without the authentication's own state
-      // change, or vice versa (ADR-003 D-2).
-      await tx
-        .update(schema.apiKeys)
-        .set({ lastUsedAt: new Date() })
-        .where(eq(schema.apiKeys.id, key.id));
 
       await this.audit.record(
         {
