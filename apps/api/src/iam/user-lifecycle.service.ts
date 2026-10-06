@@ -55,10 +55,7 @@ export class UserLifecycleService {
    * identity connection it uses is back in the pool before the caller starts
    * any Argon2 work, which must never run while a connection is held.
    */
-  async findCredentialByEmail(
-    reader: Database,
-    email: string,
-  ): Promise<UserSignInRecord | null> {
+  async findCredentialByEmail(reader: Database, email: string): Promise<UserSignInRecord | null> {
     const [row] = await reader
       .select({
         id: schema.users.id,
