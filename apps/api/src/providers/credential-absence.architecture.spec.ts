@@ -179,10 +179,27 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
     const adr015 = migrations.find((m) => m.n.startsWith('0025_'));
     expect(adr015).toBeDefined();
     expect(adr015!.sql).not.toMatch(/CREATE\s+TABLE|ADD\s+COLUMN/i);
+    // ADR-015 R-5 (migration 0026) classifies the existing permission catalogue;
+    // its only credential-shaped references are the three existing
+    // `api_keys.*` permission keys it names. It creates no table, and its only
+    // new columns are on `permissions`.
+    const PERMISSION_KEYS_0026 = new Set(['api_keys']);
+    const adr015Classification = migrations.find((m) => m.n.startsWith('0026_'));
+    expect(adr015Classification).toBeDefined();
+    expect(adr015Classification!.sql).not.toMatch(/CREATE\s+TABLE/i);
+    expect(
+      [
+        ...adr015Classification!.sql.matchAll(/ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)/gi),
+      ].map((x) => x[1]),
+    ).toEqual(['classification', 'allowed_scope_types']);
+    expect(
+      [...adr015Classification!.sql.matchAll(/'api_keys\.\w+'/g)].map((x) => x[0]).sort(),
+    ).toEqual(["'api_keys.create'", "'api_keys.read'", "'api_keys.revoke'"]);
     expect(
       phase2.flatMap((m) =>
         [...m.sql.matchAll(/\w*(?:credential|secret|passw|api_?key|token)\w*/gi)]
           .filter((x) => !(m === adr015 && IDENTITY_BACKSTOP_0025.has(x[0])))
+          .filter((x) => !(m === adr015Classification && PERMISSION_KEYS_0026.has(x[0])))
           .map((x) => `${m.n}: ${x[0]}`),
       ),
     ).toEqual([]);

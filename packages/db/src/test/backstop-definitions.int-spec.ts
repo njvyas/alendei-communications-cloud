@@ -138,3 +138,114 @@ describe('migration 0025 catalogue: triggers, functions and policies', () => {
     expect(rows).toEqual([]);
   });
 });
+
+/**
+ * Migration `0026` (ADR-015 R-5, grant side of R-6) — the same discipline: the
+ * eligibility triggers, their functions and the permissions CHECKs are pinned
+ * by PostgreSQL's own rendering. `fn_validate_role_permission` stays SECURITY
+ * DEFINER (since `0000`; it must see the role whatever the writer's RLS
+ * context); the two new guards are SECURITY INVOKER.
+ */
+const TRIGGERS_0026: Record<string, string> = {
+  trg_permissions_guard_scope_eligibility: '12ce02574bf95e91568b184e3cf0b84e',
+  trg_role_permissions_validate: '73b5f6c4429fae114cff8e23fdc970b8',
+  trg_roles_guard_permission_eligibility: '622ca0f81c19269bef261262c88ec99a',
+};
+
+/** Function → [md5(pg_get_functiondef), SECURITY DEFINER]. */
+const FUNCTIONS_0026: Record<string, [string, boolean]> = {
+  fn_permissions_guard_scope_eligibility: ['a96e8b10539cda4f563349cb1eb99899', false],
+  fn_roles_guard_permission_eligibility: ['2df88b975456ee2753a33125d8b84118', false],
+  fn_validate_role_permission: ['6e58e134434c717ec63f4d8215e84234', true],
+};
+
+const PERMISSIONS_CONSTRAINTS_0026: Record<string, string> = {
+  permissions_allowed_scope_types_non_empty: 'CHECK ((cardinality(allowed_scope_types) >= 1))',
+  permissions_classification_platform_domain:
+    "CHECK (((classification = 'platform'::text) = (key ~~ 'platform.%'::text)))",
+  permissions_classification_valid:
+    "CHECK ((classification = ANY (ARRAY['platform'::text, 'platform_catalogue'::text, 'tenancy_administration'::text, 'tenant_content'::text])))",
+  permissions_platform_scope_only:
+    "CHECK (((classification <> 'platform'::text) OR (allowed_scope_types = ARRAY['platform'::role_scope_type])))",
+  permissions_tenant_content_scopes:
+    "CHECK (((classification <> 'tenant_content'::text) OR (NOT (allowed_scope_types && ARRAY['platform'::role_scope_type, 'reseller'::role_scope_type]))))",
+};
+
+describe('migration 0026 catalogue: scope-eligibility triggers, functions and CHECKs', () => {
+  let db: Principals;
+
+  beforeAll(() => {
+    loadTestEnv();
+    db = connect();
+  });
+
+  afterAll(async () => {
+    await db.close();
+  });
+
+  it('every 0026 trigger exists, is enabled, and has exactly its pinned definition', async () => {
+    const { rows } = await db.admin.execute<{ tgname: string; h: string; enabled: string }>(sql`
+      SELECT tgname, md5(pg_get_triggerdef(oid)) AS h, tgenabled AS enabled
+      FROM pg_trigger
+      WHERE NOT tgisinternal AND tgname = ANY(string_to_array(${Object.keys(TRIGGERS_0026).join(',')}, ','))`);
+    expect(Object.fromEntries(rows.map((r) => [r.tgname, r.h]))).toEqual(TRIGGERS_0026);
+    expect(rows.map((r) => r.enabled)).toEqual(rows.map(() => 'O'));
+  });
+
+  it('every 0026 function has its pinned definition and security mode, a pinned search_path, and no principal may EXECUTE it', async () => {
+    const { rows } = await db.admin.execute<{
+      proname: string;
+      h: string;
+      prosecdef: boolean;
+      proconfig: string[] | null;
+      exec: boolean[];
+    }>(sql`
+      SELECT p.proname, md5(pg_get_functiondef(p.oid)) AS h, p.prosecdef, p.proconfig,
+             ARRAY[has_function_privilege('public', p.oid, 'EXECUTE'),
+                   has_function_privilege('acc_app', p.oid, 'EXECUTE'),
+                   has_function_privilege('acc_auth', p.oid, 'EXECUTE'),
+                   has_function_privilege('acc_relay', p.oid, 'EXECUTE')] AS exec
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = ANY(string_to_array(${Object.keys(FUNCTIONS_0026).join(',')}, ','))`);
+    expect(Object.fromEntries(rows.map((r) => [r.proname, [r.h, r.prosecdef]]))).toEqual(
+      FUNCTIONS_0026,
+    );
+    for (const row of rows) {
+      expect([row.proname, row.proconfig, row.exec]).toEqual([
+        row.proname,
+        ['search_path=public, pg_temp'],
+        [false, false, false, false],
+      ]);
+    }
+  });
+
+  it('the permissions CHECKs are exactly the five of 0026 plus the key format', async () => {
+    const { rows } = await db.admin.execute<{ conname: string; def: string }>(sql`
+      SELECT conname, pg_get_constraintdef(oid) AS def FROM pg_constraint
+      WHERE conrelid = 'permissions'::regclass AND contype = 'c' AND conname <> 'permissions_key_format'`);
+    expect(Object.fromEntries(rows.map((r) => [r.conname, r.def]))).toEqual(
+      PERMISSIONS_CONSTRAINTS_0026,
+    );
+  });
+
+  it('classification and allowed_scope_types are NOT NULL with no default', async () => {
+    const { rows } = await db.admin.execute<{
+      column_name: string;
+      is_nullable: string;
+      column_default: string | null;
+      udt_name: string;
+    }>(sql`
+      SELECT column_name, is_nullable, column_default, udt_name FROM information_schema.columns
+      WHERE table_name = 'permissions' AND column_name IN ('classification', 'allowed_scope_types')
+      ORDER BY column_name`);
+    expect(rows).toEqual([
+      {
+        column_name: 'allowed_scope_types',
+        is_nullable: 'NO',
+        column_default: null,
+        udt_name: '_role_scope_type',
+      },
+      { column_name: 'classification', is_nullable: 'NO', column_default: null, udt_name: 'text' },
+    ]);
+  });
+});

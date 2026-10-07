@@ -4,7 +4,12 @@
  * constraints and indexes, and time-sortable UUIDv7 primary keys.
  */
 import { sql } from 'drizzle-orm';
-import { ALL_PERMISSION_KEYS } from '@acc/contracts';
+import {
+  ALL_PERMISSION_KEYS,
+  PERMISSION_ALLOWED_SCOPES,
+  PERMISSION_CLASS,
+  TENANT_CONTENT_PERMISSIONS,
+} from '@acc/contracts';
 
 import { connect, createTenant, destroyTenant, type Principals } from './harness';
 
@@ -264,6 +269,44 @@ describe('Phase 1 schema', () => {
     const seeded = new Set(result.rows.map((row) => row.key));
     const missing = ALL_PERMISSION_KEYS.filter((key) => !seeded.has(key));
     expect(missing).toEqual([]);
+  });
+
+  /**
+   * ADR-015 R-5: the projection is exact. Every row's (key, classification,
+   * allowed scopes) is what `packages/contracts` defines, and there is no row
+   * the contracts do not define — so the database, the evaluator and the API-key
+   * path judge the same table. Migration `0026` writes it on upgrade and
+   * `seed.ts` on install; either alone must satisfy this.
+   */
+  it('the permission catalogue equals packages/contracts exactly: key, classification, allowed scopes', async () => {
+    const result = await db.admin.execute<{
+      key: string;
+      classification: string;
+      scopes: string[];
+    }>(sql`SELECT key, classification, allowed_scope_types::text[] AS scopes FROM permissions`);
+    const actual = Object.fromEntries(
+      result.rows.map((r) => [r.key, [r.classification, [...r.scopes].sort()]]),
+    );
+    const expected = Object.fromEntries(
+      ALL_PERMISSION_KEYS.map((k) => [
+        k,
+        [PERMISSION_CLASS[k], [...PERMISSION_ALLOWED_SCOPES[k]].sort()],
+      ]),
+    );
+    expect(actual).toEqual(expected);
+  });
+
+  it('the tenant-content keys are inert: catalogued, carried by no seeded role', async () => {
+    const result = await db.admin.execute<{ key: string; role_key: string }>(sql`
+      SELECT p.key, r.key AS role_key FROM permissions p
+        JOIN role_permissions rp ON rp.permission_id = p.id
+        JOIN roles r ON r.id = rp.role_id
+      WHERE p.classification = 'tenant_content' AND r.is_system_role`);
+    expect(result.rows).toEqual([]);
+    const present = await db.admin.execute<{ key: string }>(
+      sql`SELECT key FROM permissions WHERE classification = 'tenant_content' ORDER BY key`,
+    );
+    expect(present.rows.map((r) => r.key)).toEqual([...TENANT_CONTENT_PERMISSIONS].sort());
   });
 
   it('seeds the platform default reseller exactly once', async () => {
