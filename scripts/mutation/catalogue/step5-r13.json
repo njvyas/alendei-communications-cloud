@@ -1,0 +1,655 @@
+{
+  "step": "ADR-015 remediation step 5 — R-13 (HIGH-3): structural CircuitAdmission enforcement",
+  "usage": "source the DATABASE_* environment of a test template database, then: node scripts/mutation/run.mjs scripts/mutation/catalogue/step5-r13.json --out <dir>. `killedBy` is informational: the test expected to fail (checked in the logs).",
+  "commands": {
+    "unit": {
+      "cwd": "apps/api",
+      "db": false,
+      "argv": [
+        "npx",
+        "jest",
+        "--selectProjects",
+        "unit",
+        "--testPathPatterns",
+        "provider-adapters/"
+      ],
+      "timeoutSeconds": 600
+    },
+    "router-contract": {
+      "cwd": ".",
+      "db": true,
+      "argv": [
+        "bash",
+        "-c",
+        "npm run db:migrate --workspace @acc/db && cd apps/api && npx jest --selectProjects security --runInBand --testPathPatterns provider-router-contract"
+      ],
+      "timeoutSeconds": 900
+    },
+    "typecheck": {
+      "cwd": ".",
+      "db": false,
+      "argv": ["npx", "tsc", "-b", "packages/contracts", "packages/db", "apps/api/tsconfig.json"],
+      "timeoutSeconds": 600
+    }
+  },
+  "mutants": [
+    {
+      "id": "M1",
+      "title": "registry exposed as an exported DI provider (raw adapter reachable through the container)",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/provider-adapters.module.ts",
+          "search": "  exports: [ProviderSubmissionExecutor, CircuitAdmissions],",
+          "replace": "  exports: [ProviderSubmissionExecutor, CircuitAdmissions, ProviderAdapterRegistry],"
+        },
+        {
+          "file": "apps/api/src/provider-adapters/provider-adapters.module.ts",
+          "search": "    { provide: SUBMISSION_TIMER, useClass: RealSubmissionTimer },",
+          "replace": "    { provide: SUBMISSION_TIMER, useClass: RealSubmissionTimer },\n    {\n      provide: ProviderAdapterRegistry,\n      useFactory: (timer: SubmissionTimer) => new ProviderAdapterRegistry([new SimulatorAdapter(timer)]),\n      inject: [SUBMISSION_TIMER],\n    },"
+        },
+        {
+          "file": "apps/api/src/provider-adapters/provider-adapters.module.ts",
+          "search": "import { CircuitAdmissions } from './circuit-admission';",
+          "replace": "import { ProviderAdapterRegistry } from './adapter-registry';\nimport { CircuitAdmissions } from './circuit-admission';"
+        }
+      ],
+      "commands": ["unit", "router-contract"],
+      "killedBy": "router-contract: the container holds no adapter and no registry…; architecture: the application source has no boundary violation (module imports/constructs the registry)"
+    },
+    {
+      "id": "M1b",
+      "title": "SimulatorAdapter registered as a DI provider",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/provider-adapters.module.ts",
+          "search": "    { provide: SUBMISSION_TIMER, useClass: RealSubmissionTimer },",
+          "replace": "    { provide: SUBMISSION_TIMER, useClass: RealSubmissionTimer },\n    {\n      provide: SimulatorAdapter,\n      useFactory: (timer: SubmissionTimer) => new SimulatorAdapter(timer),\n      inject: [SUBMISSION_TIMER],\n    },"
+        }
+      ],
+      "commands": ["router-contract"],
+      "killedBy": "router-contract: the container holds no adapter and no registry…"
+    },
+    {
+      "id": "M2",
+      "title": "GuardedProviderAdapter.send skips the ledger state check (permit replayable)",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "  if (record.state !== 'redeemed') throw new CircuitAdmissionRequired('permit already used');\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "circuit-admission.spec: a genuine permit reaches the provider once…"
+    },
+    {
+      "id": "M2b",
+      "title": "send() falls back to a raw call when no permit is presented",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "    const record = invoke(options?.permit, this, context, submission);",
+          "replace": "    if (!options?.permit) return this.submit(context, submission, { timeoutMs: options?.timeoutMs ?? 0 });\n    const record = invoke(options?.permit, this, context, submission);"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "provider-adapters.spec: a raw adapter send() is refused… no permit; a health view never sends"
+    },
+    {
+      "id": "M3a",
+      "title": "ledger accepts a prototype clone of a genuine admission",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "    const record = admissionRecord(admission);",
+          "replace": "    const record =\n      admissionRecord(admission) ??\n      admissionRecord(isObject(admission) ? Object.getPrototypeOf(admission) : undefined);"
+        }
+      ],
+      "commands": ["unit", "router-contract"],
+      "killedBy": "provider-adapters.spec: no admission, … a forged copy … refused; router-contract: the admission step is mandatory (prototype clone)"
+    },
+    {
+      "id": "M3b",
+      "title": "ledger accepts an admission-shaped plain object by its fields",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "    if (!record) throw new CircuitAdmissionRequired('not an admission issued by the circuit');",
+          "replace": "    if (!record && isObject(admission) && 'providerId' in admission) {\n      const f = admission as { providerId: string; generation: number; probeId: string | null };\n      return this.#redeem(\n        this.#issue({\n          providerId: f.providerId,\n          adapterKey: 'simulator',\n          channel: 'sms',\n          capabilities: {},\n          ticket: { generation: f.generation, probeId: f.probeId },\n          circuitPolicyVersion: 0,\n        }),\n        submission,\n      );\n    }\n    if (!record) throw new CircuitAdmissionRequired('not an admission issued by the circuit');"
+        }
+      ],
+      "commands": ["unit", "router-contract"],
+      "killedBy": "provider-adapters.spec: no admission, … a forged copy … refused; router-contract: OPEN → zero normal submissions"
+    },
+    {
+      "id": "M4",
+      "title": "double redeem allowed",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "    if (record.state !== 'issued') throw new CircuitAdmissionRequired('admission already used');\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "provider-adapters.spec: an admission is single-use, and issued by this ledger only"
+    },
+    {
+      "id": "M5a",
+      "title": "executor times the call with a constant instead of the admission's timeout",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/submission-executor.ts",
+          "search": "    const { timeoutMs } = redemption;",
+          "replace": "    const timeoutMs = 3000;"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "provider-adapters.spec: the submission timeout is the admission's…; SLOW_RESPONSE … TIMEOUT when shorter"
+    },
+    {
+      "id": "M5b",
+      "title": "executor accepts (and ignores) a caller-supplied adapter, context and timeout",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/submission-executor.ts",
+          "search": "    if (unexpected.length > 0) {\n      throw new TypeError(\n        'ProviderSubmissionExecutor.execute takes no adapter, context or timeout: they come from the admission',\n      );\n    }",
+          "replace": "    void unexpected;"
+        }
+      ],
+      "commands": ["unit", "router-contract"],
+      "killedBy": "provider-adapters.spec: the executor takes no adapter, context or timeout…; router-contract: the admission step is mandatory (foreign provider refused outright)"
+    },
+    {
+      "id": "M5c",
+      "title": "adapter submit() receives the caller's context instead of the admission's",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "    return this.submit(record.context, submission, {",
+          "replace": "    return this.submit(context, submission, {"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "circuit-admission.spec: a genuine permit reaches the provider once, with the context and timeout of the admission"
+    },
+    {
+      "id": "M5d",
+      "title": "adapter submit() receives the caller's timeout instead of the admission's",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "      timeoutMs: record.timeoutMs,\n      signal: options.signal,",
+          "replace": "      timeoutMs: options.timeoutMs,\n      signal: options.signal,"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "circuit-admission.spec: a genuine permit reaches the provider once, with the context and timeout of the admission"
+    },
+    {
+      "id": "M5e",
+      "title": "executor passes the redemption in place of the minted permit",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/submission-executor.ts",
+          "search": "{ timeoutMs, signal: abort.signal, permit }",
+          "replace": "{ timeoutMs, signal: abort.signal, permit: redemption as unknown as typeof permit }"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "provider-adapters.spec: every genuine-flow case (e.g. SUCCESS → accepted)"
+    },
+    {
+      "id": "M6",
+      "title": "recordSubmission accepts a plain ticket",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "    if (!record) {\n      throw new CircuitAdmissionRequired('not a settled submission: nothing to record');\n    }",
+          "replace": "    if (!record) {\n      const t = settled as unknown as { providerId?: string; generation: number; probeId: string | null; result?: ProviderSubmissionResult };\n      return Object.freeze({\n        providerId: t.providerId ?? '',\n        ticket: { generation: t.generation, probeId: t.probeId },\n        result: t.result!,\n        circuitPolicyVersion: 0,\n      });\n    }"
+        }
+      ],
+      "commands": ["unit", "router-contract"],
+      "killedBy": "circuit-admission.spec: a plain ticket … is not recordable; recordSubmission refuses … before it touches the transaction; router-contract: recordSubmission takes only the settled submission"
+    },
+    {
+      "id": "M7",
+      "title": "recordSubmission accepts an unsettled handle (the admission)",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "    const record = settledRecord(settled);",
+          "replace": "    const record = settledRecord(settled) ?? admissionRecord(settled);"
+        }
+      ],
+      "commands": ["unit", "router-contract"],
+      "killedBy": "circuit-admission.spec: … or the admission itself — even after its call settled — is not recordable; router-contract: the admission"
+    },
+    {
+      "id": "M8",
+      "title": "recordSubmission allows recording twice",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "    if (record.state !== 'settled') {\n      throw new CircuitAdmissionRequired('settled submission already recorded');\n    }\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit", "router-contract"],
+      "killedBy": "circuit-admission.spec: takeForRecording … only once; router-contract: the replayed settled submission"
+    },
+    {
+      "id": "M9",
+      "title": "claimIssuer allows a second claim",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "    if (this.#issuerClaimed) {\n      throw new Error('CircuitAdmissions: the issuer is already claimed (one issuer per ledger)');\n    }\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "circuit-admission.spec: a second claimIssuer() on a ledger throws; ProviderStateStore claims the issuer…"
+    },
+    {
+      "id": "M9b",
+      "title": "claimRedeemer allows a second claim",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "    if (this.#redeemerClaimed) {\n      throw new Error(\n        'CircuitAdmissions: the redeemer is already claimed (one redeemer per ledger)',\n      );\n    }\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "circuit-admission.spec: a second claimRedeemer() … fails at construction"
+    },
+    {
+      "id": "M10",
+      "title": "registry accepts an adapter whose instance shadows send()",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "  if ((adapter as GuardedProviderAdapter).send !== GuardedProviderAdapter.prototype.send) {\n    throw new ProviderAdapterRefused(key, 'it overrides send()');\n  }\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "provider-adapters.spec: a subclass that overrides send() … one that replaces it on the instance is refused by the registry"
+    },
+    {
+      "id": "M10b",
+      "title": "a subclass overriding send() is not refused at construction",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "    if (this.send !== GuardedProviderAdapter.prototype.send) {\n      throw new ProviderAdapterRefused(new.target.name, 'it overrides send()');\n    }",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "provider-adapters.spec: a subclass that overrides send() is refused at construction…"
+    },
+    {
+      "id": "M11",
+      "title": "registry accepts an unfrozen adapter",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "  if (!Object.isFrozen(adapter)) throw new ProviderAdapterRefused(key, 'it is not frozen');\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "provider-adapters.spec: an adapter that is not frozen is refused"
+    },
+    {
+      "id": "M11b",
+      "title": "registry accepts an adapter that is not a GuardedProviderAdapter",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "  if (!isGuardedInstance(adapter)) {\n    throw new ProviderAdapterRefused(key, 'it is not a GuardedProviderAdapter');\n  }\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "provider-adapters.spec: an adapter that is not a GuardedProviderAdapter is refused…"
+    },
+    {
+      "id": "M12",
+      "title": "simulatorFor() is back and returns the adapter (executor hands it out)",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/submission-executor.ts",
+          "search": "  isSimulator(adapterKey: string): boolean {",
+          "replace": "  adapterFor(adapterKey: string): GuardedProviderAdapter {\n    return this.#registry.resolve(adapterKey);\n  }\n\n  isSimulator(adapterKey: string): boolean {"
+        },
+        {
+          "file": "apps/api/src/providers/provider-registry.service.ts",
+          "search": "  assertSimulatorProvider(provider: ProviderRow): void {",
+          "replace": "  simulatorFor(provider: ProviderRow) {\n    return this.executor.adapterFor(provider.adapterKey);\n  }\n\n  assertSimulatorProvider(provider: ProviderRow): void {"
+        }
+      ],
+      "commands": ["unit", "router-contract"],
+      "killedBy": "provider-adapters.spec: the executor exposes no adapter…; router-contract: … the registry service answers no adapter"
+    },
+    {
+      "id": "M13",
+      "title": "behaviour accepted for a non-simulator adapter",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/submission-executor.ts",
+          "search": "    if (!(adapter instanceof SimulatorAdapter)) throw new ProviderAdapterVariantRefused(adapterKey);\n",
+          "replace": "    if (!(adapter instanceof SimulatorAdapter)) return adapter;\n"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "provider-adapters.spec: a behaviour is refused for an adapter that is not the simulator…; the probe … a behaviour only for the simulator"
+    },
+    {
+      "id": "M13b",
+      "title": "an unguarded simulator view is not re-checked before the call",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/submission-executor.ts",
+          "search": "    assertGuardedAdapter(scenario);\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "provider-adapters.spec: a simulator view that is not guarded is refused before the call"
+    },
+    {
+      "id": "M14",
+      "title": "boundary allowlist widened: send may be referenced anywhere under providers/",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.architecture.spec.ts",
+          "search": "  'ProviderAdapter.send': [EXECUTOR, LEDGER],",
+          "replace": "  'ProviderAdapter.send': [EXECUTOR, LEDGER, 'providers/'],"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "architecture: scanner self-test (providers/rogue-send.ts, rogue-adapter.ts)"
+    },
+    {
+      "id": "M14b",
+      "title": "boundary allowlist widened: adapters may be constructed under providers/",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.architecture.spec.ts",
+          "search": "  'GuardedProviderAdapter subclass': [MODULE, SIMULATOR],",
+          "replace": "  'GuardedProviderAdapter subclass': [MODULE, SIMULATOR, 'providers/'],"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "architecture: scanner self-test (providers/rogue-import-simulator.ts)"
+    },
+    {
+      "id": "M14c",
+      "title": "scanner blind to destructuring",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.architecture.spec.ts",
+          "search": "    } else if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) {",
+          "replace": "    } else if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent) && false) {"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "architecture: scanner self-test (rogue-send.ts line 4)"
+    },
+    {
+      "id": "M14d",
+      "title": "scanner blind to element access",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.architecture.spec.ts",
+          "search": "      ts.isElementAccessExpression(node) &&\n      ts.isStringLiteralLike(node.argumentExpression)",
+          "replace": "      ts.isElementAccessExpression(node) &&\n      ts.isStringLiteralLike(node.argumentExpression) &&\n      false"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "architecture: scanner self-test (rogue-send.ts line 5, rogue-ledger.ts claimRedeemer)"
+    },
+    {
+      "id": "M14e",
+      "title": "a new raw send() alias in production code",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/simulator.adapter.ts",
+          "search": "/** An adapter operation that has no Phase 2 behaviour (ADR-013 PD-6). */",
+          "replace": "export const rawSend = (adapter: SimulatorAdapter) => adapter.send;\n\n/** An adapter operation that has no Phase 2 behaviour (ADR-013 PD-6). */"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "architecture: the application source has no boundary violation"
+    },
+    {
+      "id": "M14f",
+      "title": "routing eligibility references the admission ledger",
+      "edits": [
+        {
+          "file": "apps/api/src/providers/provider-state-machine.ts",
+          "search": "import {\n  PROVIDER_CIRCUIT_TRANSITIONS,",
+          "replace": "import { CircuitAdmissions } from '../provider-adapters/circuit-admission';\nimport {\n  PROVIDER_CIRCUIT_TRANSITIONS,"
+        },
+        {
+          "file": "apps/api/src/providers/provider-state-machine.ts",
+          "search": "  // Lifecycle first: a disabled or draining provider never consults the circuit.\n",
+          "replace": "  void CircuitAdmissions;\n  // Lifecycle first: a disabled or draining provider never consults the circuit.\n"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "architecture: the application source has no boundary violation"
+    },
+    {
+      "id": "M15",
+      "title": "permit not bound to the provider (cross-provider permit accepted)",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "  if (context?.providerId !== record.providerId) {\n    throw new CircuitAdmissionRequired('permit was issued for another provider');\n  }\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "circuit-admission.spec: a permit for provider A is refused when presented for provider B"
+    },
+    {
+      "id": "M15b",
+      "title": "permit not bound to the adapter instance",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "  if (record.target !== adapter) {\n    throw new CircuitAdmissionRequired('permit was issued for another adapter');\n  }\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "circuit-admission.spec: a permit minted for adapter X is refused by adapter Y"
+    },
+    {
+      "id": "M15c",
+      "title": "permit not bound to the submission",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "  if (submission?.submissionId !== record.submissionId) {\n    throw new CircuitAdmissionRequired('permit was issued for another submission');\n  }\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "circuit-admission.spec: a permit for one submission is refused for another"
+    },
+    {
+      "id": "M16",
+      "title": "a redemption settles without a provider call (fabricated result)",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "    if (record.state !== 'invoked') {",
+          "replace": "    if (record.state !== 'invoked' && record.state !== 'redeemed') {"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "circuit-admission.spec: nothing settles without a provider call"
+    },
+    {
+      "id": "M17",
+      "title": "a redemption can be authorized twice (re-bound to another adapter)",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "    if (record.state !== 'redeemed' || record.target !== null) {",
+          "replace": "    if (record.state !== 'redeemed') {"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "circuit-admission.spec: a redemption is authorized for one adapter only"
+    },
+    {
+      "id": "M18",
+      "title": "another ledger's admission is redeemable",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "    if (record.ledger !== this) {\n      throw new CircuitAdmissionRequired('admission was issued by another ledger');\n    }\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "provider-adapters.spec: an admission is single-use, and issued by this ledger only"
+    },
+    {
+      "id": "M19",
+      "title": "another ledger's settled submission is recordable",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "    if (record.ledger !== this) {\n      throw new CircuitAdmissionRequired('settled submission belongs to another ledger');\n    }\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "circuit-admission.spec: another ledger's settled submission is refused"
+    },
+    {
+      "id": "M20",
+      "title": "a redeemer acts on another ledger's redemption",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "    if (!record || record.ledger !== this) {",
+          "replace": "    if (!record) {"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "circuit-admission.spec: another ledger's redeemer cannot act on this ledger's redemption"
+    },
+    {
+      "id": "M21",
+      "title": "admissions never expire",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "      redeemBy: issuedAt + CircuitAdmissions.MAX_AGE_MS,",
+          "replace": "      redeemBy: Infinity,"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "provider-adapters.spec: an admission must be redeemed immediately…"
+    },
+    {
+      "id": "M22",
+      "title": "an expired admission is not voided",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "      record.state = 'void';\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "provider-adapters.spec: … one millisecond later it is refused and void"
+    },
+    {
+      "id": "M23",
+      "title": "capabilities snapshot not copied and deep-frozen",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "      capabilities: deepFrozenCopy(grant.capabilities),",
+          "replace": "      capabilities: grant.capabilities,"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "circuit-admission.spec: an admission copies and deep-freezes what was admitted; provider-adapters.spec: genuine admission … deep-frozen"
+    },
+    {
+      "id": "M24",
+      "title": "the guarded base prototype is not frozen",
+      "edits": [
+        {
+          "file": "apps/api/src/provider-adapters/circuit-admission.ts",
+          "search": "Object.freeze(GuardedProviderAdapter.prototype);\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "provider-adapters.spec: the guard itself cannot be replaced"
+    },
+    {
+      "id": "M25",
+      "title": "admit consults the circuit for a non-active provider",
+      "edits": [
+        {
+          "file": "apps/api/src/providers/provider-state.store.ts",
+          "search": "    if (provider.status !== 'active') throw lifecycleConflict(provider.status);\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["router-contract"],
+      "killedBy": "router-contract: admission itself keeps the precedence of §6f"
+    },
+    {
+      "id": "M26",
+      "title": "admit consults the circuit for an unregistered adapter key",
+      "edits": [
+        {
+          "file": "apps/api/src/providers/provider-state.store.ts",
+          "search": "    if (!(PROVIDER_ADAPTER_KEYS as readonly string[]).includes(provider.adapterKey)) {",
+          "replace": "    if (false) {"
+        }
+      ],
+      "commands": ["router-contract"],
+      "killedBy": "router-contract: admission itself keeps the precedence of §6f"
+    },
+    {
+      "id": "M27",
+      "title": "recordSubmission touches the transaction before taking the settled capability",
+      "edits": [
+        {
+          "file": "apps/api/src/providers/provider-state.store.ts",
+          "search": "    const { providerId, ticket, result } = this.#issuer.takeForRecording(settled);\n    const provider = await loadProvider(tx, providerId, { forUpdate: true });",
+          "replace": "    const provider = await loadProvider(tx, settled.providerId, { forUpdate: true });\n    const { providerId, ticket, result } = this.#issuer.takeForRecording(settled);"
+        }
+      ],
+      "commands": ["unit"],
+      "killedBy": "circuit-admission.spec: ProviderStateStore.recordSubmission refuses … before it touches the transaction"
+    },
+    {
+      "id": "M28",
+      "title": "contract: permit made optional (type fixtures must fail typecheck)",
+      "edits": [
+        {
+          "file": "packages/contracts/src/provider-adapter.ts",
+          "search": "  readonly permit: SubmissionPermit;",
+          "replace": "  readonly permit?: SubmissionPermit;"
+        }
+      ],
+      "commands": ["typecheck"],
+      "killedBy": "npm run typecheck: circuit-admission.types.spec.ts TS2578 unused @ts-expect-error ('send() requires a permit')"
+    }
+  ]
+}
