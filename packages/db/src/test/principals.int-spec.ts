@@ -62,16 +62,22 @@ const TABLES = [
   'ws_tickets',
 ].sort();
 
-/** The complete intended table-privilege map, per principal. Anything else is a defect. */
+/**
+ * The complete intended table-privilege map, per principal. Anything else is a
+ * defect. Migration `0025` (ADR-015 R-2, R-3, R-4) moved UPDATE on the tenancy
+ * and identity tables from table level to named columns (`EXPECTED_COLUMN_GRANTS`)
+ * and removed `acc_app`'s INSERT on sessions, DELETE on teams and
+ * idempotency_keys, and UPDATE on user_roles and role_permissions.
+ */
 const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
   acc_app: {
-    api_keys: 'INSERT,SELECT,UPDATE',
+    api_keys: 'INSERT,SELECT',
     audit_logs: 'INSERT,SELECT',
     // Phase 2.1: the channel catalogue is read-only (seeded by migration); a
     // provider is never deleted; its capability set is replaced as a whole.
     channels: 'SELECT',
-    idempotency_keys: 'DELETE,INSERT,SELECT,UPDATE',
-    organizations: 'INSERT,SELECT,UPDATE',
+    idempotency_keys: 'INSERT,SELECT',
+    organizations: 'INSERT,SELECT',
     permissions: 'SELECT',
     provider_capabilities: 'DELETE,INSERT,SELECT,UPDATE',
     // Gate D.3 remediation: seeded by migration, read and replaced, never added or removed.
@@ -81,36 +87,109 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
     // Phase 2.3: samples are appended, never changed or removed.
     provider_health: 'INSERT,SELECT',
     providers: 'INSERT,SELECT,UPDATE',
-    resellers: 'INSERT,SELECT,UPDATE',
-    role_permissions: 'DELETE,INSERT,SELECT,UPDATE',
-    roles: 'DELETE,INSERT,SELECT,UPDATE',
-    sessions: 'INSERT,SELECT,UPDATE',
-    teams: 'DELETE,INSERT,SELECT,UPDATE',
-    user_roles: 'DELETE,INSERT,SELECT,UPDATE',
-    users: 'INSERT,SELECT,UPDATE',
-    workspaces: 'INSERT,SELECT,UPDATE',
-    ws_tickets: 'INSERT,SELECT,UPDATE',
+    resellers: 'INSERT,SELECT',
+    role_permissions: 'DELETE,INSERT,SELECT',
+    roles: 'DELETE,INSERT,SELECT',
+    sessions: 'SELECT',
+    teams: 'INSERT,SELECT',
+    user_roles: 'DELETE,INSERT,SELECT',
+    users: 'INSERT,SELECT',
+    workspaces: 'INSERT,SELECT',
+    ws_tickets: 'INSERT,SELECT',
   },
   acc_auth: {
-    api_keys: 'SELECT,UPDATE',
+    api_keys: 'SELECT',
     audit_logs: 'INSERT',
     organizations: 'SELECT',
     permissions: 'SELECT',
     resellers: 'SELECT',
     role_permissions: 'SELECT',
     roles: 'SELECT',
-    sessions: 'INSERT,SELECT,UPDATE',
+    sessions: 'INSERT,SELECT',
     teams: 'SELECT',
     user_roles: 'SELECT',
-    users: 'SELECT,UPDATE',
+    users: 'SELECT',
     workspaces: 'SELECT',
-    ws_tickets: 'SELECT,UPDATE',
+    ws_tickets: 'SELECT',
   },
   // SELECT on audit_logs is granted for the planned SIEM projection, but no RLS
   // policy targets acc_relay, so it reads zero rows today (asserted below).
   acc_relay: {
     audit_logs: 'SELECT',
   },
+};
+
+/**
+ * The complete intended column-level privilege map (migration `0025`): every
+ * privilege a principal holds on a column without holding it on the table.
+ * Only UPDATE is narrowed by column — INSERT stays table-level because Drizzle
+ * names every column in an INSERT (`DATABASE.md` §2). A credential column
+ * (`email`, `password_hash`, `mfa_*`), a tenant key (`org_id`, `workspace_id`,
+ * `user_id`), `slug`, or a session's `expires_at` appearing here is a defect.
+ */
+const EXPECTED_COLUMN_GRANTS: Record<string, Record<string, Record<string, string[]>>> = {
+  acc_app: {
+    api_keys: { UPDATE: ['revoked_at', 'revoked_reason', 'updated_at'] },
+    idempotency_keys: {
+      UPDATE: [
+        'actor_api_key_id',
+        'actor_user_id',
+        'completed_at',
+        'correlation_id',
+        'expires_at',
+        'failure_reason',
+        'request_hash',
+        'response_snapshot',
+        'response_status_code',
+        'status',
+      ],
+    },
+    organizations: {
+      UPDATE: [
+        'billing_mode',
+        'billing_policy',
+        'gstin',
+        'legal_name',
+        'name',
+        'reseller_id',
+        'status',
+        'status_changed_at',
+        'status_reason',
+      ],
+    },
+    resellers: {
+      UPDATE: [
+        'brand_config',
+        'default_markup_pct',
+        'domain',
+        'is_platform_default',
+        'name',
+        'status',
+      ],
+    },
+    roles: { UPDATE: ['allowed_scope_types', 'description', 'name', 'updated_at'] },
+    sessions: { UPDATE: ['revoked_at', 'revoked_reason'] },
+    teams: { UPDATE: ['name', 'status'] },
+    users: { UPDATE: ['phone', 'status', 'updated_at'] },
+    workspaces: { UPDATE: ['name', 'status'] },
+  },
+  acc_auth: {
+    api_keys: { UPDATE: ['last_used_at'] },
+    sessions: {
+      UPDATE: [
+        'family_id',
+        'last_used_at',
+        'replaced_by_session_id',
+        'reuse_detected_at',
+        'revoked_at',
+        'revoked_reason',
+        'rotated_at',
+      ],
+    },
+    users: { UPDATE: ['last_login_at', 'password_hash', 'password_updated_at'] },
+    ws_tickets: { UPDATE: ['consumed_at', 'consumed_ip'] },
+  },
+  acc_relay: {},
 };
 
 describe('database principals and RLS coverage', () => {
@@ -210,14 +289,39 @@ describe('database principals and RLS coverage', () => {
       expect(actual).toEqual(EXPECTED_GRANTS);
     });
 
-    it('no principal holds a column-level privilege, TRUNCATE, or CREATE on the schema', async () => {
-      const { rows: columns } = await db.admin.execute(sql`
-        SELECT 1 FROM information_schema.column_privileges
+    it('each principal holds exactly its intended column-level privileges and nothing else', async () => {
+      // Column privileges a principal holds without holding the same privilege
+      // on the table — the narrowed grants of migration 0025, and nothing else.
+      const { rows } = await db.admin.execute<{
+        grantee: string;
+        table_name: string;
+        privilege_type: string;
+        columns: string[];
+      }>(sql`
+        SELECT grantee, table_name, privilege_type,
+               array_agg(column_name::text ORDER BY column_name COLLATE "C") AS columns
+        FROM information_schema.column_privileges
         WHERE grantee IN ('acc_app', 'acc_auth', 'acc_relay') AND table_schema = 'public'
           AND (grantee, table_name, privilege_type) NOT IN (
             SELECT grantee, table_name, privilege_type FROM information_schema.role_table_grants
-            WHERE table_schema = 'public')`);
-      expect(columns).toEqual([]);
+            WHERE table_schema = 'public')
+        GROUP BY grantee, table_name, privilege_type`);
+      const actual: Record<string, Record<string, Record<string, string[]>>> = {
+        acc_app: {},
+        acc_auth: {},
+        acc_relay: {},
+      };
+      for (const row of rows) {
+        (actual[row.grantee]![row.table_name] ??= {})[row.privilege_type] = row.columns;
+      }
+      expect(actual).toEqual(EXPECTED_COLUMN_GRANTS);
+    });
+
+    it('no principal holds TRUNCATE or CREATE on the schema', async () => {
+      const { rows: truncate } = await db.admin.execute(sql`
+        SELECT 1 FROM information_schema.role_table_grants
+        WHERE grantee IN ('acc_app', 'acc_auth', 'acc_relay') AND privilege_type = 'TRUNCATE'`);
+      expect(truncate).toEqual([]);
       for (const principal of principals) {
         const { rows } = await db.admin.execute<{ c: boolean }>(
           sql`SELECT has_schema_privilege(${principal}, 'public', 'CREATE') AS c`,
@@ -359,6 +463,13 @@ describe('database principals and RLS coverage', () => {
       if (privileges) {
         await db.admin.execute(
           sql.raw(`GRANT ${privileges.split(',').join(', ')} ON ${table} TO ${principal}`),
+        );
+      }
+      for (const [privilege, columns] of Object.entries(
+        EXPECTED_COLUMN_GRANTS[principal]?.[table] ?? {},
+      )) {
+        await db.admin.execute(
+          sql.raw(`GRANT ${privilege} (${columns.join(', ')}) ON ${table} TO ${principal}`),
         );
       }
     }

@@ -448,7 +448,10 @@ describe('role administration', () => {
         db.withTenant({ orgId: orgA.orgId, resellerId: orgA.resellerId }, (tx) =>
           tx.update(schema.roles).set({ isSystemRole: true }).where(eq(schema.roles.id, id)),
         ),
-        /system role .* cannot be modified/,
+        // Since migration 0025 (ADR-015 R-3) `is_system_role` is not a column
+        // acc_app may write at all; fn_protect_system_roles stays the backstop
+        // for every writer that may.
+        /permission denied for table roles/,
       );
     });
   });

@@ -341,27 +341,50 @@ describe('shared-reseller isolation — direct PostgreSQL as acc_app', () => {
       });
       return result as T;
     };
+    /**
+     * A no-op UPDATE of one column `acc_app` may write on each table (migration
+     * `0025` narrows UPDATE to named columns, so `org_id` itself is no longer a
+     * writable target anywhere).
+     */
+    const WRITABLE_COLUMN: Record<string, string> = {
+      workspaces: 'name',
+      teams: 'name',
+      api_keys: 'revoked_reason',
+      idempotency_keys: 'status',
+      roles: 'name',
+    };
     const touch =
       (table: string, orgId: string) =>
-      async (tx: Parameters<Parameters<typeof withTenantTransaction>[2]>[0]) =>
-        (await tx.execute(sql.raw(`UPDATE ${table} SET org_id = org_id WHERE org_id = '${orgId}'`)))
-          .rowCount ?? 0;
+      async (tx: Parameters<Parameters<typeof withTenantTransaction>[2]>[0]) => {
+        const column = WRITABLE_COLUMN[table]!;
+        return (
+          (
+            await tx.execute(
+              sql.raw(`UPDATE ${table} SET ${column} = ${column} WHERE org_id = '${orgId}'`),
+            )
+          ).rowCount ?? 0
+        );
+      };
 
-    const UPDATABLE = [
-      'workspaces',
-      'teams',
-      'api_keys',
-      'ws_tickets',
-      'idempotency_keys',
-      'roles',
-      'role_permissions',
-      'user_roles',
-    ];
+    const UPDATABLE = Object.keys(WRITABLE_COLUMN);
+    /** Tables `acc_app` may not UPDATE at all since migration `0025`. */
+    const NOT_UPDATABLE = ['ws_tickets', 'role_permissions', 'user_roles'];
 
     it('Org A1 cannot update any Org A2 or Org B1 row', async () => {
       for (const table of UPDATABLE) {
         expect(`${table}:${await attempt(member(a1), touch(table, a2.orgId))}`).toBe(`${table}:0`);
         expect(`${table}:${await attempt(member(a1), touch(table, b1.orgId))}`).toBe(`${table}:0`);
+      }
+      // No row of these is updatable by acc_app in any organization, its own included.
+      for (const table of NOT_UPDATABLE) {
+        for (const orgId of [a1.orgId, a2.orgId, b1.orgId]) {
+          await expectRefusal(
+            attempt(member(a1), (tx) =>
+              tx.execute(sql.raw(`UPDATE ${table} SET org_id = org_id WHERE org_id = '${orgId}'`)),
+            ),
+            new RegExp(`permission denied for table ${table}`),
+          );
+        }
       }
       // Its own rows remain writable — the control that the statement works.
       expect(await attempt(member(a1), touch('workspaces', a1.orgId))).toBeGreaterThan(0);

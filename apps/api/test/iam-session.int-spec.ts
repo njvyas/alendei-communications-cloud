@@ -116,6 +116,15 @@ describe('IAM foundation', () => {
   const asPlatform = <T>(work: (tx: Transaction) => Promise<T>): Promise<T> =>
     withTenantTransaction(appDb, platform, work);
 
+  /**
+   * Runs work as the schema owner, as the bootstrap and fixture CLIs do for
+   * activation: since migration `0025` (ADR-015 R-2) no application principal
+   * may write `password_hash`, so setting a first credential is an owner
+   * operation.
+   */
+  const asOwner = <T>(work: (tx: Transaction) => Promise<T>): Promise<T> =>
+    admin.db.transaction((tx) => work(tx as unknown as Transaction));
+
   // ---------------------------------------------------------------------------
   // User lifecycle
   // ---------------------------------------------------------------------------
@@ -139,7 +148,7 @@ describe('IAM foundation', () => {
 
     it('activation sets a credential and moves the user to active', async () => {
       const id = await newUser('activate');
-      const activated = await asPlatform((tx) =>
+      const activated = await asOwner((tx) =>
         users.activate(tx, id, 'a-sufficiently-long-password'),
       );
       expect(activated.status).toBe('active');
@@ -153,7 +162,7 @@ describe('IAM foundation', () => {
 
     it('a disabled user cannot authenticate even with a valid password', async () => {
       const id = await newUser('disabled');
-      await asPlatform((tx) => users.activate(tx, id, 'valid-password-here'));
+      await asOwner((tx) => users.activate(tx, id, 'valid-password-here'));
       const disabled = await asPlatform((tx) => users.disable(tx, id));
 
       expect(disabled.status).toBe('disabled');
@@ -167,9 +176,23 @@ describe('IAM foundation', () => {
 
     it('refuses to activate a user that does not exist', async () => {
       await expectRejected(
-        asPlatform((tx) => users.activate(tx, uuidv7(), 'password-value')),
+        asOwner((tx) => users.activate(tx, uuidv7(), 'password-value')),
         /not found for activation/,
       );
+    });
+
+    it('acc_app cannot activate, even under a validated platform context (migration 0025)', async () => {
+      const id = await newUser('app-activate');
+      await expectRejected(
+        asPlatform((tx) => users.activate(tx, id, 'a-sufficiently-long-password')),
+        /permission denied for table users/,
+      );
+      const [row] = (
+        await admin.db.execute<{ status: string; password_hash: string | null }>(
+          sql`SELECT status, password_hash FROM users WHERE id = ${id}`,
+        )
+      ).rows;
+      expect(row).toEqual({ status: 'invited', password_hash: null });
     });
 
     it('the database forbids an active user with no credential at all', async () => {
@@ -634,13 +657,28 @@ describe('IAM foundation', () => {
       expect(names.has('sessions_auth')).toBe(true);
     });
 
-    it('grants acc_auth no DELETE on sessions — revocation is an update', async () => {
+    it('grants acc_auth no DELETE on sessions — revocation is a column update', async () => {
       const privileges = await admin.db.execute<{ privilege_type: string }>(
         sql`SELECT privilege_type FROM information_schema.table_privileges
             WHERE table_name='sessions' AND grantee='acc_auth'`,
       );
       const held = privileges.rows.map((r) => r.privilege_type).sort();
-      expect(held).toEqual(['INSERT', 'SELECT', 'UPDATE']);
+      // Migration 0025 (ADR-015 R-2): UPDATE is held on named columns only.
+      expect(held).toEqual(['INSERT', 'SELECT']);
+      const columns = await admin.db.execute<{ column_name: string }>(
+        sql`SELECT column_name FROM information_schema.column_privileges
+            WHERE table_name='sessions' AND grantee='acc_auth' AND privilege_type='UPDATE'
+            ORDER BY column_name COLLATE "C"`,
+      );
+      expect(columns.rows.map((r) => r.column_name)).toEqual([
+        'family_id',
+        'last_used_at',
+        'replaced_by_session_id',
+        'reuse_detected_at',
+        'revoked_at',
+        'revoked_reason',
+        'rotated_at',
+      ]);
     });
 
     it('refuses to let acc_auth create a user at all', async () => {

@@ -164,11 +164,26 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
     const phase2 = migrations.filter((m) => Number(m.n.slice(0, 4)) >= 18);
     // 0018–0024 at the end of Phase 2; a later migration is checked the same way.
     expect(phase2.length).toBeGreaterThanOrEqual(7);
+    // ADR-015 R-2 (migration 0025) narrows privileges on identity credential
+    // columns that already exist; it creates no table or column. Its references
+    // are exactly these existing identifiers — anything else still fails here.
+    const IDENTITY_BACKSTOP_0025 = new Set([
+      'actor_api_key_id',
+      'api_keys',
+      'mfa_secret_ref',
+      'password_hash',
+      'password_updated_at',
+      'trg_api_keys_org_id_immutable',
+      'trg_api_keys_revocation_terminal',
+    ]);
+    const adr015 = migrations.find((m) => m.n.startsWith('0025_'));
+    expect(adr015).toBeDefined();
+    expect(adr015!.sql).not.toMatch(/CREATE\s+TABLE|ADD\s+COLUMN/i);
     expect(
       phase2.flatMap((m) =>
-        [...m.sql.matchAll(/\w*(?:credential|secret|passw|api_?key|token)\w*/gi)].map(
-          (x) => `${m.n}: ${x[0]}`,
-        ),
+        [...m.sql.matchAll(/\w*(?:credential|secret|passw|api_?key|token)\w*/gi)]
+          .filter((x) => !(m === adr015 && IDENTITY_BACKSTOP_0025.has(x[0])))
+          .map((x) => `${m.n}: ${x[0]}`),
       ),
     ).toEqual([]);
   });

@@ -944,15 +944,18 @@ describe('Phase 1C.6 database integrity', () => {
       expect(first.queued).toBe(true);
       expect((first.outcome as { e: PgError }).e.constraint).toBe('api_keys_workspace_org_fk');
 
-      // Parent first: ws2 is moving to A2; a key bound to (ws2, A1) waits, then fails.
+      // Parent first is no longer reachable: since migration 0025 (ADR-015 R-3)
+      // a workspace's org_id is immutable for every principal, the owner
+      // included, so the move is refused at once and never holds the row for a
+      // child to race. (Above, the composite FK still reports first: its RI
+      // trigger sorts before the AFTER immutability trigger.)
       const ws2 = await bareWorkspace(a1);
-      const parent = await hold(async (c) => {
-        await c.query('UPDATE workspaces SET org_id = $1 WHERE id = $2', [a2.orgId, ws2]);
-      });
-      const childInsert = asOwner((c) => insertKey(c, a1.orgId, ws2));
-      const second = await race(parent, childInsert);
-      expect(second.queued).toBe(true);
-      expect((second.outcome as { e: PgError }).e.constraint).toBe('api_keys_workspace_org_fk');
+      const moved = await asOwner((c) =>
+        refusal(c.query('UPDATE workspaces SET org_id = $1 WHERE id = $2', [a2.orgId, ws2])),
+      );
+      expect([moved.code, moved.constraint]).toEqual(['42501', 'workspaces_org_id_immutable']);
+      const childInsert = await asOwner((c) => insertKey(c, a1.orgId, ws2));
+      expect(childInsert.rowCount).toBe(1);
     });
   });
   // ===========================================================================
@@ -1624,11 +1627,6 @@ describe('Phase 1C.6 database integrity', () => {
             [p.platform!.userId],
           ],
           ['user_roles delete', 'DELETE FROM user_roles WHERE id = $1', [lastGrant]],
-          [
-            'user_roles update',
-            'UPDATE user_roles SET role_id = $1 WHERE id = $2',
-            [support, lastGrant],
-          ],
         ] as const) {
           await c.query('SAVEPOINT s');
           const err = await refusal(c.query(statement, [...params]));
@@ -1636,6 +1634,34 @@ describe('Phase 1C.6 database integrity', () => {
           expect(err.message).toMatch(/no active administrator/);
           await c.query('ROLLBACK TO SAVEPOINT s');
         }
+        // Migration 0025 (ADR-015 R-3): acc_app holds no UPDATE on user_roles,
+        // so the update path is no longer an acc_app path at all.
+        await c.query('SAVEPOINT s');
+        const denied = await refusal(
+          c.query('UPDATE user_roles SET role_id = $1 WHERE id = $2', [support, lastGrant]),
+        );
+        expect(`${denied.code}:${denied.message}`).toBe(
+          '42501:permission denied for table user_roles',
+        );
+        await c.query('ROLLBACK TO SAVEPOINT s');
+      });
+      // The update trigger still fires, driven through the owner (with the
+      // platform flag fn_validate_user_role_scope requires of a platform role).
+      await asOwner(async (c) => {
+        await c.query("SELECT set_config('app.is_platform_admin', 'on', true)");
+        await c.query(
+          "DELETE FROM user_roles WHERE scope_type = 'platform' AND role_id = $1 AND user_id <> $2",
+          [superAdmin, p.platform!.userId],
+        );
+        const { rows } = await c.query(
+          "SELECT id FROM user_roles WHERE scope_type = 'platform' AND role_id = $1 AND user_id = $2",
+          [superAdmin, p.platform!.userId],
+        );
+        const err = await refusal(
+          c.query('UPDATE user_roles SET role_id = $1 WHERE id = $2', [support, rows[0]!.id]),
+        );
+        expect(`user_roles update:${err.code}`).toBe('user_roles update:23001');
+        expect(err.message).toMatch(/no active administrator/);
       });
     });
   });
@@ -1738,15 +1764,22 @@ describe('Phase 1C.6 database integrity', () => {
         const { rows } = await addSecond();
         const removed = await c.query('DELETE FROM user_roles WHERE id = $1', [rows[0]!.id]);
         expect(removed.rowCount).toBe(1);
-        // Non-last reassignment: allowed (trg_user_roles_platform_admin_liveness_update).
-        const again = await addSecond();
-        const moved = await c.query('UPDATE user_roles SET role_id = $1 WHERE id = $2', [
-          support,
-          again.rows[0]!.id,
-        ]);
-        expect(moved.rowCount).toBe(1);
-        // Non-last disable: allowed (trg_users_platform_admin_liveness).
+        // Reassignment is no longer an acc_app path (migration 0025, ADR-015
+        // R-3): acc_app holds no UPDATE on user_roles. Driven through the owner below.
         await addSecond();
+        await c.query('SAVEPOINT r');
+        const { rows: seconds } = await c.query(
+          "SELECT id FROM user_roles WHERE scope_type = 'platform' AND role_id = $1 AND user_id = $2",
+          [superAdmin, second],
+        );
+        const denied = await refusal(
+          c.query('UPDATE user_roles SET role_id = $1 WHERE id = $2', [support, seconds[0]!.id]),
+        );
+        expect(`${denied.code}:${denied.message}`).toBe(
+          '42501:permission denied for table user_roles',
+        );
+        await c.query('ROLLBACK TO SAVEPOINT r');
+        // Non-last disable: allowed (trg_users_platform_admin_liveness).
         const disabled = await c.query("UPDATE users SET status = 'disabled' WHERE id = $1", [
           second,
         ]);
@@ -1759,11 +1792,6 @@ describe('Phase 1C.6 database integrity', () => {
         for (const [label, statement, params] of [
           ['disable', "UPDATE users SET status = 'disabled' WHERE id = $1", [p.platform!.userId]],
           ['delete', 'DELETE FROM user_roles WHERE id = $1', [last.rows[0]!.id]],
-          [
-            'reassign',
-            'UPDATE user_roles SET role_id = $1 WHERE id = $2',
-            [support, last.rows[0]!.id],
-          ],
         ] as const) {
           await c.query('SAVEPOINT s');
           const err = await refusal(c.query(statement, [...params]));
@@ -1771,6 +1799,33 @@ describe('Phase 1C.6 database integrity', () => {
           expect(err.message).toMatch(/no active administrator/);
           await c.query('ROLLBACK TO SAVEPOINT s');
         }
+      });
+      // Reassignment through the owner: a non-last reassignment is admitted by
+      // trg_user_roles_platform_admin_liveness_update; the last is refused.
+      await asOwner(async (c) => {
+        await c.query("SELECT set_config('app.is_platform_admin', 'on', true)");
+        await c.query(
+          "DELETE FROM user_roles WHERE scope_type = 'platform' AND role_id = $1 AND user_id <> $2",
+          [superAdmin, p.platform!.userId],
+        );
+        const added = await c.query(
+          "INSERT INTO user_roles (user_id, role_id, scope_type, scope_id) VALUES ($1, $2, 'platform', NULL) RETURNING id",
+          [second, superAdmin],
+        );
+        const moved = await c.query('UPDATE user_roles SET role_id = $1 WHERE id = $2', [
+          support,
+          added.rows[0]!.id,
+        ]);
+        expect(moved.rowCount).toBe(1);
+        const last = await c.query(
+          "SELECT id FROM user_roles WHERE scope_type = 'platform' AND role_id = $1 AND user_id = $2",
+          [superAdmin, p.platform!.userId],
+        );
+        const err = await refusal(
+          c.query('UPDATE user_roles SET role_id = $1 WHERE id = $2', [support, last.rows[0]!.id]),
+        );
+        expect(`reassign:${err.code}`).toBe('reassign:23001');
+        expect(err.message).toMatch(/no active administrator/);
       });
     });
   });

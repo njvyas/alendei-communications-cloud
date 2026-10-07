@@ -48,8 +48,11 @@ export interface ListOrganizationsFilter extends ListQueryInput {
 
 type Transition = 'suspend' | 'reactivate' | 'close';
 
-/** ADR-012 F-1: the only legal transitions. `closed` is terminal. */
-const TRANSITIONS: Readonly<
+/**
+ * ADR-012 F-1: the only legal transitions. `closed` is terminal. Exported only so
+ * the database backstop (migration `0025`) is tested for parity against it.
+ */
+export const TRANSITIONS: Readonly<
   Record<
     Transition,
     { from: readonly OrganizationStatus[]; to: OrganizationStatus; action: AuditAction }

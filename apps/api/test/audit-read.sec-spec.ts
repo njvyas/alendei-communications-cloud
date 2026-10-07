@@ -561,6 +561,11 @@ describe('audit read', () => {
       // go before the workspace it attributes an action to — the append-only
       // design working, not a teardown inconvenience.
       await purgeAudit(h.admin, sql`true`);
+      // A workspace cannot be deleted while a grant is scoped to it (migration
+      // 0025, `fn_scope_parent_restrict`), so the pinned grant goes first.
+      await h.admin.execute(
+        sql`DELETE FROM user_roles WHERE scope_type = 'workspace' AND scope_id = ${second!.id}`,
+      );
       await h.admin.execute(sql`DELETE FROM workspaces WHERE id = ${second!.id}`);
     });
 
