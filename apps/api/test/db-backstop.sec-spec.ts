@@ -75,6 +75,7 @@ describe('migration 0025 database backstops (ADR-015 R-2, R-3, R-4)', () => {
   let owner: Pool;
   let app: Pool;
   let auth: Pool;
+  let relay: Pool;
 
   // Planted state (ids).
   const f = {} as Record<string, string>;
@@ -148,6 +149,7 @@ describe('migration 0025 database backstops (ADR-015 R-2, R-3, R-4)', () => {
     owner = new Pool({ connectionString: process.env.DATABASE_ADMIN_URL!, max: 3 });
     app = new Pool({ connectionString: process.env.DATABASE_URL!, max: 4 });
     auth = new Pool({ connectionString: process.env.DATABASE_AUTH_URL!, max: 2 });
+    relay = new Pool({ connectionString: process.env.DATABASE_RELAY_URL!, max: 1 });
 
     await plant(async (c) => {
       const role = async (key: string) =>
@@ -351,7 +353,7 @@ describe('migration 0025 database backstops (ADR-015 R-2, R-3, R-4)', () => {
     } finally {
       c.release();
     }
-    await Promise.all([owner.end(), app.end(), auth.end()]);
+    await Promise.all([owner.end(), app.end(), auth.end(), relay.end()]);
   }, 60_000);
 
   // ===========================================================================
@@ -1011,6 +1013,29 @@ describe('migration 0025 database backstops (ADR-015 R-2, R-3, R-4)', () => {
             await attempt(app, ctx, `UPDATE organizations SET ${set} WHERE id = $1`, [f.X]),
           ).toEqual(closedTerminal);
         }
+      }
+      // acc_auth and acc_relay hold no UPDATE on organizations at all.
+      for (const pool of [auth, relay]) {
+        expect(
+          await attempt(pool, null, "UPDATE organizations SET status = 'active' WHERE id = $1", [
+            f.X,
+          ]),
+        ).toEqual(denied('organizations'));
+      }
+    });
+
+    it('only the owner (migration/administrative tooling) may reopen a closed organization, for controlled teardown or recovery', async () => {
+      // Decision 07-Oct-2026: closed is terminal for every application
+      // principal; the owner keeps the exemption it has from RLS.
+      for (const to of ['active', 'suspended']) {
+        expect(
+          await attempt(
+            owner,
+            null,
+            'UPDATE organizations SET status = $1, status_changed_at = now() WHERE id = $2',
+            [to, f.X],
+          ),
+        ).toEqual(ok());
       }
     });
 

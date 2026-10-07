@@ -1,5 +1,5 @@
 {
-  "step": "ADR-015 remediation step 2 \u2014 migration 0025 (R-2, R-3, R-4)",
+  "step": "ADR-015 remediation step 2 — migration 0025 (R-2, R-3, R-4)",
   "usage": "source the DATABASE_* environment of a test template database at migration 0024, then: node scripts/mutation/run.mjs scripts/mutation/catalogue/step2-0025.json --out <dir>. Every command first applies the (mutated) migrations to its disposable clone.",
   "commands": {
     "backstop": {
@@ -407,6 +407,18 @@
         }
       ],
       "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M25",
+      "title": "closed-terminal applied to the owner too (owner loses the teardown/recovery exemption)",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "BEGIN\n  IF app_session_bypasses_rls() THEN\n    RETURN NEW;\n  END IF;\n  v_manage := app_has_platform_permission('platform.tenants.manage');\n\n  IF TG_OP = 'INSERT' THEN",
+          "replace": "BEGIN\n  IF TG_OP = 'UPDATE' AND OLD.status = 'closed' THEN\n    RAISE EXCEPTION 'organizations: organization % is closed, which is terminal', OLD.id\n      USING ERRCODE = 'insufficient_privilege', CONSTRAINT = 'organizations_closed_terminal';\n  END IF;\n  IF app_session_bypasses_rls() THEN\n    RETURN NEW;\n  END IF;\n  v_manage := app_has_platform_permission('platform.tenants.manage');\n\n  IF TG_OP = 'INSERT' THEN"
+        }
+      ],
+      "commands": ["backstop"]
     }
   ]
 }
