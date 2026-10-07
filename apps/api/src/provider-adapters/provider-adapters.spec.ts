@@ -214,8 +214,14 @@ async function run(
   const timer = new VirtualTimer();
   const { executor, admit } = rig(timer, { submissionTimeoutMs: timeoutMs });
   let settled: ProviderSubmissionResult | undefined;
-  void executor.execute(admit(grant), submission(), behavior).then((s) => (settled = s.result));
+  let failed: unknown;
+  void executor.execute(admit(grant), submission(), behavior).then(
+    (s) => (settled = s.result),
+    (error: unknown) => (failed = error),
+  );
   await timer.advance(timeoutMs + 1000);
+  // A refusal is a failure of the genuine flow, reported as such.
+  if (failed !== undefined) throw failed;
   return { result: settled!, timer };
 }
 
@@ -785,10 +791,15 @@ describe('circuit admission is mandatory before any provider call (Gate D.3, PRO
     const timer = new VirtualTimer();
     const { executor, admit } = rig(timer, { submissionTimeoutMs: 1000 });
     let settled: ProviderSubmissionResult | undefined;
-    void executor.execute(admit(), submission(), 'TIMEOUT').then((s) => (settled = s.result));
+    let failed: unknown;
+    void executor.execute(admit(), submission(), 'TIMEOUT').then(
+      (s) => (settled = s.result),
+      (error: unknown) => (failed = error),
+    );
     await timer.advance(999);
     expect(settled).toBeUndefined();
     await timer.advance(1);
+    expect(failed).toBeUndefined();
     expect(settled).toMatchObject({ outcome: 'rejected', latencyMs: 1000 });
     expect(timer.pending).toBe(0);
   });
