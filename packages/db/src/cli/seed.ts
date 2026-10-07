@@ -1,7 +1,8 @@
 /**
  * Seeds platform-level reference data. Idempotent: safe to run repeatedly.
  *
- *   1. the permission catalogue (`RBAC.md` §1)
+ *   1. the permission catalogue (`RBAC.md` §1), with each key's classification
+ *      and allowed-scope set (ADR-015 R-5)
  *   2. the fixed platform roles and their permissions (`RBAC.md` §3)
  *   3. the "Alendei Direct" reseller (`TENANCY.md` §1)
  *
@@ -12,7 +13,13 @@ import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 
-import { ALL_PERMISSION_KEYS, PLATFORM_ROLE_DEFINITIONS, splitPermissionKey } from '@acc/contracts';
+import {
+  ALL_PERMISSION_KEYS,
+  PERMISSION_ALLOWED_SCOPES,
+  PERMISSION_CLASS,
+  PLATFORM_ROLE_DEFINITIONS,
+  splitPermissionKey,
+} from '@acc/contracts';
 import { PLATFORM_DEFAULT_RESELLER_SLUG } from '../constants';
 import * as schema from '../schema';
 import { loadCliEnv, requireEnv } from './_env';
@@ -34,12 +41,22 @@ async function main(): Promise<void> {
       // request-derived privilege.
       await tx.execute(sql`select set_config('app.is_platform_admin', 'on', true)`);
 
+      // Classification and allowed scopes come from packages/contracts, on
+      // insert and on every re-run (ADR-015 R-5). A wrong definition fails
+      // loudly here: the permissions CHECKs refuse an impossible
+      // classification, and `fn_permissions_guard_scope_eligibility` refuses a
+      // scope set that a role already carrying the key would be ineligible for.
       for (const key of ALL_PERMISSION_KEYS) {
         const { domain, action } = splitPermissionKey(key);
-        await tx.insert(schema.permissions).values({ key, domain, action }).onConflictDoUpdate({
-          target: schema.permissions.key,
-          set: { domain, action },
-        });
+        const classification = PERMISSION_CLASS[key];
+        const allowedScopeTypes = [...PERMISSION_ALLOWED_SCOPES[key]];
+        await tx
+          .insert(schema.permissions)
+          .values({ key, domain, action, classification, allowedScopeTypes })
+          .onConflictDoUpdate({
+            target: schema.permissions.key,
+            set: { domain, action, classification, allowedScopeTypes },
+          });
       }
       console.log(`Permissions seeded: ${ALL_PERMISSION_KEYS.length}`);
 

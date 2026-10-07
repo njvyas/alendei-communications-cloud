@@ -101,12 +101,52 @@ export const permissions = pgTable(
     domain: text('domain').notNull(),
     action: text('action').notNull(),
     description: text('description'),
+    /**
+     * `PERMISSION_CLASS[key]` (ADR-015 R-5, migration `0026`): `platform`,
+     * `platform_catalogue`, `tenancy_administration` or `tenant_content`. No
+     * default — a row must be classified explicitly, by the migration that adds
+     * it and by `seed.ts`, both from `packages/contracts`.
+     */
+    classification: text('classification').notNull(),
+    /**
+     * `PERMISSION_ALLOWED_SCOPES[key]` (ADR-015 R-5, migration `0026`): the
+     * scope types at which a grant may confer this permission.
+     * `fn_validate_role_permission` refuses a role whose `allowed_scope_types`
+     * is not a subset of it. No default.
+     */
+    allowedScopeTypes: roleScopeType('allowed_scope_types').array().notNull(),
     ...timestamps(),
   },
   (table) => [
     uniqueIndex('permissions_key_key').on(table.key),
     index('permissions_domain_idx').on(table.domain),
     check('permissions_key_format', sql`${table.key} ~ '^[a-z][a-z0-9_.]*\\.[a-z][a-z0-9_]*$'`),
+    // The four classes of ADR-015 R-5, and no other.
+    check(
+      'permissions_classification_valid',
+      sql`${table.classification} IN ('platform', 'platform_catalogue', 'tenancy_administration', 'tenant_content')`,
+    ),
+    // `platform` is exactly the `platform.` domain, in both directions.
+    check(
+      'permissions_classification_platform_domain',
+      sql`(${table.classification} = 'platform') = (${table.key} LIKE 'platform.%')`,
+    ),
+    // `cardinality`, not `array_length`: the latter is NULL for an empty
+    // array, and a CHECK passes on NULL.
+    check(
+      'permissions_allowed_scope_types_non_empty',
+      sql`cardinality(${table.allowedScopeTypes}) >= 1`,
+    ),
+    // A platform permission is conferred at platform scope only.
+    check(
+      'permissions_platform_scope_only',
+      sql`${table.classification} <> 'platform' OR ${table.allowedScopeTypes} = ARRAY['platform']::role_scope_type[]`,
+    ),
+    // Tenant content is never conferred at platform or reseller scope (ADR-014 §6).
+    check(
+      'permissions_tenant_content_scopes',
+      sql`${table.classification} <> 'tenant_content' OR NOT (${table.allowedScopeTypes} && ARRAY['platform','reseller']::role_scope_type[])`,
+    ),
   ],
 );
 

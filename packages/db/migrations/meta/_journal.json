@@ -183,6 +183,13 @@
       "when": 1791310661496,
       "tag": "0025_adr015_column_backstops_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1791388024648,
+      "tag": "0026_adr015_permission_classification",
+      "breakpoints": true
     }
   ]
 }

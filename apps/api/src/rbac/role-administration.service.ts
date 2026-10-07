@@ -1,5 +1,6 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
+  API_SURFACE_PERMISSION_KEYS,
   AUDIT_ACTIONS,
   ERROR_CODES,
   type AuthPrincipal,
@@ -414,8 +415,11 @@ export class RoleAdministrationService {
     const resolved = this.lists.resolve(query, this.permissionListSpec);
 
     // The catalogue is global and system-defined — not tenant data — so there is
-    // no tenant predicate here and deliberately none to forget.
-    const predicates: SQL[] = [];
+    // no tenant predicate here and deliberately none to forget. It is pinned to
+    // the API surface: the inert tenant-content keys (ADR-015 follow-up decision
+    // 6) exist in `permissions` but are neither accepted nor listed until Phase
+    // 3.1 changes `API_SURFACE_PERMISSION_KEYS`.
+    const predicates: SQL[] = [inArray(schema.permissions.key, [...API_SURFACE_PERMISSION_KEYS])];
     if (query.domain !== undefined) predicates.push(eq(schema.permissions.domain, query.domain));
     if (resolved.after) predicates.push(resolved.after);
 

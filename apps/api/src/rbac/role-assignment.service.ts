@@ -1,8 +1,11 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   AUDIT_ACTIONS,
+  DELEGABLE_TENANT_SYSTEM_ROLES,
   ERROR_CODES,
+  PERMISSIONS,
   PLATFORM_ROLE_KEYS,
+  isTenantContentPermission,
   type AuthPrincipal,
   type PageInfo,
   type ScopeRef,
@@ -19,6 +22,7 @@ import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/ht
 import {
   assertScopeAcceptsNewMembers,
   assertTargetOrganizationActive,
+  organizationOfScope,
 } from '../tenancy/scope-lifecycle';
 
 export interface AssignmentView {
@@ -110,6 +114,14 @@ export interface ListAssignmentsFilter extends ListQueryInput {
  *      `principal.permissions`, whose flattening is exactly what ADR-005
  *      removed from the decision path. A permission the actor holds only in one
  *      workspace does not authorize conferring it across the organization.
+ *
+ *      **The one exception is tenant delegation** (ADR-015 R-6, `RBAC.md` §7b):
+ *      a platform principal holding `platform.roles.delegate_tenant` may appoint
+ *      a predefined tenant-system role from `DELEGABLE_TENANT_SYSTEM_ROLES` at
+ *      its own organization although the role carries tenant-content
+ *      permissions the actor does not hold — and only those. It is consulted
+ *      only when the ordinary rule refuses, every constraint is required, and
+ *      the grant's audit row records `metadata.delegation`.
  *
  *   5. **The target user is real and within reach.** Users are platform-level
  *      identities, so RLS cannot scope them; reachability is established by the
@@ -294,7 +306,9 @@ export class RoleAssignmentService {
     this.assertScopeTypeAdmitted(role, input.scopeType);
 
     // Guard 4 — §6n cases 21 and 22. One chain resolve, not one per permission.
-    await this.assertWithinActorAuthority(tx, principal, role.id, target);
+    // Satisfied by delegation (ADR-015 R-6) only where the ordinary rule
+    // refuses and every delegation constraint holds.
+    const delegated = await this.assertWithinActorAuthority(tx, principal, role, input);
 
     // Guard 5 — a real, reachable, active target user. Skipped only for a user
     // this transaction created, whose reachability is established by
@@ -336,7 +350,15 @@ export class RoleAssignmentService {
           scopeType: input.scopeType,
           scopeId: input.scopeId,
         },
-        metadata: { roleKey: role.key, grantedTo: input.userId },
+        metadata: {
+          roleKey: role.key,
+          grantedTo: input.userId,
+          // Only on a delegated grant (ADR-015 R-6): the tenant-content
+          // permissions the actor conferred without holding them.
+          ...(delegated.length > 0
+            ? { delegation: true, delegatedPermissions: [...delegated] }
+            : {}),
+        },
       },
       tx,
     );
@@ -523,18 +545,35 @@ export class RoleAssignmentService {
    * role's permission set, one inside `unheldPermissions` for the scope chain.
    * The evaluator then decides each permission in memory against the same
    * coherent-grant rule every other decision uses.
+   *
+   * The role row is locked `FOR SHARE` before its permissions are read, so the
+   * set judged here is the set the grant commits against: a concurrent edit of
+   * the role (which updates the row) waits for this grant, or this grant waits
+   * for it.
+   *
+   * Returns the permissions conferred **by delegation** (ADR-015 R-6) — sorted,
+   * and empty for an ordinary grant. Delegation is tried only when the ordinary
+   * rule refuses; if any of its constraints fails, the ordinary refusal stands,
+   * unchanged.
    */
   private async assertWithinActorAuthority(
     tx: Transaction,
     principal: AuthPrincipal,
-    roleId: string,
-    target: ScopeRef,
-  ): Promise<void> {
+    role: typeof schema.roles.$inferSelect,
+    input: GrantInput,
+  ): Promise<readonly string[]> {
+    const target: ScopeRef = { scopeType: input.scopeType, scopeId: input.scopeId };
+    await tx
+      .select({ id: schema.roles.id })
+      .from(schema.roles)
+      .where(eq(schema.roles.id, role.id))
+      .for('share');
+
     const carried = await tx
       .select({ key: schema.permissions.key })
       .from(schema.rolePermissions)
       .innerJoin(schema.permissions, eq(schema.permissions.id, schema.rolePermissions.permissionId))
-      .where(eq(schema.rolePermissions.roleId, roleId));
+      .where(eq(schema.rolePermissions.roleId, role.id));
 
     const unheld = await this.authorization.unheldPermissions(tx, {
       principal,
@@ -542,17 +581,64 @@ export class RoleAssignmentService {
       target,
     });
 
-    if (unheld.length > 0) {
-      throw new AppException({
-        status: HttpStatus.FORBIDDEN,
-        code: ERROR_CODES.AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION,
-        message: 'This role carries a permission you do not hold at that scope',
-        // The role's composition is readable through `/roles`, so naming the
-        // offending permissions discloses nothing new and is what makes the
-        // refusal actionable.
-        details: { rejected: [...unheld] },
-      });
+    if (unheld.length === 0) return [];
+    if (await this.delegationApplies(tx, principal, role, input, unheld)) {
+      return [...unheld].sort();
     }
+
+    throw new AppException({
+      status: HttpStatus.FORBIDDEN,
+      code: ERROR_CODES.AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION,
+      message: 'This role carries a permission you do not hold at that scope',
+      // The role's composition is readable through `/roles`, so naming the
+      // offending permissions discloses nothing new and is what makes the
+      // refusal actionable.
+      details: { rejected: [...unheld] },
+    });
+  }
+
+  /**
+   * Tenant delegation (ADR-015 R-6, approved mechanism; `RBAC.md` §7b). Every
+   * condition is required; any failure leaves the ordinary guard-4 refusal.
+   *
+   *   1. the role is in `DELEGABLE_TENANT_SYSTEM_ROLES` (exactly `org_admin`);
+   *   2. it is a seeded system role owned by the target organization;
+   *   3. the grant is at organization scope, in that organization;
+   *   4. the actor holds `platform.roles.delegate_tenant` at platform scope —
+   *      asked through the evaluator, never by role name;
+   *   5. what the actor lacks is non-empty and consists only of tenant-content
+   *      keys: it holds every non-content permission the role carries;
+   *   6. the actor is not appointing itself.
+   *
+   * Enforcement is application-only, as guard 4 is (`RBAC.md` §7); the
+   * database still refuses tenant-content keys on platform roles and
+   * `platform.%` keys on tenant roles. Revocation by delegation is R-11's and
+   * is not implemented here.
+   */
+  private async delegationApplies(
+    tx: Transaction,
+    principal: AuthPrincipal,
+    role: typeof schema.roles.$inferSelect,
+    input: GrantInput,
+    unheld: readonly string[],
+  ): Promise<boolean> {
+    if (!(DELEGABLE_TENANT_SYSTEM_ROLES as readonly string[]).includes(role.key)) return false;
+    if (!role.isSystemRole) return false;
+    if (input.scopeType !== 'organization') return false;
+    // Ownership is judged against the organization owning the target scope,
+    // read from the database — independently of the scope-level check above.
+    const targetOrganization = await organizationOfScope(tx, {
+      scopeType: input.scopeType,
+      scopeId: input.scopeId,
+    });
+    if (role.orgId === null || role.orgId !== targetOrganization) return false;
+    if (input.userId === principal.userId) return false;
+    if (!unheld.every((permission) => isTenantContentPermission(permission))) return false;
+    return this.authorization.allows(tx, {
+      principal,
+      permission: PERMISSIONS.PLATFORM_ROLES_DELEGATE_TENANT,
+      target: { scopeType: 'platform', scopeId: null },
+    });
   }
 
   /**

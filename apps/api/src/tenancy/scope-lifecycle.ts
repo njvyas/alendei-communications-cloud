@@ -79,7 +79,10 @@ export async function assertOrganizationActive(tx: Transaction, orgId: string): 
  * target, so this is defensive, and it fails closed rather than skipping the
  * lifecycle check.
  */
-async function organizationOfScope(tx: Transaction, target: ScopeRef): Promise<string | null> {
+export async function organizationOfScope(
+  tx: Transaction,
+  target: ScopeRef,
+): Promise<string | null> {
   if (!target.scopeId) return null;
   if (target.scopeType === 'organization') return target.scopeId;
 

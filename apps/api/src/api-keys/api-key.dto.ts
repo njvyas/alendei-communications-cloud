@@ -12,7 +12,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
-import { ALL_PERMISSION_KEYS, type ScopeType } from '@acc/contracts';
+import { API_SURFACE_PERMISSION_KEYS, type ScopeType } from '@acc/contracts';
 
 import { ListQueryDto } from '../common/http/list-query.dto';
 import { ApiProperty } from '@nestjs/swagger';
@@ -72,12 +72,14 @@ export class CreateApiKeyDto {
    *
    * Validated against the catalogue: an unknown key could never be intersected
    * into anything, so accepting one would only produce a dead scope string.
+   * The API surface excludes the inert tenant-content keys (ADR-015 follow-up
+   * decision 6); Phase 3.1 changes `API_SURFACE_PERMISSION_KEYS`.
    */
   @IsArray()
   @ArrayMaxSize(64)
   @ArrayUnique()
-  @IsIn(ALL_PERMISSION_KEYS as readonly string[], { each: true })
-  @ApiProperty({ enum: ALL_PERMISSION_KEYS, isArray: true })
+  @IsIn(API_SURFACE_PERMISSION_KEYS as readonly string[], { each: true })
+  @ApiProperty({ enum: API_SURFACE_PERMISSION_KEYS, isArray: true })
   scopes!: string[];
 
   /**

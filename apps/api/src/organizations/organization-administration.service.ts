@@ -3,6 +3,7 @@ import {
   AUDIT_ACTIONS,
   ERROR_CODES,
   PERMISSIONS,
+  grantConfers,
   type AuditAction,
   type AuthPrincipal,
   type PageInfo,
@@ -583,9 +584,9 @@ export class OrganizationAdministrationService {
     resellerIds: string[];
     activeOrganizationIds: string[];
   } {
-    const carrying = principal.roles.filter((g) =>
-      g.permissions.includes(PERMISSIONS.ORGANIZATIONS_READ),
-    );
+    // `grantConfers`: the evaluator's own "this grant confers P" predicate
+    // (ADR-015 R-5), so reach is never read off a grant that does not confer it.
+    const carrying = principal.roles.filter((g) => grantConfers(g, PERMISSIONS.ORGANIZATIONS_READ));
     if (carrying.some((g) => g.scopeType === 'platform')) {
       return { everything: true, resellerIds: [], activeOrganizationIds: [] };
     }
@@ -670,18 +671,14 @@ export class OrganizationAdministrationService {
   }
 
   private holdsAtPlatform(principal: AuthPrincipal, permission: string): boolean {
-    return principal.roles.some(
-      (g) => g.scopeType === 'platform' && g.permissions.includes(permission),
-    );
+    return principal.roles.some((g) => g.scopeType === 'platform' && grantConfers(g, permission));
   }
 
   private resellersHolding(principal: AuthPrincipal, permission: string): string[] {
     return [
       ...new Set(
         principal.roles
-          .filter(
-            (g) => g.scopeType === 'reseller' && g.scopeId && g.permissions.includes(permission),
-          )
+          .filter((g) => g.scopeType === 'reseller' && g.scopeId && grantConfers(g, permission))
           .map((g) => g.scopeId!),
       ),
     ];

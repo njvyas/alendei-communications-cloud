@@ -12,7 +12,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
-import { ALL_PERMISSION_KEYS, type ScopeType } from '@acc/contracts';
+import { API_SURFACE_PERMISSION_KEYS, type ScopeType } from '@acc/contracts';
 
 import { ListQueryDto } from '../common/http/list-query.dto';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -55,12 +55,16 @@ export class CreateRoleDto {
    * Validated against the catalogue here so an unknown key is a `400`. Whether
    * the *actor* may confer each one is a separate, authorization question the
    * service asks through `AuthorizationService` — this is only spelling.
+   *
+   * The API surface excludes the inert tenant-content keys (ADR-015 follow-up
+   * decision 6: no API behaviour); Phase 3.1 changes
+   * `API_SURFACE_PERMISSION_KEYS`.
    */
   @IsArray()
   @ArrayMaxSize(200)
   @ArrayUnique()
-  @IsIn(ALL_PERMISSION_KEYS, { each: true })
-  @ApiProperty({ enum: ALL_PERMISSION_KEYS, isArray: true })
+  @IsIn(API_SURFACE_PERMISSION_KEYS, { each: true })
+  @ApiProperty({ enum: API_SURFACE_PERMISSION_KEYS, isArray: true })
   permissions!: string[];
 }
 
@@ -88,8 +92,8 @@ export class UpdateRoleDto {
   @IsArray()
   @ArrayMaxSize(200)
   @ArrayUnique()
-  @IsIn(ALL_PERMISSION_KEYS, { each: true })
-  @ApiPropertyOptional({ enum: ALL_PERMISSION_KEYS, isArray: true })
+  @IsIn(API_SURFACE_PERMISSION_KEYS, { each: true })
+  @ApiPropertyOptional({ enum: API_SURFACE_PERMISSION_KEYS, isArray: true })
   permissions?: string[];
 }
 

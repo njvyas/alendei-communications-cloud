@@ -561,6 +561,7 @@
                 "platform.tenants.read",
                 "platform.tenants.manage",
                 "platform.roles.assign",
+                "platform.roles.delegate_tenant",
                 "platform.audit.read"
               ],
               "type": "string"
@@ -750,6 +751,7 @@
                 "platform.tenants.read",
                 "platform.tenants.manage",
                 "platform.roles.assign",
+                "platform.roles.delegate_tenant",
                 "platform.audit.read"
               ],
               "type": "string"
@@ -2623,6 +2625,7 @@
                 "platform.tenants.read",
                 "platform.tenants.manage",
                 "platform.roles.assign",
+                "platform.roles.delegate_tenant",
                 "platform.audit.read"
               ],
               "type": "string"

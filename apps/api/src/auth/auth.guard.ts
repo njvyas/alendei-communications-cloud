@@ -3,9 +3,11 @@ import { Reflector } from '@nestjs/core';
 import {
   AUDIT_ACTIONS,
   ERROR_CODES,
+  grantConfers,
   scopeCovers,
   type ActorType,
   type AuthPrincipal,
+  type RoleGrant,
   type ScopeChain,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
@@ -536,18 +538,40 @@ export class AuthGuard implements CanActivate {
       teamId: null,
     };
 
-    return [
-      ...new Set(
-        creatorScopes.grants
-          .filter((grant) =>
-            scopeCovers(
-              { scopeType: grant.scopeType, scopeId: grant.scopeId },
-              bindingScope,
-              chain,
-            ),
-          )
-          .flatMap((grant) => grant.permissions),
-      ),
-    ];
+    return creatorAuthorityFromGrants(creatorScopes.grants, bindingScope, chain);
   }
+}
+
+/**
+ * What a key's creator may confer **at the key's binding scope** (`RBAC.md`
+ * §5c, ADR-005 D-4), given the creator's grants and the binding's resolved
+ * chain. The database reads stay in `AuthGuard.creatorAuthorityAtBinding`; this
+ * is the decision, kept pure so it is testable on synthetic grants.
+ *
+ * Two questions per grant, the evaluator's two (ADR-005 D-1, ADR-015 R-5):
+ *
+ *   1. does it cover the binding scope? (`scopeCovers`)
+ *   2. which of its role's permissions does it *confer*? (`grantConfers` — the
+ *      role carries the key **and** the grant's scope type is in the key's
+ *      allowed-scope set)
+ *
+ * so a platform or reseller creator grant never lends a key a tenant-content
+ * permission, even if its role carried one.
+ */
+export function creatorAuthorityFromGrants(
+  grants: readonly RoleGrant[],
+  bindingScope: { readonly scopeType: 'organization' | 'workspace'; readonly scopeId: string },
+  chain: ScopeChain,
+): string[] {
+  return [
+    ...new Set(
+      grants
+        .filter((grant) =>
+          scopeCovers({ scopeType: grant.scopeType, scopeId: grant.scopeId }, bindingScope, chain),
+        )
+        .flatMap((grant) =>
+          grant.permissions.filter((permission) => grantConfers(grant, permission)),
+        ),
+    ),
+  ];
 }

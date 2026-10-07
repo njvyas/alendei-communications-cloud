@@ -5,7 +5,12 @@
  * per organization as editable defaults; organizations may compose additional
  * custom roles from the same permission catalogue.
  */
-import { PERMISSIONS, type PermissionKey } from './permissions';
+import {
+  ALL_PERMISSION_KEYS,
+  PERMISSIONS,
+  isTenantContentPermission,
+  type PermissionKey,
+} from './permissions';
 import type { ScopeType } from './tenancy';
 
 export const PLATFORM_ROLE_KEYS = {
@@ -37,7 +42,7 @@ export interface RoleDefinition {
 
 const P = PERMISSIONS;
 
-const TENANT_READ_PERMISSIONS: readonly PermissionKey[] = [
+export const TENANT_READ_PERMISSIONS: readonly PermissionKey[] = Object.freeze([
   P.ORGANIZATIONS_READ,
   P.WORKSPACES_READ,
   P.TEAMS_READ,
@@ -45,7 +50,17 @@ const TENANT_READ_PERMISSIONS: readonly PermissionKey[] = [
   P.ROLES_READ,
   P.ROLE_ASSIGNMENTS_READ,
   P.PERMISSIONS_READ,
-];
+]);
+
+/**
+ * `alendei_super_admin`'s permission set: the whole catalogue **minus** the
+ * tenant-content keys (ADR-015 R-5: platform roles never hold tenant-content
+ * permissions). It therefore includes `platform.roles.delegate_tenant`
+ * (follow-up decision 5). A new non-content key belongs to it by construction.
+ */
+export const SUPER_ADMIN_PERMISSIONS: readonly PermissionKey[] = Object.freeze(
+  ALL_PERMISSION_KEYS.filter((key) => !isTenantContentPermission(key)),
+);
 
 /**
  * Platform-level roles. `roles.org_id IS NULL` for every one of these
@@ -58,7 +73,7 @@ export const PLATFORM_ROLE_DEFINITIONS: readonly RoleDefinition[] = Object.freez
     name: 'Alendei Super Admin',
     description: 'Full control-plane access across every tenant.',
     allowedScopeTypes: ['platform'],
-    permissions: Object.values(P),
+    permissions: SUPER_ADMIN_PERMISSIONS,
   },
   {
     key: PLATFORM_ROLE_KEYS.ALENDEI_SUPPORT,
@@ -175,6 +190,15 @@ export const ALL_ROLE_DEFINITIONS: readonly RoleDefinition[] = Object.freeze([
   ...PLATFORM_ROLE_DEFINITIONS,
   ...TENANT_ROLE_DEFINITIONS,
 ]);
+
+/**
+ * The predefined tenant-system roles a platform principal holding
+ * `platform.roles.delegate_tenant` may appoint although they carry
+ * tenant-content permissions it does not hold (ADR-015 R-6, `RBAC.md` §7b).
+ * Pinned to exactly `['org_admin']`: adding or removing a role is a contract
+ * change with its own test. Custom roles never qualify.
+ */
+export const DELEGABLE_TENANT_SYSTEM_ROLES = Object.freeze([TENANT_ROLE_KEYS.ORG_ADMIN] as const);
 
 export function isPlatformRoleKey(key: string): key is PlatformRoleKey {
   return PLATFORM_ROLE_DEFINITIONS.some((role) => role.key === key);

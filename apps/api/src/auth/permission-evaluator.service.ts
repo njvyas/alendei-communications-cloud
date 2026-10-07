@@ -1,6 +1,7 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   ERROR_CODES,
+  grantConfers,
   scopeCovers,
   type AuthPrincipal,
   type PermissionKey,
@@ -66,6 +67,7 @@ export class PermissionEvaluator {
    *
    *     ALLOW(P, target)  ⟺  ∃ g ∈ principal.roles :
    *             P ∈ g.permissions
+   *         ∧   g.scopeType ∈ allowedScopes(P)            (ADR-015 R-5)
    *         ∧   scopeCovers(g.scope, target.scope, target.chain)
    *
    * `AuthPrincipal.permissions` — the flattened union — is deliberately not
@@ -107,13 +109,20 @@ export class PermissionEvaluator {
    * A grant's own permission set comes from `role_permissions` for its role
    * (`ScopeResolver.permissionsByRole`), so a grant can never be widened by
    * what some *other* grant's role happens to carry.
+   *
+   * "Carries P" is `grantConfers` (ADR-015 R-5): the role carries the
+   * permission **and** the grant's scope type is in the permission's
+   * allowed-scope set. A platform or reseller grant therefore never confers a
+   * tenant-content key, whatever its role carries — the database refuses that
+   * composition too (`fn_validate_role_permission`, migration `0026`), and this
+   * is the application half of the same rule.
    */
   private grantAuthorizes(
     grant: RoleGrant,
     permission: PermissionKey | string,
     target: AuthorizationTarget,
   ): boolean {
-    if (!grant.permissions.includes(permission)) return false;
+    if (!grantConfers(grant, permission)) return false;
     return scopeCovers(
       { scopeType: grant.scopeType, scopeId: grant.scopeId },
       target.scope,
