@@ -1,0 +1,412 @@
+{
+  "step": "ADR-015 remediation step 2 \u2014 migration 0025 (R-2, R-3, R-4)",
+  "usage": "source the DATABASE_* environment of a test template database at migration 0024, then: node scripts/mutation/run.mjs scripts/mutation/catalogue/step2-0025.json --out <dir>. Every command first applies the (mutated) migrations to its disposable clone.",
+  "commands": {
+    "backstop": {
+      "cwd": ".",
+      "db": true,
+      "argv": [
+        "bash",
+        "-c",
+        "npm run db:migrate --workspace @acc/db && cd apps/api && npx jest --selectProjects security --runInBand --testPathPatterns db-backstop"
+      ],
+      "timeoutSeconds": 900
+    },
+    "catalogue": {
+      "cwd": ".",
+      "db": true,
+      "argv": [
+        "bash",
+        "-c",
+        "npm run db:migrate --workspace @acc/db && cd packages/db && npx jest --selectProjects integration --runInBand --testPathPatterns \"principals|backstop-definitions\""
+      ],
+      "timeoutSeconds": 900
+    }
+  },
+  "mutants": [
+    {
+      "id": "M1",
+      "title": "table-level UPDATE re-granted on users to acc_app",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "GRANT UPDATE (phone, status, updated_at) ON users TO acc_app;",
+          "replace": "GRANT UPDATE ON users TO acc_app;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M2",
+      "title": "users.password_hash and email granted to acc_app",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "GRANT UPDATE (phone, status, updated_at) ON users TO acc_app;",
+          "replace": "GRANT UPDATE (phone, status, updated_at, password_hash, email) ON users TO acc_app;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M3",
+      "title": "acc_app INSERT on sessions kept (re-granted)",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "REVOKE INSERT, UPDATE ON sessions FROM acc_app;",
+          "replace": "REVOKE UPDATE ON sessions FROM acc_app;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M4",
+      "title": "acc_auth table-wide UPDATE on users restored",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "GRANT UPDATE (last_login_at, password_hash, password_updated_at) ON users TO acc_auth;",
+          "replace": "GRANT UPDATE ON users TO acc_auth;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M4b",
+      "title": "acc_auth table-wide UPDATE on sessions restored",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "GRANT UPDATE (family_id, rotated_at, replaced_by_session_id, reuse_detected_at,\n              revoked_at, revoked_reason, last_used_at) ON sessions TO acc_auth;",
+          "replace": "GRANT UPDATE ON sessions TO acc_auth;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M5",
+      "title": "closed-terminal branch removed",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "  IF OLD.status = 'closed' THEN",
+          "replace": "  IF false THEN"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M6",
+      "title": "lifecycle authority = app_current_reseller_id() IS NOT NULL",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "  v_manage := app_has_platform_permission('platform.tenants.manage');",
+          "replace": "  v_manage := app_current_reseller_id() IS NOT NULL;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M7",
+      "title": "lifecycle authority = app_is_platform_admin()",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "  v_manage := app_has_platform_permission('platform.tenants.manage');",
+          "replace": "  v_manage := app_is_platform_admin();"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M8a",
+      "title": "immutability trigger dropped: trg_roles_org_id_immutable",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "CREATE OR REPLACE TRIGGER trg_roles_org_id_immutable\n  AFTER UPDATE OF org_id ON roles FOR EACH ROW\n  WHEN (OLD.org_id IS DISTINCT FROM NEW.org_id)\n  EXECUTE FUNCTION fn_tenant_key_immutable('org_id');",
+          "replace": "SELECT 1;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M8b",
+      "title": "immutability trigger dropped: trg_workspaces_org_id_immutable",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "CREATE OR REPLACE TRIGGER trg_workspaces_org_id_immutable\n  AFTER UPDATE OF org_id ON workspaces FOR EACH ROW\n  WHEN (OLD.org_id IS DISTINCT FROM NEW.org_id)\n  EXECUTE FUNCTION fn_tenant_key_immutable('org_id');",
+          "replace": "SELECT 1;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M8c",
+      "title": "immutability trigger dropped: trg_teams_org_id_immutable",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "CREATE OR REPLACE TRIGGER trg_teams_org_id_immutable\n  AFTER UPDATE OF org_id, workspace_id ON teams FOR EACH ROW\n  WHEN (OLD.org_id IS DISTINCT FROM NEW.org_id OR OLD.workspace_id IS DISTINCT FROM NEW.workspace_id)\n  EXECUTE FUNCTION fn_tenant_key_immutable('org_id', 'workspace_id');",
+          "replace": "SELECT 1;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M8d",
+      "title": "immutability trigger dropped: trg_api_keys_org_id_immutable",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "CREATE OR REPLACE TRIGGER trg_api_keys_org_id_immutable\n  AFTER UPDATE OF org_id, workspace_id ON api_keys FOR EACH ROW\n  WHEN (OLD.org_id IS DISTINCT FROM NEW.org_id OR OLD.workspace_id IS DISTINCT FROM NEW.workspace_id)\n  EXECUTE FUNCTION fn_tenant_key_immutable('org_id', 'workspace_id');",
+          "replace": "SELECT 1;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M8e",
+      "title": "immutability trigger dropped: trg_idempotency_keys_org_id_immutable",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "CREATE OR REPLACE TRIGGER trg_idempotency_keys_org_id_immutable\n  AFTER UPDATE OF org_id ON idempotency_keys FOR EACH ROW\n  WHEN (OLD.org_id IS DISTINCT FROM NEW.org_id)\n  EXECUTE FUNCTION fn_tenant_key_immutable('org_id');",
+          "replace": "SELECT 1;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M8f",
+      "title": "immutability trigger dropped: trg_sessions_user_id_immutable",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "CREATE OR REPLACE TRIGGER trg_sessions_user_id_immutable\n  AFTER UPDATE OF user_id ON sessions FOR EACH ROW\n  WHEN (OLD.user_id IS DISTINCT FROM NEW.user_id)\n  EXECUTE FUNCTION fn_tenant_key_immutable('user_id');",
+          "replace": "SELECT 1;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M9",
+      "title": "immutability made conditional on the platform claim",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "  FOREACH v_col IN ARRAY TG_ARGV LOOP",
+          "replace": "  IF app_is_platform_admin() THEN\n    RETURN NULL;\n  END IF;\n  FOREACH v_col IN ARRAY TG_ARGV LOOP"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M10a",
+      "title": "revocation-terminal trigger dropped on sessions",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "CREATE OR REPLACE TRIGGER trg_sessions_revocation_terminal\n  BEFORE UPDATE OF revoked_at, revoked_reason ON sessions\n  FOR EACH ROW EXECUTE FUNCTION fn_revocation_terminal();",
+          "replace": "SELECT 1;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M10b",
+      "title": "revocation-terminal trigger dropped on api_keys",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "CREATE OR REPLACE TRIGGER trg_api_keys_revocation_terminal\n  BEFORE UPDATE OF revoked_at, revoked_reason ON api_keys\n  FOR EACH ROW EXECUTE FUNCTION fn_revocation_terminal();",
+          "replace": "SELECT 1;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M11",
+      "title": "users insert-shape trigger dropped",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "CREATE OR REPLACE TRIGGER trg_users_insert_shape\n  BEFORE INSERT ON users\n  FOR EACH ROW EXECUTE FUNCTION fn_users_insert_shape();",
+          "replace": "SELECT 1;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M12",
+      "title": "parent-restrict made a no-op",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "  IF EXISTS (SELECT 1 FROM user_roles ur",
+          "replace": "  IF false AND EXISTS (SELECT 1 FROM user_roles ur"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M13a",
+      "title": "organizations.slug re-granted to acc_app",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "status, status_changed_at, status_reason, reseller_id) ON organizations TO acc_app;",
+          "replace": "status, status_changed_at, status_reason, reseller_id, slug) ON organizations TO acc_app;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M13b",
+      "title": "resellers.slug re-granted to acc_app",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "GRANT UPDATE (name, domain, brand_config, default_markup_pct, status, is_platform_default)",
+          "replace": "GRANT UPDATE (name, domain, brand_config, default_markup_pct, status, is_platform_default, slug)"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M14",
+      "title": "teams DELETE kept for acc_app",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "REVOKE UPDATE, DELETE ON teams FROM acc_app;",
+          "replace": "REVOKE UPDATE ON teams FROM acc_app;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M15",
+      "title": "user_roles UPDATE kept for acc_app",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "REVOKE UPDATE ON user_roles FROM acc_app;",
+          "replace": "SELECT 1;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M16",
+      "title": "idempotency_keys DELETE kept for acc_app",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "REVOKE UPDATE, DELETE ON idempotency_keys FROM acc_app;",
+          "replace": "REVOKE UPDATE ON idempotency_keys FROM acc_app;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M17",
+      "title": "provisioning reseller binding removed",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "    OR (app_is_provisioning() AND id = app_current_org_id()\n        AND (reseller_id = app_current_reseller_id()\n             OR app_has_platform_permission('platform.tenants.manage')))",
+          "replace": "    OR (app_is_provisioning() AND id = app_current_org_id())"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M18",
+      "title": "illegal-edge check removed",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "    IF NOT (\n         (OLD.status = 'active'",
+          "replace": "    IF false AND NOT (\n         (OLD.status = 'active'"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M19",
+      "title": "reseller platform-field guard admits everyone",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "  IF app_session_bypasses_rls() OR app_has_platform_permission('platform.tenants.manage') THEN",
+          "replace": "  IF true THEN"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M20",
+      "title": "organization billing authority on UPDATE removed",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "  IF (NEW.billing_mode, NEW.billing_policy) IS DISTINCT FROM (OLD.billing_mode, OLD.billing_policy)\n     AND NOT v_manage THEN",
+          "replace": "  IF false THEN"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M21",
+      "title": "organization INSERT shape (starts active, default billing) removed",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "  IF TG_OP = 'INSERT' THEN\n",
+          "replace": "  IF TG_OP = 'INSERT' THEN\n    RETURN NEW;\n"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M22",
+      "title": "ws_tickets UPDATE kept for acc_app",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "REVOKE UPDATE ON ws_tickets FROM acc_app, acc_auth;",
+          "replace": "REVOKE UPDATE ON ws_tickets FROM acc_auth;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M23",
+      "title": "api_keys.scopes granted to acc_app",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "GRANT UPDATE (revoked_at, revoked_reason, updated_at) ON api_keys TO acc_app;",
+          "replace": "GRANT UPDATE (revoked_at, revoked_reason, updated_at, scopes) ON api_keys TO acc_app;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    },
+    {
+      "id": "M24",
+      "title": "acc_app session expires_at granted",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0025_adr015_column_backstops_lifecycle.sql",
+          "search": "GRANT UPDATE (revoked_at, revoked_reason) ON sessions TO acc_app;",
+          "replace": "GRANT UPDATE (revoked_at, revoked_reason, expires_at) ON sessions TO acc_app;"
+        }
+      ],
+      "commands": ["backstop", "catalogue"]
+    }
+  ]
+}
