@@ -1465,6 +1465,26 @@ Mandatory: HIGH-1 (authentication pool exhaustion, plus the `AuthorizationServic
 
 1 — R-1, R-12; 2 — migration 0025 (R-2, R-3, R-4); 3 — R-5 (R-6 after the mechanism is approved); 4 — R-7 … R-10 ADR amendments and content-RLS infrastructure; 5 — R-13; 6 — R-11; 7 — R-14/R-15 before the dispatcher.
 
+### R-6 mechanism as corrected and approved by the user (06-Oct-2026)
+
+- **Delegable set:** `DELEGABLE_TENANT_SYSTEM_ROLES` in `packages/contracts` is pinned to exactly `['org_admin']`; custom roles never qualify.
+- **Gate permission:** a dedicated `platform.roles.delegate_tenant` (platform scope only, classification `platform`, not tenant content). Neither `platform.tenants.manage` nor `platform.roles.assign` gates delegation. Its sole purpose is this exception.
+- **Constraints (all required):** the role is in the pinned set; it is a seeded system role owned by the target organization; the grant is at organization scope in that organization; the actor holds `platform.roles.delegate_tenant` at platform scope; the permissions the actor lacks are all tenant-content keys, and the actor holds every non-content permission the role carries; the actor never delegates to itself; arbitrary custom roles stay prohibited; platform roles never carry tenant-content permissions; the audit row records `metadata.delegation = true` and the delegated permission set.
+- **Revocation:** delegation applies symmetrically to revocation for organizational recovery (implemented with R-11); last-organization-administrator protection remains mandatory.
+- **Existing scope sets:** none of the 37 existing keys is narrowed; only the eight ADR-014 §6 keys receive narrowed allowed-scope sets.
+- **Enforcement layer:** application, as for guard 4 (`RBAC.md` §7); the database still refuses tenant-content keys on platform roles and `platform.%` keys on tenant roles. No second authorization source is added.
+
+### Follow-up decisions (user, 07-Oct-2026)
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Disposable test template after the `acc_p24_fresh` incident | A new template `acc_r015_base`: built from `template0`, migrations `0000`–`0024` applied from a worktree at `1bc7fd9`, seeded, and verified (row counts and all migration hashes). `acc_p24` is not reused as a template and `acc_p24_fresh` is not recreated under its old name. The incident stays recorded (`TESTING.md` §6q). |
+| 2 | Owner exemption from closed-terminal | **Yes.** "Closed is terminal" binds every application principal (`acc_app`, `acc_auth`, `acc_relay`, and `acc_dispatch` when it exists). The migration/owner principal may reopen a closed organization for controlled teardown or recovery. Migration `0025` already behaves this way (the owner passes `fn_organizations_guard_lifecycle` as it passes RLS); `db-backstop.sec-spec.ts` proves both sides. |
+| 3 | Same-status lifecycle re-stamping | **Refused.** `active → active` or `suspended → suspended` with changed status metadata is not a legal transition (`23514`, `organizations_status_transition`); the transition-parity test stays. |
+| 4 | Sign-in refused because the password hash changed between the read and the success transaction | Keep `invalid_password`. No `credential_changed` reason unless a later product or security requirement needs the distinction. |
+| 5 | Does `alendei_super_admin` hold `platform.roles.delegate_tenant`? | **Yes**, by default. Platform-only, not tenant content; `DELEGABLE_TENANT_SYSTEM_ROLES` stays exactly `['org_admin']`; every R-6 restriction above and symmetric revoke/recovery are kept. |
+| 6 | Add the eight ADR-014 §6 tenant-content keys now? | **Yes, as inert catalogue entries** — foundation/RBAC remediation, **not** Phase 3.1. Exact ADR-014 §6 classification and allowed-scope sets; no route, no API behaviour, no frontend, no content table, no role assignment, no runtime activation; not added to any seeded role. Tests prove they are catalogue-only and cannot be granted to platform or reseller roles. A test needing a role that carries one uses a disposable-test fixture, never the production seed. |
+
 ### Required evidence (every remediation)
 
 Positive, negative security, direct database backstop, deterministic concurrency and mutation tests (every intended mutant caught); fresh migration, upgrade migration, rerun/no-op; disposable-clone regression; exact privilege catalogue; policy and trigger definition checks; full regression; CI green. HIGH-5 additionally: the full Model B matrix (organization grant, workspace/team grant allowed; sibling organization, reseller-only, platform-only, support-only, suspended user, revoked key, expired key, forged organization context denied; the `app.current_user_id` residual documented and tested exactly; `PUBLIC EXECUTE` on the helper impossible).
