@@ -101,7 +101,7 @@ These roles have `roles.org_id IS NULL`, which is what marks a role as platform-
 |---|---|---|
 | `alendei_super_admin` | `platform` | Full control-plane access: providers, routing, all tenants, billing |
 | `alendei_support` | `platform` | Cross-tenant read plus limited write (audit view, impersonation-with-audit for support) |
-| `reseller_admin` | `reseller` | Manage the organizations beneath one reseller, and that reseller's billing/markup |
+| `reseller_admin` | `reseller` | Manage the organizations beneath one reseller (create, rename; not their lifecycle or billing, which need `platform.tenants.manage`), and that reseller's name, branding and markup (`default_markup_pct`); its `status`, `domain` and platform-default flag are platform-only, enforced in the database by migration `0025` |
 
 **What platform-level access means** (ADR-011 D-2): only an `alendei_super_admin` grant at platform scope sets `app.is_platform_admin`, and so satisfies `app_org_in_scope()` for every organization (`TENANCY.md` §3a); the database re-checks that grant before honouring the flag. `alendei_support`, though platform-scoped, does **not** set it: support may *select* any organization (`X-Acc-Organization`), and inside that organization RLS scopes it exactly like a member, while its read-only permission set bounds what it can do. Before migration `0010` any platform-scope grant set the flag, which gave the read-only support role unrestricted database read and write reach.
 

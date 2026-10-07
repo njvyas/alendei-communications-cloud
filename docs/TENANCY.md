@@ -282,6 +282,11 @@ Because that layer is the *whole* of the enforcement below organization level, i
 | team vs. team | API guard (`AuthorizationService.assert`, DB-resolved chain) | No — application-layer only, **by decision** (ADR-011 D-4) |
 | role-grant scope integrity | `fn_validate_user_role_scope` trigger + service pre-check | **Yes — the trigger is a hard boundary** |
 | platform permission on a tenant role | `fn_validate_role_permission` trigger | **Yes** |
+| tenant key of a tenancy row — `org_id`/`workspace_id` of roles, workspaces, teams, api_keys, idempotency_keys; `sessions.user_id` | no `acc_app` column grant + `fn_tenant_key_immutable` triggers, every principal including the owner (migration `0025`, ADR-015 R-3) | **Yes** |
+| grant-scope parent existence — a team, workspace or reseller holding a grant | `fn_scope_parent_restrict` (`23503`); `acc_app` holds no DELETE on teams, workspaces or resellers (`0025`) | **Yes** |
+| identity credentials — `email`, `password_hash`, `mfa_*`, a session's token, expiry and owner, an API key's hash, scopes and binding | column-level UPDATE grants; no `acc_app` INSERT on sessions; `users` insert shape (invited, nothing else); revocation terminal on sessions and api_keys (`0025`, ADR-015 R-2) | **Yes.** Coverage of a *subject's* grants (who may administer which user — F-9) is application-only by decision (option B) |
+| organization lifecycle and billing — `status*`, `billing_*`; `slug`; new-organization shape; provisioning `reseller_id` | `fn_organizations_guard_lifecycle` on the validated `platform.tenants.manage`; `closed` terminal; four legal edges (`23514` otherwise); no `slug` grant; `organizations_insert` provisioning arm bound to the validated reseller claim (`0025`, ADR-015 R-4) | **Yes.** Refusing configuration edits to a suspended organization (`name`, `legal_name`, `gstin`) stays application-only (ADR-012 OD-3) |
+| reseller `status`, `is_platform_default`, `domain`, `slug` | `fn_resellers_guard_platform_fields` on `platform.tenants.manage`; no `slug` grant (`0025`) | **Yes.** `name`, `brand_config`, `default_markup_pct` remain the reseller's own |
 
 **The running application holds no principal that can bypass RLS.** Migrations and seeding run as the schema owner; the API connects only as non-owner roles (`DATABASE.md` §2).
 
