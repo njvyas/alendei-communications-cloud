@@ -118,15 +118,11 @@ export class ProviderSubmissionExecutor {
       this.#refused(error, submission);
       throw error;
     }
-    let adapter: GuardedProviderAdapter;
-    try {
-      adapter = this.#target(redemption.adapterKey, variant, (a, v) =>
-        a.forBehavior(v as SimulatorBehavior),
-      );
-    } catch (error) {
-      this.#redeemer.void(redemption);
-      throw error;
-    }
+    // A refusal here leaves the admission redeemed but unauthorized: spent,
+    // and never usable again (only this executor holds the redeemer).
+    const adapter = this.#target(redemption.adapterKey, variant, (a, v) =>
+      a.forBehavior(v as SimulatorBehavior),
+    );
     const permit = this.#redeemer.authorize(redemption, adapter);
     const result = await this.#run(adapter, redemption, submission, permit);
     const settled = this.#redeemer.settle(redemption, result);
@@ -241,9 +237,8 @@ export class ProviderSubmissionExecutor {
     } catch (error) {
       abort.abort();
       if (error instanceof CircuitAdmissionRequired) {
-        // The adapter's guard refused the permit: nothing was sent, and
-        // nothing will be recorded.
-        this.#redeemer.void(redemption);
+        // The adapter's guard refused the permit: nothing was sent, nothing
+        // settles, and nothing can be recorded.
         this.#refused(error, submission);
         throw error;
       }

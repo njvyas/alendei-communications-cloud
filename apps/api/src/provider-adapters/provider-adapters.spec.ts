@@ -793,7 +793,7 @@ describe('circuit admission is mandatory before any provider call (Gate D.3, PRO
     expect(timer.pending).toBe(0);
   });
 
-  it('a behaviour is refused for an adapter that is not the simulator: nothing is sent, and the admission is void', async () => {
+  it('a behaviour is refused for an adapter that is not the simulator: nothing is sent, and the admission is spent', async () => {
     const { adapters, submit } = recording();
     const { executor, admit } = rig(new VirtualTimer(), { adapters });
     const admission = admit();
@@ -809,7 +809,7 @@ describe('circuit admission is mandatory before any provider call (Gate D.3, PRO
     expect(() => executor.isSimulator('acme_sms')).toThrow(ProviderAdapterNotRegistered);
   });
 
-  it('an admission for an unregistered adapter key fails closed, and is void', async () => {
+  it('an admission for an unregistered adapter key fails closed, and is spent', async () => {
     const reached = simulated();
     const { executor, admit } = rig();
     const admission = admit({ adapterKey: 'acme_sms' });

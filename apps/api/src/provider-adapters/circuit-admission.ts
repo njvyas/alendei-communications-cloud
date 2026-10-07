@@ -33,7 +33,7 @@ import type { SubmissionTimer } from './submission-timer';
  *   settled   the executor, with the normalized result it measured
  *   recorded  `ProviderStateStore.recordSubmission`, which takes provider,
  *             ticket and result from here — never from its caller — once
- *   void      expired, or refused after redemption
+ *   void      expired before it was redeemed
  *
  * Every capability (admission, redemption, permit, settled submission) is a
  * frozen instance of a class with a private constructor whose ES `#record`
@@ -236,7 +236,6 @@ export interface AdmissionRedeemer {
   redeem(admission: unknown, submission: ProviderSubmission): Redemption;
   authorize(redemption: Redemption, target: GuardedProviderAdapter): SubmissionPermit;
   settle(redemption: Redemption, result: ProviderSubmissionResult): SettledSubmission;
-  void(redemption: Redemption): void;
 }
 
 /**
@@ -294,7 +293,6 @@ export class CircuitAdmissions {
         this.#authorize(redemption, target),
       settle: (redemption: Redemption, result: ProviderSubmissionResult) =>
         this.#settle(redemption, result),
-      void: (redemption: Redemption) => this.#void(redemption),
     });
   }
 
@@ -363,11 +361,6 @@ export class CircuitAdmissions {
     record.result = deepFrozenCopy(result);
     record.state = 'settled';
     return mintSettled(record);
-  }
-
-  #void(redemption: Redemption): void {
-    const record = this.#own(redemptionRecord(redemption));
-    if (record.state === 'redeemed' || record.state === 'invoked') record.state = 'void';
   }
 
   #takeForRecording(settled: SettledSubmission): SettledRecord {
