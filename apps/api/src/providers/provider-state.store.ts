@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import {
   AUDIT_ACTIONS,
+  PROVIDER_ADAPTER_KEYS,
   PROVIDER_CIRCUIT_STATES,
   PROVIDER_HEALTH_DEFAULTS,
   PROVIDER_HEALTH_STATES,
@@ -13,13 +14,17 @@ import {
   type ProviderHealthSampleKind,
   type ProviderHealthState,
   type ProviderProbeOutcome,
-  type ProviderSubmissionResult,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
 import { and, desc, eq, gt, inArray, lte, ne } from 'drizzle-orm';
 
 import { RequestContext } from '../common/context/request-context';
-import { CircuitAdmissions, type CircuitAdmission } from '../provider-adapters/circuit-admission';
+import {
+  CircuitAdmissions,
+  type AdmissionIssuer,
+  type CircuitAdmission,
+  type SettledSubmission,
+} from '../provider-adapters/circuit-admission';
 import { MetricsService } from '../observability/metrics.service';
 import { ProviderAccess } from './provider-access.service';
 import { PROVIDER_CLOCK, type ProviderClock } from './provider-clock';
@@ -31,23 +36,29 @@ import {
   recordSubmission,
   submissionOutcome,
   type CircuitSnapshot,
-  type CircuitTicket,
   type CircuitTransition,
   type HealthWindowSample,
 } from './provider-state-machine';
 import {
+  adapterNotRegistered,
+  channelCodeOf,
   circuitPolicyOf,
   circuitSnapshot,
+  lifecycleConflict,
   loadCircuitPolicy,
   loadProvider,
+  readCapabilities,
   type ProviderRow,
 } from './provider-views';
 
 export type Admission =
   | {
       readonly admitted: true;
-      readonly ticket: CircuitTicket;
-      /** The token the provider call must redeem (§6h). Issued only here. */
+      /**
+       * The capability the provider call must redeem (§6h). Issued only here;
+       * it carries the provider, adapter, channel, capabilities, ticket and
+       * timeout the executor will use — the caller supplies none of them.
+       */
       readonly admission: CircuitAdmission;
     }
   | {
@@ -80,24 +91,34 @@ type HealthCause = 'submission' | 'probe' | 'override';
 @Injectable()
 export class ProviderStateStore {
   private readonly logger = new Logger(ProviderStateStore.name);
+  /** The admission ledger's one issuer (ADR-015 R-13): claimed here, so no other code can issue. */
+  readonly #issuer: AdmissionIssuer;
 
   constructor(
     private readonly access: ProviderAccess,
-    private readonly admissions: CircuitAdmissions,
+    admissions: CircuitAdmissions,
     @Inject(PROVIDER_CLOCK) private readonly clock: ProviderClock,
     @Optional() private readonly metrics?: MetricsService,
-  ) {}
+  ) {
+    this.#issuer = admissions.claimIssuer();
+  }
 
   /**
-   * Admission of one submission (§6c). `provider` must already be locked `FOR
-   * UPDATE` in `tx` — the caller has just checked its lifecycle status under
-   * that lock (§6f). A refusal changes nothing and is the caller's to record.
+   * Admission of one submission (§6c), in the fixed precedence of §6f: the
+   * provider is locked `FOR UPDATE` here (a caller that already holds the lock
+   * re-takes it harmlessly in the same transaction); only an `active` provider
+   * is a submission target (`409`, the circuit never consulted); its catalogue
+   * adapter key must be registered (`422`); then the circuit decides. A
+   * circuit refusal changes nothing and is the caller's to record. An admitted
+   * submission gets a `CircuitAdmission` carrying the channel and the
+   * capabilities read under the same lock.
    */
-  async admit(
-    tx: Transaction,
-    principal: AuthPrincipal,
-    provider: ProviderRow,
-  ): Promise<Admission> {
+  async admit(tx: Transaction, principal: AuthPrincipal, providerId: string): Promise<Admission> {
+    const provider = await loadProvider(tx, providerId, { forUpdate: true });
+    if (provider.status !== 'active') throw lifecycleConflict(provider.status);
+    if (!(PROVIDER_ADAPTER_KEYS as readonly string[]).includes(provider.adapterKey)) {
+      throw adapterNotRegistered(provider, PROVIDER_ADAPTER_KEYS);
+    }
     const now = this.clock.now();
     // The policy is read after the caller took the provider row lock, and this
     // one version governs the whole decision (§6a).
@@ -146,23 +167,37 @@ export class ProviderStateStore {
         correlationId: RequestContext.correlationId(),
       });
     }
+    const channel = await channelCodeOf(tx, provider.channelId);
+    const capabilities = await readCapabilities(tx, provider.id);
     // The only place an admission is issued: the circuit has just admitted this
     // submission under the provider row lock (§6h).
     return {
       admitted: true,
-      ticket: decision.ticket,
-      admission: this.admissions.issue(provider.id, decision.ticket),
+      admission: this.#issuer.issue({
+        providerId: provider.id,
+        adapterKey: provider.adapterKey,
+        channel,
+        capabilities: Object.fromEntries(capabilities.map((c) => [c.key, c.value])),
+        ticket: decision.ticket,
+        circuitPolicyVersion: policyRow.version,
+      }),
     };
   }
 
-  /** Records a submission the adapter answered (§6d), and its effect on health (§5c). */
+  /**
+   * Records a submission the adapter answered (§6d), and its effect on health
+   * (§5c). Takes only the settled submission the executor returned: the
+   * provider, the ticket and the result come from the admission ledger, once —
+   * a plain ticket, an admission whose call has not settled, a forgery or a
+   * second recording is refused (`CircuitAdmissionRequired`) before anything
+   * is read or written.
+   */
   async recordSubmission(
     tx: Transaction,
     principal: AuthPrincipal,
-    providerId: string,
-    ticket: CircuitTicket,
-    result: ProviderSubmissionResult,
+    settled: SettledSubmission,
   ): Promise<RecordedState> {
+    const { providerId, ticket, result } = this.#issuer.takeForRecording(settled);
     const provider = await loadProvider(tx, providerId, { forUpdate: true });
     const now = this.clock.now();
     const outcome = submissionOutcome(result);

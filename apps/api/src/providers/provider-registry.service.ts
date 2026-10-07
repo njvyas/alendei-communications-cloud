@@ -6,7 +6,6 @@ import {
   PROVIDER_ADAPTER_KEYS,
   PROVIDER_CAPABILITY_FORBIDDEN_KEY_FRAGMENTS,
   PROVIDER_CAPABILITY_LIMITS,
-  PROVIDER_SUBMISSION_DEFAULTS,
   PROVIDER_TRANSITIONS,
   type AuditAction,
   type AuthPrincipal,
@@ -27,17 +26,13 @@ import { RequestContext } from '../common/context/request-context';
 import { AppException } from '../common/errors/app.exception';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
 import { TenantDatabase } from '../database/tenant-database.service';
-import {
-  ProviderAdapterNotRegistered,
-  ProviderAdapterRegistry,
-} from '../provider-adapters/adapter-registry';
-import { SimulatorAdapter } from '../provider-adapters/simulator.adapter';
+import { ProviderAdapterNotRegistered } from '../provider-adapters/adapter-registry';
 import { ProviderSubmissionExecutor } from '../provider-adapters/submission-executor';
 import { ProviderAccess } from './provider-access.service';
 import { ProviderConfigurationCache } from './provider-configuration.cache';
 import { ProviderStateStore, type Admission } from './provider-state.store';
 import {
-  channelCodeOf,
+  adapterNotRegistered,
   channelView,
   lifecycleConflict,
   loadCircuitPolicy,
@@ -125,7 +120,6 @@ export class ProviderRegistryService {
     private readonly db: TenantDatabase,
     private readonly access: ProviderAccess,
     private readonly lists: ListQuery,
-    private readonly adapters: ProviderAdapterRegistry,
     private readonly executor: ProviderSubmissionExecutor,
     private readonly state: ProviderStateStore,
     private readonly configuration: ProviderConfigurationCache,
@@ -459,8 +453,8 @@ export class ProviderRegistryService {
       await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_TEST_SEND);
       const provider = await loadProvider(tx, id, { forUpdate: true });
       if (provider.status !== 'active') throw lifecycleConflict(provider.status);
-      const adapter = this.simulatorFor(provider);
-      const admission = await this.state.admit(tx, principal, provider);
+      this.assertSimulatorProvider(provider);
+      const admission = await this.state.admit(tx, principal, provider.id);
       if (!admission.admitted) {
         await this.access.record(
           tx,
@@ -481,18 +475,12 @@ export class ProviderRegistryService {
         );
         return { admission } as const;
       }
-      const capabilities = await readCapabilities(tx, provider.id);
-      return {
-        admission,
-        provider,
-        adapter,
-        channel: await channelCodeOf(tx, provider.channelId),
-        capabilities: Object.fromEntries(capabilities.map((c) => [c.key, c.value])),
-      } as const;
+      return { admission, provider } as const;
     });
     if (!gate.admission.admitted) throw circuitOpen(gate.admission);
-    const { provider, adapter, channel, capabilities } = gate as Required<typeof gate>;
-    const ticket = gate.admission.ticket;
+    const { provider } = gate as Required<typeof gate>;
+    const { admission } = gate.admission;
+    const channel = admission.channel;
 
     const correlationId = RequestContext.correlationId();
     const submission = {
@@ -503,14 +491,10 @@ export class ProviderRegistryService {
       content: { text: 'ACC provider test-send' },
     };
     // Circuit admission is mandatory and redeemed by the executor before the
-    // adapter is called (PROVIDER_ADAPTER.md §6h).
-    const result = await this.executor.execute(
-      gate.admission.admission,
-      adapter.forBehavior(behavior),
-      { providerId: provider.id, adapterKey: provider.adapterKey, channel, capabilities },
-      submission,
-      PROVIDER_SUBMISSION_DEFAULTS.TIMEOUT_MS,
-    );
+    // adapter is called; the adapter, its context and the timeout come from
+    // the admission (PROVIDER_ADAPTER.md §6h, ADR-015 R-13).
+    const settled = await this.executor.execute(admission, submission, behavior);
+    const { result } = settled;
 
     const recorded = await this.db.withRequestTenant(async (tx) => {
       await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_TEST_SEND);
@@ -518,7 +502,7 @@ export class ProviderRegistryService {
         reason: 'authority withdrawn while the test-send ran; result not recorded',
         submissionId: submission.submissionId,
       });
-      const states = await this.state.recordSubmission(tx, principal, provider.id, ticket, result);
+      const states = await this.state.recordSubmission(tx, principal, settled);
       await this.access.record(
         tx,
         principal,
@@ -532,7 +516,7 @@ export class ProviderRegistryService {
           retryable: result.outcome === 'rejected' ? result.failure.retryable : null,
           latencyMs: result.latencyMs,
           submissionId: submission.submissionId,
-          circuitProbe: ticket.probeId !== null,
+          circuitProbe: settled.circuitProbe,
           circuitState: states.circuitState,
           healthState: states.healthState,
         },
@@ -552,7 +536,7 @@ export class ProviderRegistryService {
       providerMessageId: result.outcome === 'accepted' ? result.providerMessageId : null,
       failure: result.outcome === 'rejected' ? result.failure : null,
       latencyMs: result.latencyMs,
-      circuitProbe: ticket.probeId !== null,
+      circuitProbe: settled.circuitProbe,
       healthState: recorded.healthState,
       circuitState: recorded.circuitState,
     };
@@ -578,32 +562,27 @@ export class ProviderRegistryService {
 
   /**
    * The provider's adapter, from its catalogue row through the code registry —
-   * never from the request. An unregistered key fails closed (`422`), and only
-   * the simulator accepts a behaviour.
+   * never from the request — must be registered (`422 PROVIDER_ADAPTER_UNKNOWN`
+   * otherwise) and must be the simulator, the only adapter that takes a
+   * behaviour. Answers nothing: no adapter ever leaves the executor (ADR-015
+   * R-13).
    */
-  simulatorFor(provider: ProviderRow): SimulatorAdapter {
-    let adapter;
+  assertSimulatorProvider(provider: ProviderRow): void {
+    let simulator: boolean;
     try {
-      adapter = this.adapters.resolve(provider.adapterKey);
+      simulator = this.executor.isSimulator(provider.adapterKey);
     } catch (error) {
       if (!(error instanceof ProviderAdapterNotRegistered)) throw error;
-      throw new AppException({
-        status: HttpStatus.UNPROCESSABLE_ENTITY,
-        code: ERROR_CODES.PROVIDER_ADAPTER_UNKNOWN,
-        message: "The provider's adapter is not registered",
-        details: { adapterKeys: [...this.adapters.keys()] },
-        logContext: { providerId: provider.id, adapterKey: provider.adapterKey },
-      });
+      throw adapterNotRegistered(provider, this.executor.adapterKeys());
     }
     // The behaviour selects a simulator scenario; only the simulator takes one.
-    if (!(adapter instanceof SimulatorAdapter)) {
+    if (!simulator) {
       throw new AppException({
         status: HttpStatus.UNPROCESSABLE_ENTITY,
         code: ERROR_CODES.VALIDATION_FAILED,
         message: 'A simulator behaviour can only be sent to a simulator provider',
       });
     }
-    return adapter;
   }
 
   // --- internals -----------------------------------------------------------------------

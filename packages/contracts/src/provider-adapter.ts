@@ -74,10 +74,35 @@ export interface ProviderSubmission {
   readonly content: { readonly text: string };
 }
 
+/**
+ * The brand of a submission permit. Declared, never defined, and not exported:
+ * no code outside this file can name it, so no value can be written that
+ * type-checks as a permit without a cast (ADR-015 R-13).
+ */
+declare const SUBMISSION_PERMIT: unique symbol;
+
+/**
+ * Proof that the circuit admitted this one submission to this one provider
+ * and adapter, redeemed by the submission executor immediately before the
+ * call (`PROVIDER_ADAPTER.md` §6h, ADR-015 R-13). Opaque: it has no readable
+ * field. The type is guidance only — what makes a permit genuine is the
+ * runtime check `send()` performs against the admission ledger, which
+ * refuses anything the ledger did not mint for this call.
+ */
+export interface SubmissionPermit {
+  readonly [SUBMISSION_PERMIT]: true;
+}
+
 export interface ProviderSubmissionOptions {
   /** The submission timeout. The executor enforces it; an adapter may also honour `signal`. */
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
+  /**
+   * The redeemed circuit admission for this call (ADR-015 R-13). Required: an
+   * adapter's `send()` refuses, before anything is sent, a call without a
+   * genuine permit minted for this provider, adapter and submission.
+   */
+  readonly permit: SubmissionPermit;
 }
 
 /** The provider accepted the submission — acceptance, not delivery. */

@@ -1,24 +1,22 @@
-import { Inject, Injectable } from '@nestjs/common';
 import {
   CHANNEL_CODES,
   PROVIDER_SUBMISSION_DEFAULTS,
   RETRYABLE_FAILURE_CATEGORIES,
   SIMULATOR_BEHAVIORS,
   SIMULATOR_HEALTH_BEHAVIORS,
-  type ProviderAdapter,
   type ProviderAdapterCapabilities,
   type ProviderAdapterContext,
   type ProviderFailureCategory,
   type ProviderHealthCheckOptions,
   type ProviderHealthProbe,
   type ProviderSubmission,
-  type ProviderSubmissionOptions,
   type ProviderSubmissionResult,
   type SimulatorBehavior,
   type SimulatorHealthBehavior,
 } from '@acc/contracts';
 
-import { SUBMISSION_TIMER, type SubmissionTimer } from './submission-timer';
+import { GuardedProviderAdapter, type AdapterSubmitOptions } from './circuit-admission';
+import type { SubmissionTimer } from './submission-timer';
 
 /** An adapter operation that has no Phase 2 behaviour (ADR-013 PD-6). */
 export class ProviderAdapterUnsupportedOperation extends Error {
@@ -57,6 +55,12 @@ const FAILURES: Readonly<
   },
 };
 
+/** The behaviour a simulator instance answers with: a submission scenario, a health scenario, or neither. */
+interface SimulatorScenario {
+  readonly submission?: SimulatorBehavior;
+  readonly health?: SimulatorHealthBehavior;
+}
+
 /**
  * The only Phase 2 adapter (`PROVIDER_ADAPTER.md` §7, ADR-013 PD-3): it never
  * opens a network connection and reproduces, on demand, the seven
@@ -64,73 +68,85 @@ const FAILURES: Readonly<
  * explicitly per submission (`forBehavior`), the provider message id derives
  * from the submission id, and every wait goes through the injected timer.
  *
+ * A `GuardedProviderAdapter` (ADR-015 R-13): `send()` is the base's, so a
+ * call without the permit the submission executor minted for this very
+ * instance is refused before anything is simulated. Behaviour views are
+ * frozen simulator instances too — never plain objects — so a view is guarded
+ * exactly as the registered simulator is.
+ *
  * It holds and needs no credential; `INVALID_CREDENTIALS` is a simulated answer.
  * Delivery and webhook behaviours are Phase 3.
  */
-@Injectable()
-export class SimulatorAdapter implements ProviderAdapter {
+export class SimulatorAdapter extends GuardedProviderAdapter {
   readonly adapterKey = 'simulator';
+  readonly #timer: SubmissionTimer;
+  readonly #scenario: SimulatorScenario;
 
-  constructor(@Inject(SUBMISSION_TIMER) private readonly timer: SubmissionTimer) {}
+  constructor(timer: SubmissionTimer, scenario: SimulatorScenario = {}) {
+    super();
+    this.#timer = timer;
+    this.#scenario = Object.freeze({ ...scenario });
+    Object.freeze(this);
+  }
 
   capabilities(): ProviderAdapterCapabilities {
     return { channels: CHANNEL_CODES };
   }
 
-  async healthCheck(): Promise<ProviderHealthProbe> {
-    return { healthy: true, latencyMs: 0 };
+  /**
+   * The health check. The bare simulator, and a submission view, answer
+   * healthy at once; a health view (`forHealthBehavior`) answers with its
+   * behaviour.
+   */
+  async healthCheck(
+    _context?: ProviderAdapterContext,
+    options?: ProviderHealthCheckOptions,
+  ): Promise<ProviderHealthProbe> {
+    const behavior = this.#scenario.health;
+    if (behavior === undefined) return { healthy: true, latencyMs: 0 };
+    return this.simulateHealth(behavior, options);
   }
 
   /**
    * A view of this adapter whose health check answers with `behavior` (Phase
    * 2.3): `HEALTHY` and `UNHEALTHY` at once, `TIMEOUT` never — the executor's
    * timeout decides, and its abort ends the wait. An unknown behaviour is
-   * unhealthy, never healthy.
+   * unhealthy, never healthy. A health view selects no submission behaviour,
+   * so it submits as the bare simulator does: `CONFIGURATION_ERROR`, never
+   * success.
    */
-  forHealthBehavior(behavior: SimulatorHealthBehavior): ProviderAdapter {
-    return {
-      adapterKey: this.adapterKey,
-      capabilities: () => this.capabilities(),
-      healthCheck: (_context, options) => this.simulateHealth(behavior, options),
-      // A health view selects no submission behaviour, so it sends as the bare
-      // simulator does: `CONFIGURATION_ERROR`, never success.
-      send: (context, submission) => this.send(context, submission),
-      estimateCost: () => this.estimateCost(),
-      checkStatus: () => this.checkStatus(),
-      parseWebhook: () => this.parseWebhook(),
-    };
+  forHealthBehavior(behavior: SimulatorHealthBehavior): SimulatorAdapter {
+    return new SimulatorAdapter(this.#timer, { health: behavior });
   }
 
   /** A view of this adapter that answers every submission with `behavior`. */
-  forBehavior(behavior: SimulatorBehavior): ProviderAdapter {
-    return {
-      adapterKey: this.adapterKey,
-      capabilities: () => this.capabilities(),
-      healthCheck: () => this.healthCheck(),
-      send: (context, submission, options) => this.simulate(behavior, context, submission, options),
-      estimateCost: () => this.estimateCost(),
-      checkStatus: () => this.checkStatus(),
-      parseWebhook: () => this.parseWebhook(),
-    };
+  forBehavior(behavior: SimulatorBehavior): SimulatorAdapter {
+    return new SimulatorAdapter(this.#timer, { submission: behavior });
   }
 
   /**
-   * Without a behaviour the simulator cannot know what to answer — that is a
-   * configuration error of the caller, reported as such, never a success.
+   * Reached only through the guarded `send()`. Without a behaviour the
+   * simulator cannot know what to answer — that is a configuration error of
+   * the caller, reported as such, never a success.
    */
-  send(
-    _context: ProviderAdapterContext,
+  protected submit(
+    context: ProviderAdapterContext,
     submission: ProviderSubmission,
+    options: AdapterSubmitOptions,
   ): Promise<ProviderSubmissionResult> {
-    return Promise.resolve(
-      this.reject(
-        submission,
-        'CONFIGURATION_ERROR',
-        null,
-        'The simulator needs an explicit behaviour',
-        0,
-      ),
-    );
+    const behavior = this.#scenario.submission;
+    if (behavior === undefined) {
+      return Promise.resolve(
+        this.reject(
+          submission,
+          'CONFIGURATION_ERROR',
+          null,
+          'The simulator needs an explicit behaviour',
+          0,
+        ),
+      );
+    }
+    return this.simulate(behavior, context, submission, options);
   }
 
   estimateCost(): Promise<never> {
@@ -145,14 +161,15 @@ export class SimulatorAdapter implements ProviderAdapter {
     return Promise.reject(new ProviderAdapterUnsupportedOperation(this.adapterKey, 'parseWebhook'));
   }
 
+  /** The simulated provider itself: every submission that reaches "the provider" passes here. */
   private async simulate(
     behavior: SimulatorBehavior,
     context: ProviderAdapterContext,
     submission: ProviderSubmission,
-    options: ProviderSubmissionOptions,
+    options: AdapterSubmitOptions,
   ): Promise<ProviderSubmissionResult> {
-    const started = this.timer.now();
-    const elapsed = () => Math.round(this.timer.now() - started);
+    const started = this.#timer.now();
+    const elapsed = () => Math.round(this.#timer.now() - started);
 
     if (!(SIMULATOR_BEHAVIORS as readonly string[]).includes(behavior)) {
       return this.reject(submission, 'CONFIGURATION_ERROR', null, 'Unknown simulator behaviour', 0);
@@ -171,7 +188,7 @@ export class SimulatorAdapter implements ProviderAdapter {
       case 'SUCCESS':
         return this.accept(submission, elapsed());
       case 'SLOW_RESPONSE':
-        await this.timer.sleep(
+        await this.#timer.sleep(
           PROVIDER_SUBMISSION_DEFAULTS.SIMULATOR_SLOW_RESPONSE_MS,
           options.signal,
         );
@@ -179,7 +196,7 @@ export class SimulatorAdapter implements ProviderAdapter {
       case 'TIMEOUT':
         // Never answers. The executor's timeout decides the outcome; the wait
         // ends when the executor aborts it, so nothing is left running.
-        await this.timer.sleep(Infinity, options.signal);
+        await this.#timer.sleep(Infinity, options.signal);
         return this.reject(
           submission,
           'TIMEOUT',
@@ -208,9 +225,9 @@ export class SimulatorAdapter implements ProviderAdapter {
       return { healthy: false, latencyMs: 0 };
     }
     if (behavior === 'TIMEOUT') {
-      const started = this.timer.now();
-      await this.timer.sleep(Infinity, options?.signal);
-      return { healthy: false, latencyMs: Math.round(this.timer.now() - started) };
+      const started = this.#timer.now();
+      await this.#timer.sleep(Infinity, options?.signal);
+      return { healthy: false, latencyMs: Math.round(this.#timer.now() - started) };
     }
     return { healthy: behavior === 'HEALTHY', latencyMs: 0 };
   }

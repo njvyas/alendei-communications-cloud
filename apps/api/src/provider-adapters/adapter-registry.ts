@@ -1,7 +1,6 @@
-import { Inject, Injectable } from '@nestjs/common';
-import { PROVIDER_ADAPTER_KEYS, type ProviderAdapter } from '@acc/contracts';
+import { PROVIDER_ADAPTER_KEYS } from '@acc/contracts';
 
-export const PROVIDER_ADAPTERS = Symbol('PROVIDER_ADAPTERS');
+import { assertGuardedAdapter, type GuardedProviderAdapter } from './circuit-admission';
 
 /** `adapter_key` names no registered adapter. Fail closed; the caller decides the status. */
 export class ProviderAdapterNotRegistered extends Error {
@@ -12,21 +11,26 @@ export class ProviderAdapterNotRegistered extends Error {
 }
 
 /**
- * `adapter_key → adapter` (ADR-013 F-9). Built once, from code, at startup:
- * nothing a request carries can register, replace or name an adapter that is not
- * here, and a provider's key comes from its catalogue row, never from input.
+ * `adapter_key → adapter` (ADR-013 F-9). Built once, from code, by the
+ * submission executor that owns it — it is not a DI provider, and the executor
+ * holds it in an ES private field, so nothing else can reach an adapter
+ * (ADR-015 R-13). Nothing a request carries can register, replace or name an
+ * adapter that is not here, and a provider's key comes from its catalogue row,
+ * never from input.
  *
- * Construction fails if two adapters claim one key (so registration order can
- * never decide which one wins) or if the registered set and the published
- * `PROVIDER_ADAPTER_KEYS` disagree in either direction.
+ * Construction fails if an adapter cannot be trusted to enforce the submission
+ * permit (not a `GuardedProviderAdapter`, overriding `send()`, or not frozen),
+ * if two adapters claim one key (so registration order can never decide which
+ * one wins), or if the registered set and the published `PROVIDER_ADAPTER_KEYS`
+ * disagree in either direction.
  */
-@Injectable()
 export class ProviderAdapterRegistry {
-  private readonly adapters: ReadonlyMap<string, ProviderAdapter>;
+  readonly #adapters: ReadonlyMap<string, GuardedProviderAdapter>;
 
-  constructor(@Inject(PROVIDER_ADAPTERS) adapters: readonly ProviderAdapter[]) {
-    const map = new Map<string, ProviderAdapter>();
+  constructor(adapters: readonly GuardedProviderAdapter[]) {
+    const map = new Map<string, GuardedProviderAdapter>();
     for (const adapter of adapters) {
+      assertGuardedAdapter(adapter);
       if (map.has(adapter.adapterKey)) {
         throw new Error(`Provider adapter key "${adapter.adapterKey}" is registered twice`);
       }
@@ -39,17 +43,18 @@ export class ProviderAdapterRegistry {
         `Registered adapters [${registered.join(', ')}] do not match PROVIDER_ADAPTER_KEYS [${published.join(', ')}]`,
       );
     }
-    this.adapters = map;
+    this.#adapters = map;
+    Object.freeze(this);
   }
 
-  /** The adapter for `adapterKey`, or `ProviderAdapterNotRegistered`. */
-  resolve(adapterKey: string): ProviderAdapter {
-    const adapter = this.adapters.get(adapterKey);
+  /** The adapter for `adapterKey`, or `ProviderAdapterNotRegistered`. For the executor only. */
+  resolve(adapterKey: string): GuardedProviderAdapter {
+    const adapter = this.#adapters.get(adapterKey);
     if (!adapter) throw new ProviderAdapterNotRegistered(adapterKey);
     return adapter;
   }
 
   keys(): readonly string[] {
-    return [...this.adapters.keys()];
+    return [...this.#adapters.keys()];
   }
 }

@@ -251,6 +251,23 @@ export function lifecycleConflict(status: ProviderStatus): AppException {
   });
 }
 
+/**
+ * The provider's catalogue `adapter_key` names no registered adapter: fail
+ * closed (`422`), naming the registered keys (`PROVIDER_ADAPTER.md` §6f step 5).
+ */
+export function adapterNotRegistered(
+  provider: Pick<ProviderRow, 'id' | 'adapterKey'>,
+  adapterKeys: readonly string[],
+): AppException {
+  return new AppException({
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    code: ERROR_CODES.PROVIDER_ADAPTER_UNKNOWN,
+    message: "The provider's adapter is not registered",
+    details: { adapterKeys: [...adapterKeys] },
+    logContext: { providerId: provider.id, adapterKey: provider.adapterKey },
+  });
+}
+
 export function notFound(resource: 'Provider' | 'Channel', id: string): AppException {
   return new AppException({
     status: HttpStatus.NOT_FOUND,

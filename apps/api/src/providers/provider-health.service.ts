@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import {
   AUDIT_ACTIONS,
   PERMISSIONS,
-  PROVIDER_HEALTH_DEFAULTS,
   type AuthPrincipal,
   type ChannelCode,
   type PageInfo,
@@ -95,25 +94,25 @@ export class ProviderHealthService {
     const target = await this.db.withRequestTenant(async (tx) => {
       await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
       const provider = await loadProvider(tx, id);
-      const adapter = this.registry.simulatorFor(provider);
+      this.registry.assertSimulatorProvider(provider);
       const capabilities = await readCapabilities(tx, provider.id);
       return {
         provider,
-        adapter,
         channel: await channelCodeOf(tx, provider.channelId),
         capabilities: Object.fromEntries(capabilities.map((c) => [c.key, c.value])),
       };
     });
 
+    // A diagnostic, not a submission: no admission (§5e). The executor
+    // resolves the adapter from the catalogue key and owns the timeout.
     const probe = await this.executor.probe(
-      target.adapter.forHealthBehavior(behavior),
       {
         providerId: target.provider.id,
         adapterKey: target.provider.adapterKey,
         channel: target.channel,
         capabilities: target.capabilities,
       },
-      PROVIDER_HEALTH_DEFAULTS.PROBE_TIMEOUT_MS,
+      behavior,
     );
 
     const recorded = await this.db.withRequestTenant(async (tx) => {
