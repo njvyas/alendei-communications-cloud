@@ -139,7 +139,7 @@ const CATEGORIES: Category[] = [
     key: 'billing',
     forbids: 'billing or rating (ADR-013 PD-6)',
     exceptions:
-      'Pre-existing: the organization billing mode and policy fields (Phase 1C; no rating or charging) and the `estimateCost` interface member, which the simulator refuses (PD-6).',
+      'Pre-existing: the organization billing mode and policy fields (Phase 1C; no rating or charging) and the `estimateCost` interface member, which the simulator refuses (PD-6). ADR-015 R-13: `estimateCost` is also an abstract member of `GuardedProviderAdapter`, and the circuit-admission *ledger* is admission bookkeeping (issued → recorded), not a billing ledger.',
     pattern:
       /[\w-]*(?:billing|rating|ledger|invoice|wallet|tariff|estimate_?cost|charge|pricing|price)[\w-]*/gi,
     providerCodeOnly: false,
@@ -169,6 +169,7 @@ const CATEGORIES: Category[] = [
         'charge_per_attempt',
         'charge_per_logical_message',
       ],
+      'apps/api/src/provider-adapters/circuit-admission.ts': ['estimateCost', 'ledger'],
       'apps/api/src/provider-adapters/simulator.adapter.ts': ['estimateCost'],
       'packages/contracts/src/provider-adapter.ts': ['estimateCost'],
       'packages/db/src/schema/tenancy.ts': [
@@ -199,12 +200,13 @@ const CATEGORIES: Category[] = [
     key: 'lifecycle',
     forbids: 'the message lifecycle \u2014 messages, attempts, delivery, webhooks (ADR-013 PD-3)',
     exceptions:
-      'Pre-existing: the `checkStatus`/`parseWebhook` interface members, which the simulator refuses (PD-6), a role description and a forbidden metric label name. No message, attempt, delivery or webhook code exists.',
+      'Pre-existing: the `checkStatus`/`parseWebhook` interface members, which the simulator refuses (PD-6) and `GuardedProviderAdapter` declares abstract (ADR-015 R-13), a role description and a forbidden metric label name. No message, attempt, delivery or webhook code exists.',
     pattern:
       /[\w-]*(?:message_?attempt|webhook|deliver|dlr|checkStatus|parseWebhook|inbound_?message|conversation)[\w-]*/gi,
     providerCodeOnly: false,
     pinned: {
       'apps/api/src/observability/metrics.service.ts': ['conversation_id'],
+      'apps/api/src/provider-adapters/circuit-admission.ts': ['checkStatus', 'parseWebhook'],
       'apps/api/src/provider-adapters/simulator.adapter.ts': ['checkStatus', 'parseWebhook'],
       'packages/contracts/src/provider-adapter.ts': ['checkStatus', 'parseWebhook'],
       'packages/contracts/src/roles.ts': ['Conversation'],

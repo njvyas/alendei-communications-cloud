@@ -8,19 +8,22 @@
  * No router exists yet (routing is a later phase). What a router could do is
  * exactly what any code can do: read eligibility, go through admission, and
  * call `ProviderSubmissionExecutor.execute` — the only path to an adapter's
- * `send()`. This suite drives the real application (test-send is today's only
- * submission path) and, beside it, attempts every bypass a router could try
- * against the real executor in the real container. A provider call is counted
- * at the simulator itself, so "zero submissions" means the provider was never
- * reached. Concurrency is made deterministic by parking requests on the
- * provider row lock.
+ * `send()`, which itself refuses a call without the permit the executor
+ * minted (ADR-015 R-13). This suite drives the real application (test-send is
+ * today's only submission path) and, beside it, attempts every bypass a router
+ * could try against the real executor, store and container. A provider call is
+ * counted at the simulator itself, so "zero submissions" means the provider
+ * was never reached. Concurrency is made deterministic by parking requests on
+ * the provider row lock.
  */
+import { ModulesContainer } from '@nestjs/core';
 import { randomBytes } from 'node:crypto';
 
 import {
   PLATFORM_ROLE_KEYS,
   PROVIDER_CIRCUIT_DEFAULTS as SEEDED,
   PROVIDER_CIRCUIT_POLICY_FIELDS,
+  type AuthPrincipal,
   type ProviderSubmission,
 } from '@acc/contracts';
 import { schema } from '@acc/db';
@@ -30,14 +33,19 @@ import request from 'supertest';
 import { uuidv7 } from 'uuidv7';
 
 import { CredentialService } from '../src/iam/credential.service';
+import { ProviderAdapterRegistry } from '../src/provider-adapters/adapter-registry';
 import {
   CircuitAdmissionRequired,
   CircuitAdmissions,
+  GuardedProviderAdapter,
   type CircuitAdmission,
+  type SettledSubmission,
 } from '../src/provider-adapters/circuit-admission';
 import { SimulatorAdapter } from '../src/provider-adapters/simulator.adapter';
 import { ProviderSubmissionExecutor } from '../src/provider-adapters/submission-executor';
+import { ProviderRegistryService } from '../src/providers/provider-registry.service';
 import { routingEligibility } from '../src/providers/provider-state-machine';
+import { ProviderStateStore } from '../src/providers/provider-state.store';
 import { circuitPolicyOf, circuitSnapshot } from '../src/providers/provider-views';
 import {
   ManualProviderClock,
@@ -118,24 +126,40 @@ describe('Gate D.3 — the Provider Router cannot bypass circuit admission', () 
     );
   }
 
-  /** A router going straight to the provider call with `credential` in place of an admission. */
-  function directCall(id: string, credential: unknown) {
-    const submission: ProviderSubmission = {
-      submissionId: uuidv7(),
-      correlationId: uuidv7(),
-      channel: 'sms',
-      recipient: 'simulator:test-recipient',
-      content: { text: 'router bypass attempt' },
-    };
+  const bypassSubmission = (): ProviderSubmission => ({
+    submissionId: uuidv7(),
+    correlationId: uuidv7(),
+    channel: 'sms',
+    recipient: 'simulator:test-recipient',
+    content: { text: 'router bypass attempt' },
+  });
+
+  /**
+   * A router going straight to the provider call with `credential` in place of
+   * an admission. The provider, adapter, context and timeout come from the
+   * admission (ADR-015 R-13), so a router cannot name them.
+   */
+  function directCall(credential: unknown) {
     return h.app
       .get(ProviderSubmissionExecutor)
-      .execute(
-        credential,
-        h.app.get(SimulatorAdapter).forBehavior('SUCCESS'),
-        { providerId: id, adapterKey: 'simulator', channel: 'sms', capabilities: {} },
-        submission,
-        3000,
-      );
+      .execute(credential as CircuitAdmission, bypassSubmission(), 'SUCCESS');
+  }
+
+  /**
+   * The Phase 2.2 call shape, naming its own provider, adapter, context and
+   * timeout: refused outright, before the admission is touched.
+   */
+  function legacyCall(id: string, credential: unknown) {
+    const executor = h.app.get(ProviderSubmissionExecutor);
+    const execute = executor.execute as unknown as (...args: unknown[]) => Promise<unknown>;
+    return execute.call(
+      executor,
+      credential,
+      new SimulatorAdapter({ now: () => 0, sleep: async () => undefined }).forBehavior('SUCCESS'),
+      { providerId: id, adapterKey: 'simulator', channel: 'sms', capabilities: {} },
+      bypassSubmission(),
+      3000,
+    );
   }
 
   async function setPolicy(overrides: Partial<typeof SEEDED>) {
@@ -170,10 +194,9 @@ describe('Gate D.3 — the Provider Router cannot bypass circuit admission', () 
     };
     outstanding.push(() => gate.releaseAll());
     jest.spyOn(executor, 'execute').mockImplementation(async (...args) => {
-      // Only a genuine admission presented for its own provider is held;
-      // anything else goes straight to the real executor, which must refuse it.
-      const admission = args[0] as CircuitAdmission;
-      if (!gate.open && issued.includes(admission) && args[2].providerId === admission.providerId) {
+      // Only a genuine admission is held; anything else goes straight to the
+      // real executor, which must refuse it.
+      if (!gate.open && issued.includes(args[0]) && args.length === 3) {
         gate.held++;
         await new Promise<void>((resolve) => waiting.push(resolve));
       }
@@ -290,15 +313,15 @@ describe('Gate D.3 — the Provider Router cannot bypass circuit admission', () 
 
   beforeEach(() => {
     providerCalls = jest.spyOn(
-      h.app.get(SimulatorAdapter) as unknown as { simulate: () => unknown },
+      SimulatorAdapter.prototype as unknown as { simulate: () => unknown },
       'simulate',
     );
     issued = [];
-    const admissions = h.app.get(CircuitAdmissions);
-    const issue = admissions.issue.bind(admissions);
-    jest.spyOn(admissions, 'issue').mockImplementation((...args) => {
-      const admission = issue(...args);
-      issued.push(admission);
+    const store = h.app.get(ProviderStateStore);
+    const admit = store.admit.bind(store);
+    jest.spyOn(store, 'admit').mockImplementation(async (...args) => {
+      const admission = await admit(...args);
+      if (admission.admitted) issued.push(admission.admission);
       return admission;
     });
   });
@@ -359,7 +382,7 @@ describe('Gate D.3 — the Provider Router cannot bypass circuit admission', () 
       await eligibilityOf(id),
       { providerId: id, generation: 1, probeId: null },
     ]) {
-      await expect(directCall(id, credential)).rejects.toBeInstanceOf(CircuitAdmissionRequired);
+      await expect(directCall(credential)).rejects.toBeInstanceOf(CircuitAdmissionRequired);
     }
     expect(providerCalls).not.toHaveBeenCalled();
   });
@@ -388,9 +411,7 @@ describe('Gate D.3 — the Provider Router cannot bypass circuit admission', () 
     expect(results.filter((r) => r.status === 200)).toHaveLength(2);
     expect(providerCalls).toHaveBeenCalledTimes(2); // …and the provider saw exactly two
     // Re-presenting a spent probe admission, concurrently, sends nothing more.
-    const replays = await Promise.allSettled(
-      issued.flatMap((a) => [directCall(id, a), directCall(id, a)]),
-    );
+    const replays = await Promise.allSettled(issued.flatMap((a) => [directCall(a), directCall(a)]));
     expect(
       replays.every((r) => r.status === 'rejected' && r.reason instanceof CircuitAdmissionRequired),
     ).toBe(true);
@@ -409,11 +430,11 @@ describe('Gate D.3 — the Provider Router cannot bypass circuit admission', () 
     const id = await plantProvider('closed');
     const verdict = await eligibilityOf(id);
     expect(verdict).toEqual({ verdict: 'eligible' });
-    await expect(directCall(id, verdict)).rejects.toThrow(CircuitAdmissionRequired);
+    await expect(directCall(verdict)).rejects.toThrow(CircuitAdmissionRequired);
     const half = await plantProvider('open_elapsed');
     const probeOnly = await eligibilityOf(half);
     expect(probeOnly).toMatchObject({ verdict: 'probe_only' });
-    await expect(directCall(half, probeOnly)).rejects.toThrow(CircuitAdmissionRequired);
+    await expect(directCall(probeOnly)).rejects.toThrow(CircuitAdmissionRequired);
     expect(providerCalls).not.toHaveBeenCalled();
     // Reading eligibility claimed nothing: the probe slot is still free for a real admission.
     expect((await providerRow(half)).circuitProbes).toEqual([]);
@@ -425,31 +446,41 @@ describe('Gate D.3 — the Provider Router cannot bypass circuit admission', () 
     await send(a).expect(200);
     const spent = issued[0]!;
     expect(spent.providerId).toBe(a);
-    const attempts: [string, unknown, string][] = [
-      ['missing', undefined, b],
-      ['copied fields', { ...spent }, a],
-      ['serialized', JSON.parse(JSON.stringify(spent)), a],
-      ['spent', spent, a],
-      ['foreign provider', spent, b],
+    const attempts: [string, () => Promise<unknown>, string][] = [
+      ['missing', () => directCall(undefined), 'refused'],
+      ['copied fields', () => directCall({ ...spent }), 'refused'],
+      ['serialized', () => directCall(JSON.parse(JSON.stringify(spent))), 'refused'],
+      ['cloned', () => directCall(structuredClone(spent)), 'refused'],
+      ['prototype clone', () => directCall(Object.create(spent)), 'refused'],
+      ['spent', () => directCall(spent), 'refused'],
+      // A target provider can be named only in the old call shape, refused outright.
+      ['foreign provider', () => legacyCall(b, spent), 'refused outright'],
     ];
-    for (const [what, credential, target] of attempts) {
-      const outcome = await directCall(target, credential).then(
+    for (const [what, attempt, expected] of attempts) {
+      const outcome = await attempt().then(
         () => 'sent',
-        (e: unknown) => (e instanceof CircuitAdmissionRequired ? 'refused' : String(e)),
+        (e: unknown) =>
+          e instanceof CircuitAdmissionRequired
+            ? 'refused'
+            : e instanceof TypeError && /takes no adapter, context or timeout/.test(e.message)
+              ? 'refused outright'
+              : String(e),
       );
-      expect(`${what} → ${outcome}`).toBe(`${what} → refused`);
+      expect(`${what} → ${outcome}`).toBe(`${what} → ${expected}`);
     }
     expect(providerCalls).toHaveBeenCalledTimes(1); // only the admitted test-send
 
     // A genuine, unspent admission for A — its submission held in flight —
-    // presented for B is refused for B, and still redeems for A afterwards.
+    // cannot be redirected to B: the executor takes no provider, adapter,
+    // context or timeout (ADR-015 R-13). The attempt is refused before the
+    // admission is touched, and it still redeems for A afterwards.
     const gate = holdAdmitted();
     const inFlight = send(a).then((r) => r);
     await until(() => gate.held === 1, 'an admitted submission to A');
     const unspent = issued.at(-1)!;
     expect(unspent.providerId).toBe(a);
-    await expect(directCall(b, unspent)).rejects.toThrow(
-      'admission was issued for another provider',
+    await expect(legacyCall(b, unspent)).rejects.toThrow(
+      'takes no adapter, context or timeout: they come from the admission',
     );
     gate.releaseAll();
     expect((await inFlight).status).toBe(200);
@@ -470,7 +501,7 @@ describe('Gate D.3 — the Provider Router cannot bypass circuit admission', () 
     );
     await waitForLockWaiters(3);
     const bypasses = Array.from({ length: 5 }, () =>
-      directCall(id, { providerId: id, generation: 2, probeId: null }).then(
+      directCall({ providerId: id, generation: 2, probeId: null }).then(
         () => 'sent',
         () => 'refused',
       ),
@@ -483,5 +514,114 @@ describe('Gate D.3 — the Provider Router cannot bypass circuit admission', () 
     expect(bypassed).toEqual(Array(5).fill('refused'));
     expect(results.filter((r) => r.status === 200)).toHaveLength(1);
     expect(providerCalls).toHaveBeenCalledTimes(1);
+  });
+  // --- ADR-015 R-13: structural admission in the real container ---------------------
+
+  it('the container holds no adapter and no registry; the ledger is claimed by the store and the executor; the registry service answers no adapter', async () => {
+    expect(() => h.app.get(SimulatorAdapter)).toThrow();
+    expect(() => h.app.get(ProviderAdapterRegistry)).toThrow();
+    const instances = [...h.app.get(ModulesContainer).values()].flatMap((m) =>
+      [...m.providers.values()].map((w) => w.instance as unknown),
+    );
+    expect(instances.length).toBeGreaterThan(20);
+    const leaks = instances.filter(
+      (i) =>
+        i instanceof GuardedProviderAdapter ||
+        i instanceof ProviderAdapterRegistry ||
+        (Array.isArray(i) && i.some((x) => x instanceof GuardedProviderAdapter)),
+    );
+    expect(leaks).toEqual([]);
+    expect(instances.filter((i) => i instanceof ProviderSubmissionExecutor)).toHaveLength(1);
+    const ledger = h.app.get(CircuitAdmissions);
+    expect(() => ledger.claimIssuer()).toThrow('the issuer is already claimed');
+    expect(() => ledger.claimRedeemer()).toThrow('the redeemer is already claimed');
+    const registry = h.app.get(ProviderRegistryService);
+    expect('simulatorFor' in registry).toBe(false);
+    const id = await plantProvider('closed');
+    expect(registry.assertSimulatorProvider(await providerRow(id))).toBeUndefined();
+    expect(providerCalls).not.toHaveBeenCalled();
+  });
+
+  it('recordSubmission takes only the settled submission, once: a plain ticket, the admission itself, a copy or a replay records nothing', async () => {
+    const id = await plantProvider('closed');
+    const executor = h.app.get(ProviderSubmissionExecutor);
+    const execute = executor.execute.bind(executor);
+    const handles: SettledSubmission[] = [];
+    jest.spyOn(executor, 'execute').mockImplementation(async (...args) => {
+      const settled = await execute(...args);
+      handles.push(settled);
+      return settled;
+    });
+    await send(id, '500').expect(200);
+    expect(handles).toHaveLength(1);
+    const [settled] = handles;
+    const [admission] = issued;
+    const sampleCount = async () =>
+      (
+        await h.admin.execute<{ n: number }>(
+          sql`select count(*)::int n from provider_health where provider_id = ${id}`,
+        )
+      ).rows[0]!.n;
+    const samplesBefore = await sampleCount();
+    expect(samplesBefore).toBe(1);
+    const before = await providerRow(id);
+    const store = h.app.get(ProviderStateStore);
+    const principal = {} as AuthPrincipal;
+    const record = (handle: unknown) =>
+      h.admin
+        .transaction((tx) => store.recordSubmission(tx as never, principal, handle as never))
+        .then(
+          () => 'recorded',
+          (e: unknown) => (e instanceof CircuitAdmissionRequired ? 'refused' : String(e)),
+        );
+    // Fabricated failures, as many as it takes to open a closed circuit: none is recorded.
+    for (let i = 0; i < SEEDED.minSamples + 1; i++) {
+      expect(await record({ generation: before.circuitGeneration, probeId: null })).toBe('refused');
+    }
+    for (const [what, handle] of [
+      ['the admission', admission],
+      ['a copy', { ...settled }],
+      ['a prototype clone', Object.create(settled!)],
+      ['the replayed settled submission', settled],
+    ] as const) {
+      expect(`${what} → ${await record(handle)}`).toBe(`${what} → refused`);
+    }
+    expect(await sampleCount()).toBe(samplesBefore);
+    const after = await providerRow(id);
+    expect([after.circuitState, after.circuitGeneration, after.healthState]).toEqual([
+      before.circuitState,
+      before.circuitGeneration,
+      before.healthState,
+    ]);
+  });
+
+  it('admission itself keeps the precedence of §6f: a disabled provider or an unregistered adapter key is refused before the circuit is consulted', async () => {
+    const store = h.app.get(ProviderStateStore);
+    const principal = {} as AuthPrincipal;
+    const admit = (id: string) =>
+      h.admin
+        .transaction((tx) => store.admit(tx as never, principal, id))
+        .then(
+          (a) => (a.admitted ? 'admitted' : `refused ${a.state}`),
+          (e: { getStatus?: () => number; code?: string }) => `${e.getStatus?.()} ${e.code}`,
+        );
+    const disabled = await plantProvider('open_elapsed');
+    await h.admin
+      .update(schema.providers)
+      .set({ status: 'disabled' })
+      .where(eq(schema.providers.id, disabled));
+    const unregistered = await plantProvider('open_elapsed');
+    await h.admin
+      .update(schema.providers)
+      .set({ adapterKey: 'acme_sms' })
+      .where(eq(schema.providers.id, unregistered));
+    expect(await admit(disabled)).toBe('409 PROVIDER_LIFECYCLE_CONFLICT');
+    expect(await admit(unregistered)).toBe('422 PROVIDER_ADAPTER_UNKNOWN');
+    for (const id of [disabled, unregistered]) {
+      const row = await providerRow(id);
+      // The cooldown had elapsed, yet no T2 and no probe slot: the circuit was never consulted.
+      expect([row.circuitState, row.circuitGeneration, row.circuitProbes]).toEqual(['open', 1, []]);
+    }
+    expect(issued).toHaveLength(0);
   });
 });

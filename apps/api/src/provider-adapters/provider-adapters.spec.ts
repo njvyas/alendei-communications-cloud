@@ -6,17 +6,30 @@ import {
   PROVIDER_SUBMISSION_DEFAULTS,
   RETRYABLE_FAILURE_CATEGORIES,
   SIMULATOR_BEHAVIORS,
+  type ChannelCode,
   type ProviderAdapter,
   type ProviderAdapterContext,
+  type ProviderHealthCheckOptions,
+  type ProviderHealthProbe,
   type ProviderSubmission,
   type ProviderSubmissionResult,
   type SimulatorBehavior,
+  type SimulatorHealthBehavior,
+  type SubmissionPermit,
 } from '@acc/contracts';
 
 import { ProviderAdapterNotRegistered, ProviderAdapterRegistry } from './adapter-registry';
+import {
+  CircuitAdmission,
+  CircuitAdmissionRequired,
+  CircuitAdmissions,
+  GuardedProviderAdapter,
+  ProviderAdapterRefused,
+  type AdapterSubmitOptions,
+  type AdmissionGrant,
+} from './circuit-admission';
 import { ProviderAdapterUnsupportedOperation, SimulatorAdapter } from './simulator.adapter';
-import { CircuitAdmissionRequired, CircuitAdmissions } from './circuit-admission';
-import { ProviderSubmissionExecutor } from './submission-executor';
+import { ProviderAdapterVariantRefused, ProviderSubmissionExecutor } from './submission-executor';
 import type { SubmissionTimer } from './submission-timer';
 
 /**
@@ -72,32 +85,10 @@ const flush = async () => {
   for (let i = 0; i < 10; i++) await Promise.resolve();
 };
 
-/**
- * An executor with its own admission registry. `admit()` stands in for the
- * circuit's admission (`ProviderStateStore.admit`, not under test here) — the
- * executor itself refuses any call without one (`PROVIDER_ADAPTER.md` §6h).
- */
-function newExecutor(timer: SubmissionTimer) {
-  const admissions = new CircuitAdmissions(timer);
-  const executor = new ProviderSubmissionExecutor(timer, admissions);
-  return Object.assign(executor, {
-    admit: (providerId = context().providerId) =>
-      admissions.issue(providerId, { generation: 0, probeId: null }),
-  });
-}
-const executeAdmitted =
-  (timer: SubmissionTimer) =>
-  (
-    ...args: Parameters<ProviderSubmissionExecutor['execute']> extends [unknown, ...infer R]
-      ? R
-      : never
-  ) => {
-    const executor = newExecutor(timer);
-    return executor.execute(executor.admit(), ...args);
-  };
+const PROVIDER = '01900000-0000-7000-8000-000000000001';
 
 const context = (overrides: Partial<ProviderAdapterContext> = {}): ProviderAdapterContext => ({
-  providerId: '01900000-0000-7000-8000-000000000001',
+  providerId: PROVIDER,
   adapterKey: 'simulator',
   channel: 'sms',
   capabilities: {},
@@ -113,18 +104,117 @@ const submission = (overrides: Partial<ProviderSubmission> = {}): ProviderSubmis
   ...overrides,
 });
 
+type Submit = (
+  context: ProviderAdapterContext,
+  submission: ProviderSubmission,
+  options: AdapterSubmitOptions,
+) => Promise<ProviderSubmissionResult>;
+
+const acceptAll: Submit = async (_c, sub) => ({
+  outcome: 'accepted',
+  submissionId: sub.submissionId,
+  correlationId: sub.correlationId,
+  providerMessageId: 'p',
+  latencyMs: 0,
+});
+
+/** A guarded test adapter: what `submit` does is the test's; `send` is the base's guard. */
+class FakeAdapter extends GuardedProviderAdapter {
+  readonly adapterKey: string;
+  readonly #submit: Submit;
+  readonly #health: (
+    context: ProviderAdapterContext,
+    options?: ProviderHealthCheckOptions,
+  ) => Promise<ProviderHealthProbe>;
+
+  constructor(
+    options: {
+      submit?: Submit;
+      health?: FakeAdapter['healthCheck'];
+      adapterKey?: string;
+    } = {},
+  ) {
+    super();
+    this.adapterKey = options.adapterKey ?? 'simulator';
+    this.#submit = options.submit ?? acceptAll;
+    this.#health = options.health ?? (async () => ({ healthy: true, latencyMs: 0 }));
+    Object.freeze(this);
+  }
+
+  capabilities() {
+    return { channels: ['sms'] as ChannelCode[] };
+  }
+
+  healthCheck(context: ProviderAdapterContext, options?: ProviderHealthCheckOptions) {
+    return this.#health(context, options);
+  }
+
+  protected submit(
+    context: ProviderAdapterContext,
+    submission: ProviderSubmission,
+    options: AdapterSubmitOptions,
+  ) {
+    return this.#submit(context, submission, options);
+  }
+
+  estimateCost(): Promise<never> {
+    return Promise.reject(new Error('n/a'));
+  }
+
+  checkStatus(): Promise<never> {
+    return Promise.reject(new Error('n/a'));
+  }
+
+  parseWebhook(): Promise<never> {
+    return Promise.reject(new Error('n/a'));
+  }
+}
+
+/**
+ * A ledger, its executor, and an issuer standing in for the circuit's
+ * admission (`ProviderStateStore.admit`, not under test here) — the executor
+ * itself refuses any call without one (`PROVIDER_ADAPTER.md` §6h).
+ */
+function rig(
+  timer: SubmissionTimer = new VirtualTimer(),
+  options: { adapters?: GuardedProviderAdapter[]; submissionTimeoutMs?: number } = {},
+) {
+  const ledger = new CircuitAdmissions(timer, { submissionTimeoutMs: options.submissionTimeoutMs });
+  const issuer = ledger.claimIssuer();
+  const executor = new ProviderSubmissionExecutor(
+    timer,
+    ledger,
+    options.adapters ?? [new SimulatorAdapter(timer)],
+  );
+  const admit = (overrides: Partial<AdmissionGrant> = {}) =>
+    issuer.issue({
+      providerId: PROVIDER,
+      adapterKey: 'simulator',
+      channel: 'sms',
+      capabilities: {},
+      ticket: { generation: 0, probeId: null },
+      circuitPolicyVersion: 1,
+      ...overrides,
+    });
+  return { ledger, issuer, executor, admit };
+}
+
+/** Counts every call that reached the simulated provider. */
+const simulated = () =>
+  jest.spyOn(SimulatorAdapter.prototype as unknown as { simulate: () => unknown }, 'simulate');
+
+afterEach(() => jest.restoreAllMocks());
+
 /** Runs one submission through the executor, driving the virtual clock until it settles. */
 async function run(
-  behavior: SimulatorBehavior,
+  behavior: SimulatorBehavior | undefined,
   timeoutMs: number = PROVIDER_SUBMISSION_DEFAULTS.TIMEOUT_MS,
+  grant: Partial<AdmissionGrant> = {},
 ): Promise<{ result: ProviderSubmissionResult; timer: VirtualTimer }> {
   const timer = new VirtualTimer();
-  const simulator = new SimulatorAdapter(timer);
-  const executor = newExecutor(timer);
+  const { executor, admit } = rig(timer, { submissionTimeoutMs: timeoutMs });
   let settled: ProviderSubmissionResult | undefined;
-  void executor
-    .execute(executor.admit(), simulator.forBehavior(behavior), context(), submission(), timeoutMs)
-    .then((r) => (settled = r));
+  void executor.execute(admit(grant), submission(), behavior).then((s) => (settled = s.result));
   await timer.advance(timeoutMs + 1000);
   return { result: settled!, timer };
 }
@@ -157,7 +247,7 @@ describe('provider adapter contract (Phase 2.2)', () => {
     await expect(adapter.parseWebhook()).rejects.toThrow(
       'parseWebhook is not implemented in Phase 2',
     );
-    const scenario = adapter.forBehavior('SUCCESS');
+    const scenario: ProviderAdapter = adapter.forBehavior('SUCCESS');
     await expect(scenario.estimateCost(context(), submission())).rejects.toBeInstanceOf(
       ProviderAdapterUnsupportedOperation,
     );
@@ -282,19 +372,13 @@ describe('SimulatorAdapter — the seven submission-time behaviours, determinist
   });
 
   it('without an explicit behaviour, or with an unknown one, or for a channel it does not serve, the simulator answers CONFIGURATION_ERROR — never success', async () => {
-    const timer = new VirtualTimer();
-    const simulator = new SimulatorAdapter(timer);
-    const noBehaviour = await simulator.send(context(), submission());
+    const noBehaviour = (await run(undefined)).result;
     expect(noBehaviour.outcome === 'rejected' && noBehaviour.failure.category).toBe(
       'CONFIGURATION_ERROR',
     );
-    const unknown = await simulator
-      .forBehavior('DELIVERY_DELAY' as SimulatorBehavior)
-      .send(context(), submission(), { timeoutMs: 10 });
+    const unknown = (await run('DELIVERY_DELAY' as SimulatorBehavior)).result;
     expect(unknown.outcome === 'rejected' && unknown.failure.category).toBe('CONFIGURATION_ERROR');
-    const foreign = await simulator
-      .forBehavior('SUCCESS')
-      .send(context({ channel: 'fax' as never }), submission(), { timeoutMs: 10 });
+    const foreign = (await run('SUCCESS', undefined, { channel: 'fax' as never })).result;
     expect(foreign.outcome === 'rejected' && foreign.failure.category).toBe('CONFIGURATION_ERROR');
   });
 
@@ -307,23 +391,16 @@ describe('SimulatorAdapter — the seven submission-time behaviours, determinist
 });
 
 describe('ProviderSubmissionExecutor — normalization', () => {
-  const adapterReturning = (send: ProviderAdapter['send']): ProviderAdapter => ({
-    adapterKey: 'test',
-    capabilities: () => ({ channels: ['sms'] }),
-    healthCheck: async () => ({ healthy: true, latencyMs: 0 }),
-    send,
-    estimateCost: () => Promise.reject(new Error('n/a')),
-    checkStatus: () => Promise.reject(new Error('n/a')),
-    parseWebhook: () => Promise.reject(new Error('n/a')),
-  });
+  const executeWith = async (submit: Submit) => {
+    const { executor, admit } = rig(new VirtualTimer(), {
+      adapters: [new FakeAdapter({ submit })],
+    });
+    return (await executor.execute(admit(), submission())).result;
+  };
 
   it('an adapter that throws becomes rejected / UNKNOWN, not an error and never a success', async () => {
-    const timer = new VirtualTimer();
-    const result = await executeAdmitted(timer)(
-      adapterReturning(() => Promise.reject(new Error('boom: secret-looking detail'))),
-      context(),
-      submission(),
-      1000,
+    const result = await executeWith(() =>
+      Promise.reject(new Error('boom: secret-looking detail')),
     );
     expect(result).toMatchObject({
       outcome: 'rejected',
@@ -333,40 +410,26 @@ describe('ProviderSubmissionExecutor — normalization', () => {
   });
 
   it('a result outside the contract becomes rejected / UNKNOWN', async () => {
-    const timer = new VirtualTimer();
-    const executor = newExecutor(timer);
     for (const bogus of [
       { outcome: 'delivered' },
       { outcome: 'accepted' }, // no providerMessageId
       { outcome: 'rejected', failure: { category: 'VENDOR_SPECIFIC_E42' } },
       null,
     ]) {
-      const result = await executor.execute(
-        executor.admit(),
-        adapterReturning(() => Promise.resolve(bogus as never)),
-        context(),
-        submission(),
-        1000,
-      );
+      const result = await executeWith(() => Promise.resolve(bogus as never));
       expect(result.outcome === 'rejected' && result.failure.category).toBe('UNKNOWN');
     }
   });
 
   it('retryability and identifiers are the executor’s, not the adapter’s', async () => {
-    const timer = new VirtualTimer();
-    const result = await executeAdmitted(timer)(
-      adapterReturning(() =>
-        Promise.resolve({
-          outcome: 'rejected',
-          submissionId: 'forged',
-          correlationId: 'forged',
-          failure: { category: 'AUTH_ERROR', retryable: true, providerCode: 'X', message: 'm' },
-          latencyMs: 999,
-        }),
-      ),
-      context(),
-      submission(),
-      1000,
+    const result = await executeWith(() =>
+      Promise.resolve({
+        outcome: 'rejected',
+        submissionId: 'forged',
+        correlationId: 'forged',
+        failure: { category: 'AUTH_ERROR', retryable: true, providerCode: 'X', message: 'm' },
+        latencyMs: 999,
+      }),
     );
     expect(result).toMatchObject({
       submissionId: submission().submissionId,
@@ -374,6 +437,16 @@ describe('ProviderSubmissionExecutor — normalization', () => {
       failure: { category: 'AUTH_ERROR', retryable: false },
       latencyMs: 0,
     });
+  });
+
+  it('the settled result is frozen: what will be recorded cannot be changed afterwards', async () => {
+    const { executor, admit } = rig();
+    const settled = await executor.execute(admit(), submission(), '500');
+    expect(Object.isFrozen(settled)).toBe(true);
+    expect(Object.isFrozen(settled.result)).toBe(true);
+    expect(() => {
+      (settled.result as { outcome: string }).outcome = 'accepted';
+    }).toThrow(TypeError);
   });
 });
 
@@ -409,49 +482,131 @@ describe('ProviderAdapterRegistry', () => {
 
   it('the registered set must equal the published keys, in both directions', () => {
     expect(() => new ProviderAdapterRegistry([])).toThrow('do not match PROVIDER_ADAPTER_KEYS');
-    const extra = { ...simulator(), adapterKey: 'acme_sms' } as unknown as ProviderAdapter;
+    const extra = new FakeAdapter({ adapterKey: 'acme_sms' });
     expect(() => new ProviderAdapterRegistry([simulator(), extra])).toThrow(
       'do not match PROVIDER_ADAPTER_KEYS',
     );
+  });
+
+  it('an adapter that is not a GuardedProviderAdapter is refused: a plain object, a spread copy, an Object.create clone', () => {
+    const genuine = simulator();
+    const clone = Object.freeze(Object.create(SimulatorAdapter.prototype) as object);
+    for (const fake of [
+      { adapterKey: 'simulator', send: async () => ({}) },
+      Object.freeze({ ...genuine, send: genuine.send }),
+      clone,
+    ]) {
+      expect(() => new ProviderAdapterRegistry([fake as never])).toThrow(
+        'is not a GuardedProviderAdapter',
+      );
+    }
+    expect(() => new ProviderAdapterRegistry([{ adapterKey: 'simulator' } as never])).toThrow(
+      ProviderAdapterRefused,
+    );
+  });
+
+  it('a subclass that overrides send() is refused at construction; one that replaces it on the instance is refused by the registry', () => {
+    class Overriding extends SimulatorAdapter {
+      override async send(): Promise<ProviderSubmissionResult> {
+        return acceptAll(context(), submission(), { timeoutMs: 1 });
+      }
+    }
+    expect(() => new Overriding(new VirtualTimer())).toThrow('it overrides send()');
+
+    // The inherited `send` is read-only (the base prototype is frozen), so an
+    // instance can only shadow it by defining its own property before freezing.
+    class Shadowing extends GuardedProviderAdapter {
+      readonly adapterKey = 'simulator';
+      constructor(replace: boolean) {
+        super();
+        if (replace) Object.defineProperty(this, 'send', { value: acceptAll });
+        Object.freeze(this);
+      }
+      capabilities() {
+        return { channels: ['sms'] as ChannelCode[] };
+      }
+      async healthCheck() {
+        return { healthy: true, latencyMs: 0 };
+      }
+      protected submit = acceptAll;
+      estimateCost(): Promise<never> {
+        return Promise.reject(new Error('n/a'));
+      }
+      checkStatus(): Promise<never> {
+        return Promise.reject(new Error('n/a'));
+      }
+      parseWebhook(): Promise<never> {
+        return Promise.reject(new Error('n/a'));
+      }
+    }
+    expect(() => new ProviderAdapterRegistry([new Shadowing(true)])).toThrow('it overrides send()');
+    expect(() => new ProviderAdapterRegistry([new Shadowing(false)])).not.toThrow();
+  });
+
+  it('an adapter that is not frozen is refused', () => {
+    class Thawed extends GuardedProviderAdapter {
+      readonly adapterKey = 'simulator';
+      constructor() {
+        super();
+      }
+      capabilities() {
+        return { channels: ['sms'] as ChannelCode[] };
+      }
+      async healthCheck() {
+        return { healthy: true, latencyMs: 0 };
+      }
+      protected submit = acceptAll;
+      estimateCost(): Promise<never> {
+        return Promise.reject(new Error('n/a'));
+      }
+      checkStatus(): Promise<never> {
+        return Promise.reject(new Error('n/a'));
+      }
+      parseWebhook(): Promise<never> {
+        return Promise.reject(new Error('n/a'));
+      }
+    }
+    expect(() => new ProviderAdapterRegistry([new Thawed()])).toThrow('it is not frozen');
+    expect(Object.isFrozen(new SimulatorAdapter(new VirtualTimer()))).toBe(true);
+    expect(Object.isFrozen(new SimulatorAdapter(new VirtualTimer()).forBehavior('SUCCESS'))).toBe(
+      true,
+    );
+  });
+
+  it('the guard itself cannot be replaced: the base prototype and class are frozen', () => {
+    expect(Object.isFrozen(GuardedProviderAdapter.prototype)).toBe(true);
+    expect(() => {
+      (GuardedProviderAdapter.prototype as { send: unknown }).send = acceptAll;
+    }).toThrow(TypeError);
   });
 });
 
 describe('health check — simulator behaviours and the executor probe (Phase 2.3)', () => {
   /** Runs one health check through the executor, driving the virtual clock until it settles. */
   async function probe(
-    adapter: ProviderAdapter,
-    timeoutMs = PROVIDER_HEALTH_DEFAULTS.PROBE_TIMEOUT_MS,
-  ) {
+    variant?: SimulatorHealthBehavior,
+    adapters?: GuardedProviderAdapter[],
+  ): Promise<{ result: { outcome: string; latencyMs: number }; timer: VirtualTimer }> {
     const timer = new VirtualTimer();
-    const executor = newExecutor(timer);
+    const { executor } = rig(timer, { adapters });
     let settled: { outcome: string; latencyMs: number } | undefined;
-    void executor.probe(adapter, context(), timeoutMs).then((r) => (settled = r));
-    await timer.advance(timeoutMs + 1000);
+    void executor.probe(context(), variant).then((r) => (settled = r));
+    await timer.advance(PROVIDER_HEALTH_DEFAULTS.PROBE_TIMEOUT_MS + 1000);
     return { result: settled!, timer };
   }
 
   it('HEALTHY and UNHEALTHY answer at once and deterministically, run after run', async () => {
     for (let i = 0; i < 3; i++) {
-      const sim = new SimulatorAdapter(new VirtualTimer());
-      expect((await probe(sim.forHealthBehavior('HEALTHY'))).result).toEqual({
-        outcome: 'healthy',
-        latencyMs: 0,
-      });
-      expect((await probe(sim.forHealthBehavior('UNHEALTHY'))).result).toEqual({
-        outcome: 'unhealthy',
-        latencyMs: 0,
-      });
+      expect((await probe('HEALTHY')).result).toEqual({ outcome: 'healthy', latencyMs: 0 });
+      expect((await probe('UNHEALTHY')).result).toEqual({ outcome: 'unhealthy', latencyMs: 0 });
     }
   });
 
   it('TIMEOUT never answers: the executor reports timeout at exactly the probe timeout, and leaves no waiter behind', async () => {
     const timer = new VirtualTimer();
-    const sim = new SimulatorAdapter(timer);
-    const executor = newExecutor(timer);
+    const { executor } = rig(timer);
     let settled: { outcome: string; latencyMs: number } | undefined;
-    void executor
-      .probe(sim.forHealthBehavior('TIMEOUT'), context(), PROVIDER_HEALTH_DEFAULTS.PROBE_TIMEOUT_MS)
-      .then((r) => (settled = r));
+    void executor.probe(context(), 'TIMEOUT').then((r) => (settled = r));
     await timer.advance(PROVIDER_HEALTH_DEFAULTS.PROBE_TIMEOUT_MS - 1);
     expect(settled).toBeUndefined();
     await timer.advance(1);
@@ -463,63 +618,100 @@ describe('health check — simulator behaviours and the executor probe (Phase 2.
   });
 
   it('an unknown behaviour, a thrown error or an answer outside the contract is unhealthy — never healthy', async () => {
-    const sim = new SimulatorAdapter(new VirtualTimer());
-    expect((await probe(sim.forHealthBehavior('BOGUS' as never))).result.outcome).toBe('unhealthy');
-    const adapter = (healthCheck: ProviderAdapter['healthCheck']): ProviderAdapter => ({
-      ...sim.forHealthBehavior('HEALTHY'),
-      healthCheck,
-    });
-    expect((await probe(adapter(() => Promise.reject(new Error('boom'))))).result.outcome).toBe(
-      'unhealthy',
-    );
+    expect((await probe('BOGUS' as never)).result.outcome).toBe('unhealthy');
+    const adapter = (health: FakeAdapter['healthCheck']) => [new FakeAdapter({ health })];
     expect(
-      (await probe(adapter(async () => ({ healthy: 'yes', latencyMs: 0 }) as never))).result
-        .outcome,
+      (
+        await probe(
+          undefined,
+          adapter(() => Promise.reject(new Error('boom'))),
+        )
+      ).result.outcome,
     ).toBe('unhealthy');
-    expect((await probe(adapter(async () => null as never))).result.outcome).toBe('unhealthy');
+    expect(
+      (
+        await probe(
+          undefined,
+          adapter(async () => ({ healthy: 'yes', latencyMs: 0 }) as never),
+        )
+      ).result.outcome,
+    ).toBe('unhealthy');
+    expect(
+      (
+        await probe(
+          undefined,
+          adapter(async () => null as never),
+        )
+      ).result.outcome,
+    ).toBe('unhealthy');
   });
 
-  it('a health view never sends successfully: it has no submission behaviour', async () => {
-    const result = await new SimulatorAdapter(new VirtualTimer())
-      .forHealthBehavior('HEALTHY')
-      .send(context(), submission(), { timeoutMs: 10 });
-    expect(result.outcome === 'rejected' && result.failure.category).toBe('CONFIGURATION_ERROR');
+  it('a health view never sends: without a permit its send() is refused, and the provider is never reached', async () => {
+    const reached = simulated();
+    const view = new SimulatorAdapter(new VirtualTimer()).forHealthBehavior('HEALTHY');
+    await expect(
+      view.send(context(), submission(), { timeoutMs: 10 } as never),
+    ).rejects.toBeInstanceOf(CircuitAdmissionRequired);
+    expect(reached).not.toHaveBeenCalled();
+  });
+
+  it('the probe resolves the adapter from the binding, takes no adapter or timeout, and a behaviour only for the simulator', async () => {
+    const health = jest.fn(
+      async (_c: ProviderAdapterContext, options?: ProviderHealthCheckOptions) => ({
+        healthy: options?.timeoutMs === PROVIDER_HEALTH_DEFAULTS.PROBE_TIMEOUT_MS,
+        latencyMs: 0,
+      }),
+    );
+    const { executor } = rig(new VirtualTimer(), { adapters: [new FakeAdapter({ health })] });
+    await expect(executor.probe(context())).resolves.toMatchObject({ outcome: 'healthy' });
+    expect(health).toHaveBeenCalledTimes(1);
+    await expect(executor.probe(context({ adapterKey: 'acme_sms' }))).rejects.toBeInstanceOf(
+      ProviderAdapterNotRegistered,
+    );
+    await expect(executor.probe(context(), 'HEALTHY')).rejects.toBeInstanceOf(
+      ProviderAdapterVariantRefused,
+    );
+    const legacy = executor.probe as unknown as (...args: unknown[]) => Promise<unknown>;
+    await expect(legacy.call(executor, new FakeAdapter(), context(), 1)).rejects.toBeInstanceOf(
+      TypeError,
+    );
+    expect(health).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('circuit admission is mandatory before any provider call (Gate D.3, PROVIDER_ADAPTER.md §6h)', () => {
-  const recordingAdapter = () => {
-    const send = jest.fn(async (_c: ProviderAdapterContext, sub: ProviderSubmission) => ({
-      outcome: 'accepted' as const,
-      submissionId: sub.submissionId,
-      correlationId: sub.correlationId,
-      providerMessageId: 'p',
-      latencyMs: 0,
-    }));
-    const adapter: ProviderAdapter = {
-      adapterKey: 'test',
-      capabilities: () => ({ channels: ['sms'] }),
-      healthCheck: async () => ({ healthy: true, latencyMs: 0 }),
-      send,
-      estimateCost: () => Promise.reject(new Error('n/a')),
-      checkStatus: () => Promise.reject(new Error('n/a')),
-      parseWebhook: () => Promise.reject(new Error('n/a')),
-    };
-    return { adapter, send };
+  const recording = () => {
+    const submit = jest.fn(acceptAll);
+    return { adapters: [new FakeAdapter({ submit })], submit };
   };
 
-  it('a genuine admission for this provider is redeemed once, and the adapter is called', async () => {
-    const executor = newExecutor(new VirtualTimer());
-    const { adapter, send } = recordingAdapter();
-    const result = await executor.execute(executor.admit(), adapter, context(), submission(), 1000);
-    expect(result.outcome).toBe('accepted');
-    expect(send).toHaveBeenCalledTimes(1);
+  it('a genuine admission is redeemed once, and the adapter is called with the context and timeout of the admission', async () => {
+    const { adapters, submit } = recording();
+    const { executor, admit } = rig(new VirtualTimer(), { adapters, submissionTimeoutMs: 1234 });
+    const settled = await executor.execute(
+      admit({ capabilities: { region: { name: 'in' } }, channel: 'sms' }),
+      submission(),
+    );
+    expect(settled.result.outcome).toBe('accepted');
+    expect(submit).toHaveBeenCalledTimes(1);
+    const [ctx, , options] = submit.mock.calls[0]!;
+    expect(ctx).toEqual({
+      providerId: PROVIDER,
+      adapterKey: 'simulator',
+      channel: 'sms',
+      capabilities: { region: { name: 'in' } },
+    });
+    // Deep-frozen: an adapter cannot change what the next reader of the admission sees.
+    expect(Object.isFrozen(ctx)).toBe(true);
+    expect(Object.isFrozen((ctx.capabilities as { region: object }).region)).toBe(true);
+    expect(options.timeoutMs).toBe(1234);
+    expect(options).not.toHaveProperty('permit');
   });
 
   it('no admission, a routing-eligibility verdict, or a forged copy of an admission: refused, the adapter never called', async () => {
-    const executor = newExecutor(new VirtualTimer());
-    const { adapter, send } = recordingAdapter();
-    const genuine = executor.admit();
+    const { adapters, submit } = recording();
+    const { executor, admit } = rig(new VirtualTimer(), { adapters });
+    const genuine = admit();
     for (const fake of [
       undefined,
       null,
@@ -528,55 +720,166 @@ describe('circuit admission is mandatory before any provider call (Gate D.3, PRO
       { verdict: 'probe_only', probeSlotsFree: 1 },
       { ...genuine },
       JSON.parse(JSON.stringify(genuine)),
-      Object.freeze({ providerId: context().providerId, generation: 0, probeId: null }),
+      structuredClone(genuine),
+      Object.freeze({ providerId: PROVIDER, generation: 0, probeId: null }),
+      Object.freeze(Object.create(CircuitAdmission.prototype) as object),
+      Object.freeze(Object.create(genuine) as object),
     ]) {
       await expect(
-        executor.execute(fake, adapter, context(), submission(), 1000),
-      ).rejects.toBeInstanceOf(CircuitAdmissionRequired);
+        executor.execute(fake as unknown as CircuitAdmission, submission()),
+      ).rejects.toThrow('not an admission issued by the circuit');
     }
-    expect(send).not.toHaveBeenCalled();
+    expect(submit).not.toHaveBeenCalled();
+    // The genuine one was never consumed by any of that.
+    await executor.execute(genuine, submission());
+    expect(submit).toHaveBeenCalledTimes(1);
   });
 
-  it('an admission is single-use, bound to its provider, and issued by this registry only', async () => {
-    const executor = newExecutor(new VirtualTimer());
-    const other = newExecutor(new VirtualTimer());
-    const { adapter, send } = recordingAdapter();
-    const once = executor.admit();
-    await executor.execute(once, adapter, context(), submission(), 1000);
-    await expect(executor.execute(once, adapter, context(), submission(), 1000)).rejects.toThrow(
+  it('an admission is single-use, and issued by this ledger only', async () => {
+    const { adapters, submit } = recording();
+    const { executor, admit } = rig(new VirtualTimer(), { adapters });
+    const other = rig(new VirtualTimer());
+    const once = admit();
+    await executor.execute(once, submission());
+    await expect(executor.execute(once, submission())).rejects.toThrow('admission already used');
+    // Issued by another ledger (another process, in effect): not redeemable here.
+    await expect(executor.execute(other.admit(), submission())).rejects.toThrow(
+      'admission was issued by another ledger',
+    );
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('an admission must be redeemed immediately: at exactly MAX_AGE_MS it is accepted, one millisecond later it is refused and void', async () => {
+    const timer = new VirtualTimer();
+    const { adapters, submit } = recording();
+    const { executor, admit } = rig(timer, { adapters });
+    const fresh = admit();
+    const stale = admit();
+    await timer.advance(CircuitAdmissions.MAX_AGE_MS);
+    await executor.execute(fresh, submission());
+    await timer.advance(1);
+    await expect(executor.execute(stale, submission())).rejects.toThrow('admission expired');
+    await expect(executor.execute(stale, submission())).rejects.toThrow('admission already used');
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('the executor takes no adapter, context or timeout: extra arguments are refused before the admission is touched', async () => {
+    const { adapters, submit } = recording();
+    const { executor, admit } = rig(new VirtualTimer(), { adapters });
+    const rogue = new FakeAdapter();
+    const genuine = admit();
+    const legacy = executor.execute as unknown as (...args: unknown[]) => Promise<unknown>;
+    for (const extra of [
+      [rogue, context(), submission(), 1],
+      [submission(), undefined, 1],
+      [submission(), undefined, context({ providerId: 'other' })],
+    ]) {
+      await expect(legacy.call(executor, genuine, ...extra)).rejects.toBeInstanceOf(TypeError);
+    }
+    expect(submit).not.toHaveBeenCalled();
+    await executor.execute(genuine, submission());
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("the submission timeout is the admission's, not a constant and not the caller's", async () => {
+    const timer = new VirtualTimer();
+    const { executor, admit } = rig(timer, { submissionTimeoutMs: 1000 });
+    let settled: ProviderSubmissionResult | undefined;
+    void executor.execute(admit(), submission(), 'TIMEOUT').then((s) => (settled = s.result));
+    await timer.advance(999);
+    expect(settled).toBeUndefined();
+    await timer.advance(1);
+    expect(settled).toMatchObject({ outcome: 'rejected', latencyMs: 1000 });
+    expect(timer.pending).toBe(0);
+  });
+
+  it('a behaviour is refused for an adapter that is not the simulator: nothing is sent, and the admission is void', async () => {
+    const { adapters, submit } = recording();
+    const { executor, admit } = rig(new VirtualTimer(), { adapters });
+    const admission = admit();
+    await expect(executor.execute(admission, submission(), 'SUCCESS')).rejects.toBeInstanceOf(
+      ProviderAdapterVariantRefused,
+    );
+    await expect(executor.execute(admission, submission())).rejects.toThrow(
       'admission already used',
     );
-    const foreign = executor.admit('01900000-0000-7000-8000-0000000000ff');
-    await expect(executor.execute(foreign, adapter, context(), submission(), 1000)).rejects.toThrow(
-      'another provider',
-    );
-    // Issued by another registry (another process, in effect): not redeemable here.
-    await expect(
-      executor.execute(other.admit(), adapter, context(), submission(), 1000),
-    ).rejects.toThrow('not an admission issued by the circuit');
-    expect(send).toHaveBeenCalledTimes(1);
+    expect(submit).not.toHaveBeenCalled();
+    expect(executor.isSimulator('simulator')).toBe(false);
+    expect(rig().executor.isSimulator('simulator')).toBe(true);
+    expect(() => executor.isSimulator('acme_sms')).toThrow(ProviderAdapterNotRegistered);
   });
 
-  it('an admission must be redeemed immediately: at exactly MAX_AGE_MS it is accepted, one millisecond later it is refused', async () => {
-    const timer = new VirtualTimer();
-    const executor = newExecutor(timer);
-    const { adapter, send } = recordingAdapter();
-    const fresh = executor.admit();
-    const stale = executor.admit();
-    await timer.advance(CircuitAdmissions.MAX_AGE_MS);
-    await executor.execute(fresh, adapter, context(), submission(), 1000);
-    await timer.advance(1);
-    await expect(executor.execute(stale, adapter, context(), submission(), 1000)).rejects.toThrow(
-      'admission expired',
+  it('an admission for an unregistered adapter key fails closed, and is void', async () => {
+    const reached = simulated();
+    const { executor, admit } = rig();
+    const admission = admit({ adapterKey: 'acme_sms' });
+    await expect(executor.execute(admission, submission(), 'SUCCESS')).rejects.toBeInstanceOf(
+      ProviderAdapterNotRegistered,
     );
-    expect(send).toHaveBeenCalledTimes(1);
+    await expect(executor.execute(admission, submission(), 'SUCCESS')).rejects.toThrow(
+      'admission already used',
+    );
+    expect(reached).not.toHaveBeenCalled();
+  });
+
+  it('a simulator view that is not guarded is refused before the call', async () => {
+    class Leaky extends SimulatorAdapter {
+      override forBehavior(): SimulatorAdapter {
+        return Object.create(SimulatorAdapter.prototype) as SimulatorAdapter;
+      }
+    }
+    const timer = new VirtualTimer();
+    const reached = simulated();
+    const { executor, admit } = rig(timer, { adapters: [new Leaky(timer)] });
+    await expect(executor.execute(admit(), submission(), 'SUCCESS')).rejects.toBeInstanceOf(
+      ProviderAdapterRefused,
+    );
+    expect(reached).not.toHaveBeenCalled();
   });
 
   it('a health-check probe is a diagnostic, not a submission, and needs no admission', async () => {
-    const executor = newExecutor(new VirtualTimer());
-    const { adapter } = recordingAdapter();
-    await expect(executor.probe(adapter, context(), 1000)).resolves.toMatchObject({
-      outcome: 'healthy',
-    });
+    const { executor } = rig(new VirtualTimer(), { adapters: recording().adapters });
+    await expect(executor.probe(context())).resolves.toMatchObject({ outcome: 'healthy' });
+  });
+
+  it('the executor exposes no adapter: its public surface is execute, probe and the registered keys', () => {
+    const { executor } = rig();
+    expect(Object.getOwnPropertyNames(ProviderSubmissionExecutor.prototype).sort()).toEqual([
+      'adapterKeys',
+      'constructor',
+      'execute',
+      'isSimulator',
+      'probe',
+    ]);
+    expect(Object.keys(executor)).toEqual([]);
+    expect(executor.adapterKeys()).toEqual([...PROVIDER_ADAPTER_KEYS]);
+  });
+});
+
+describe('a raw adapter send() is refused without a redeemed permit (ADR-015 R-13)', () => {
+  it('no permit, a forged permit, an admission in place of a permit: refused, the provider never reached', async () => {
+    const reached = simulated();
+    const timer = new VirtualTimer();
+    const { admit } = rig(timer);
+    const adapter = new SimulatorAdapter(timer).forBehavior('SUCCESS');
+    for (const permit of [
+      undefined,
+      null,
+      {},
+      admit(),
+      JSON.parse(JSON.stringify({ permit: true })),
+      Object.freeze(Object.create(null) as object),
+    ]) {
+      await expect(
+        adapter.send(context(), submission(), {
+          timeoutMs: 10,
+          permit: permit as unknown as SubmissionPermit,
+        }),
+      ).rejects.toThrow('no submission permit');
+    }
+    await expect(adapter.send(context(), submission(), undefined as never)).rejects.toThrow(
+      CircuitAdmissionRequired,
+    );
+    expect(reached).not.toHaveBeenCalled();
   });
 });

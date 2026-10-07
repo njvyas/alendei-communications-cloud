@@ -19,7 +19,6 @@ import {
   PROVIDER_CIRCUIT_DEFAULTS as C,
   PROVIDER_HEALTH_DEFAULTS as H,
   PROVIDER_SUBMISSION_DEFAULTS,
-  type ProviderSubmissionResult,
 } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
@@ -30,6 +29,7 @@ import { uuidv7 } from 'uuidv7';
 import { CredentialService } from '../src/iam/credential.service';
 import { FORBIDDEN_LABELS, MetricsService } from '../src/observability/metrics.service';
 import { ProviderSubmissionExecutor } from '../src/provider-adapters/submission-executor';
+import { SUBMISSION_TIMER, type SubmissionTimer } from '../src/provider-adapters/submission-timer';
 import {
   ManualProviderClock,
   PASSWORD,
@@ -985,28 +985,23 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
       for (let i = 0; i < 5; i++) await send('tester', limited, '429').expect(200);
       expect((await providerRow(limited)).circuitState).toBe('open');
 
-      // A timeout's classification, without waiting 3 s five times: the executor
-      // answers TIMEOUT exactly as its timeout does.
-      const executor = h.app.get(ProviderSubmissionExecutor);
-      jest.spyOn(executor, 'execute').mockImplementation(
-        async (_a, _c, submission) =>
-          ({
-            outcome: 'rejected',
-            submissionId: submission.submissionId,
-            correlationId: submission.correlationId,
-            failure: {
-              category: 'TIMEOUT',
-              retryable: true,
-              providerCode: null,
-              message: 'timeout',
-            },
-            latencyMs: PROVIDER_SUBMISSION_DEFAULTS.TIMEOUT_MS,
-          }) satisfies ProviderSubmissionResult,
-      );
+      // A timeout's classification, without waiting 3 s five times: the real
+      // simulator never answers `TIMEOUT`, and the submission timer the
+      // executor races it against elapses at once — so the executor's own
+      // timeout decides, through the real admission, permit and settlement
+      // (ADR-015 R-13: a result can no longer be fabricated around them).
+      const timer = h.app.get<SubmissionTimer>(SUBMISSION_TIMER);
+      const sleep = timer.sleep.bind(timer);
+      jest
+        .spyOn(timer, 'sleep')
+        .mockImplementation((ms, signal) => sleep(Number.isFinite(ms) ? 0 : ms, signal));
       const timedOut = await plantProvider();
       for (let i = 0; i < 5; i++) await send('tester', timedOut, 'TIMEOUT').expect(200);
       expect((await providerRow(timedOut)).circuitState).toBe('open');
       expect((await samples(timedOut)).map((s) => s.outcome)).toEqual(Array(5).fill('timeout'));
+      expect((await samples(timedOut)).map((s) => s.latencyMs)).toEqual(
+        Array(5).fill(PROVIDER_SUBMISSION_DEFAULTS.TIMEOUT_MS),
+      );
       jest.restoreAllMocks();
 
       const neutral = await plantProvider();
