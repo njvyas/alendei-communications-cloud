@@ -176,6 +176,13 @@
       "when": 1791098815313,
       "tag": "0024_phase2_4_configuration_revision",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791310661496,
+      "tag": "0025_adr015_column_backstops_lifecycle",
+      "breakpoints": true
     }
   ]
 }
