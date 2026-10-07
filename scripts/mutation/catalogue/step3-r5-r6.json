@@ -1,0 +1,432 @@
+{
+  "step": "ADR-015 remediation step 3 — R-5 classification and allowed-scope sets (migration 0026), R-6 grant-side delegation",
+  "usage": "source the DATABASE_* environment of a test template database at migration 0024 or later, then: node scripts/mutation/run.mjs scripts/mutation/catalogue/step3-r5-r6.json --out <dir>. Every DB command first applies the (mutated) migrations to its disposable clone. The seed command (dbcat) resolves @acc/contracts through node_modules, so contracts mutants are judged by the unit and API commands.",
+  "commands": {
+    "unit": {
+      "cwd": ".",
+      "db": false,
+      "argv": [
+        "bash",
+        "-c",
+        "cd apps/api && npx jest --selectProjects unit --testPathPatterns permission-classification"
+      ],
+      "timeoutSeconds": 300
+    },
+    "dbsec": {
+      "cwd": ".",
+      "db": true,
+      "argv": [
+        "bash",
+        "-c",
+        "npm run db:migrate --workspace @acc/db && cd apps/api && npx jest --selectProjects security --runInBand --testPathPatterns permission-classification"
+      ],
+      "timeoutSeconds": 900
+    },
+    "delegation": {
+      "cwd": ".",
+      "db": true,
+      "argv": [
+        "bash",
+        "-c",
+        "npm run db:migrate --workspace @acc/db && cd apps/api && npx jest --selectProjects security --runInBand --testPathPatterns role-assignment-delegation"
+      ],
+      "timeoutSeconds": 900
+    },
+    "dbcat": {
+      "cwd": ".",
+      "db": true,
+      "argv": [
+        "bash",
+        "-c",
+        "npm run db:migrate --workspace @acc/db && cd packages/db && npx jest --selectProjects integration --runInBand --testPathPatterns \"schema|backstop-definitions|seed-classification\""
+      ],
+      "timeoutSeconds": 900
+    }
+  },
+  "mutants": [
+    {
+      "id": "M1",
+      "title": "alendei_super_admin back to the whole catalogue (Object.values(P))",
+      "edits": [
+        {
+          "file": "packages/contracts/src/roles.ts",
+          "search": "    permissions: SUPER_ADMIN_PERMISSIONS,",
+          "replace": "    permissions: Object.values(P),"
+        }
+      ],
+      "commands": ["unit"]
+    },
+    {
+      "id": "M2",
+      "title": "evaluator predicate removed: a grant confers whatever its role carries",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/permission-evaluator.service.ts",
+          "search": "    if (!grantConfers(grant, permission)) return false;",
+          "replace": "    if (!grant.permissions.includes(permission)) return false;"
+        }
+      ],
+      "commands": ["unit"]
+    },
+    {
+      "id": "M3",
+      "title": "API-key creator intersection ignores the allowed-scope sets",
+      "edits": [
+        {
+          "file": "apps/api/src/auth/auth.guard.ts",
+          "search": "grant.permissions.filter((permission) => grantConfers(grant, permission)),",
+          "replace": "grant.permissions,"
+        }
+      ],
+      "commands": ["unit"]
+    },
+    {
+      "id": "M4",
+      "title": "contacts.read scope set widened to include platform in contracts",
+      "edits": [
+        {
+          "file": "packages/contracts/src/permissions.ts",
+          "search": "    [P.CONTACTS_READ]: Object.freeze(['organization', 'workspace']),",
+          "replace": "    [P.CONTACTS_READ]: Object.freeze(['platform', 'organization', 'workspace']),"
+        }
+      ],
+      "commands": ["unit"]
+    },
+    {
+      "id": "M4b",
+      "title": "templates.read scope set widened to include reseller in contracts",
+      "edits": [
+        {
+          "file": "packages/contracts/src/permissions.ts",
+          "search": "    [P.TEMPLATES_READ]: Object.freeze(['organization']),",
+          "replace": "    [P.TEMPLATES_READ]: Object.freeze(['reseller', 'organization']),"
+        }
+      ],
+      "commands": ["unit"]
+    },
+    {
+      "id": "M5",
+      "title": "eligibility clause removed from fn_validate_role_permission",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0026_adr015_permission_classification.sql",
+          "search": "  IF NOT (coalesce(v_role_scopes, '{}'::role_scope_type[])",
+          "replace": "  IF false AND NOT (coalesce(v_role_scopes, '{}'::role_scope_type[])"
+        }
+      ],
+      "commands": ["dbsec"]
+    },
+    {
+      "id": "M6",
+      "title": "FOR SHARE on the permission row dropped from the attach (race)",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0026_adr015_permission_classification.sql",
+          "search": "    FROM permissions p WHERE p.id = NEW.permission_id\n    FOR SHARE;",
+          "replace": "    FROM permissions p WHERE p.id = NEW.permission_id;"
+        }
+      ],
+      "commands": ["dbsec"]
+    },
+    {
+      "id": "M6b",
+      "title": "FOR SHARE on the role row dropped from the attach (race)",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0026_adr015_permission_classification.sql",
+          "search": "    FROM roles r WHERE r.id = NEW.role_id\n    FOR SHARE;",
+          "replace": "    FROM roles r WHERE r.id = NEW.role_id;"
+        }
+      ],
+      "commands": ["dbsec"]
+    },
+    {
+      "id": "M6c",
+      "title": "the narrowing guard no longer locks the roles carrying the permission (race)",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0026_adr015_permission_classification.sql",
+          "search": "   ORDER BY r.id\n   FOR SHARE;",
+          "replace": "   ORDER BY r.id;"
+        }
+      ],
+      "commands": ["dbsec"]
+    },
+    {
+      "id": "M7",
+      "title": "reclassify/narrow trigger disabled (fires on description only)",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0026_adr015_permission_classification.sql",
+          "search": "  BEFORE UPDATE OF classification, allowed_scope_types ON permissions",
+          "replace": "  BEFORE UPDATE OF description ON permissions"
+        }
+      ],
+      "commands": ["dbsec"]
+    },
+    {
+      "id": "M7b",
+      "title": "narrowing isolation guard removed",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0026_adr015_permission_classification.sql",
+          "search": "  IF v_isolation <> 'read committed'",
+          "replace": "  IF false AND v_isolation <> 'read committed'"
+        }
+      ],
+      "commands": ["dbsec"]
+    },
+    {
+      "id": "M8",
+      "title": "role-widening trigger disabled (fires on description only)",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0026_adr015_permission_classification.sql",
+          "search": "  BEFORE UPDATE OF allowed_scope_types ON roles",
+          "replace": "  BEFORE UPDATE OF description ON roles"
+        }
+      ],
+      "commands": ["dbsec"]
+    },
+    {
+      "id": "M8b",
+      "title": "CHECK permissions_tenant_content_scopes neutralised",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0026_adr015_permission_classification.sql",
+          "search": "CHECK (classification <> 'tenant_content' OR NOT",
+          "replace": "CHECK (true OR classification <> 'tenant_content' OR NOT"
+        }
+      ],
+      "commands": ["dbsec"]
+    },
+    {
+      "id": "M8c",
+      "title": "CHECK platform ⇔ platform. prefix neutralised",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0026_adr015_permission_classification.sql",
+          "search": "CHECK ((classification = 'platform') = (key LIKE 'platform.%'))",
+          "replace": "CHECK (true)"
+        }
+      ],
+      "commands": ["dbsec"]
+    },
+    {
+      "id": "M8d",
+      "title": "verification block no longer refuses an ineligible role permission",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0026_adr015_permission_classification.sql",
+          "search": "  IF v_count > 0 THEN\n    RAISE EXCEPTION\n      'migration 0026 verification failed [role_permissions_scope_eligibility]",
+          "replace": "  IF false THEN\n    RAISE EXCEPTION\n      'migration 0026 verification failed [role_permissions_scope_eligibility]"
+        }
+      ],
+      "commands": ["dbsec"]
+    },
+    {
+      "id": "M8e",
+      "title": "backfill classifies providers.* as tenancy administration",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0026_adr015_permission_classification.sql",
+          "search": "    WHEN key LIKE 'providers.%' THEN 'platform_catalogue'",
+          "replace": "    WHEN key LIKE 'providers.%' THEN 'tenancy_administration'"
+        }
+      ],
+      "commands": ["dbsec"]
+    },
+    {
+      "id": "M8f",
+      "title": "upgrade does not attach delegate_tenant to alendei_super_admin",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0026_adr015_permission_classification.sql",
+          "search": "  AND p.key = 'platform.roles.delegate_tenant'\n",
+          "replace": "  AND p.key = 'platform.roles.delegate_tenant_absent'\n"
+        }
+      ],
+      "commands": ["dbsec"]
+    },
+    {
+      "id": "M9",
+      "title": "seed no longer writes classification and scopes on re-run",
+      "edits": [
+        {
+          "file": "packages/db/src/cli/seed.ts",
+          "search": "            set: { domain, action, classification, allowedScopeTypes },",
+          "replace": "            set: { domain, action },"
+        }
+      ],
+      "commands": ["dbcat"]
+    },
+    {
+      "id": "M10",
+      "title": "role DTOs accept the whole catalogue (content keys included)",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role.dto.ts",
+          "search": "import { API_SURFACE_PERMISSION_KEYS, type ScopeType } from '@acc/contracts';",
+          "replace": "import { ALL_PERMISSION_KEYS as API_SURFACE_PERMISSION_KEYS, type ScopeType } from '@acc/contracts';"
+        }
+      ],
+      "commands": ["delegation"]
+    },
+    {
+      "id": "M10b",
+      "title": "API-key DTO accepts the whole catalogue (content keys included)",
+      "edits": [
+        {
+          "file": "apps/api/src/api-keys/api-key.dto.ts",
+          "search": "import { API_SURFACE_PERMISSION_KEYS, type ScopeType } from '@acc/contracts';",
+          "replace": "import { ALL_PERMISSION_KEYS as API_SURFACE_PERMISSION_KEYS, type ScopeType } from '@acc/contracts';"
+        }
+      ],
+      "commands": ["delegation"]
+    },
+    {
+      "id": "M10c",
+      "title": "GET /permissions no longer pinned to the API surface",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-administration.service.ts",
+          "search": "    const predicates: SQL[] = [inArray(schema.permissions.key, [...API_SURFACE_PERMISSION_KEYS])];",
+          "replace": "    const predicates: SQL[] = [];"
+        }
+      ],
+      "commands": ["delegation"]
+    },
+    {
+      "id": "M10d",
+      "title": "API_SURFACE_PERMISSION_KEYS is the whole catalogue",
+      "edits": [
+        {
+          "file": "packages/contracts/src/permissions.ts",
+          "search": "  ALL_PERMISSION_KEYS.filter((key) => PERMISSION_CLASS[key] !== 'tenant_content'),",
+          "replace": "  ALL_PERMISSION_KEYS.filter(() => true),"
+        }
+      ],
+      "commands": ["unit"]
+    },
+    {
+      "id": "M11",
+      "title": "delegation set check dropped",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "    if (!(DELEGABLE_TENANT_SYSTEM_ROLES as readonly string[]).includes(role.key)) return false;\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["delegation"]
+    },
+    {
+      "id": "M12",
+      "title": "custom (non-system) roles admitted into delegation",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "    if (!role.isSystemRole) return false;\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["delegation"]
+    },
+    {
+      "id": "M13",
+      "title": "owned-by-target-organization check dropped",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "    if (role.orgId === null || role.orgId !== targetOrganization) return false;\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["delegation"]
+    },
+    {
+      "id": "M14",
+      "title": "organization-scope check dropped",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "    if (input.scopeType !== 'organization') return false;\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["delegation"]
+    },
+    {
+      "id": "M15",
+      "title": "self-delegation check dropped",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "    if (input.userId === principal.userId) return false;\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["delegation"]
+    },
+    {
+      "id": "M16",
+      "title": "non-content-holdings check dropped (escape hatch)",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "    if (!unheld.every((permission) => isTenantContentPermission(permission))) return false;\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["delegation"]
+    },
+    {
+      "id": "M17",
+      "title": "platform.tenants.manage accepted in place of delegate_tenant",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "      permission: PERMISSIONS.PLATFORM_ROLES_DELEGATE_TENANT,",
+          "replace": "      permission: PERMISSIONS.PLATFORM_TENANTS_MANAGE,"
+        }
+      ],
+      "commands": ["delegation"]
+    },
+    {
+      "id": "M18",
+      "title": "workspace_manager added to the delegable set",
+      "edits": [
+        {
+          "file": "packages/contracts/src/roles.ts",
+          "search": "export const DELEGABLE_TENANT_SYSTEM_ROLES = Object.freeze([TENANT_ROLE_KEYS.ORG_ADMIN] as const);",
+          "replace": "export const DELEGABLE_TENANT_SYSTEM_ROLES = Object.freeze([\n  TENANT_ROLE_KEYS.ORG_ADMIN,\n  TENANT_ROLE_KEYS.WORKSPACE_MANAGER,\n] as const);"
+        }
+      ],
+      "commands": ["unit", "delegation"]
+    },
+    {
+      "id": "M19",
+      "title": "audit delegation metadata dropped",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "            ? { delegation: true, delegatedPermissions: [...delegated] }",
+          "replace": "            ? {}"
+        }
+      ],
+      "commands": ["delegation"]
+    },
+    {
+      "id": "M20",
+      "title": "role row no longer locked before its permissions are read",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "      .where(eq(schema.roles.id, role.id))\n      .for('share');",
+          "replace": "      .where(eq(schema.roles.id, role.id));"
+        }
+      ],
+      "commands": ["delegation"]
+    }
+  ]
+}
