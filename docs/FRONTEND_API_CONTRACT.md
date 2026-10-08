@@ -647,7 +647,9 @@ Five behaviours the frontend must build against:
 - **Composition is bounded by the caller's own authority.** A permission the
   caller does not itself hold at the organization is refused with `403`
   `AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION`, and `error.details.rejected` lists
-  exactly which keys — usable directly as per-field form feedback.
+  exactly which keys — usable directly as per-field form feedback. Since
+  ADR-015 R-11 the same applies to a permission the `PATCH` **removes**: the
+  caller cannot strip a permission it does not hold.
 - **`allowedScopeTypes` IS enforced at grant time**, since Phase 1B.5.5. A
   `POST /role-assignments` naming a `scopeType` the role does not admit is
   refused with `422 AUTHZ_SCOPE_TYPE_NOT_ADMITTED` (§30b). Present it as an
@@ -722,6 +724,21 @@ must build against:
 `DELETE` returns `204`, or `404` if the assignment is already gone — a repeated
 delete is safe and idempotent from the caller's point of view. Revocation takes
 effect on the **next request**, not at token expiry.
+
+**Revocation is symmetric with granting** — IMPLEMENTED (ADR-015 R-11). A
+caller may revoke only a grant whose role it could itself have granted at that
+scope: otherwise `403 AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION`, with
+`error.details.rejected` naming the role's permissions the caller does not hold
+(the same code and shape as on `POST`). A workspace manager therefore cannot
+revoke an organization administrator, nor a `read_only` grant (it lacks
+`audit.read`). A console should offer "revoke" only where it would offer
+"grant" for the same role and scope.
+
+**`409 AUTHZ_LAST_ORGANIZATION_ADMIN`** — IMPLEMENTED (ADR-015 R-11). A
+revocation that would leave an organization that has an active administrator
+with none is refused, exactly like the platform case below: a `409`, not an
+access error; the remedy is to appoint another organization administrator
+first. An organization that has never had an administrator is not affected.
 
 **`409 AUTHZ_LAST_PLATFORM_ADMIN`** — IMPLEMENTED (Phase 1B.5.6). A revocation
 that would leave the platform with no active administrator is refused. It is a
@@ -886,6 +903,7 @@ POST /api/v1/users/:id/reactivate   → 200 { data: user }   // status: "active"
 |---|---|---|
 | `409 USER_LIFECYCLE_CONFLICT` | conflict | Already in that state. `details.status` is authoritative — refresh the row |
 | `409 AUTHZ_LAST_PLATFORM_ADMIN` | conflict | This is the last active platform administrator. **Not an access error** — the caller had the authority. Say "appoint another administrator first"; do not offer a retry |
+| `409 AUTHZ_LAST_ORGANIZATION_ADMIN` | conflict | The user is the last active administrator of an organization (ADR-015 R-11) — disabling the identity would leave it with none. **Not an access error**. Say "appoint another organization administrator first"; do not offer a retry |
 | `404 RESOURCE_NOT_FOUND` | not found | Not a member of this organization, or no such user |
 | `403 AUTHZ_SCOPE_DENIED` | forbidden | The caller lacks the permission at this organization |
 
