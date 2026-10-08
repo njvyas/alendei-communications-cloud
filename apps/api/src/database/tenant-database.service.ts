@@ -185,6 +185,9 @@ export class TenantDatabase {
         workspaceId: principal.tenant.workspaceId,
         resellerId: principal.tenant.resellerId,
         userId: principal.userId,
+        // ADR-015 R-7: the seventh claim. Null for a session principal, so it is
+        // written as the empty string; the authenticated key for an API-key one.
+        apiKeyId: principal.apiKeyId,
         isPlatformAdmin: principal.tenant.isPlatformAdmin,
       },
       work,

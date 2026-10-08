@@ -22,6 +22,13 @@ export const SESSION_VARS = {
   USER_ID: 'app.current_user_id',
   IS_PLATFORM_ADMIN: 'app.is_platform_admin',
   PROVISIONING: 'app.provisioning',
+  /**
+   * The authenticated API key, for API-key principals only (ADR-015 R-7,
+   * ADR-014 §17.1). Read solely by `app_content_context_valid()` (migration
+   * `0027`), which honours it only while it names an unrevoked, unexpired key
+   * of the organization in context. Empty for every other principal.
+   */
+  API_KEY_ID: 'app.current_api_key_id',
 } as const;
 
 /** The seeded reseller that organizations without an external reseller belong to. */

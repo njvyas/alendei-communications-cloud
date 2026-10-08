@@ -14,6 +14,13 @@ export interface TenantSession {
   readonly workspaceId?: string | null;
   readonly resellerId?: string | null;
   readonly userId?: string | null;
+  /**
+   * The authenticated API key's id, for an API-key principal (ADR-015 R-7).
+   * The tenant-content predicate (`app_content_context_valid()`, migration
+   * `0027`) admits an API-key transaction only through it; a session principal
+   * leaves it absent, and it is then written as the empty string.
+   */
+  readonly apiKeyId?: string | null;
   /** Only true when the principal actually holds a platform-scoped role. */
   readonly isPlatformAdmin?: boolean;
   /**
@@ -30,6 +37,7 @@ export const EMPTY_TENANT_SESSION: TenantSession = Object.freeze({
   workspaceId: null,
   resellerId: null,
   userId: null,
+  apiKeyId: null,
   isPlatformAdmin: false,
   provisioning: false,
 });
@@ -55,5 +63,6 @@ export function tenantContextStatements(session: TenantSession): SQL[] {
     localSetting(SESSION_VARS.USER_ID, session.userId ?? ''),
     localSetting(SESSION_VARS.IS_PLATFORM_ADMIN, session.isPlatformAdmin ? 'on' : 'off'),
     localSetting(SESSION_VARS.PROVISIONING, session.provisioning ? 'on' : 'off'),
+    localSetting(SESSION_VARS.API_KEY_ID, session.apiKeyId ?? ''),
   ];
 }

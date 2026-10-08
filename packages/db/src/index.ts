@@ -3,5 +3,6 @@ export * from './schema';
 export * from './client';
 export * from './tenant-context';
 export * from './constants';
+export * from './table-classes';
 export * from './principal-guard';
 export * from './pool-guard';
