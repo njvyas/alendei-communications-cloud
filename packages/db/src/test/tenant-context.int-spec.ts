@@ -14,7 +14,7 @@
  *
  * Property 2 is the one that catches a connection-level `SET`. A GUC left on
  * the connection after commit is invisible to every transaction that
- * establishes its own context — every one of them overwrites all six variables
+ * establishes its own context — every one of them overwrites all seven variables
  * — so it only shows up in a query that deliberately establishes none. That
  * bare probe is therefore the load-bearing assertion in both tests here, and it
  * is written against real rows rather than against the setting.

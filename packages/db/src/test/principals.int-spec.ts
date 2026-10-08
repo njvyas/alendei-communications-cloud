@@ -367,6 +367,21 @@ describe('database principals and RLS coverage', () => {
       const byName = new Map(rows.map((r) => [r.proname, r.public_exec]));
       expect(byName.get('app_org_reseller')).toBe(false);
       expect(byName.get('app_session_bypasses_rls')).toBe(false);
+      // ADR-015 R-7 (migration 0027): the tenant-content helper — acc_app only.
+      expect(byName.get('app_content_context_valid')).toBe(false);
+    });
+
+    it('app_content_context_valid() is executable by acc_app and by no other principal (ADR-015 R-7)', async () => {
+      const { rows } = await db.admin.execute<{ grantee: string; can: boolean }>(sql`
+        SELECT g.grantee, has_function_privilege(g.grantee, 'public.app_content_context_valid()', 'EXECUTE') AS can
+        FROM (VALUES ('public'), ('acc_app'), ('acc_auth'), ('acc_relay')) AS g(grantee)
+        ORDER BY g.grantee`);
+      expect(rows.map((r) => `${r.grantee}:${r.can}`)).toEqual([
+        'acc_app:true',
+        'acc_auth:false',
+        'acc_relay:false',
+        'public:false',
+      ]);
     });
   });
 

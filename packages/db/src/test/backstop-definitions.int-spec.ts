@@ -249,3 +249,65 @@ describe('migration 0026 catalogue: scope-eligibility triggers, functions and CH
     ]);
   });
 });
+
+/**
+ * Migration `0027` (ADR-015 R-7, ADR-014 §17.1): the Model B tenant-content
+ * helper. Pinned by the md5 of `pg_get_functiondef`, with its security mode,
+ * volatility, `search_path`, owner and exact ACL — so a definer → invoker
+ * change, a dropped search_path pin, an added arm or a widened EXECUTE fails
+ * here even where no behavioural test happens to reach the changed branch.
+ */
+describe('migration 0027 catalogue: app_content_context_valid()', () => {
+  let db: Principals;
+
+  beforeAll(() => {
+    loadTestEnv();
+    db = connect();
+  });
+
+  afterAll(async () => {
+    await db.close();
+  });
+
+  it('has exactly its pinned definition: STABLE SECURITY DEFINER, search_path = public, pg_temp, no arguments, boolean', async () => {
+    const { rows } = await db.admin.execute<Record<string, unknown>>(sql`
+      SELECT md5(pg_get_functiondef(p.oid)) AS h, p.prosecdef, p.proconfig, p.provolatile,
+             p.pronargs, p.prorettype::regtype::text AS returns, l.lanname
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      JOIN pg_language l ON l.oid = p.prolang
+      WHERE n.nspname = 'public' AND p.proname = 'app_content_context_valid'`);
+    expect(rows).toEqual([
+      {
+        h: '611890103da0a02dacf84707028ecd7e',
+        prosecdef: true,
+        proconfig: ['search_path=public, pg_temp'],
+        provolatile: 's',
+        pronargs: 0,
+        returns: 'boolean',
+        lanname: 'plpgsql',
+      },
+    ]);
+  });
+
+  it('is owned by the tables’ owner and executable by acc_app alone', async () => {
+    const { rows } = await db.admin.execute<{
+      owner: string;
+      acl: string;
+      table_owner: string;
+    }>(sql`
+      SELECT pg_get_userbyid(p.proowner) AS owner, p.proacl::text AS acl,
+             (SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'public.user_roles'::regclass) AS table_owner
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'app_content_context_valid'`);
+    const { owner, acl, table_owner } = rows[0]!;
+    expect(owner).toBe(table_owner);
+    expect(acl).toBe(`{${owner}=X/${owner},acc_app=X/${owner}}`);
+  });
+
+  it('no policy calls it yet: there is no content table before Phase 3.1', async () => {
+    const { rows } = await db.admin.execute<{ n: string }>(sql`
+      SELECT count(*)::text AS n FROM pg_policies
+      WHERE coalesce(qual, '') || coalesce(with_check, '') LIKE '%app_content_context_valid%'`);
+    expect(rows[0]!.n).toBe('0');
+  });
+});

@@ -11,6 +11,7 @@ import {
   TENANT_CONTENT_PERMISSIONS,
 } from '@acc/contracts';
 
+import { TENANCY_RECORD_TABLES } from '../table-classes';
 import { connect, createTenant, destroyTenant, type Principals } from './harness';
 
 /** The Phase 1 tables listed in `ROADMAP.md` Phase 1 "DB changes" (Phase 1A and 1B). */
@@ -32,23 +33,13 @@ const PHASE_1_TABLES = [
 ] as const;
 
 /**
- * Tables carrying tenant data. `permissions` is a global, system-defined
- * catalogue and `users`/`sessions` are platform-level identities, so their
- * policies are identity-shaped rather than `org_id`-shaped — all of them still
- * have RLS enabled, asserted separately below.
+ * Tables carrying tenant data — the tenancy-record class of
+ * `table-classes.ts`. `permissions` is a global, system-defined catalogue and
+ * `users`/`sessions` are platform-level identities, so their policies are
+ * identity-shaped rather than `org_id`-shaped — all of them still have RLS
+ * enabled, asserted separately below.
  */
-const ORG_SCOPED_TABLES = [
-  'organizations',
-  'workspaces',
-  'teams',
-  'roles',
-  'role_permissions',
-  'user_roles',
-  'api_keys',
-  'ws_tickets',
-  'idempotency_keys',
-  'audit_logs',
-] as const;
+const ORG_SCOPED_TABLES = TENANCY_RECORD_TABLES;
 
 describe('Phase 1 schema', () => {
   let db: Principals;

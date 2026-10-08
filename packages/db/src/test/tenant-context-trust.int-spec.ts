@@ -21,7 +21,7 @@
  *
  * Every assertion here describes arbitrary-SQL capability as `acc_app` — a
  * compromised application process. The application itself never issues these
- * statements: it writes all six variables, from the authenticated principal, at
+ * statements: it writes all seven variables, from the authenticated principal, at
  * the start of every transaction (`withTenantTransaction`).
  */
 import { sql } from 'drizzle-orm';
@@ -356,7 +356,7 @@ describe('tenant-context trust model — what acc_app can do with session variab
       client.release();
     }
     // … but the application never issues a bare tenant query: every one goes
-    // through `withTenantTransaction`, which writes all six variables first.
+    // through `withTenantTransaction`, which writes all seven variables first.
     // On the same single connection, a sanctioned transaction sees only its own.
     const seen = await withTenantTransaction(app, { orgId: attacker.orgId }, async (tx) => {
       const { rows } = await tx.execute<{ org: string }>(
@@ -366,6 +366,42 @@ describe('tenant-context trust model — what acc_app can do with session variab
     });
     expect(seen).toEqual([attacker.orgId]);
     await pool.query('RESET app.current_org_id');
+  });
+
+  it('F. the seventh claim, app.current_api_key_id, cannot leak from a poisoned connection into a sanctioned transaction', async () => {
+    // ADR-015 R-7: the API-key arm of app_content_context_valid() reads this
+    // claim, so a value left on a pooled connection must never reach the next
+    // principal's transaction — a session principal's included, for which the
+    // claim is absent and must be written as the empty string, not skipped.
+    const client = await pool.connect();
+    try {
+      await client.query(`SET app.current_api_key_id = '${victim.apiKeyId}'`);
+    } finally {
+      client.release();
+    }
+    const seen = await withTenantTransaction(
+      app,
+      { orgId: attacker.orgId, userId: attacker.userId },
+      async (tx) => {
+        const { rows } = await tx.execute<{ v: string | null }>(
+          sql`SELECT current_setting('app.current_api_key_id', true) AS v`,
+        );
+        return rows[0]!.v;
+      },
+    );
+    expect(seen).toBe('');
+    const withKey = await withTenantTransaction(
+      app,
+      { orgId: attacker.orgId, apiKeyId: attacker.apiKeyId },
+      async (tx) => {
+        const { rows } = await tx.execute<{ v: string | null }>(
+          sql`SELECT current_setting('app.current_api_key_id', true) AS v`,
+        );
+        return rows[0]!.v;
+      },
+    );
+    expect(withKey).toBe(attacker.apiKeyId);
+    await pool.query('RESET app.current_api_key_id');
   });
 
   it('F. a variable cannot be persisted as a role or database default', async () => {
