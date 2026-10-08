@@ -195,11 +195,20 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
     expect(
       [...adr015Classification!.sql.matchAll(/'api_keys\.\w+'/g)].map((x) => x[0]).sort(),
     ).toEqual(["'api_keys.create'", "'api_keys.read'", "'api_keys.revoke'"]);
+    // ADR-015 R-7 (migration 0027) creates one function and no table or
+    // column; its API-key arm reads the existing `api_keys` table through the
+    // seventh tenant-context claim, `app.current_api_key_id`. Those two names
+    // are its only credential-shaped references.
+    const CONTENT_CONTEXT_0027 = new Set(['api_keys', 'current_api_key_id']);
+    const adr015Content = migrations.find((m) => m.n.startsWith('0027_'));
+    expect(adr015Content).toBeDefined();
+    expect(adr015Content!.sql).not.toMatch(/CREATE\s+TABLE|ADD\s+COLUMN/i);
     expect(
       phase2.flatMap((m) =>
         [...m.sql.matchAll(/\w*(?:credential|secret|passw|api_?key|token)\w*/gi)]
           .filter((x) => !(m === adr015 && IDENTITY_BACKSTOP_0025.has(x[0])))
           .filter((x) => !(m === adr015Classification && PERMISSION_KEYS_0026.has(x[0])))
+          .filter((x) => !(m === adr015Content && CONTENT_CONTEXT_0027.has(x[0])))
           .map((x) => `${m.n}: ${x[0]}`),
       ),
     ).toEqual([]);

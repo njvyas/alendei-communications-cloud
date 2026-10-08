@@ -12,6 +12,8 @@
  * pre-0025 definitions — 0025 changed no predicate there — and no
  * `app_actor_covers_user` exists.
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { sql } from 'drizzle-orm';
 
 import { connect, loadTestEnv, type Principals } from './harness';
@@ -302,6 +304,60 @@ describe('migration 0027 catalogue: app_content_context_valid()', () => {
     const { owner, acl, table_owner } = rows[0]!;
     expect(owner).toBe(table_owner);
     expect(acl).toBe(`{${owner}=X/${owner},acc_app=X/${owner}}`);
+  });
+
+  it('the verification block refuses an organization grant whose org_id disagrees with its scope, before anything is applied', async () => {
+    // The function trusts user_roles.org_id; 0027's first statement refuses to
+    // install it over a grant that would make that trust wrong. The bad row is
+    // planted with the scope trigger disabled, inside a transaction that is
+    // rolled back.
+    const migration = readFileSync(
+      resolve(__dirname, '../../migrations/0027_adr015_content_context.sql'),
+      'utf8',
+    );
+    const block = migration.slice(migration.indexOf('DO $$'), migration.indexOf('END $$;') + 7);
+    expect(block).toMatch(/^DO \$\$[\s\S]*user_roles_scope_org_consistent[\s\S]*END \$\$;$/);
+    const c = await db.adminPool.connect();
+    try {
+      await c.query('BEGIN');
+      // Consistent data: the block passes.
+      await c.query(block);
+      const { rows: r } = await c.query<{ id: string }>(
+        `INSERT INTO resellers (name, slug) VALUES ('v27', 'rs-v27-' || substr(md5(random()::text), 1, 12)) RETURNING id`,
+      );
+      const orgs: string[] = [];
+      for (const label of ['a', 'b']) {
+        const { rows } = await c.query<{ id: string }>(
+          `INSERT INTO organizations (name, slug, reseller_id)
+           VALUES ($1, 'org-v27-' || substr(md5(random()::text), 1, 12), $2) RETURNING id`,
+          [`v27 ${label}`, r[0]!.id],
+        );
+        orgs.push(rows[0]!.id);
+      }
+      const { rows: role } = await c.query<{ id: string }>(
+        `INSERT INTO roles (org_id, key, name, is_system_role, allowed_scope_types)
+         VALUES ($1, 'v27', 'v27', false, '{organization}') RETURNING id`,
+        [orgs[0]],
+      );
+      const { rows: user } = await c.query<{ id: string }>(
+        `INSERT INTO users (email, status) VALUES ('v27-' || substr(md5(random()::text), 1, 12) || '@example.test', 'invited') RETURNING id`,
+      );
+      await c.query('ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_validate_scope');
+      await c.query(
+        `INSERT INTO user_roles (user_id, role_id, scope_type, scope_id, org_id)
+         VALUES ($1, $2, 'organization', $3, $4)`,
+        [user[0]!.id, role[0]!.id, orgs[0], orgs[1]],
+      );
+      const failure = await c.query(block).then(
+        () => null,
+        (e: { code?: string; message?: string }) => e,
+      );
+      expect(failure?.code).toBe('23514');
+      expect(failure?.message).toMatch(/\[user_roles_scope_org_consistent\]: 1 role grants/);
+    } finally {
+      await c.query('ROLLBACK');
+      c.release();
+    }
   });
 
   it('no policy calls it yet: there is no content table before Phase 3.1', async () => {

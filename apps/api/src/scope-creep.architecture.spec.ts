@@ -231,7 +231,7 @@ const CATEGORIES: Category[] = [
     key: 'websocket',
     forbids: 'a WebSocket gateway (D15, ADR-013 PD-8)',
     exceptions:
-      'Pre-existing: the WebSocket **ticket** mint (Phase 1B, D15 \u2014 a ticket can be issued, never consumed: no gateway, no upgrade handler) and two unrelated `ws` aliases (a workspace slug and a list-query local).',
+      'Pre-existing: the WebSocket **ticket** mint (Phase 1B, D15 \u2014 a ticket can be issued, never consumed: no gateway, no upgrade handler) and two unrelated `ws` aliases (a workspace slug and a list-query local). ADR-015 R-7: the table-class registry names the existing `ws_tickets` table as a tenancy record.',
     pattern:
       /[\w-]*(?:websocket|socket\.io|WebSocketGateway|upgrade|\bws\b|ws[-_]?ticket|wss?:)[\w-]*/gi,
     providerCodeOnly: false,
@@ -280,6 +280,7 @@ const CATEGORIES: Category[] = [
         'WS_TICKET_EXPIRED',
         'WS_TICKET_INVALID',
       ],
+      'packages/db/src/table-classes.ts': ['ws_tickets'],
       'packages/db/src/schema/iam.ts': [
         'NewWsTicket',
         'WsTicket',
