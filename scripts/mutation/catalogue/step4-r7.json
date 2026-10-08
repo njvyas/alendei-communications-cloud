@@ -1,0 +1,274 @@
+{
+  "step": "ADR-015 remediation step 4 — R-7 … R-10 Model B tenant-content RLS infrastructure (migration 0027, the seventh claim, the table-class registry)",
+  "usage": "source the DATABASE_* environment of a test template database at migration 0024 or later (acc_r015_base), then: node scripts/mutation/run.mjs scripts/mutation/catalogue/step4-r7.json --out <dir>. Every DB command first applies the (mutated) migrations to its disposable clone.",
+  "commands": {
+    "unit": {
+      "cwd": ".",
+      "db": false,
+      "argv": ["bash", "-c", "cd packages/db && npx jest --selectProjects unit"],
+      "timeoutSeconds": 300
+    },
+    "db": {
+      "cwd": ".",
+      "db": true,
+      "argv": [
+        "bash",
+        "-c",
+        "npm run db:migrate --workspace @acc/db && cd packages/db && npx jest --selectProjects integration --runInBand --testPathPatterns \"content-rls|table-classes|backstop-definitions|principals|tenant-context-trust\""
+      ],
+      "timeoutSeconds": 900
+    },
+    "api": {
+      "cwd": ".",
+      "db": true,
+      "argv": [
+        "bash",
+        "-c",
+        "npm run db:migrate --workspace @acc/db && cd apps/api && npx jest --selectProjects security --runInBand --testPathPatterns content-context"
+      ],
+      "timeoutSeconds": 900
+    }
+  },
+  "mutants": [
+    {
+      "id": "M1",
+      "title": "platform arm added: a validated platform claim makes the context valid",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0027_adr015_content_context.sql",
+          "search": "  RETURN false;\nEND;\n$$;",
+          "replace": "  IF app_is_platform_admin() THEN\n    RETURN true;\n  END IF;\n\n  RETURN false;\nEND;\n$$;"
+        }
+      ],
+      "commands": ["db"]
+    },
+    {
+      "id": "M2",
+      "title": "reseller arm added: the selected organization's reseller matching a validated reseller claim makes it valid",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0027_adr015_content_context.sql",
+          "search": "  RETURN false;\nEND;\n$$;",
+          "replace": "  IF app_org_reseller(v_org) = app_current_reseller_id() THEN\n    RETURN true;\n  END IF;\n\n  RETURN false;\nEND;\n$$;"
+        }
+      ],
+      "commands": ["db"]
+    },
+    {
+      "id": "M3",
+      "title": "active-user condition dropped",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0027_adr015_content_context.sql",
+          "search": "      AND u.status = 'active'\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["db"]
+    },
+    {
+      "id": "M4",
+      "title": "user arm accepts any grant of an active user, regardless of organization and scope type",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0027_adr015_content_context.sql",
+          "search": "      AND ur.org_id = v_org\n      AND ur.scope_type IN ('organization', 'workspace', 'team')\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["db"]
+    },
+    {
+      "id": "M4b",
+      "title": "scope_type restriction dropped alone (behaviourally equivalent: user_roles_scope_shape forces org_id NULL on platform/reseller grants)",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0027_adr015_content_context.sql",
+          "search": "      AND ur.scope_type IN ('organization', 'workspace', 'team')\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["db"]
+    },
+    {
+      "id": "M5",
+      "title": "organization match dropped from the user arm",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0027_adr015_content_context.sql",
+          "search": "      AND ur.org_id = v_org\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["db"]
+    },
+    {
+      "id": "M6",
+      "title": "revoked_at check dropped from the key arm",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0027_adr015_content_context.sql",
+          "search": "      AND k.revoked_at IS NULL\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["db"]
+    },
+    {
+      "id": "M7",
+      "title": "expires_at check dropped from the key arm",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0027_adr015_content_context.sql",
+          "search": "      AND (k.expires_at IS NULL OR k.expires_at > now())\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["db"]
+    },
+    {
+      "id": "M8",
+      "title": "organization match dropped from the key arm",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0027_adr015_content_context.sql",
+          "search": "      AND k.org_id = v_org\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["db"]
+    },
+    {
+      "id": "M9",
+      "title": "EXECUTE granted to PUBLIC",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0027_adr015_content_context.sql",
+          "search": "GRANT EXECUTE ON FUNCTION app_content_context_valid() TO acc_app;",
+          "replace": "GRANT EXECUTE ON FUNCTION app_content_context_valid() TO acc_app, PUBLIC;"
+        }
+      ],
+      "commands": ["db"]
+    },
+    {
+      "id": "M10",
+      "title": "EXECUTE granted to acc_auth",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0027_adr015_content_context.sql",
+          "search": "GRANT EXECUTE ON FUNCTION app_content_context_valid() TO acc_app;",
+          "replace": "GRANT EXECUTE ON FUNCTION app_content_context_valid() TO acc_app, acc_auth;"
+        }
+      ],
+      "commands": ["db"]
+    },
+    {
+      "id": "M11",
+      "title": "SECURITY INVOKER instead of DEFINER",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0027_adr015_content_context.sql",
+          "search": "LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp\nAS $$\nDECLARE\n  v_org",
+          "replace": "LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = public, pg_temp\nAS $$\nDECLARE\n  v_org"
+        }
+      ],
+      "commands": ["db"]
+    },
+    {
+      "id": "M12",
+      "title": "search_path pin dropped",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0027_adr015_content_context.sql",
+          "search": "LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp\nAS $$\nDECLARE\n  v_org",
+          "replace": "LANGUAGE plpgsql STABLE SECURITY DEFINER\nAS $$\nDECLARE\n  v_org"
+        }
+      ],
+      "commands": ["db"]
+    },
+    {
+      "id": "M13",
+      "title": "returns true when app.current_org_id is empty",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0027_adr015_content_context.sql",
+          "search": "  IF v_org IS NULL THEN\n    RETURN false;",
+          "replace": "  IF v_org IS NULL THEN\n    RETURN true;"
+        }
+      ],
+      "commands": ["db"]
+    },
+    {
+      "id": "M14",
+      "title": "tenantContextStatements stops writing app.current_api_key_id",
+      "edits": [
+        {
+          "file": "packages/db/src/tenant-context.ts",
+          "search": "    localSetting(SESSION_VARS.API_KEY_ID, session.apiKeyId ?? ''),\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["unit", "db", "api"]
+    },
+    {
+      "id": "M14b",
+      "title": "tenantContextStatements writes app.current_api_key_id only when present (leak)",
+      "edits": [
+        {
+          "file": "packages/db/src/tenant-context.ts",
+          "search": "    localSetting(SESSION_VARS.API_KEY_ID, session.apiKeyId ?? ''),\n",
+          "replace": "    ...(session.apiKeyId ? [localSetting(SESSION_VARS.API_KEY_ID, session.apiKeyId)] : []),\n"
+        }
+      ],
+      "commands": ["unit", "db", "api"]
+    },
+    {
+      "id": "M15",
+      "title": "withRequestTenant passes null for API-key principals",
+      "edits": [
+        {
+          "file": "apps/api/src/database/tenant-database.service.ts",
+          "search": "        apiKeyId: principal.apiKeyId,",
+          "replace": "        apiKeyId: null,"
+        }
+      ],
+      "commands": ["api"]
+    },
+    {
+      "id": "M16",
+      "title": "catalogue checker stops rejecting app_org_in_scope",
+      "edits": [
+        {
+          "file": "packages/db/src/test/content-tables.ts",
+          "search": "  /app_org_in_scope|app_is_platform_admin|app_current_reseller_id|app_org_reseller|app_has_platform_/;",
+          "replace": "  /app_is_platform_admin|app_current_reseller_id|app_org_reseller|app_has_platform_/;"
+        }
+      ],
+      "commands": ["db"]
+    },
+    {
+      "id": "M17",
+      "title": "catalogue checker accepts any permissive expression that mentions the helper (OR instead of AND passes)",
+      "edits": [
+        {
+          "file": "packages/db/src/test/content-tables.ts",
+          "search": "        if (expression !== CONTENT_PREDICATE) {",
+          "replace": "        if (!expression.includes('app_content_context_valid()')) {"
+        }
+      ],
+      "commands": ["db"]
+    },
+    {
+      "id": "M18",
+      "title": "completeness exemption widened (a tenancy table also exempted)",
+      "edits": [
+        {
+          "file": "packages/db/src/table-classes.ts",
+          "search": "export const ORG_ID_EXEMPT_TABLES: readonly string[] = [];",
+          "replace": "export const ORG_ID_EXEMPT_TABLES: readonly string[] = ['api_keys'];"
+        }
+      ],
+      "commands": ["db"]
+    }
+  ]
+}
