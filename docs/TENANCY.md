@@ -247,13 +247,14 @@ RLS enforces the **tenancy** dimension of the scope model. It is the boundary th
 | `app.current_reseller_id` | resolved `TenantContext.reseller_id` — a genuine reseller-scope grant only (§2a) | not acting in a reseller capacity |
 | `app.current_user_id` | the verified principal's `user_id` | not a human-user request |
 | `app.is_platform_admin` | `'on'` only when the principal holds `alendei_super_admin` at platform scope | not a platform admin |
+| `app.current_api_key_id` | the authenticated API key's id — API-key principals only (ADR-015 R-7, migration `0027`) | not an API-key request; the content predicate's key arm admits nothing |
 
-**Elevated claims are validated by the database (migration `0010`, ADR-011 D-1).** For any principal RLS binds, `app_current_reseller_id()` returns the claimed reseller only while `app.current_user_id` holds an active `reseller`-scope grant on it, and `app_is_platform_admin()` returns true only while that user holds `alendei_super_admin` at platform scope. An unbacked claim reads as NULL/false. `app.current_org_id` and `app.provisioning` are not validated (`SECURITY.md` §4b).
+**Elevated claims are validated by the database (migration `0010`, ADR-011 D-1).** For any principal RLS binds, `app_current_reseller_id()` returns the claimed reseller only while `app.current_user_id` holds an active `reseller`-scope grant on it, and `app_is_platform_admin()` returns true only while that user holds `alendei_super_admin` at platform scope. An unbacked claim reads as NULL/false. `app.current_org_id` and `app.provisioning` are not validated (`SECURITY.md` §4b). `app.current_user_id` and `app.current_api_key_id` are validated, for tenant content only, by `app_content_context_valid()` (below).
 | `app.provisioning` | `'on'` only inside the tenant-provisioning path, alongside `app.current_org_id` set to the organization being created | not provisioning |
 
-Every variable is written on **every** transaction, including empty values for absent ones, so a pooled connection can never inherit context from the work that ran on it before.
+All seven variables are written on **every** transaction, including empty values for absent ones, so a pooled connection can never inherit context from the work that ran on it before.
 
-**The one predicate every org-scoped policy is built from** — `app_org_in_scope(target_org)`:
+**The one predicate every tenancy-record policy is built from** — `app_org_in_scope(target_org)` (tenancy records: organizations, workspaces, teams, roles, grants, API keys, WebSocket tickets, idempotency, audit — `TENANCY_RECORD_TABLES` in `packages/db/src/table-classes.ts`):
 
 ```
 app_is_platform_admin()                                   -- platform covers everything
@@ -262,6 +263,14 @@ OR app_org_reseller(target_org) = app_current_reseller_id()  -- an organization 
 ```
 
 This is exactly §1a.4's downward inheritance expressed in SQL. Note what it does *not* contain: no workspace or team term. **RLS enforces isolation down to the organization; workspace and team are enforced above it, by the authorization layer.** That is a deliberate boundary, not an omission — a workspace is not a tenant, and modelling it as one would make every policy a join and still not remove the need for the authorization check. Documented as a residual risk and revisited if `DECISIONS.md` D3 (making `workspace_id` mandatory on every tenant-scoped table) is ever resolved in favour of mandatory.
+
+**Tenant-content tables use a different predicate (ADR-015 R-7 Model B, ADR-014 §17.1; migration `0027`).** Contacts, consent events, templates, suppressions, messages, attempts and events — none exists before Phase 3.1 — are **not** tenancy records, and their `acc_app` policies never call `app_org_in_scope`:
+
+```
+org_id = app_current_org_id() AND (SELECT app_content_context_valid())
+```
+
+`app_content_context_valid()` is true only when `app.current_org_id` is set **and** either the current user is an active user with an organization-, workspace- or team-scope grant **in that organization**, or the current API key is an unrevoked, unexpired key **of that organization**. It has no reseller, platform, support or break-glass arm (R-8): a reseller administrator, a super administrator or `alendei_support` who *selects* an organization reaches its tenancy records (the hierarchy above) but **none of its content** unless it also holds an organization, workspace or team grant there. The reseller and platform claims are not cleared in a content transaction — the same request may read tenancy tables — the content predicate simply ignores them. As everywhere in RLS, a workspace or team grant admits the whole organization at this layer; workspace and team isolation of content remain the authorization layer's (ADR-011 D-4). Every table with an `org_id` column is classified in exactly one of `TENANCY_RECORD_TABLES`, `CONTENT_TABLES` or `ORG_ID_EXEMPT_TABLES` (`table-classes.int-spec.ts` fails otherwise, and checks every content table's policies and grants against the rule). R-10: `organization_provider_assignments` will be a tenancy record; `message_dispatch_queue` is not tenant content while it stays content-free.
 
 **RLS stopping at organization does not mean sub-organization scope is unrecorded.** `audit_logs` records the exact scope an action occurred at — including `workspace` and `team` — and enforces the parent–child chain physically (§1a.3). What RLS does not do is *filter* on those levels.
 
@@ -381,7 +390,8 @@ Every mechanism that stops a principal reaching outside its scope, in one place,
 | Supplying another organization's `org_id` in a path, body or header | Context is re-derived from the credential; a mismatch is `403` (§2b) |
 | Forging `org_id` in a JWT claim | Claims are read only from a *verified* token, and tenancy is re-derived from `user_roles`, not taken from the claim |
 | An API key acting outside its organization | `api_keys.org_id` is the key's entire tenant reach; it is bound at creation and never widened by a request |
-| Reaching another organization's rows despite a missing application filter | RLS `app_org_in_scope(org_id)` on every org-scoped table |
+| Reaching another organization's rows despite a missing application filter | RLS `app_org_in_scope(org_id)` on every tenancy-record table; the Model B content predicate on every tenant-content table |
+| A reseller, platform or support principal reaching tenant content by selecting an organization | `app_content_context_valid()` admits only an organization/workspace/team grant in that organization or a valid key of it — no reseller, platform or break-glass arm (ADR-015 R-7, R-8) |
 | Reaching another reseller's organizations | `app_org_reseller()` comparison; a reseller grant covers only its own organizations |
 | Escalating team → workspace → organization → reseller → platform | Inheritance is downward only (§1a.4); a grant is never widened by the scope it is used at |
 | Granting a role at a scope in another tenant | `fn_validate_user_role_scope` derives and verifies the ownership chain, and aborts the transaction on mismatch (`RBAC.md` §6) |
