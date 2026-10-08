@@ -4,6 +4,7 @@ import {
   ERROR_CODES,
   PERMISSIONS,
   PLATFORM_ROLE_KEYS,
+  TENANT_ROLE_KEYS,
   type AuthPrincipal,
   type PageInfo,
   type ScopeType,
@@ -20,6 +21,11 @@ import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/ht
 import { SessionService } from '../iam/session.service';
 import { ScopeResolver } from '../auth/scope-resolver.service';
 import { TenantDatabase } from '../database/tenant-database.service';
+import {
+  assertOrganizationAdminRemains,
+  lockOrganizationAdministration,
+  translateOrganizationAdminLiveness,
+} from '../rbac/organization-admin-liveness';
 import { RoleAssignmentService } from '../rbac/role-assignment.service';
 import type { UserStatus } from './user.dto';
 
@@ -458,9 +464,12 @@ export class UserAdministrationService {
       throw this.lifecycleConflict('This user is already disabled', before.status);
     }
 
-    // Only for a platform administrator: every other disable takes no lock and
-    // runs no count.
+    // Only for an administrator: every other disable takes no lock and runs
+    // no count. Organizations first, then the platform — the order the
+    // triggers beneath take the same locks in (`trg_users_org_admin_liveness`
+    // fires before `trg_users_platform_admin_liveness`).
     if (before.status === 'active') {
+      await this.assertOrganizationAdminsRemain(tx, id);
       await this.assertPlatformAdminRemains(tx, id);
     }
 
@@ -799,6 +808,40 @@ export class UserAdministrationService {
   }
 
   /**
+   * Refuses a disable that would leave any organization the user administers
+   * with no active administrator (ADR-015 R-11, D-MEDIUM-3b; `RBAC.md` §7c).
+   *
+   * The message, not the guarantee: `trg_users_org_admin_liveness` (migration
+   * `0028`) fires on exactly this transition for every writer. The locks are
+   * taken here first, in ascending organization order as the trigger takes
+   * them, and a lost race's `restrict_violation` is translated to the same
+   * `409` by `translateLivenessViolation`.
+   */
+  private async assertOrganizationAdminsRemain(tx: Transaction, userId: string): Promise<void> {
+    const administered = await tx
+      .selectDistinct({ orgId: schema.userRoles.scopeId })
+      .from(schema.userRoles)
+      .innerJoin(schema.roles, eq(schema.roles.id, schema.userRoles.roleId))
+      .where(
+        and(
+          eq(schema.userRoles.userId, userId),
+          eq(schema.userRoles.scopeType, 'organization'),
+          eq(schema.roles.orgId, schema.userRoles.scopeId),
+          eq(schema.roles.key, TENANT_ROLE_KEYS.ORG_ADMIN),
+          eq(schema.roles.isSystemRole, true),
+        ),
+      );
+    // Early exit, as the trigger's: a user administering nothing takes no lock.
+    const orgIds = administered.map((row) => row.orgId!).sort();
+    if (orgIds.length === 0) return;
+
+    await lockOrganizationAdministration(tx, orgIds);
+    for (const orgId of orgIds) {
+      await assertOrganizationAdminRemains(tx, orgId, { userId });
+    }
+  }
+
+  /**
    * Refuses a disable that would leave the platform with no active
    * administrator (ADR-005 D-7).
    *
@@ -876,6 +919,10 @@ export class UserAdministrationService {
    * produces — not as a `500`, which would report a working invariant as a bug.
    */
   private translateLivenessViolation(error: unknown): unknown {
+    // The organization rule raises the same SQLSTATE with its own constraint
+    // name (migration `0028`), and is its own `409`.
+    const organization = translateOrganizationAdminLiveness(error);
+    if (organization !== error) return organization;
     if (this.pgCode(error) !== PG_RESTRICT_VIOLATION) return error;
     return new AppException({
       status: HttpStatus.CONFLICT,

@@ -20,6 +20,11 @@ import { AuditWriter } from '../audit/audit-writer.service';
 import { AuthorizationService } from '../auth/authorization.service';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
 import {
+  assertOrganizationAdminRemains,
+  isOrganizationAdministratorGrant,
+  lockOrganizationAdministration,
+} from './organization-admin-liveness';
+import {
   assertScopeAcceptsNewMembers,
   assertTargetOrganizationActive,
   organizationOfScope,
@@ -40,6 +45,17 @@ export interface AssignmentView {
 export interface GrantInput {
   readonly userId: string;
   readonly roleId: string;
+  readonly scopeType: ScopeType;
+  readonly scopeId: string | null;
+}
+
+/**
+ * What guard 4 and the delegation constraints judge, for a grant **and** for a
+ * revocation (ADR-015 R-11): whose grant, at which scope. One shape, so the
+ * two paths share one evaluator and cannot drift.
+ */
+export interface AuthoritySubject {
+  readonly userId: string;
   readonly scopeType: ScopeType;
   readonly scopeId: string | null;
 }
@@ -392,6 +408,13 @@ export class RoleAssignmentService {
       scopeId: assignment.scopeId,
     });
 
+    // Revocation is symmetric with granting (ADR-015 R-11): the actor must
+    // hold every permission the role carries at a scope covering the grant —
+    // guard 4, the same evaluator, with the role row locked `FOR SHARE` — or
+    // satisfy the same delegation constraints (R-6, revoke side).
+    const role = await this.loadRole(tx, assignment.roleId);
+    const delegated = await this.assertWithinActorAuthority(tx, principal, role, assignment);
+
     // The last-platform-admin invariant (ADR-005 D-7). Only for a platform
     // grant: every other revocation takes no lock and runs no count.
     if (
@@ -399,6 +422,14 @@ export class RoleAssignmentService {
       assignment.roleKey === PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN
     ) {
       await this.assertPlatformAdminRemains(tx, assignment.id);
+    }
+
+    // The last-organization-administrator invariant (ADR-015 R-11,
+    // D-MEDIUM-3b). Only for a grant of the organization's seeded `org_admin`
+    // at its organization scope: every other revocation takes no lock.
+    if (isOrganizationAdministratorGrant(role, assignment)) {
+      await lockOrganizationAdministration(tx, [assignment.scopeId!]);
+      await assertOrganizationAdminRemains(tx, assignment.scopeId!, { grantId: assignment.id });
     }
 
     // The audit row is written *before* the delete, inside the same
@@ -425,7 +456,15 @@ export class RoleAssignmentService {
           scopeId: assignment.scopeId,
         },
         after: null,
-        metadata: { roleKey: assignment.roleKey, revokedFrom: assignment.userId },
+        metadata: {
+          roleKey: assignment.roleKey,
+          revokedFrom: assignment.userId,
+          // Only on a delegated revocation (ADR-015 R-6, revoke side): the
+          // tenant-content permissions the actor removed without holding them.
+          ...(delegated.length > 0
+            ? { delegation: true, delegatedPermissions: [...delegated] }
+            : {}),
+        },
       },
       tx,
     );
@@ -504,6 +543,28 @@ export class RoleAssignmentService {
     return role;
   }
 
+  /**
+   * The role of a stored grant, for revocation. Visible whenever the grant is
+   * (`loadVisible` joined it under the same RLS context); a platform role is
+   * not refused here — revoking a platform-role grant is judged by guard 4
+   * like any other.
+   */
+  private async loadRole(
+    tx: Transaction,
+    roleId: string,
+  ): Promise<typeof schema.roles.$inferSelect> {
+    const [role] = await tx.select().from(schema.roles).where(eq(schema.roles.id, roleId));
+    if (!role) {
+      throw new AppException({
+        status: HttpStatus.NOT_FOUND,
+        code: ERROR_CODES.RESOURCE_NOT_FOUND,
+        message: 'Role assignment not found',
+        logContext: { requestedRoleId: roleId },
+      });
+    }
+    return role;
+  }
+
   /** §6n case 28. `RBAC.md` §7's "no grant at a scope level the role was never designed for". */
   private assertScopeTypeAdmitted(
     role: typeof schema.roles.$inferSelect,
@@ -555,12 +616,17 @@ export class RoleAssignmentService {
    * and empty for an ordinary grant. Delegation is tried only when the ordinary
    * rule refuses; if any of its constraints fails, the ordinary refusal stands,
    * unchanged.
+   *
+   * **The one evaluator for granting and revoking** (ADR-015 R-11): `revoke`
+   * calls exactly this with the stored grant as the subject, so revocation is
+   * symmetric with granting — the same rule, the same lock, the same
+   * delegation constraints, the same refusal — and the two cannot drift.
    */
   private async assertWithinActorAuthority(
     tx: Transaction,
     principal: AuthPrincipal,
     role: typeof schema.roles.$inferSelect,
-    input: GrantInput,
+    input: AuthoritySubject,
   ): Promise<readonly string[]> {
     const target: ScopeRef = { scopeType: input.scopeType, scopeId: input.scopeId };
     await tx
@@ -612,14 +678,16 @@ export class RoleAssignmentService {
    *
    * Enforcement is application-only, as guard 4 is (`RBAC.md` §7); the
    * database still refuses tenant-content keys on platform roles and
-   * `platform.%` keys on tenant roles. Revocation by delegation is R-11's and
-   * is not implemented here.
+   * `platform.%` keys on tenant roles. The same constraints decide a
+   * delegated revocation (organizational recovery, ADR-015 R-11): `subject`
+   * is then the stored grant, so condition 6 refuses revoking one's own grant
+   * by delegation exactly as it refuses granting oneself.
    */
   private async delegationApplies(
     tx: Transaction,
     principal: AuthPrincipal,
     role: typeof schema.roles.$inferSelect,
-    input: GrantInput,
+    input: AuthoritySubject,
     unheld: readonly string[],
   ): Promise<boolean> {
     if (!(DELEGABLE_TENANT_SYSTEM_ROLES as readonly string[]).includes(role.key)) return false;

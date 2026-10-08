@@ -51,3 +51,19 @@ export const PLATFORM_DEFAULT_RESELLER_SLUG = 'alendei-direct';
  * and `RoleAssignmentService` must take the same one.
  */
 export const PLATFORM_ADMIN_LOCK_KEY = 4_820_193_077n;
+
+/**
+ * The advisory-lock class serialising every mutation that could remove the
+ * last active administrator of one organization (ADR-015 R-11, D-MEDIUM-3b,
+ * migration `0028`).
+ *
+ * Used in PostgreSQL's two-`int4` form,
+ * `pg_advisory_xact_lock(ORG_ADMIN_LOCK_CLASS, hashtext(org_id::text))`: one
+ * lock per organization, so administration of different organizations never
+ * contends, in a keyspace PostgreSQL keeps apart from every one-`bigint` lock
+ * (`pg_locks.objsubid` 2 versus 1) — it cannot collide with
+ * `PLATFORM_ADMIN_LOCK_KEY`. As for that key, a second value would silently
+ * disable the guarantee: `fn_assert_org_admin_remains` and the services must
+ * take the same one, and the suite asserts they do.
+ */
+export const ORG_ADMIN_LOCK_CLASS = 482_019_308;

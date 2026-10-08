@@ -54,6 +54,15 @@ export const ERROR_CODES = {
    * looking for a permission it already holds.
    */
   AUTHZ_LAST_PLATFORM_ADMIN: 'AUTHZ_LAST_PLATFORM_ADMIN',
+  /**
+   * The operation would leave an organization that has an administrator with
+   * none (ADR-015 R-11, D-MEDIUM-3b): no active user would hold the
+   * organization's seeded `org_admin` at its organization scope. Rendered `409`
+   * for the same reason as `AUTHZ_LAST_PLATFORM_ADMIN` — the actor was
+   * authorized; the organization may not enter that state, and the remedy is
+   * to appoint another administrator first.
+   */
+  AUTHZ_LAST_ORGANIZATION_ADMIN: 'AUTHZ_LAST_ORGANIZATION_ADMIN',
 
   // --- User lifecycle (Phase 1B.6.1) ---------------------------------------
   /**

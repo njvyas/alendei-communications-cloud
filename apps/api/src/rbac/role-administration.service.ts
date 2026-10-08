@@ -284,6 +284,7 @@ export class RoleAdministrationService {
     }
     if (input.permissions) {
       await this.assertComposable(tx, principal, orgId, input.permissions);
+      await this.assertRemovable(tx, principal, orgId, roleId, input.permissions);
     }
 
     const [before] = await this.withPermissions(tx, [role]);
@@ -567,6 +568,55 @@ export class RoleAdministrationService {
         // The rejected keys are the caller's own input, so echoing them
         // discloses nothing it did not send.
         details: { rejected: [...unheld] },
+      });
+    }
+  }
+
+  /**
+   * Removing a permission from a role requires holding it too (ADR-015 R-11,
+   * `RBAC.md` §8a): an actor may not strip authority it cannot itself see. With
+   * `assertComposable` over the new set, the edit is checked over everything it
+   * touches — every permission added, kept or removed.
+   *
+   * The role row is locked `FOR UPDATE` before its current set is read, so the
+   * set judged is the set replaced: a concurrent grant or revocation of this
+   * role (which holds `FOR SHARE` on the same row while it judges the role's
+   * permissions) either completes first or waits for this edit.
+   */
+  private async assertRemovable(
+    tx: Transaction,
+    principal: AuthPrincipal,
+    orgId: string,
+    roleId: string,
+    next: readonly string[],
+  ): Promise<void> {
+    await tx
+      .select({ id: schema.roles.id })
+      .from(schema.roles)
+      .where(eq(schema.roles.id, roleId))
+      .for('update');
+    const current = await tx
+      .select({ key: schema.permissions.key })
+      .from(schema.rolePermissions)
+      .innerJoin(schema.permissions, eq(schema.permissions.id, schema.rolePermissions.permissionId))
+      .where(eq(schema.rolePermissions.roleId, roleId));
+    const removed = current.map((row) => row.key).filter((key) => !next.includes(key));
+    if (removed.length === 0) return;
+
+    const unheld = await this.authorization.unheldPermissions(tx, {
+      principal,
+      permissions: removed,
+      target: { scopeType: 'organization', scopeId: orgId },
+    });
+    if (unheld.length > 0) {
+      throw new AppException({
+        status: HttpStatus.FORBIDDEN,
+        code: ERROR_CODES.AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION,
+        message:
+          'A permission cannot be removed from a role unless you hold it at this organization',
+        // The role's composition is readable through `/roles`, so naming the
+        // keys discloses nothing new.
+        details: { rejected: [...unheld].sort() },
       });
     }
   }
