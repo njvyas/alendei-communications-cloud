@@ -94,8 +94,14 @@ describe('last-organization-administrator invariant (ADR-015 R-11)', () => {
     expect(cause.message).toMatch(REFUSAL);
   };
 
+  interface Held {
+    readonly client: PoolClient;
+    readonly pid: number;
+    done: boolean;
+  }
+
   /** An owner connection holding the organization's liveness lock, open. */
-  async function holdLock(orgId: string): Promise<{ client: PoolClient; pid: number }> {
+  async function holdLock(orgId: string): Promise<Held> {
     const client = await owner.connect();
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock($1::int4, hashtext($2::text))', [
@@ -103,26 +109,67 @@ describe('last-organization-administrator invariant (ADR-015 R-11)', () => {
       orgId,
     ]);
     const pid = (await client.query('SELECT pg_backend_pid() AS pid')).rows[0].pid as number;
-    return { client, pid };
+    return { client, pid, done: false };
   }
 
-  /** Waits until `count` backends are blocked by `pid`. */
-  async function untilBlocked(pid: number, count: number): Promise<number[]> {
-    const deadline = Date.now() + 15_000;
+  /** Commits and releases a held lock; safe to call again from `finally`. */
+  async function release(held: Held | undefined): Promise<void> {
+    if (!held || held.done) return;
+    held.done = true;
+    try {
+      await held.client.query('COMMIT');
+    } finally {
+      held.client.release();
+    }
+  }
+
+  /** A pending operation that reports whether it has already settled. */
+  function track<T>(promise: Promise<T>): { promise: Promise<T>; settled: () => boolean } {
+    let done = false;
+    const tracked = promise.finally(() => {
+      done = true;
+    });
+    return { promise: tracked, settled: () => done };
+  }
+
+  /**
+   * The backends blocked by `pid`, once there are `count` of them — or `null`
+   * as soon as any contender has settled without blocking (or after 8 s), so
+   * that a contender that should have waited fails an assertion instead of a
+   * timeout.
+   */
+  async function untilBlocked(
+    pid: number,
+    count: number,
+    settled: () => boolean = () => false,
+  ): Promise<number[] | null> {
+    const deadline = Date.now() + 8_000;
     for (;;) {
       const { rows } = await owner.query<{ pid: number }>(
         'SELECT pid FROM pg_stat_activity WHERE $1::int = ANY (pg_blocking_pids(pid))',
         [pid],
       );
       if (rows.length >= count) return rows.map((r) => r.pid);
-      if (Date.now() > deadline) throw new Error(`only ${rows.length} of ${count} blocked`);
+      if (settled() || Date.now() > deadline) return null;
       await new Promise((r) => setTimeout(r, 20));
     }
   }
 
-  async function release(held: { client: PoolClient }): Promise<void> {
-    await held.client.query('COMMIT');
-    held.client.release();
+  /** A row-lock probe that must succeed at once; always leaves the client clean. */
+  async function probeRowFree(text: string, id: string): Promise<boolean> {
+    const probe = await owner.connect();
+    try {
+      await probe.query('BEGIN');
+      await probe.query('SET LOCAL lock_timeout = 200');
+      const ok = await probe.query(text, [id]).then(
+        (r) => r.rowCount === 1,
+        () => false,
+      );
+      return ok;
+    } finally {
+      await probe.query('ROLLBACK').catch(() => undefined);
+      probe.release();
+    }
   }
 
   // ===========================================================================
@@ -186,67 +233,81 @@ describe('last-organization-administrator invariant (ADR-015 R-11)', () => {
       const second = await w.admin(org, 'ord-2');
       const token = await w.login(first.email);
       const held = await holdLock(org.orgId);
+      const pending = track(w.revoke(token, org.orgId, second.grantId).then((r) => r));
       try {
-        const pending = w.revoke(token, org.orgId, second.grantId).then((r) => r);
-        const [blocked] = await untilBlocked(held.pid, 1);
+        const blocked = await untilBlocked(held.pid, 1, pending.settled);
+        expect(blocked).not.toBeNull();
         // Parked on the organization lock …
         const { rows } = await owner.query<{ classid: number; objsubid: number }>(
           `SELECT classid::bigint::int AS classid, objsubid FROM pg_locks
             WHERE pid = $1 AND NOT granted AND locktype = 'advisory'`,
-          [blocked],
+          [blocked![0]],
         );
         expect(rows).toEqual([{ classid: ORG_ADMIN_LOCK_CLASS, objsubid: 2 }]);
         // … and before the DELETE: the grant's row is not yet locked by it.
-        const probe = await owner.connect();
-        try {
-          await probe.query('BEGIN');
-          await probe.query('SET LOCAL lock_timeout = 200');
-          await expect(
-            probe.query('SELECT id FROM user_roles WHERE id = $1 FOR UPDATE', [second.grantId]),
-          ).resolves.toMatchObject({ rowCount: 1 });
-          await probe.query('ROLLBACK');
-        } finally {
-          probe.release();
-        }
+        expect(
+          await probeRowFree('SELECT id FROM user_roles WHERE id = $1 FOR UPDATE', second.grantId),
+        ).toBe(true);
         await release(held);
-        expect((await pending).status).toBe(204);
+        expect((await pending.promise).status).toBe(204);
       } finally {
-        await held.client.query('ROLLBACK').catch(() => undefined);
+        await release(held);
+        await pending.promise.catch(() => undefined);
       }
-    });
+    }, 30_000);
 
     it('disable takes the organization lock BEFORE it updates the user (lock first, row locks second)', async () => {
       const org = await w.org('ordering-disable');
       await w.admin(org, 'ordd-1');
       const second = await w.admin(org, 'ordd-2');
       const held = await holdLock(org.orgId);
+      const pending = track(w.disable(superToken, org.orgId, second.userId).then((r) => r));
       try {
-        const pending = w.disable(superToken, org.orgId, second.userId).then((r) => r);
-        const [blocked] = await untilBlocked(held.pid, 1);
+        const blocked = await untilBlocked(held.pid, 1, pending.settled);
+        expect(blocked).not.toBeNull();
         const { rows } = await owner.query<{ classid: number; objsubid: number }>(
           `SELECT classid::bigint::int AS classid, objsubid FROM pg_locks
             WHERE pid = $1 AND NOT granted AND locktype = 'advisory'`,
-          [blocked],
+          [blocked![0]],
         );
         expect(rows).toEqual([{ classid: ORG_ADMIN_LOCK_CLASS, objsubid: 2 }]);
         // The user's row is not yet locked by the disable.
-        const probe = await owner.connect();
-        try {
-          await probe.query('BEGIN');
-          await probe.query('SET LOCAL lock_timeout = 200');
-          await expect(
-            probe.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [second.userId]),
-          ).resolves.toMatchObject({ rowCount: 1 });
-          await probe.query('ROLLBACK');
-        } finally {
-          probe.release();
-        }
+        expect(
+          await probeRowFree('SELECT id FROM users WHERE id = $1 FOR UPDATE', second.userId),
+        ).toBe(true);
         await release(held);
-        expect((await pending).status).toBe(200);
+        expect((await pending.promise).status).toBe(200);
       } finally {
-        await held.client.query('ROLLBACK').catch(() => undefined);
+        await release(held);
+        await pending.promise.catch(() => undefined);
       }
-    });
+    }, 30_000);
+
+    it('the trigger path itself parks behind the organization lock (service bypassed)', async () => {
+      const org = await w.org('trigger-lock');
+      const a = await w.admin(org, 'tl-a');
+      await w.admin(org, 'tl-b');
+      const held = await holdLock(org.orgId);
+      const writer = await owner.connect();
+      try {
+        await writer.query('BEGIN');
+        const deleting = track(
+          writer.query('DELETE FROM user_roles WHERE id = $1', [a.grantId]).then(
+            (r) => r.rowCount,
+            () => null,
+          ),
+        );
+        const blocked = await untilBlocked(held.pid, 1, deleting.settled);
+        await release(held);
+        expect(await deleting.promise).toBe(1);
+        expect(blocked).not.toBeNull();
+      } finally {
+        await release(held);
+        await writer.query('ROLLBACK').catch(() => undefined);
+        writer.release();
+      }
+      expect(await w.admins(org.orgId)).toBe(2);
+    }, 30_000);
 
     it('three triggers guard exactly the documented paths', async () => {
       const { rows } = await h.admin.execute<{ def: string }>(sql`
@@ -579,60 +640,70 @@ describe('last-organization-administrator invariant (ADR-015 R-11)', () => {
 
   // ===========================================================================
   describe('F. concurrency — deterministic, contenders parked behind the lock', () => {
+    /**
+     * Parks `contenders` behind the organization lock, asserts every one of
+     * them is waiting on it, releases it and returns what each answered. A
+     * contender that does not wait is an assertion failure, not a timeout.
+     */
+    async function race<T>(orgId: string, contenders: (() => Promise<T>)[]): Promise<T[]> {
+      const held = await holdLock(orgId);
+      const pending = contenders.map((run) => track(run()));
+      try {
+        const blocked = await untilBlocked(held.pid, contenders.length, () =>
+          pending.some((p) => p.settled()),
+        );
+        expect(blocked?.length ?? 0).toBe(contenders.length);
+        await release(held);
+        return await Promise.all(pending.map((p) => p.promise));
+      } finally {
+        await release(held);
+        await Promise.allSettled(pending.map((p) => p.promise));
+      }
+    }
+
     it('two administrators revoking each other: exactly one 204 and one 409', async () => {
       const org = await w.org('mutual');
       const a = await w.admin(org, 'f-a');
       const b = await w.admin(org, 'f-b');
       const [ta, tb] = [await w.login(a.email), await w.login(b.email)];
-      const held = await holdLock(org.orgId);
-      const pending = Promise.all([
-        w.revoke(ta, org.orgId, b.grantId).then((r) => r),
-        w.revoke(tb, org.orgId, a.grantId).then((r) => r),
+      const results = await race(org.orgId, [
+        () => w.revoke(ta, org.orgId, b.grantId).then((r) => r),
+        () => w.revoke(tb, org.orgId, a.grantId).then((r) => r),
       ]);
-      await untilBlocked(held.pid, 2);
-      await release(held);
-      const results = await pending;
       expect(results.map((r) => r.status).sort()).toEqual([204, 409]);
       expect(results.find((r) => r.status === 409)!.body.error.code).toBe(
         ERROR_CODES.AUTHZ_LAST_ORGANIZATION_ADMIN,
       );
       expect(await w.admins(org.orgId)).toBe(1);
-    });
+    }, 30_000);
 
     it('a revocation racing a disable: one succeeds, the other is 409', async () => {
       const org = await w.org('revoke-disable');
       const a = await w.admin(org, 'f-rd-a');
       const b = await w.admin(org, 'f-rd-b');
-      const held = await holdLock(org.orgId);
-      const pending = Promise.all([
-        w.revoke(superToken, org.orgId, a.grantId).then((r) => r.status),
-        w.disable(superToken, org.orgId, b.userId).then((r) => r.status),
+      const [revoked, disabled] = await race(org.orgId, [
+        () => w.revoke(superToken, org.orgId, a.grantId).then((r) => r.status),
+        () => w.disable(superToken, org.orgId, b.userId).then((r) => r.status),
       ]);
-      await untilBlocked(held.pid, 2);
-      await release(held);
-      const [revoked, disabled] = await pending;
       expect([revoked, disabled].filter((s) => s === 409)).toHaveLength(1);
       expect([revoked, disabled].filter((s) => s === 204 || s === 200)).toHaveLength(1);
       expect(await w.admins(org.orgId)).toBe(1);
-    });
+    }, 30_000);
 
     it('four concurrent removals against two administrators leave one', async () => {
       const org = await w.org('four');
       const a = await w.admin(org, 'f-4a');
       const b = await w.admin(org, 'f-4b');
-      const held = await holdLock(org.orgId);
-      const pending = Promise.all(
-        [a.grantId, b.grantId, a.grantId, b.grantId].map((id) =>
-          w.revoke(superToken, org.orgId, id).then((r) => r.status),
+      const statuses = await race(
+        org.orgId,
+        [a.grantId, b.grantId, a.grantId, b.grantId].map(
+          (id) => () => w.revoke(superToken, org.orgId, id).then((r) => r.status),
         ),
       );
-      await untilBlocked(held.pid, 4);
-      await release(held);
-      const statuses = await pending;
       expect(statuses.filter((s) => s === 204)).toHaveLength(1);
       expect(statuses.every((s) => [204, 404, 409].includes(s))).toBe(true);
       expect(await w.admins(org.orgId)).toBe(1);
-    });
+    }, 30_000);
 
     it('database: two owner connections each delete a different administrator — exactly one commits', async () => {
       const org = await w.org('db-race');
@@ -646,21 +717,26 @@ describe('last-organization-administrator invariant (ADR-015 R-11)', () => {
         const firstPid = (await first.query('SELECT pg_backend_pid() AS pid')).rows[0]
           .pid as number;
         await second.query('BEGIN');
-        const losing = second.query('DELETE FROM user_roles WHERE id = $1', [b.grantId]).then(
-          () => null,
-          (error: { code?: string; constraint?: string }) => error,
+        const losing = track(
+          second.query('DELETE FROM user_roles WHERE id = $1', [b.grantId]).then(
+            () => null,
+            (error: { code?: string; constraint?: string }) => error,
+          ),
         );
-        await untilBlocked(firstPid, 1);
+        const blocked = await untilBlocked(firstPid, 1, losing.settled);
         await first.query('COMMIT');
-        const error = await losing;
+        const error = await losing.promise;
         await second.query('ROLLBACK');
+        expect(blocked).not.toBeNull();
         expect([error?.code, error?.constraint]).toEqual(['23001', 'organization_admin_liveness']);
         expect(await w.admins(org.orgId)).toBe(1);
       } finally {
+        await first.query('ROLLBACK').catch(() => undefined);
+        await second.query('ROLLBACK').catch(() => undefined);
         first.release();
         second.release();
       }
-    });
+    }, 30_000);
   });
 });
 

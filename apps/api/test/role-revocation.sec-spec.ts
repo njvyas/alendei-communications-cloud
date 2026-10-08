@@ -510,11 +510,17 @@ describe('symmetric revocation, role-edit removal and delegated revocation (ADR-
           .pid as number;
         await holder.query('UPDATE roles SET updated_at = now() WHERE id = $1', [roleId]);
 
-        const pending = w.revoke(tokens.cAdmin!, c.orgId, id).then((r) => r);
+        let settled = false;
+        const pending = w.revoke(tokens.cAdmin!, c.orgId, id).then((r) => {
+          settled = true;
+          return r;
+        });
 
+        // A revocation that does not wait for the edit settles first: the loop
+        // ends and the assertions below fail, rather than the test timing out.
         let waited = false;
-        const deadline = Date.now() + 10_000;
-        while (!waited && Date.now() < deadline) {
+        const deadline = Date.now() + 8_000;
+        while (!waited && !settled && Date.now() < deadline) {
           const { rows } = await owner.query<{ n: number }>(
             'SELECT count(*)::int AS n FROM pg_stat_activity WHERE $1::int = ANY (pg_blocking_pids(pid))',
             [holderPid],
@@ -539,6 +545,6 @@ describe('symmetric revocation, role-edit removal and delegated revocation (ADR-
         await w.detach(roleId, ['contacts.read']);
         await owner.end();
       }
-    });
+    }, 30_000);
   });
 });

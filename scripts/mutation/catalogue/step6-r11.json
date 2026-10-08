@@ -71,7 +71,7 @@
         }
       ],
       "commands": ["revocation"],
-      "killedBy": "revocation E: an edit of the role in flight is waited for, and the revocation is judged on the committed set"
+      "killedBy": "revocation E: an edit of the role in flight is waited for, and the revocation is judged on the committed set (the revocation no longer waits: waited=false, 204 instead of 403)"
     },
     {
       "id": "M4",
@@ -201,7 +201,7 @@
         }
       ],
       "commands": ["liveness"],
-      "killedBy": "liveness A: lock agreement; F: database two-connection race (exactly one commits)"
+      "killedBy": "liveness A: the trigger path itself parks behind the organization lock; F: database two owner connections (the second delete is not blocked and commits)"
     },
     {
       "id": "M9a",
@@ -214,7 +214,7 @@
         }
       ],
       "commands": ["liveness"],
-      "killedBy": "liveness A: lock agreement; F: contenders parked behind the organization lock"
+      "killedBy": "liveness A: the trigger path itself parks behind the organization lock (the trigger takes the platform key, so it does not wait); lock agreement pin"
     },
     {
       "id": "M9b",
@@ -305,7 +305,7 @@
         }
       ],
       "commands": ["liveness"],
-      "killedBy": "liveness A: disable takes the organization lock BEFORE it updates the user"
+      "killedBy": "liveness A: disable takes the organization lock BEFORE it updates the user (the user row is already locked)"
     },
     {
       "id": "M16",
@@ -331,7 +331,7 @@
         }
       ],
       "commands": ["liveness"],
-      "killedBy": "liveness A: lock ordering (revoke and disable)"
+      "killedBy": "liveness A: lock-first ordering for revoke and disable; F: two administrators revoking each other (the loser is a 500 from the trigger)"
     }
   ]
 }
