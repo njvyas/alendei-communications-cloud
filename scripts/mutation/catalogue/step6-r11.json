@@ -1,0 +1,337 @@
+{
+  "step": "ADR-015 remediation step 6 — R-11 (MEDIUM-3): symmetric revocation, role-edit removal check, last-organization-administrator protection (migration 0028), R-6 revoke side",
+  "usage": "source the DATABASE_* environment of a test template database at migration 0024 or later, then: node scripts/mutation/run.mjs scripts/mutation/catalogue/step6-r11.json --out <dir>. Every command first applies the (mutated) migrations to its disposable clone. `killedBy` is informational: the test expected to fail (checked in the logs).",
+  "commands": {
+    "revocation": {
+      "cwd": ".",
+      "db": true,
+      "argv": [
+        "bash",
+        "-c",
+        "npm run db:migrate --workspace @acc/db && cd apps/api && npx jest --selectProjects security --runInBand --forceExit --testPathPatterns role-revocation"
+      ],
+      "timeoutSeconds": 900
+    },
+    "liveness": {
+      "cwd": ".",
+      "db": true,
+      "argv": [
+        "bash",
+        "-c",
+        "npm run db:migrate --workspace @acc/db && cd apps/api && npx jest --selectProjects security --runInBand --forceExit --testPathPatterns organization-admin-liveness"
+      ],
+      "timeoutSeconds": 900
+    },
+    "delegation": {
+      "cwd": ".",
+      "db": true,
+      "argv": [
+        "bash",
+        "-c",
+        "npm run db:migrate --workspace @acc/db && cd apps/api && npx jest --selectProjects security --runInBand --forceExit --testPathPatterns role-assignment-delegation"
+      ],
+      "timeoutSeconds": 900
+    }
+  },
+  "mutants": [
+    {
+      "id": "M1",
+      "title": "symmetric revoke check removed (revocation needs only role_assignments.revoke at the grant's scope)",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "    const delegated = await this.assertWithinActorAuthority(tx, principal, role, assignment);\n",
+          "replace": "    const delegated: readonly string[] = [];\n"
+        }
+      ],
+      "commands": ["revocation"],
+      "killedBy": "revocation B: a workspace_manager at organization scope cannot revoke an org_admin (204 instead of 403)"
+    },
+    {
+      "id": "M2",
+      "title": "revocation judged against a role with no permissions (only role_assignments.revoke is effectively checked)",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "    const delegated = await this.assertWithinActorAuthority(tx, principal, role, assignment);\n",
+          "replace": "    const delegated = await this.assertWithinActorAuthority(\n      tx,\n      principal,\n      { ...role, id: '00000000-0000-0000-0000-000000000000' },\n      assignment,\n    );\n"
+        }
+      ],
+      "commands": ["revocation"],
+      "killedBy": "revocation B: workspace_manager / reseller_admin / API key / coherent-grant cases (204 instead of 403)"
+    },
+    {
+      "id": "M3",
+      "title": "role row no longer locked FOR SHARE before its permissions are read",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "      .for('share');\n",
+          "replace": "      ;\n"
+        }
+      ],
+      "commands": ["revocation"],
+      "killedBy": "revocation E: an edit of the role in flight is waited for, and the revocation is judged on the committed set"
+    },
+    {
+      "id": "M4",
+      "title": "R2 removed-permission check dropped (only the new set is checked)",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-administration.service.ts",
+          "search": "      await this.assertRemovable(tx, principal, orgId, roleId, input.permissions);\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["revocation"],
+      "killedBy": "revocation D: removing a permission the actor does not hold is 403, and the role is unchanged"
+    },
+    {
+      "id": "M5a",
+      "title": "R-6: the pinned delegable set is not consulted",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "    if (!(DELEGABLE_TENANT_SYSTEM_ROLES as readonly string[]).includes(role.key)) return false;\n",
+          "replace": "    void DELEGABLE_TENANT_SYSTEM_ROLES;\n"
+        }
+      ],
+      "commands": ["revocation"],
+      "killedBy": "revocation C: refused: a system role outside the delegable set (workspace_manager carrying a content key)"
+    },
+    {
+      "id": "M5b",
+      "title": "R-6: the seeded-system-role condition dropped",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "    if (!role.isSystemRole) return false;\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["revocation"],
+      "killedBy": "revocation C: refused: a NON-system role keyed org_admin carrying a content key"
+    },
+    {
+      "id": "M5c",
+      "title": "R-6: the organization-scope condition dropped",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "    if (input.scopeType !== 'organization') return false;\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["revocation"],
+      "killedBy": "revocation C: refused: a grant at workspace scope (org_admin widened by fixture to admit it)"
+    },
+    {
+      "id": "M5d",
+      "title": "R-6: gated by platform.tenants.manage instead of platform.roles.delegate_tenant",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "      permission: PERMISSIONS.PLATFORM_ROLES_DELEGATE_TENANT,\n",
+          "replace": "      permission: PERMISSIONS.PLATFORM_TENANTS_MANAGE,\n"
+        }
+      ],
+      "commands": ["revocation"],
+      "killedBy": "revocation C: refused: platform.tenants.manage does not stand in for delegate_tenant; C: super admin delegated revoke (positive) still passes"
+    },
+    {
+      "id": "M5e",
+      "title": "R-6: the not-oneself condition dropped (shared evaluator; observable on the grant side only — see DECISIONS §1o step 6 note)",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "    if (input.userId === principal.userId) return false;\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["delegation"],
+      "killedBy": "role-assignment-delegation B: delegating to oneself"
+    },
+    {
+      "id": "M5f",
+      "title": "R-6: the actor no longer needs every non-content permission (delegate_tenant as an escape hatch)",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "    if (!unheld.every((permission) => isTenantContentPermission(permission))) return false;\n",
+          "replace": "    void isTenantContentPermission;\n"
+        }
+      ],
+      "commands": ["revocation"],
+      "killedBy": "revocation C: refused: an actor lacking a NON-content permission of org_admin"
+    },
+    {
+      "id": "M6",
+      "title": "R-6 revoke: audit metadata of a delegated revocation dropped",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "          revokedFrom: assignment.userId,\n          // Only on a delegated revocation (ADR-015 R-6, revoke side): the\n          // tenant-content permissions the actor removed without holding them.\n          ...(delegated.length > 0\n            ? { delegation: true, delegatedPermissions: [...delegated] }\n            : {}),\n",
+          "replace": "          revokedFrom: assignment.userId,\n"
+        }
+      ],
+      "commands": ["revocation"],
+      "killedBy": "revocation C: super admin revokes an org_admin carrying content keys it does not hold: 204, audited as delegation"
+    },
+    {
+      "id": "M7",
+      "title": "grant and revoke evaluators diverge: revocation judged as if at organization scope",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "    const delegated = await this.assertWithinActorAuthority(tx, principal, role, assignment);\n",
+          "replace": "    const delegated = await this.assertWithinActorAuthority(tx, principal, role, {\n      ...assignment,\n      scopeType: 'organization',\n    });\n"
+        }
+      ],
+      "commands": ["revocation"],
+      "killedBy": "revocation C: refused: a grant at workspace scope"
+    },
+    {
+      "id": "M8",
+      "title": "last-admin: advisory lock removed from fn_assert_org_admin_remains",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0028_adr015_org_admin_liveness.sql",
+          "search": "  PERFORM pg_advisory_xact_lock(482019308, hashtext(p_org_id::text));\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "liveness A: lock agreement; F: database two-connection race (exactly one commits)"
+    },
+    {
+      "id": "M9a",
+      "title": "last-admin: database function locks with the platform key",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0028_adr015_org_admin_liveness.sql",
+          "search": "  PERFORM pg_advisory_xact_lock(482019308, hashtext(p_org_id::text));\n",
+          "replace": "  PERFORM pg_advisory_xact_lock(4820193077);\n"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "liveness A: lock agreement; F: contenders parked behind the organization lock"
+    },
+    {
+      "id": "M9b",
+      "title": "last-admin: service locks with the platform key",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/organization-admin-liveness.ts",
+          "search": "      sql`select pg_advisory_xact_lock(${ORG_ADMIN_LOCK_CLASS}::int4, hashtext(${orgId}::text))`,\n",
+          "replace": "      sql`select pg_advisory_xact_lock(4820193077::bigint)`,\n"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "liveness A: the service takes the lock BEFORE it deletes the grant / disable ordering"
+    },
+    {
+      "id": "M10",
+      "title": "last-admin: definition counts another role key",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0028_adr015_org_admin_liveness.sql",
+          "search": "     AND r.key = 'org_admin'\n     AND r.is_system_role\n     AND u.status = 'active';\n",
+          "replace": "     AND r.key = 'workspace_manager'\n     AND r.is_system_role\n     AND u.status = 'active';\n"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "liveness D: with a second administrator present each removal is allowed; A: function definitions pinned"
+    },
+    {
+      "id": "M11",
+      "title": "last-admin: users status trigger removed",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0028_adr015_org_admin_liveness.sql",
+          "search": "CREATE TRIGGER trg_users_org_admin_liveness\n  AFTER UPDATE OF status ON \"users\"\n  FOR EACH ROW WHEN (OLD.status = 'active' AND NEW.status <> 'active')\n  EXECUTE FUNCTION fn_users_org_admin_guard();",
+          "replace": "SELECT 1;"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "liveness D: owner/acc_app disabling the last administrator is refused"
+    },
+    {
+      "id": "M12",
+      "title": "last-admin: user_roles delete trigger removed",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0028_adr015_org_admin_liveness.sql",
+          "search": "CREATE TRIGGER trg_user_roles_org_admin_liveness\n  AFTER DELETE ON \"user_roles\"\n  FOR EACH ROW WHEN (OLD.scope_type = 'organization')\n  EXECUTE FUNCTION fn_user_roles_org_admin_guard();",
+          "replace": "SELECT 1;"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "liveness D: owner/acc_app deleting the last administrator grant is refused; the user-row cascade is refused"
+    },
+    {
+      "id": "M13",
+      "title": "last-admin: every non-active organization exempted",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0028_adr015_org_admin_liveness.sql",
+          "search": "  IF NOT EXISTS (SELECT 1 FROM organizations o WHERE o.id = p_org_id) THEN\n",
+          "replace": "  IF NOT EXISTS (SELECT 1 FROM organizations o WHERE o.id = p_org_id AND o.status = 'active') THEN\n"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "liveness D: a suspended organization is not exempt"
+    },
+    {
+      "id": "M14",
+      "title": "last-admin: revocation service check removed (the trigger still refuses: 500, not 409)",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "      await lockOrganizationAdministration(tx, [assignment.scopeId!]);\n      await assertOrganizationAdminRemains(tx, assignment.scopeId!, { grantId: assignment.id });\n",
+          "replace": "      void lockOrganizationAdministration;\n      void assertOrganizationAdminRemains;\n"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "liveness B: the last administrator revoking itself: 409 AUTHZ_LAST_ORGANIZATION_ADMIN (500 instead)"
+    },
+    {
+      "id": "M15",
+      "title": "last-admin: disable service check removed (the trigger refuses after the row update)",
+      "edits": [
+        {
+          "file": "apps/api/src/users/user-administration.service.ts",
+          "search": "      await this.assertOrganizationAdminsRemain(tx, id);\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "liveness A: disable takes the organization lock BEFORE it updates the user"
+    },
+    {
+      "id": "M16",
+      "title": "last-admin: wrong error code",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/organization-admin-liveness.ts",
+          "search": "    code: ERROR_CODES.AUTHZ_LAST_ORGANIZATION_ADMIN,\n",
+          "replace": "    code: ERROR_CODES.AUTHZ_LAST_PLATFORM_ADMIN,\n"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "liveness B/C: 409 AUTHZ_LAST_ORGANIZATION_ADMIN"
+    },
+    {
+      "id": "M17",
+      "title": "last-admin: service lock taken but nothing serialised before the delete (lock helper emptied)",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/organization-admin-liveness.ts",
+          "search": "  for (const orgId of [...new Set(orgIds)].sort()) {\n",
+          "replace": "  for (const orgId of [...new Set(orgIds)].sort().slice(0, 0)) {\n"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "liveness A: lock ordering (revoke and disable)"
+    }
+  ]
+}
