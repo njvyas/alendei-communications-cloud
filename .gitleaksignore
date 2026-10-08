@@ -33,3 +33,12 @@ f8e2731f4dde0d17890aa083140ebeb8df283ae8:packages/contracts/src/events.ts:generi
 # persisted in browser storage. Synthetic by design.
 cafcd436c17cb2945301de8b03b4b246f0e554d6:apps/web/src/lib/audit-logs-security.sec.test.ts:generic-api-key:479
 cafcd436c17cb2945301de8b03b4b246f0e554d6:apps/web/src/lib/audit-logs-security.sec.test.ts:generic-api-key:480
+
+# md5 pins of trigger definitions in the migration 0025 definition catalogue
+# (ADR-015 step 2): 32-hex digests of pg_get_triggerdef keyed by trigger names
+# that contain "api_keys" / "idempotency_keys". Not credentials. Audited
+# 08-Oct-2026 (full-history scan, gitleaks 8.24.3): the values are definition
+# hashes recomputed from the database by the test itself.
+a0ef7b7b8555369d0e1b35a2b55b45ed350294b3:packages/db/src/test/backstop-definitions.int-spec.ts:generic-api-key:21
+a0ef7b7b8555369d0e1b35a2b55b45ed350294b3:packages/db/src/test/backstop-definitions.int-spec.ts:generic-api-key:23
+a0ef7b7b8555369d0e1b35a2b55b45ed350294b3:packages/db/src/test/backstop-definitions.int-spec.ts:generic-api-key:43

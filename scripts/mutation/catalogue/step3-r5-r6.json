@@ -406,12 +406,12 @@
     },
     {
       "id": "M19",
-      "title": "audit delegation metadata dropped",
+      "title": "audit delegation metadata dropped (grant side; the revoke side is step6-r11 M6)",
       "edits": [
         {
           "file": "apps/api/src/rbac/role-assignment.service.ts",
-          "search": "            ? { delegation: true, delegatedPermissions: [...delegated] }",
-          "replace": "            ? {}"
+          "search": "          grantedTo: input.userId,\n          // Only on a delegated grant (ADR-015 R-6): the tenant-content\n          // permissions the actor conferred without holding them.\n          ...(delegated.length > 0\n            ? { delegation: true, delegatedPermissions: [...delegated] }",
+          "replace": "          grantedTo: input.userId,\n          // Only on a delegated grant (ADR-015 R-6): the tenant-content\n          // permissions the actor conferred without holding them.\n          ...(delegated.length > 0\n            ? {}"
         }
       ],
       "commands": ["delegation"]
