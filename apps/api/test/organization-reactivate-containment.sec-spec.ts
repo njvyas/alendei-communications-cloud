@@ -250,16 +250,20 @@ describe('organization reactivate — refusal and transaction boundary', () => {
       );
       try {
         await tx.execute(
-          sql`DELETE FROM user_roles WHERE user_id IN (${list(createdUsers)}) OR org_id IN (${list(createdOrgs)})`,
+          sql`DELETE FROM user_roles WHERE (user_id IN (${list(createdUsers)}) OR org_id IN (${list(createdOrgs)})) AND NOT (scope_type = 'organization' AND org_id IN (${list(createdOrgs)}))`,
         );
       } finally {
         await tx.execute(
           sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
         );
       }
-      for (const table of ['role_permissions', 'roles', 'workspaces']) {
+      for (const table of ['workspaces']) {
         await tx.execute(sql`DELETE FROM ${sql.raw(table)} WHERE org_id IN (${list(createdOrgs)})`);
       }
+      // The organizations go inside this provisioning transaction: their
+      // organization-scope grants, roles and role permissions cascade with them,
+      // the one exemption of the last-organization-administrator rule (0028).
+      await tx.execute(sql`DELETE FROM organizations WHERE id IN (${list(createdOrgs)})`);
     });
     await h.admin.execute(sql`DELETE FROM sessions WHERE user_id IN (${list(createdUsers)})`);
     await h.admin.execute(sql`DELETE FROM organizations WHERE id IN (${list(createdOrgs)})`);

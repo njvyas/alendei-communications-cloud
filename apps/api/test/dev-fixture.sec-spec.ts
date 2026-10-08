@@ -259,19 +259,16 @@ describe('Phase 1C.4a development/test fixture', () => {
       );
       await tx.execute(sql`DELETE FROM sessions WHERE user_id IN (${userList})`);
       await tx.execute(
-        sql`DELETE FROM user_roles WHERE user_id IN (${userList}) OR org_id IN (${orgList})`,
+        sql`DELETE FROM user_roles WHERE (user_id IN (${userList}) OR org_id IN (${orgList}))
+              AND NOT (scope_type = 'organization' AND org_id IN (${orgList}))`,
       );
-      for (const table of [
-        'role_permissions',
-        'roles',
-        'ws_tickets',
-        'api_keys',
-        'idempotency_keys',
-        'teams',
-        'workspaces',
-      ]) {
+      for (const table of ['ws_tickets', 'api_keys', 'idempotency_keys', 'teams', 'workspaces']) {
         await tx.execute(sql`DELETE FROM ${sql.raw(table)} WHERE org_id IN (${orgList})`);
       }
+      // The organizations before their users: organization-scope grants, roles
+      // and role permissions cascade with them — the exemption of the
+      // last-organization-administrator rule (migration 0028).
+      await tx.execute(sql`DELETE FROM organizations WHERE id IN (${orgList})`);
       await tx.execute(
         sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
       );
@@ -1281,11 +1278,14 @@ describe('Phase 1C.4a development/test fixture', () => {
     });
 
     it('a disabled fixture user is refused, not reactivated', async () => {
-      const id = manifest.users.b1Admin.id;
+      // The team reader rather than an organization's only administrator, whom
+      // the last-organization-administrator rule (ADR-015 R-11, migration 0028)
+      // keeps active for every writer, the owner included.
+      const id = manifest.users.teamReader.id;
       await withMutation(
         sql`UPDATE users SET status = 'disabled' WHERE id = ${id}`,
         sql`UPDATE users SET status = 'active' WHERE id = ${id}`,
-        /b1-admin@acc-fixture.test is disabled/,
+        /a1-team-reader@acc-fixture.test is disabled/,
       );
     });
 

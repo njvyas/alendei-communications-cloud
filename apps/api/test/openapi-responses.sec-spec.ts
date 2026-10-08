@@ -290,24 +290,20 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
       );
       try {
         await tx.execute(
-          sql`DELETE FROM user_roles WHERE user_id IN (${list(users)}) OR org_id IN (${list(orgs)})`,
+          sql`DELETE FROM user_roles WHERE (user_id IN (${list(users)}) OR org_id IN (${list(orgs)})) AND NOT (scope_type = 'organization' AND org_id IN (${list(orgs)}))`,
         );
       } finally {
         await tx.execute(
           sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
         );
       }
-      for (const table of [
-        'role_permissions',
-        'roles',
-        'ws_tickets',
-        'api_keys',
-        'idempotency_keys',
-        'teams',
-        'workspaces',
-      ]) {
+      for (const table of ['ws_tickets', 'api_keys', 'idempotency_keys', 'teams', 'workspaces']) {
         await tx.execute(sql`DELETE FROM ${sql.raw(table)} WHERE org_id IN (${list(orgs)})`);
       }
+      // The organizations go inside this provisioning transaction: their
+      // organization-scope grants, roles and role permissions cascade with them,
+      // the one exemption of the last-organization-administrator rule (0028).
+      await tx.execute(sql`DELETE FROM organizations WHERE id IN (${list(orgs)})`);
     });
     await db.execute(sql`DELETE FROM organizations WHERE id IN (${list(orgs)})`);
     if (created.providers.length > 0) {

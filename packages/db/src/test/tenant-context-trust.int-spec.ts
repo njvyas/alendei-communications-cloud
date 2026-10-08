@@ -233,14 +233,17 @@ describe('tenant-context trust model — what acc_app can do with session variab
   /**
    * Every SECURITY DEFINER trigger function is trigger-only — executable by the
    * owner alone: the three Phase 1C.6 functions since migration 0015 (review
-   * H-1), the six older ones since migration 0016 (review H-3).
+   * H-1), the six older ones since migration 0016 (review H-3), and the two
+   * last-organization-administrator guards since migration 0028 (ADR-015 R-11).
    */
   const TRIGGER_ONLY = [
     'fn_organizations_guard_reseller_id',
     'fn_protect_system_role_permissions',
     'fn_protect_system_roles',
     'fn_roles_guard_allowed_scope_types',
+    'fn_user_roles_org_admin_guard',
     'fn_user_roles_platform_admin_guard',
+    'fn_users_org_admin_guard',
     'fn_users_platform_admin_guard',
     'fn_validate_audit_scope',
     'fn_validate_role_permission',

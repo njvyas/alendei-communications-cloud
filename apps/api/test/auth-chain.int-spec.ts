@@ -21,6 +21,7 @@ import { TenantDatabase } from '../src/database/tenant-database.service';
 import {
   PASSWORD,
   PREFIX,
+  addSpareAdmin,
   createTenant,
   destroyTenant,
   purgeAudit,
@@ -50,6 +51,9 @@ describe('authenticated request chain', () => {
     const credentials = h.app.get(CredentialService);
     orgA = await createTenant(h.admin, 'chain-a', credentials);
     orgB = await createTenant(h.admin, 'chain-b', credentials);
+    // Cases below disable or ungrant orgA's fixture user; a second administrator
+    // keeps the last-organization-administrator rule (ADR-015 R-11) out of them.
+    await addSpareAdmin(h.admin, orgA);
   }, 60_000);
 
   afterAll(async () => {

@@ -208,20 +208,18 @@ describe('shared-reseller isolation (application + acc_app)', () => {
     await purgeAudit(h.admin, sql`org_id = ${org.orgId}`);
     await h.admin.transaction(async (tx) => {
       await tx.execute(sql`select set_config('app.provisioning','on',true)`);
-      for (const table of [
-        'user_roles',
-        'role_permissions',
-        'roles',
-        'ws_tickets',
-        'api_keys',
-        'idempotency_keys',
-        'teams',
-        'workspaces',
-      ]) {
+      // Grants below organization scope hold their workspace or team; the
+      // organization-scope grants, roles and role permissions cascade with the
+      // organization — the exemption of the last-organization-administrator
+      // rule (migration 0028).
+      await tx.execute(
+        sql`DELETE FROM user_roles WHERE org_id = ${org.orgId} AND scope_type <> 'organization'`,
+      );
+      for (const table of ['ws_tickets', 'api_keys', 'idempotency_keys', 'teams', 'workspaces']) {
         await tx.execute(sql`DELETE FROM ${sql.raw(table)} WHERE org_id = ${org.orgId}`);
       }
+      await tx.execute(sql`DELETE FROM organizations WHERE id = ${org.orgId}`);
     });
-    await h.admin.execute(sql`DELETE FROM organizations WHERE id = ${org.orgId}`);
   }
 
   async function login(email: string): Promise<string> {
@@ -291,6 +289,8 @@ describe('shared-reseller isolation (application + acc_app)', () => {
 
   afterAll(async () => {
     await purgeAudit(h.admin, sql`true`);
+    // Organizations first: their administrators' grants go with them.
+    for (const org of [a1, a2, b1]) if (org) await destroyOrg(org);
     await h.admin.transaction(async (tx) => {
       await tx.execute(
         sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
@@ -306,7 +306,6 @@ describe('shared-reseller isolation (application + acc_app)', () => {
         );
       }
     });
-    for (const org of [a1, a2, b1]) if (org) await destroyOrg(org);
     for (const id of createdUsers) await h.admin.execute(sql`DELETE FROM users WHERE id = ${id}`);
     await h.admin.execute(sql`DELETE FROM resellers WHERE id IN (${resellerA}, ${resellerB})`);
     await h.close();

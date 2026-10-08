@@ -38,6 +38,7 @@ import { TenantDatabase } from '../src/database/tenant-database.service';
 import {
   PASSWORD,
   PREFIX,
+  addSpareAdmin,
   createTenant,
   destroyTenant,
   purgeAudit,
@@ -63,6 +64,9 @@ describe('last-platform-admin invariant', () => {
     credentials = h.app.get(CredentialService);
     db = h.app.get(TenantDatabase);
     orgA = await createTenant(h.admin, 'liveness', credentials);
+    // Case B revokes the fixture's own org_admin grant; a second administrator
+    // keeps the last-organization-administrator rule (ADR-015 R-11) out of it.
+    await addSpareAdmin(h.admin, orgA);
 
     const [role] = await h.admin
       .select({ id: schema.roles.id })

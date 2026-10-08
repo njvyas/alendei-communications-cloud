@@ -20,6 +20,7 @@ import { REFRESH_COOKIE } from '../src/auth/auth.controller';
 import {
   PASSWORD,
   PREFIX,
+  addSpareAdmin,
   createTenant,
   destroyTenant,
   grantInto,
@@ -50,6 +51,9 @@ describe('Phase 1B.3 security', () => {
     const credentials = h.app.get(CredentialService);
     orgA = await createTenant(h.admin, 'sec-a', credentials);
     orgB = await createTenant(h.admin, 'sec-b', credentials);
+    // Cases below disable or ungrant orgB's fixture user; a second administrator
+    // keeps the last-organization-administrator rule (ADR-015 R-11) out of them.
+    await addSpareAdmin(h.admin, orgB);
     multi = await createTenant(h.admin, 'sec-m', credentials);
     // The multi-org user also holds a grant in Org A, so it has two.
     await grantInto(h.admin, multi.userId, orgA);

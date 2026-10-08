@@ -224,15 +224,21 @@ describe('Gate C metrics — organization-status refusals and session-cap evicti
         sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
       );
       await tx.execute(sql`DELETE FROM sessions WHERE user_id IN (${list(userIds)})`);
-      await tx.execute(sql`DELETE FROM user_roles WHERE user_id IN (${list(userIds)})`);
-      for (const table of ['role_permissions', 'roles', 'teams', 'workspaces']) {
+      await tx.execute(
+        sql`DELETE FROM user_roles WHERE user_id IN (${list(userIds)})
+              AND NOT (scope_type = 'organization' AND org_id IN (${list(orgIds)}))`,
+      );
+      for (const table of ['teams', 'workspaces']) {
         await tx.execute(sql`DELETE FROM ${sql.raw(table)} WHERE org_id IN (${list(orgIds)})`);
       }
+      // The organizations before their users: organization-scope grants, roles
+      // and role permissions cascade with them — the exemption of the
+      // last-organization-administrator rule (migration 0028).
+      await tx.execute(sql`DELETE FROM organizations WHERE id IN (${list(orgIds)})`);
       await tx.execute(
         sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
       );
       await tx.execute(sql`DELETE FROM users WHERE id IN (${list(userIds)})`);
-      await tx.execute(sql`DELETE FROM organizations WHERE id IN (${list(orgIds)})`);
       if (resellerId) await tx.execute(sql`DELETE FROM resellers WHERE id = ${resellerId}`);
     });
   }

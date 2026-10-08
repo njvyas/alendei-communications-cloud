@@ -399,6 +399,35 @@ export async function createScopedUser(
   return { userId: user!.id, email };
 }
 
+/**
+ * Gives a tenant a second active organization administrator — a holder of the
+ * tenant's stand-in `org_admin` at organization scope — so a test that removes
+ * the fixture user's own administrator grant (or disables it) does not trip
+ * the last-organization-administrator rule (ADR-015 R-11, migration `0028`),
+ * which is not what such a test is about. The rule is never relaxed for it.
+ *
+ * The identity never signs in (placeholder credential). Its grant goes with
+ * the organization in `destroyTenant`; its user row is removed there too, by
+ * the address this helper gives it.
+ */
+export async function addSpareAdmin(admin: Database, tenant: TenantFixture): Promise<string> {
+  const [user] = await admin
+    .insert(schema.users)
+    .values({
+      email: `spare-${tenant.slug}-${uuidv7().replace(/-/g, '').slice(-8)}@example.test`,
+      status: 'active',
+      passwordHash: 'not-a-login-credential',
+    })
+    .returning({ id: schema.users.id });
+  await admin.insert(schema.userRoles).values({
+    userId: user!.id,
+    roleId: tenant.roleId,
+    scopeType: 'organization',
+    scopeId: tenant.orgId,
+  });
+  return user!.id;
+}
+
 /** Removes a user created by `createScopedUser`, with its dependent rows. */
 export async function destroyUser(admin: Database, userId: string): Promise<void> {
   await purgeAudit(admin, sql`actor_user_id = ${userId}`);
@@ -419,23 +448,27 @@ export async function destroyTenant(admin: Database, tenant: TenantFixture): Pro
   // so teardown declares the same transaction-local provisioning flag the
   // fixture created them under. One transaction, because `SET LOCAL` does not
   // survive a statement on a pooled connection.
+  //
+  // The organization is deleted rather than emptied grant by grant: its
+  // organization-scope grants, roles and role permissions cascade with it,
+  // which is the one exemption of the last-organization-administrator rule
+  // (migration `0028`) — deleting the last `org_admin` grant of a live
+  // organization is refused for the owner as for everyone else.
   await admin.transaction(async (tx) => {
     await tx.execute(sql`select set_config('app.provisioning','on',true)`);
-    for (const table of [
-      'user_roles',
-      'role_permissions',
-      'roles',
-      'ws_tickets',
-      'api_keys',
-      'idempotency_keys',
-      'teams',
-      'workspaces',
-    ]) {
+    // Grants below organization scope hold their workspace or team (RESTRICT).
+    await tx.execute(
+      sql`DELETE FROM user_roles WHERE org_id = ${tenant.orgId} AND scope_type <> 'organization'`,
+    );
+    for (const table of ['ws_tickets', 'api_keys', 'idempotency_keys', 'teams', 'workspaces']) {
       await tx.execute(sql`DELETE FROM ${sql.raw(table)} WHERE org_id = ${tenant.orgId}`);
     }
+    await tx.execute(sql`DELETE FROM organizations WHERE id = ${tenant.orgId}`);
   });
   await admin.execute(sql`DELETE FROM users WHERE id = ${tenant.userId}`);
-  await admin.execute(sql`DELETE FROM organizations WHERE id = ${tenant.orgId}`);
+  await admin.execute(
+    sql`DELETE FROM users WHERE email LIKE ${`spare-${tenant.slug}-%@example.test`}`,
+  );
   await admin.execute(sql`DELETE FROM resellers WHERE id = ${tenant.resellerId}`);
 }
 

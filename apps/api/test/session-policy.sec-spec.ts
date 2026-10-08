@@ -450,24 +450,20 @@ describe('Phase 1C.2 session policy', () => {
       );
       try {
         await tx.execute(
-          sql`DELETE FROM user_roles WHERE user_id IN (${list(createdUsers)}) OR org_id IN (${list(orgs)})`,
+          sql`DELETE FROM user_roles WHERE (user_id IN (${list(createdUsers)}) OR org_id IN (${list(orgs)})) AND NOT (scope_type = 'organization' AND org_id IN (${list(orgs)}))`,
         );
       } finally {
         await tx.execute(
           sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
         );
       }
-      for (const table of [
-        'role_permissions',
-        'roles',
-        'ws_tickets',
-        'api_keys',
-        'idempotency_keys',
-        'teams',
-        'workspaces',
-      ]) {
+      for (const table of ['ws_tickets', 'api_keys', 'idempotency_keys', 'teams', 'workspaces']) {
         await tx.execute(sql`DELETE FROM ${sql.raw(table)} WHERE org_id IN (${list(orgs)})`);
       }
+      // The organizations go inside this provisioning transaction: their
+      // organization-scope grants, roles and role permissions cascade with them,
+      // the one exemption of the last-organization-administrator rule (0028).
+      await tx.execute(sql`DELETE FROM organizations WHERE id IN (${list(orgs)})`);
     });
     await h.admin.execute(sql`DELETE FROM organizations WHERE id IN (${list(orgs)})`);
     await h.admin.delete(schema.users).where(inArray(schema.users.id, createdUsers));
@@ -1131,6 +1127,10 @@ describe('Phase 1C.2 session policy', () => {
       const admin = await login(p.adminA1!);
       await resetSessions(p.tOrg!.userId);
       await login(p.tOrg!);
+      // A1 keeps another administrator, so the last-organization-administrator
+      // rule (ADR-015 R-11) is not what this case exercises.
+      const spare = await createUser('sp-stale-spare');
+      await grant(spare.userId, a1.roles[TENANT_ROLE_KEYS.ORG_ADMIN]!, 'organization', a1.orgId);
       await h.admin.execute(
         sql`DELETE FROM user_roles WHERE user_id = ${p.adminA1!.userId} AND org_id = ${a1.orgId}`,
       );
