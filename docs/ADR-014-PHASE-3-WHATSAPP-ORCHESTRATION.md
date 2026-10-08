@@ -233,7 +233,7 @@ Decision record: `DECISIONS.md` §1o (R-1 … R-15). This section governs where 
 
 ### 17.2 Tenant-content permissions (R-5, R-6)
 
-Each permission key carries an explicit classification and allowed-scope set (single source `packages/contracts`, projected into `permissions`, enforced by the evaluator, the API-key path and the database). The §6 keys are never grantable at PLATFORM or RESELLER scope; platform roles never hold them. Appointment of predefined tenant-system roles that carry them is by a narrow, audited delegation whose exact mechanism is approved by the user before implementation.
+Each permission key carries an explicit classification and allowed-scope set (single source `packages/contracts`, projected into `permissions`, enforced by the evaluator, the API-key path and the database). The §6 keys are never grantable at PLATFORM or RESELLER scope; platform roles never hold them. Appointment of predefined tenant-system roles that carry them is by a narrow, audited delegation whose exact mechanism the user approved on 06-Oct-2026 (`DECISIONS.md` §1o). **Status (ADR-015 step 3):** the classification, the scope sets, the eight keys as inert catalogue entries and the grant side of the delegation are implemented (migration `0026`, `RBAC.md` §1a, §7b); revocation by delegation is pending with R-11.
 
 ### 17.3 Structural CircuitAdmission (R-13)
 

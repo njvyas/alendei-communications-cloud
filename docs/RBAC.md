@@ -19,6 +19,22 @@ users ──< user_roles >── roles ──< role_permissions >── permissi
 
   A user can hold different roles at different scopes. Grants inherit **downward only** (`TENANCY.md` §1a.4): an `organization`-scoped grant already covers every workspace and team beneath it and needs no additional workspace-level grant, while a `workspace`-scoped grant confers nothing at organization level and nothing in a sibling workspace.
 
+### 1a. Permission classification and allowed-scope sets (ADR-015 R-5, migration `0026`)
+
+Every key carries an explicit **classification** and an explicit **allowed-scope set** — the scope types at which a grant may confer it. The single source is `packages/contracts` (`PERMISSION_CLASS`, `PERMISSION_ALLOWED_SCOPES`, exhaustive over `PermissionKey`, so an unclassified key does not compile), projected into `permissions.classification` and `permissions.allowed_scope_types` (no default; the seed writes both on insert and on every re-run, and `schema.int-spec.ts` asserts the database equals the contracts exactly).
+
+| Class | Keys | Allowed scopes |
+|---|---|---|
+| `platform` | every `platform.*` key (5): `platform.tenants.read`, `platform.tenants.manage`, `platform.roles.assign`, `platform.roles.delegate_tenant`, `platform.audit.read` | `platform` |
+| `platform_catalogue` | `providers.read`, `providers.manage`, `providers.test_send` | all five (unchanged) |
+| `tenancy_administration` | the 30 other pre-ADR-015 keys (`organizations.*`, `workspaces.*`, `teams.*`, `users.*`, `roles.*`, `role_assignments.*`, `permissions.read`, `api_keys.*`, `sessions.*`, `audit.read`, `resellers.*`) | all five (unchanged) |
+| `tenant_content` | `contacts.read`, `contacts.manage`, `messages.read`, `messages.send` | `organization`, `workspace` |
+| `tenant_content` | `templates.read`, `templates.manage`, `suppressions.read`, `suppressions.manage` | `organization` |
+
+These four classes and no other. None of the 37 pre-ADR-015 keys was narrowed. The rule is enforced in three places with one definition: **a grant confers permission P only if its scope type is in P's allowed-scope set** — `grantConfers` in `packages/contracts`, used by `PermissionEvaluator`, by the API-key creator intersection (`creatorAuthorityFromGrants`, §5c) and by the organization read/creation reach in `OrganizationAdministrationService`; and in the database, `fn_validate_role_permission` refuses a role carrying P unless `role.allowed_scope_types ⊆ P.allowed_scope_types` (§7). So a platform or reseller grant never confers a tenant-content key, and no platform role, no reseller-scope role, and no tenant role admitting a level a content key excludes can carry one.
+
+**The eight tenant-content keys are inert catalogue entries** (ADR-015 follow-up decision 6, 07-Oct-2026): the rows exist, but no route checks them, no seeded role (platform or tenant) carries them, the API neither accepts nor lists them (`API_SURFACE_PERMISSION_KEYS` — the catalogue minus tenant content — drives `CreateRoleDto`, `UpdateRoleDto`, `CreateApiKeyDto` and `GET /permissions`), and no content table exists. Phase 3.1 activates them together with the routes that check them.
+
 ## 2. Authorization decision
 
 A request is authorized when:
@@ -99,7 +115,7 @@ These roles have `roles.org_id IS NULL`, which is what marks a role as platform-
 
 | Role | Assignable at `scope_type` | Purpose |
 |---|---|---|
-| `alendei_super_admin` | `platform` | Full control-plane access: providers, routing, all tenants, billing |
+| `alendei_super_admin` | `platform` | Full control-plane access: providers, routing, all tenants, billing. **Definition (ADR-015 R-5):** every catalogue key **minus the tenant-content keys** — 38 of 46 today, including `platform.roles.delegate_tenant` (follow-up decision 5). Platform roles never hold tenant-content permissions |
 | `alendei_support` | `platform` | Cross-tenant read plus limited write (audit view, impersonation-with-audit for support) |
 | `reseller_admin` | `reseller` | Manage the organizations beneath one reseller (create, rename; not their lifecycle or billing, which need `platform.tenants.manage`), and that reseller's name, branding and markup (`default_markup_pct`); its `status`, `domain` and platform-default flag are platform-only, enforced in the database by migration `0025` |
 
@@ -185,7 +201,7 @@ The recurring pattern: **an actor may administer downward, never its own level's
 
 **The first two guards are `(permission, scope)` pairs, not permission sets**, and the distinction is the whole of §2 restated as an escalation rule. A guard written as "does the actor hold every permission in this role?" against `AuthPrincipal.permissions` reproduces the cross-product defect exactly: an actor holding a permission only at a workspace would pass the check for a grant at organization scope, and the guard meant to prevent escalation would itself become the escalation path. The actor's **effective grant authority** — the set of pairs it may confer — is `{(P, s) : ∃ coherent grant g, P ∈ permissions(g) ∧ scopeCovers(g.scope, s)}`, computed per grant and never from the flattened union.
 
-### 4c. Phase 3 permissions (ADR-014 D09 — frozen 06-Oct-2026; not yet in `PERMISSIONS`)
+### 4c. Phase 3 permissions (ADR-014 D09 — frozen 06-Oct-2026; in `PERMISSIONS` since ADR-015 step 3 as **inert** catalogue entries, §1a)
 
 | Permission | Resource | Allowed grant scopes |
 |---|---|---|
@@ -266,7 +282,7 @@ effective_permissions =
     ∩ permissions_valid_for_the_target_operation
 ```
 
-The middle term is the creator's authority **at a scope covering the key's own binding** — not everything the creator holds anywhere. The distinction is load-bearing: a creator who is `read_only` in Organization A and `org_admin` in Organization B must not be able to mint a key bound to Organization A carrying `org_admin` permissions.
+The middle term is the creator's authority **at a scope covering the key's own binding** — not everything the creator holds anywhere — and only what each covering grant *confers* (`grantConfers`, §1a): a platform or reseller creator grant never lends a key a tenant-content permission. The distinction is load-bearing: a creator who is `read_only` in Organization A and `org_admin` in Organization B must not be able to mint a key bound to Organization A carrying `org_admin` permissions.
 
 Implemented in Phase 1B.5.1 (ADR-005 D-4), together with §2's correction so the two cannot drift apart: each creator grant is tested for coverage of the key's binding scope with the same `scopeCovers` rule the evaluator uses, and only the grants that cover it contribute their own permissions. The chain the coverage is judged against is read from the key's own `org_id`/`workspace_id` columns, never from the request.
 
@@ -313,6 +329,8 @@ Each guard names the layer that enforces it, because a guard that exists only in
 | **No self-granted platform access.** Platform-level roles are assignable only by an existing platform admin. | Service layer **and** `fn_validate_user_role_scope` |
 | **No platform role at a tenant scope.** `alendei_super_admin` cannot be granted at `organization` scope to "scope it down" — the combination is refused outright. | Service layer **and** `fn_validate_user_role_scope` |
 | **No smuggling platform power into a tenant role.** A `platform.*` permission cannot be attached to a role with `roles.org_id IS NOT NULL`, closing escalation by custom role composition. | `fn_validate_role_permission` (`DATABASE.md` §2) |
+| **No role carrying a permission outside its allowed scopes** (ADR-015 R-5). A role may carry permission P only if every scope type the role admits is in P's allowed-scope set — so no platform or reseller-scope role carries a tenant-content key, `platform.roles.delegate_tenant` is never on a reseller-scope or tenant role, and an organization-only key is never on a role admitting workspace or team. The reverse races are closed too: narrowing or reclassifying a permission a role already carries, and widening a role's `allowed_scope_types` past its permissions, are refused. | `fn_validate_role_permission` (`42501`, `role_permissions_scope_eligibility`), `fn_permissions_guard_scope_eligibility` and `fn_roles_guard_permission_eligibility` (migration `0026`); and the evaluator and API-key path never confer such a pair (`grantConfers`, §1a) |
+| **Tenant delegation is the only exception to row 1, and it is narrow** (ADR-015 R-6, grant side). See §7b. | Service layer (`RoleAssignmentService`, guard 4), as row 1 |
 | **No forged `org_id` on a grant.** `user_roles.org_id` is derived by the trigger from the resolved scope chain, never taken from the writer. | `fn_validate_user_role_scope` |
 | **No upward administration.** An actor cannot modify its own scope's parent — an organization admin cannot reassign their organization's reseller. | Service layer + RLS (`TENANCY.md` §3a) |
 | **At least one active platform administrator always remains.** Revoking the last platform grant, disabling its holder, deleting its holder, or deleting the role is refused. | Service layer (clear `409 AUTHZ_LAST_PLATFORM_ADMIN`) **and** `fn_assert_platform_admin_remains` taking `pg_advisory_xact_lock` (migration `0005`), which is what makes it hold under concurrency (ADR-005 D-7). Phase 1B.5.6 — see §7a |
@@ -320,6 +338,21 @@ Each guard names the layer that enforces it, because a guard that exists only in
 | **No rewriting a system role.** `roles.is_system_role` marks the seeded platform and tenant roles. A tenant principal holding `roles.update` composes roles *within* an organization; it does not get to redefine what `org_admin` means, nor promote a custom role into a system one. | Service layer (`403`) **and** `fn_protect_system_roles` / `fn_protect_system_role_permissions` (migration `0004`), Phase 1B.5.4. Both triggers admit only a transaction that has declared `app.is_platform_admin` (the seeder, the bootstrap CLI) or `app.provisioning` (`TenantRoleProvisioner`) — neither of which any application principal can set |
 | **No grant at a scope level the role was never designed for.** `RoleDefinition.allowedScopeTypes` bounds where a seeded role may be granted — `org_admin` at `organization` only, `agent` at `organization`/`workspace`/`team`. | Schema from Phase 1B.5.4 (`roles.allowed_scope_types`, migration `0004`); **enforced at grant time from Phase 1B.5.5** in `RoleAssignmentService`, closing §6n case 28. The refusal is `422 AUTHZ_SCOPE_TYPE_NOT_ADMITTED`, deliberately **not** `403`: the actor was entitled and the request well-formed — the role simply does not exist at that level, and collapsing the two would tell an administrator it lacked authority it actually has |
 | **No conferring authority a credential's creator never held at its binding.** An API key's effective permissions intersect its creator's authority *at the key's own binding scope*, so a creator cannot mint a key carrying permissions it holds only in another workspace or another organization (§5c). | Service layer (`AuthGuard`), Phase 1B.5.1 |
+
+### 7b. Tenant delegation on grant (ADR-015 R-6 — grant side implemented; revocation pending R-11)
+
+The mechanism approved by the user (06-Oct-2026, `DECISIONS.md` §1o). Guard 4 of `RoleAssignmentService.grant` — the actor holds every permission of the role at a covering scope — is consulted first and decides every ordinary grant. **Only when it refuses** may it be satisfied by delegation, and only if **all** of these hold:
+
+1. the role's key is in `DELEGABLE_TENANT_SYSTEM_ROLES`, pinned in `packages/contracts` to exactly `['org_admin']` (a change is a contract change with its own test);
+2. the role is a seeded system role (`is_system_role = true`) owned by the organization that owns the target scope (read from the database) — custom roles never qualify;
+3. the grant is at `organization` scope in that organization;
+4. the actor holds `platform.roles.delegate_tenant` at platform scope, decided by the evaluator (no role name is consulted; neither `platform.tenants.manage` nor `platform.roles.assign` stands in for it);
+5. the permissions the actor lacks are non-empty and are **all** tenant-content keys — the actor holds every non-content permission the role carries at a covering scope (`delegate_tenant` is not an escape hatch for anything else);
+6. the target user is not the actor.
+
+Otherwise the ordinary refusal stands unchanged (`403 AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION`, `details.rejected`). The role row is locked `FOR SHARE` before its permissions are read, so the set judged is the set the grant commits against. A delegated grant's `user_role.granted` audit row carries `metadata.delegation = true` and `metadata.delegatedPermissions` (the sorted unheld content keys); an ordinary grant carries neither. The decision is application-only, as guard 4 is; the database still refuses tenant-content keys on platform roles and `platform.%` keys on tenant roles, and no SQL re-implements "the actor holds P". `alendei_super_admin` holds `platform.roles.delegate_tenant` by default; `alendei_support` and `reseller_admin` do not.
+
+No seeded role carries a tenant-content key today (§1a), so delegation has no production effect until Phase 3.1 gives `org_admin` content permissions; the tests use disposable fixtures. **Revocation by delegation (organizational recovery) and last-organization-administrator protection are R-11's and are not implemented yet.**
 
 ### 7a. The last-platform-admin invariant (Phase 1B.5.6)
 
