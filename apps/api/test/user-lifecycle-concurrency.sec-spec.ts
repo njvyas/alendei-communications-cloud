@@ -198,11 +198,17 @@ describe('user lifecycle under concurrency', () => {
       await tx.execute(
         sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
       );
+      await tx.execute(
+        sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+      );
       try {
         await tx.delete(schema.sessions).where(inArray(schema.sessions.userId, ids));
         await tx.delete(schema.userRoles).where(inArray(schema.userRoles.userId, ids));
         await tx.delete(schema.users).where(inArray(schema.users.id, ids));
       } finally {
+        await tx.execute(
+          sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+        );
         await tx.execute(
           sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
         );

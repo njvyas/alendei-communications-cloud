@@ -204,6 +204,20 @@
       "when": 1791425901004,
       "tag": "0028_adr015_org_admin_liveness",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1791473827663,
+      "tag": "0029_adr015_roles_scope_types_non_empty",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1791474795404,
+      "tag": "0030_adr015_reseller_admin_liveness",
+      "breakpoints": true
     }
   ]
 }

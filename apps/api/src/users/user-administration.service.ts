@@ -26,6 +26,11 @@ import {
   lockOrganizationAdministration,
   translateOrganizationAdminLiveness,
 } from '../rbac/organization-admin-liveness';
+import {
+  assertResellerAdminRemains,
+  lockResellerAdministration,
+  translateResellerAdminLiveness,
+} from '../rbac/reseller-admin-liveness';
 import { RoleAssignmentService } from '../rbac/role-assignment.service';
 import type { UserStatus } from './user.dto';
 
@@ -465,12 +470,14 @@ export class UserAdministrationService {
     }
 
     // Only for an administrator: every other disable takes no lock and runs
-    // no count. Organizations first, then the platform — the order the
-    // triggers beneath take the same locks in (`trg_users_org_admin_liveness`
-    // fires before `trg_users_platform_admin_liveness`).
+    // no count. Organizations, then the platform, then resellers — the order
+    // the triggers beneath take the same locks in (`trg_users_org_admin_liveness`,
+    // `trg_users_platform_admin_liveness`, `trg_users_reseller_admin_liveness`
+    // fire in name order).
     if (before.status === 'active') {
       await this.assertOrganizationAdminsRemain(tx, id);
       await this.assertPlatformAdminRemains(tx, id);
+      await this.assertResellerAdminsRemain(tx, id);
     }
 
     const after = await this.setStatus(tx, id, 'disabled');
@@ -842,6 +849,38 @@ export class UserAdministrationService {
   }
 
   /**
+   * Refuses a disable that would leave any reseller the user administers with
+   * no active administrator (ADR-015 follow-up item 4; `RBAC.md` §7d) — when
+   * this request can see every holder; otherwise `trg_users_reseller_admin_liveness`
+   * (migration `0030`) decides on the update below and `translateLivenessViolation`
+   * renders its refusal as the same `409`. The locks are taken here first, in
+   * ascending reseller order, after the organization and platform locks.
+   */
+  private async assertResellerAdminsRemain(tx: Transaction, userId: string): Promise<void> {
+    const administered = await tx
+      .selectDistinct({ resellerId: schema.userRoles.scopeId })
+      .from(schema.userRoles)
+      .innerJoin(schema.roles, eq(schema.roles.id, schema.userRoles.roleId))
+      .where(
+        and(
+          eq(schema.userRoles.userId, userId),
+          eq(schema.userRoles.scopeType, 'reseller'),
+          isNull(schema.roles.orgId),
+          eq(schema.roles.key, PLATFORM_ROLE_KEYS.RESELLER_ADMIN),
+          eq(schema.roles.isSystemRole, true),
+        ),
+      );
+    // Early exit, as the trigger's: a user administering no reseller takes no lock.
+    const resellerIds = administered.map((row) => row.resellerId!).sort();
+    if (resellerIds.length === 0) return;
+
+    await lockResellerAdministration(tx, resellerIds);
+    for (const resellerId of resellerIds) {
+      await assertResellerAdminRemains(tx, resellerId, { userId });
+    }
+  }
+
+  /**
    * Refuses a disable that would leave the platform with no active
    * administrator (ADR-005 D-7).
    *
@@ -923,6 +962,9 @@ export class UserAdministrationService {
     // name (migration `0028`), and is its own `409`.
     const organization = translateOrganizationAdminLiveness(error);
     if (organization !== error) return organization;
+    // So does the reseller rule (migration `0030`).
+    const reseller = translateResellerAdminLiveness(error);
+    if (reseller !== error) return reseller;
     if (this.pgCode(error) !== PG_RESTRICT_VIOLATION) return error;
     return new AppException({
       status: HttpStatus.CONFLICT,

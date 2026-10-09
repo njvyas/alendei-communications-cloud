@@ -118,6 +118,9 @@ describe('audit read', () => {
         await tx.execute(
           sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
         );
+        await tx.execute(
+          sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+        );
         try {
           for (const id of ids) {
             await tx.execute(sql`DELETE FROM sessions WHERE user_id = ${id}`);
@@ -125,6 +128,9 @@ describe('audit read', () => {
             await tx.execute(sql`DELETE FROM users WHERE id = ${id}`);
           }
         } finally {
+          await tx.execute(
+            sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+          );
           await tx.execute(
             sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
           );

@@ -223,6 +223,9 @@ describe('Gate C metrics — organization-status refusals and session-cap evicti
       await tx.execute(
         sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
       );
+      await tx.execute(
+        sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+      );
       await tx.execute(sql`DELETE FROM sessions WHERE user_id IN (${list(userIds)})`);
       await tx.execute(
         sql`DELETE FROM user_roles WHERE user_id IN (${list(userIds)})
@@ -235,6 +238,9 @@ describe('Gate C metrics — organization-status refusals and session-cap evicti
       // and role permissions cascade with them — the exemption of the
       // last-organization-administrator rule (migration 0028).
       await tx.execute(sql`DELETE FROM organizations WHERE id IN (${list(orgIds)})`);
+      await tx.execute(
+        sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+      );
       await tx.execute(
         sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
       );

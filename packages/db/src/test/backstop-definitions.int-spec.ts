@@ -253,6 +253,39 @@ describe('migration 0026 catalogue: scope-eligibility triggers, functions and CH
 });
 
 /**
+ * Migration `0029` (ADR-015 follow-up, item 2): `roles_allowed_scope_types_non_empty`
+ * uses `cardinality`, as `permissions_allowed_scope_types_non_empty` does —
+ * `array_length('{}', 1)` is NULL and passed. The other two roles CHECKs are
+ * pinned with it, unchanged since `0004`. Behaviour: `roles-scope-types.int-spec.ts`.
+ */
+const ROLES_CONSTRAINTS_0029: Record<string, string> = {
+  roles_allowed_scope_types_level:
+    "CHECK (\nCASE\n    WHEN (org_id IS NULL) THEN (allowed_scope_types <@ ARRAY['platform'::role_scope_type, 'reseller'::role_scope_type])\n    ELSE (allowed_scope_types <@ ARRAY['organization'::role_scope_type, 'workspace'::role_scope_type, 'team'::role_scope_type])\nEND)",
+  roles_allowed_scope_types_non_empty: 'CHECK ((cardinality(allowed_scope_types) >= 1))',
+  roles_key_format: "CHECK ((key ~ '^[a-z][a-z0-9_]{2,63}$'::text))",
+};
+
+describe('migration 0029 catalogue: the roles CHECKs', () => {
+  let db: Principals;
+
+  beforeAll(() => {
+    loadTestEnv();
+    db = connect();
+  });
+
+  afterAll(async () => {
+    await db.close();
+  });
+
+  it('roles_allowed_scope_types_non_empty is the cardinality form, and the roles CHECKs are exactly these three', async () => {
+    const { rows } = await db.admin.execute<{ conname: string; def: string }>(sql`
+      SELECT conname, pg_get_constraintdef(oid) AS def FROM pg_constraint
+      WHERE conrelid = 'roles'::regclass AND contype = 'c'`);
+    expect(Object.fromEntries(rows.map((r) => [r.conname, r.def]))).toEqual(ROLES_CONSTRAINTS_0029);
+  });
+});
+
+/**
  * Migration `0027` (ADR-015 R-7, ADR-014 §17.1): the Model B tenant-content
  * helper. Pinned by the md5 of `pg_get_functiondef`, with its security mode,
  * volatility, `search_path`, owner and exact ACL — so a definer → invoker

@@ -306,6 +306,9 @@ describe('Phase 2.2 provider adapter test-send', () => {
         await tx.execute(
           sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
         );
+        await tx.execute(
+          sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+        );
         try {
           await tx.execute(sql`DELETE FROM user_roles WHERE user_id IN (${list(createdUsers)})`);
           await tx.execute(
@@ -313,6 +316,9 @@ describe('Phase 2.2 provider adapter test-send', () => {
           );
           await tx.execute(sql`DELETE FROM roles WHERE id IN (${list(createdRoles)})`);
         } finally {
+          await tx.execute(
+            sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+          );
           await tx.execute(
             sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
           );

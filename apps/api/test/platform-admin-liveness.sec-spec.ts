@@ -42,6 +42,7 @@ import {
   createTenant,
   destroyTenant,
   purgeAudit,
+  removeIdentities,
   startHarness,
   type Harness,
   type TenantFixture,
@@ -149,11 +150,17 @@ describe('last-platform-admin invariant', () => {
       await tx.execute(
         sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
       );
+      await tx.execute(
+        sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+      );
       try {
         await tx.delete(schema.sessions).where(inArray(schema.sessions.userId, ids));
         await tx.delete(schema.userRoles).where(inArray(schema.userRoles.userId, ids));
         await tx.delete(schema.users).where(inArray(schema.users.id, ids));
       } finally {
+        await tx.execute(
+          sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+        );
         await tx.execute(
           sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
         );
@@ -355,8 +362,9 @@ describe('last-platform-admin invariant', () => {
       try {
         expect(await admins()).toBe(before);
       } finally {
-        await h.admin.execute(sql`DELETE FROM user_roles WHERE user_id = ${userId}`);
-        await h.admin.execute(sql`DELETE FROM users WHERE id = ${userId}`);
+        // The planted user is this reseller's only administrator, so it is
+        // removed the way planted administrators are (migration `0030`).
+        await removeIdentities(h.admin, [userId]);
       }
     });
   });

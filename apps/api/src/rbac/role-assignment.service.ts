@@ -25,6 +25,12 @@ import {
   lockOrganizationAdministration,
 } from './organization-admin-liveness';
 import {
+  assertResellerAdminRemains,
+  isResellerAdministratorGrant,
+  lockResellerAdministration,
+  translateResellerAdminLiveness,
+} from './reseller-admin-liveness';
+import {
   assertScopeAcceptsNewMembers,
   assertTargetOrganizationActive,
   organizationOfScope,
@@ -392,14 +398,28 @@ export class RoleAssignmentService {
    */
   async revoke(tx: Transaction, principal: AuthPrincipal, id: string): Promise<void> {
     this.requireOrg(principal);
-    const assignment = await this.loadVisible(tx, id);
+    const visible = await this.loadVisible(tx, id);
 
     await this.authorization.assert(tx, {
       principal,
       permission: 'role_assignments.revoke',
-      target: { scopeType: assignment.scopeType, scopeId: assignment.scopeId },
+      target: { scopeType: visible.scopeType, scopeId: visible.scopeId },
       resourceType: 'Role assignment',
     });
+
+    // A reseller-scope grant is judged under its reseller's liveness lock
+    // (ADR-015 follow-up item 4, migration `0030`), taken here — after guard 1,
+    // before anything a concurrent removal could change — and the grant is
+    // read again under it. A reseller principal's reach is re-validated on
+    // every statement (`app_current_reseller_id()`, migration `0010`), so if a
+    // removal that committed while this request waited took the actor's own
+    // reseller grant, the grant is no longer visible here and the answer is the
+    // ordinary `404`, never a half-written revocation.
+    let assignment = visible;
+    if (visible.scopeType === 'reseller' && visible.scopeId !== null) {
+      await lockResellerAdministration(tx, [visible.scopeId]);
+      assignment = await this.loadVisible(tx, id);
+    }
 
     // The organization owning the grant's scope must be active (ADR-012 F-5),
     // whichever organization the request selected.
@@ -430,6 +450,17 @@ export class RoleAssignmentService {
     if (isOrganizationAdministratorGrant(role, assignment)) {
       await lockOrganizationAdministration(tx, [assignment.scopeId!]);
       await assertOrganizationAdminRemains(tx, assignment.scopeId!, { grantId: assignment.id });
+    }
+
+    // The last-reseller-administrator invariant (ADR-015 follow-up item 4,
+    // migration `0030`). Only for a grant of the seeded `reseller_admin` at
+    // reseller scope; its lock is already held (above). The check refuses
+    // here only when this request can see every holder
+    // (`assertResellerAdminRemains`); otherwise the trigger on the delete
+    // below decides under the same lock, and its refusal is translated to the
+    // same `409` (rolling back the audit row with it).
+    if (isResellerAdministratorGrant(role, assignment)) {
+      await assertResellerAdminRemains(tx, assignment.scopeId!, { grantId: assignment.id });
     }
 
     // The audit row is written *before* the delete, inside the same
@@ -475,7 +506,10 @@ export class RoleAssignmentService {
     const deleted = await tx
       .delete(schema.userRoles)
       .where(eq(schema.userRoles.id, id))
-      .returning({ id: schema.userRoles.id });
+      .returning({ id: schema.userRoles.id })
+      .catch((error: unknown) => {
+        throw translateResellerAdminLiveness(error);
+      });
 
     if (deleted.length === 0) {
       // The other revocation won. Reporting `404` is honest — the assignment is

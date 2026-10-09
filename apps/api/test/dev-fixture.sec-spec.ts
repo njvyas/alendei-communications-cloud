@@ -257,6 +257,9 @@ describe('Phase 1C.4a development/test fixture', () => {
       await tx.execute(
         sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
       );
+      await tx.execute(
+        sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+      );
       await tx.execute(sql`DELETE FROM sessions WHERE user_id IN (${userList})`);
       await tx.execute(
         sql`DELETE FROM user_roles WHERE (user_id IN (${userList}) OR org_id IN (${orgList}))
@@ -269,6 +272,9 @@ describe('Phase 1C.4a development/test fixture', () => {
       // and role permissions cascade with them — the exemption of the
       // last-organization-administrator rule (migration 0028).
       await tx.execute(sql`DELETE FROM organizations WHERE id IN (${orgList})`);
+      await tx.execute(
+        sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+      );
       await tx.execute(
         sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
       );

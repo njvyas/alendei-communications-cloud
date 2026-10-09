@@ -75,11 +75,11 @@ export const roles = pgTable(
     index('roles_org_created_at_id_idx').on(table.orgId, table.createdAt, table.id),
     check('roles_key_format', sql`${table.key} ~ '^[a-z][a-z0-9_]{2,63}$'`),
     // A role admitting no scope could never be granted anywhere — silently
-    // broken rather than restrictive.
-    check(
-      'roles_allowed_scope_types_non_empty',
-      sql`array_length(${table.allowedScopeTypes}, 1) >= 1`,
-    ),
+    // broken rather than restrictive — and an empty set would satisfy the
+    // R-5 eligibility rule (role scopes ⊆ permission scopes) vacuously.
+    // `cardinality`, not `array_length`: the latter is NULL for an empty
+    // array, and a CHECK passes on NULL (migration `0029`).
+    check('roles_allowed_scope_types_non_empty', sql`cardinality(${table.allowedScopeTypes}) >= 1`),
     // A platform role is designed for platform/reseller scope and nothing
     // below; a tenant role for organization/workspace/team and nothing above.
     check(

@@ -1,0 +1,42 @@
+{
+  "step": "ADR-015 follow-up item 2 — roles_allowed_scope_types_non_empty refuses an empty scope-type set (migration 0029)",
+  "usage": "source the DATABASE_* environment of a test template database at migration 0024 or later (acc_r015_base), then: node scripts/mutation/run.mjs scripts/mutation/catalogue/item2-0029.json --out <dir>. Every DB command first applies the (mutated) migrations to its disposable clone.",
+  "commands": {
+    "db": {
+      "cwd": ".",
+      "db": true,
+      "argv": [
+        "bash",
+        "-c",
+        "npm run db:migrate --workspace @acc/db && cd packages/db && npx jest --selectProjects integration --runInBand --testPathPatterns \"roles-scope-types|backstop-definitions\""
+      ],
+      "timeoutSeconds": 900
+    }
+  },
+  "mutants": [
+    {
+      "id": "M1",
+      "title": "the NULL-passing array_length form restored: an empty scope-type set is admitted again",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0029_adr015_roles_scope_types_non_empty.sql",
+          "search": "CHECK (cardinality(allowed_scope_types) >= 1);",
+          "replace": "CHECK (array_length(allowed_scope_types, 1) >= 1);"
+        }
+      ],
+      "commands": ["db"]
+    },
+    {
+      "id": "M2",
+      "title": "verification block blind: it no longer finds a role with an empty set",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0029_adr015_roles_scope_types_non_empty.sql",
+          "search": "     WHERE cardinality(r.allowed_scope_types) = 0\n",
+          "replace": "     WHERE false\n"
+        }
+      ],
+      "commands": ["db"]
+    }
+  ]
+}

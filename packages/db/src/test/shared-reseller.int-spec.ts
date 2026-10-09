@@ -271,6 +271,10 @@ describe('shared-reseller isolation — direct PostgreSQL as acc_app', () => {
     });
 
     it('a disabled reseller administrator’s claim stops being honoured', async () => {
+      // Reseller A keeps an administrator while this one is disabled: the
+      // last-reseller-administrator rule (migration 0030) refuses disabling the
+      // only one, for the owner as for everyone else.
+      const spare = await plantResellerAdmin(db.admin, resellerA, 'sr-reseller-a-spare');
       await db.admin.execute(
         sql`UPDATE users SET status = 'disabled' WHERE id = ${resellerAAdmin}`,
       );
@@ -280,6 +284,7 @@ describe('shared-reseller isolation — direct PostgreSQL as acc_app', () => {
         await db.admin.execute(
           sql`UPDATE users SET status = 'active' WHERE id = ${resellerAAdmin}`,
         );
+        await removeIdentities(db.admin, [spare]);
       }
     });
 

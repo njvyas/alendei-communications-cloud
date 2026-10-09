@@ -288,11 +288,17 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
       await tx.execute(
         sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
       );
+      await tx.execute(
+        sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+      );
       try {
         await tx.execute(
           sql`DELETE FROM user_roles WHERE (user_id IN (${list(users)}) OR org_id IN (${list(orgs)})) AND NOT (scope_type = 'organization' AND org_id IN (${list(orgs)}))`,
         );
       } finally {
+        await tx.execute(
+          sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+        );
         await tx.execute(
           sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
         );

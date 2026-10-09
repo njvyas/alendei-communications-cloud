@@ -12,7 +12,11 @@
  * Teardown deletes each organization, so its organization-scope grants, roles
  * and role permissions cascade with it — the one exemption of the
  * last-organization-administrator rule (migration `0028`). Nothing here
- * disables that rule's triggers.
+ * disables that rule's triggers. Reseller grants do not cascade with their
+ * reseller (`trg_resellers_grant_restrict`, migration `0025`), so the final
+ * removal of this suite's platform and reseller grants disables the platform
+ * and reseller liveness triggers for that one owner statement, as every suite
+ * that plants a platform administrator already does for the platform rule.
  */
 import { AUDIT_ACTIONS, PLATFORM_ROLE_KEYS, TENANT_ROLE_KEYS } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
@@ -42,6 +46,7 @@ export class RevocationWorld {
   readonly createdUsers: string[] = [];
   readonly createdOrgs: string[] = [];
   readonly createdPlatformRoles: string[] = [];
+  readonly createdResellers: string[] = [];
   private credentials: CredentialService;
   private hash: string | null = null;
   resellerId = '';
@@ -125,14 +130,24 @@ export class RevocationWorld {
     });
   }
 
+  /** A further reseller, removed by `teardown`. */
+  async reseller(label: string): Promise<string> {
+    const [r] = await this.h.admin
+      .insert(schema.resellers)
+      .values({ name: `R11 ${label}`, slug: `r11-${label}-${suffix()}` })
+      .returning({ id: schema.resellers.id });
+    this.createdResellers.push(r!.id);
+    return r!.id;
+  }
+
   /** A provisioned organization: the five seeded tenant roles and a default workspace. */
-  async org(label: string): Promise<Org> {
+  async org(label: string, resellerId: string = this.resellerId): Promise<Org> {
     const [org] = await this.h.admin
       .insert(schema.organizations)
       .values({
         name: `R11 ${label}`,
         slug: `r11-${label}-${suffix()}`,
-        resellerId: this.resellerId,
+        resellerId,
       })
       .returning({ id: schema.organizations.id });
     this.createdOrgs.push(org!.id);
@@ -210,6 +225,47 @@ export class RevocationWorld {
       null,
     );
     return person;
+  }
+
+  /**
+   * A fresh user holding the seeded platform role `reseller_admin` at the
+   * reseller's scope — and, with `memberOf`, also `read_only` in that
+   * organization, which makes the user a member there (reachable by
+   * `users.disable`) and visible to the reseller's other principals.
+   */
+  async resellerAdmin(
+    resellerId: string,
+    label: string,
+    options: { memberOf?: Org; status?: 'active' | 'invited' } = {},
+  ): Promise<Person & { grantId: string }> {
+    const person = await this.person(label, options.status ?? 'active');
+    const grantId = await this.grant(
+      person.userId,
+      await this.seededPlatformRole(PLATFORM_ROLE_KEYS.RESELLER_ADMIN),
+      'reseller',
+      resellerId,
+    );
+    if (options.memberOf) {
+      await this.grant(
+        person.userId,
+        options.memberOf.roles[TENANT_ROLE_KEYS.READ_ONLY]!,
+        'organization',
+        options.memberOf.orgId,
+      );
+    }
+    return { ...person, grantId };
+  }
+
+  /** The reseller invariant's own count (migration `0030`). */
+  async resellerAdmins(resellerId: string): Promise<number> {
+    const { rows } = await this.h.admin.execute<{ n: string }>(sql`
+      SELECT count(*) AS n FROM user_roles ur
+        JOIN users u ON u.id = ur.user_id
+        JOIN roles r ON r.id = ur.role_id
+       WHERE ur.scope_type = 'reseller' AND ur.scope_id = ${resellerId}
+         AND r.org_id IS NULL AND r.key = 'reseller_admin' AND r.is_system_role
+         AND u.status = 'active'`);
+    return Number(rows[0]!.n);
   }
 
   async login(email: string): Promise<string> {
@@ -292,7 +348,7 @@ export class RevocationWorld {
     await purgeAudit(
       this.h.admin,
       sql`org_id IN (${list(this.createdOrgs)}) OR actor_user_id IN (${list(this.createdUsers)})
-          OR reseller_id = ${this.resellerId}`,
+          OR reseller_id IN (${list([this.resellerId, ...this.createdResellers])})`,
     );
     for (const orgId of this.createdOrgs) {
       const [exists] = await this.h.admin
@@ -302,15 +358,22 @@ export class RevocationWorld {
       if (exists) await this.deleteOrg(orgId);
     }
     // What remains are platform and reseller grants of this suite's users. The
-    // platform liveness trigger is disabled for the statement, as every suite
-    // that plants a platform administrator does (`removeIdentities`).
+    // platform and reseller liveness triggers are disabled for the statement,
+    // as every suite that plants a platform administrator does for the
+    // platform rule (`removeIdentities`).
     await this.h.admin.transaction(async (tx) => {
       await tx.execute(
         sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
       );
+      await tx.execute(
+        sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+      );
       try {
         await tx.execute(sql`DELETE FROM user_roles WHERE user_id IN (${list(this.createdUsers)})`);
       } finally {
+        await tx.execute(
+          sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+        );
         await tx.execute(
           sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
         );
@@ -327,6 +390,8 @@ export class RevocationWorld {
       sql`DELETE FROM api_keys WHERE created_by IN (${list(this.createdUsers)})`,
     );
     await this.h.admin.delete(schema.users).where(inArray(schema.users.id, this.createdUsers));
-    await this.h.admin.execute(sql`DELETE FROM resellers WHERE id = ${this.resellerId}`);
+    await this.h.admin.execute(
+      sql`DELETE FROM resellers WHERE id IN (${list([this.resellerId, ...this.createdResellers])})`,
+    );
   }
 }

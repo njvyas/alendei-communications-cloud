@@ -63,6 +63,14 @@ export const ERROR_CODES = {
    * to appoint another administrator first.
    */
   AUTHZ_LAST_ORGANIZATION_ADMIN: 'AUTHZ_LAST_ORGANIZATION_ADMIN',
+  /**
+   * The operation would leave a reseller that has an administrator with none
+   * (ADR-015 follow-up item 4, migration `0030`): no active user would hold
+   * the seeded platform role `reseller_admin` at that reseller's scope.
+   * Rendered `409` for the same reason as the platform and organization
+   * codes; the remedy is to appoint another reseller administrator first.
+   */
+  AUTHZ_LAST_RESELLER_ADMIN: 'AUTHZ_LAST_RESELLER_ADMIN',
 
   // --- User lifecycle (Phase 1B.6.1) ---------------------------------------
   /**

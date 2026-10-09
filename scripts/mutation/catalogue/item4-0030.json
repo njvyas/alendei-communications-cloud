@@ -1,0 +1,278 @@
+{
+  "step": "ADR-015 follow-up item 4 — last-reseller-administrator protection (migration 0030, reseller-admin-liveness.ts, revoke and disable)",
+  "usage": "source the DATABASE_* environment of a test template database at migration 0024 or later (acc_r015_base), then: node scripts/mutation/run.mjs scripts/mutation/catalogue/item4-0030.json --out <dir>. Every DB command first applies the (mutated) migrations to its disposable clone.",
+  "commands": {
+    "liveness": {
+      "cwd": ".",
+      "db": true,
+      "argv": [
+        "bash",
+        "-c",
+        "npm run db:migrate --workspace @acc/db && cd apps/api && npx jest --selectProjects security --runInBand --forceExit --testPathPatterns reseller-admin-liveness"
+      ],
+      "timeoutSeconds": 900
+    }
+  },
+  "mutants": [
+    {
+      "id": "M1",
+      "title": "trigger removed: DELETE of a reseller-administrator grant is unguarded",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0030_adr015_reseller_admin_liveness.sql",
+          "search": "CREATE TRIGGER trg_user_roles_reseller_admin_liveness\n  AFTER DELETE ON \"user_roles\"\n  FOR EACH ROW WHEN (OLD.scope_type = 'reseller')\n  EXECUTE FUNCTION fn_user_roles_reseller_admin_guard();",
+          "replace": "SELECT 1;"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "D: owner/acc_app deleting the last grant is refused; A: three triggers pinned"
+    },
+    {
+      "id": "M2",
+      "title": "trigger removed: UPDATE of a reseller-administrator grant is unguarded",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0030_adr015_reseller_admin_liveness.sql",
+          "search": "CREATE TRIGGER trg_user_roles_reseller_admin_liveness_update\n  AFTER UPDATE OF scope_type, scope_id, user_id, role_id, org_id ON \"user_roles\"\n  FOR EACH ROW WHEN (OLD.scope_type = 'reseller')\n  EXECUTE FUNCTION fn_user_roles_reseller_admin_guard();",
+          "replace": "SELECT 1;"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "D: changing role / moving / reassigning the last grant is refused"
+    },
+    {
+      "id": "M3",
+      "title": "trigger removed: disabling the last reseller administrator is unguarded",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0030_adr015_reseller_admin_liveness.sql",
+          "search": "CREATE TRIGGER trg_users_reseller_admin_liveness\n  AFTER UPDATE OF status ON \"users\"",
+          "replace": "CREATE TRIGGER trg_users_reseller_admin_liveness\n  AFTER UPDATE OF email ON \"users\""
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "D: owner/acc_app disabling the last administrator is refused; C: trigger-decided disable"
+    },
+    {
+      "id": "M4",
+      "title": "advisory lock removed from the invariant function",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0030_adr015_reseller_admin_liveness.sql",
+          "search": "  PERFORM pg_advisory_xact_lock(482019309, hashtext(p_reseller_id::text));\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "A: lock agreement; F: database race — exactly one commits"
+    },
+    {
+      "id": "M5",
+      "title": "wrong lock class in the migration (the organization class)",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0030_adr015_reseller_admin_liveness.sql",
+          "search": "  PERFORM pg_advisory_xact_lock(482019309, hashtext(p_reseller_id::text));",
+          "replace": "  PERFORM pg_advisory_xact_lock(482019308, hashtext(p_reseller_id::text));"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "A: the migration and @acc/db agree on the lock class"
+    },
+    {
+      "id": "M6",
+      "title": "wrong lock class in @acc/db (the service locks the organization class)",
+      "edits": [
+        {
+          "file": "packages/db/src/constants.ts",
+          "search": "export const RESELLER_ADMIN_LOCK_CLASS = 482_019_309;",
+          "replace": "export const RESELLER_ADMIN_LOCK_CLASS = 482_019_308;"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "A: lock agreement / keyspace distinct from the organization class"
+    },
+    {
+      "id": "M7",
+      "title": "active-user condition removed from the count",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0030_adr015_reseller_admin_liveness.sql",
+          "search": "     AND u.status = 'active';",
+          "replace": "     ;"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "D: disabling the last administrator is refused"
+    },
+    {
+      "id": "M8",
+      "title": "role condition removed from the count (any reseller-scope grant counts)",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0030_adr015_reseller_admin_liveness.sql",
+          "search": "     AND r.key = 'reseller_admin'\n     AND r.is_system_role\n     AND u.status",
+          "replace": "     AND u.status"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "D: changing the role of the last administrator grant is refused"
+    },
+    {
+      "id": "M9",
+      "title": "scope condition removed from the count (administrators of any reseller count)",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0030_adr015_reseller_admin_liveness.sql",
+          "search": "     AND ur.scope_id = p_reseller_id\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "D: deleting the last administrator grant is refused"
+    },
+    {
+      "id": "M10",
+      "title": "weakened trigger condition: fires for organization-scope grants instead of reseller ones",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0030_adr015_reseller_admin_liveness.sql",
+          "search": "  AFTER DELETE ON \"user_roles\"\n  FOR EACH ROW WHEN (OLD.scope_type = 'reseller')",
+          "replace": "  AFTER DELETE ON \"user_roles\"\n  FOR EACH ROW WHEN (OLD.scope_type = 'organization')"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "D: deleting the last grant; A: trigger definitions pinned"
+    },
+    {
+      "id": "M11",
+      "title": "weakened guard: a grant whose user row is gone is treated as not qualifying (fail open on the cascade)",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0030_adr015_reseller_admin_liveness.sql",
+          "search": "  IF EXISTS (SELECT 1 FROM users u WHERE u.id = OLD.user_id AND u.status <> 'active') THEN",
+          "replace": "  IF NOT EXISTS (SELECT 1 FROM users u WHERE u.id = OLD.user_id AND u.status = 'active') THEN"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "D: deleting the last administrator's user row is refused through the cascade"
+    },
+    {
+      "id": "M12",
+      "title": "wrong constraint name raised by the database",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0030_adr015_reseller_admin_liveness.sql",
+          "search": "            CONSTRAINT = 'reseller_admin_liveness';",
+          "replace": "            CONSTRAINT = 'organization_admin_liveness';"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "D: expectDbRefusal checks the constraint; B: trigger-decided revocation"
+    },
+    {
+      "id": "M13",
+      "title": "service liveness check removed from revocation (the refusal reaches the audit write)",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "      await assertResellerAdminRemains(tx, assignment.scopeId!, { grantId: assignment.id });\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "B: last administrator revoking itself — decided before the audit write"
+    },
+    {
+      "id": "M14",
+      "title": "service liveness check removed from disable (no reseller lock before the user row)",
+      "edits": [
+        {
+          "file": "apps/api/src/users/user-administration.service.ts",
+          "search": "      await this.assertResellerAdminsRemain(tx, id);\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "A: disable takes the reseller lock BEFORE it updates the user"
+    },
+    {
+      "id": "M15",
+      "title": "service refuses on what it can see (the RLS defer guard removed)",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/reseller-admin-liveness.ts",
+          "search": "  if (hidden > 0) return;\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "R: self-revocation with an invisible active peer answers 204"
+    },
+    {
+      "id": "M16",
+      "title": "incorrect error translation: revocation does not render the trigger's refusal",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/reseller-admin-liveness.ts",
+          "search": "    cause.constraint === RESELLER_ADMIN_LIVENESS_CONSTRAINT",
+          "replace": "    cause.constraint === 'organization_admin_liveness'"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "B: trigger-decided revocation answers 409 AUTHZ_LAST_RESELLER_ADMIN"
+    },
+    {
+      "id": "M17",
+      "title": "incorrect error translation on disable: the reseller refusal is reported as the platform code",
+      "edits": [
+        {
+          "file": "apps/api/src/users/user-administration.service.ts",
+          "search": "    const reseller = translateResellerAdminLiveness(error);\n    if (reseller !== error) return reseller;\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "C: trigger-decided disable keeps AUTHZ_LAST_RESELLER_ADMIN"
+    },
+    {
+      "id": "M18",
+      "title": "incorrect API error code",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/reseller-admin-liveness.ts",
+          "search": "    code: ERROR_CODES.AUTHZ_LAST_RESELLER_ADMIN,",
+          "replace": "    code: ERROR_CODES.AUTHZ_LAST_ORGANIZATION_ADMIN,"
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "B/C: every 409 asserts AUTHZ_LAST_RESELLER_ADMIN"
+    },
+    {
+      "id": "M19",
+      "title": "revocation not re-read under the lock (a loser that lost its reseller reach writes half a revocation)",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "      assignment = await this.loadVisible(tx, id);\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "F: mutual revocation — the loser is a 404, never a 500"
+    },
+    {
+      "id": "M20",
+      "title": "the exemption removed: the check raises for a reseller that does not exist",
+      "edits": [
+        {
+          "file": "packages/db/migrations/0030_adr015_reseller_admin_liveness.sql",
+          "search": "  IF NOT EXISTS (SELECT 1 FROM resellers s WHERE s.id = p_reseller_id) THEN\n    RETURN;\n  END IF;\n",
+          "replace": ""
+        }
+      ],
+      "commands": ["liveness"],
+      "killedBy": "D: the exemption — the check returns when the reseller no longer exists"
+    }
+  ]
+}

@@ -316,6 +316,9 @@ describe('migration 0025 database backstops (ADR-015 R-2, R-3, R-4)', () => {
       await c.query(
         'ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness',
       );
+      await c.query(
+        'ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_reseller_admin_liveness',
+      );
       const orgs = [f.A, f.B, f.C, f.X, f.P, f.Q].filter(Boolean);
       await c.query('DELETE FROM user_roles WHERE user_id = ANY($1::uuid[])', [users]);
       await c.query('DELETE FROM ws_tickets WHERE org_id = ANY($1::uuid[])', [orgs]);
@@ -345,6 +348,7 @@ describe('migration 0025 database backstops (ADR-015 R-2, R-3, R-4)', () => {
       await c.query('DELETE FROM resellers WHERE id = ANY($1::uuid[])', [
         [f.R, f.R2].filter(Boolean),
       ]);
+      await c.query('ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_reseller_admin_liveness');
       await c.query('ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness');
       await c.query('COMMIT');
     } catch (error) {
@@ -803,9 +807,18 @@ describe('migration 0025 database backstops (ADR-015 R-2, R-3, R-4)', () => {
         );
       } finally {
         await plant(async (c) => {
+          // The planted grant is the lone reseller's only administrator: its
+          // removal is refused by migration 0030 unless the owner disables
+          // the liveness trigger for this teardown statement.
+          await c.query(
+            'ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_reseller_admin_liveness',
+          );
           await c.query("DELETE FROM user_roles WHERE scope_type = 'reseller' AND scope_id = $1", [
             lone,
           ]);
+          await c.query(
+            'ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_reseller_admin_liveness',
+          );
           await c.query('DELETE FROM resellers WHERE id = $1', [lone]);
         });
       }

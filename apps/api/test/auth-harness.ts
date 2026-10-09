@@ -428,11 +428,38 @@ export async function addSpareAdmin(admin: Database, tenant: TenantFixture): Pro
   return user!.id;
 }
 
-/** Removes a user created by `createScopedUser`, with its dependent rows. */
+/**
+ * Removes a user created by `createScopedUser`, with its dependent rows. A
+ * scoped user may be its reseller's only `reseller_admin`, so the reseller
+ * liveness trigger (migration `0030`) is disabled for the grant removal, as
+ * `removeIdentities` does — when it exists: some mutation catalogues run this
+ * helper against an unmigrated (`0024`) template clone, where it does not.
+ */
 export async function destroyUser(admin: Database, userId: string): Promise<void> {
   await purgeAudit(admin, sql`actor_user_id = ${userId}`);
   await admin.execute(sql`DELETE FROM sessions WHERE user_id = ${userId}`);
-  await admin.execute(sql`DELETE FROM user_roles WHERE user_id = ${userId}`);
+  await admin.transaction(async (tx) => {
+    const { rows } = await tx.execute(
+      sql`SELECT 1 FROM pg_trigger
+           WHERE tgrelid = 'user_roles'::regclass
+             AND tgname = 'trg_user_roles_reseller_admin_liveness'`,
+    );
+    const guarded = rows.length === 1;
+    if (guarded) {
+      await tx.execute(
+        sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+      );
+    }
+    try {
+      await tx.execute(sql`DELETE FROM user_roles WHERE user_id = ${userId}`);
+    } finally {
+      if (guarded) {
+        await tx.execute(
+          sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+        );
+      }
+    }
+  });
   await admin.execute(sql`DELETE FROM users WHERE id = ${userId}`);
 }
 
@@ -568,9 +595,10 @@ export async function plantResellerIdentity(
 }
 
 /**
- * Removes identities planted by the two helpers above. The liveness trigger is
- * disabled for the statement — the same owner capability `purgeAudit` uses —
- * because a planted platform administrator may be the only one in the database.
+ * Removes identities planted by the two helpers above. The platform and
+ * reseller liveness triggers are disabled for the statement — the same owner
+ * capability `purgeAudit` uses — because a planted platform or reseller
+ * administrator may be the only one present (migrations `0005`, `0030`).
  */
 export async function removeIdentities(admin: Database, userIds: readonly string[]): Promise<void> {
   if (userIds.length === 0) return;
@@ -585,6 +613,9 @@ export async function removeIdentities(admin: Database, userIds: readonly string
     await tx.execute(
       sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
     );
+    await tx.execute(
+      sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+    );
     try {
       for (const id of userIds) {
         await tx.execute(sql`DELETE FROM sessions WHERE user_id = ${id}`);
@@ -592,6 +623,9 @@ export async function removeIdentities(admin: Database, userIds: readonly string
         await tx.execute(sql`DELETE FROM users WHERE id = ${id}`);
       }
     } finally {
+      await tx.execute(
+        sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+      );
       await tx.execute(
         sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
       );

@@ -1,0 +1,77 @@
+{
+  "step": "ADR-015 follow-up item 5 — the platform-role grant/revoke asymmetry (no production change; the mutants prove the suite pins both halves and the audit)",
+  "usage": "source the DATABASE_* environment of a test template database at migration 0024 or later (acc_r015_base), then: node scripts/mutation/run.mjs scripts/mutation/catalogue/item5-platform-asymmetry.json --out <dir>. Every DB command first applies the migrations to its disposable clone.",
+  "commands": {
+    "asymmetry": {
+      "cwd": ".",
+      "db": true,
+      "argv": [
+        "bash",
+        "-c",
+        "npm run db:migrate --workspace @acc/db && cd apps/api && npx jest --selectProjects security --runInBand --forceExit --testPathPatterns platform-role-asymmetry"
+      ],
+      "timeoutSeconds": 900
+    }
+  },
+  "mutants": [
+    {
+      "id": "M1",
+      "title": "granting platform roles becomes possible: loadAssignableRole no longer refuses a platform-level role",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "    if (role.orgId === null) {\n",
+          "replace": "    if (false && role.orgId === null) {\n"
+        }
+      ],
+      "commands": ["asymmetry"],
+      "killedBy": "A: each role — the reseller-scope grant is 403 AUTHZ_PLATFORM_ROLE_REQUIRED and writes nothing"
+    },
+    {
+      "id": "M2",
+      "title": "revoking platform roles becomes impossible: loadRole refuses a platform-level role",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "        message: 'Role assignment not found',\n        logContext: { requestedRoleId: roleId },\n      });\n    }\n    return role;\n",
+          "replace": "        message: 'Role assignment not found',\n        logContext: { requestedRoleId: roleId },\n      });\n    }\n    if (role.orgId === null) {\n      throw new AppException({\n        status: HttpStatus.FORBIDDEN,\n        code: ERROR_CODES.AUTHZ_PLATFORM_ROLE_REQUIRED,\n        message: 'Platform-level roles cannot be revoked through tenant administration',\n      });\n    }\n    return role;\n"
+        }
+      ],
+      "commands": ["asymmetry"],
+      "killedBy": "A: each role — an existing grant is revoked by a platform administrator (204)"
+    },
+    {
+      "id": "M3",
+      "title": "platform-role revocation audit is skipped",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.service.ts",
+          "search": "    await this.audit.record(\n      {\n        scopeType: assignment.scopeType,\n",
+          "replace": "    if (role.orgId !== null) await this.audit.record(\n      {\n        scopeType: assignment.scopeType,\n"
+        }
+      ],
+      "commands": ["asymmetry"],
+      "killedBy": "A: each role — exactly one user_role.revoked row, by the actor, at the grant's scope"
+    },
+    {
+      "id": "M4",
+      "title": "the POST DTO admits scopeType: 'platform'",
+      "edits": [
+        {
+          "file": "apps/api/src/rbac/role-assignment.dto.ts",
+          "search": "const GRANTABLE_SCOPE_TYPES: readonly ScopeType[] = [\n  'reseller',\n",
+          "replace": "const GRANTABLE_SCOPE_TYPES: readonly ScopeType[] = [\n  'platform',\n  'reseller',\n"
+        }
+      ],
+      "commands": ["asymmetry"],
+      "killedBy": "A: each role — a well-formed request whose only fault is scopeType 'platform' is 400 VALIDATION_FAILED naming scopeType"
+    }
+  ],
+  "equivalentMutants": [
+    {
+      "id": "E1",
+      "title": "guard 4 skipped when revoking a platform-level role (assertWithinActorAuthority not called for role.orgId === null)",
+      "reason": "Behaviourally equivalent today, so not run: a platform-scope grant is visible only to a validated platform administrator (RLS user_roles_tenant: app_is_platform_admin()), i.e. a holder of alendei_super_admin, which carries every non-content permission, and platform roles can carry no tenant-content key (R-5) — so guard 4 can never refuse a revocation such an actor can reach. A reseller_admin grant is reachable by a same-reseller reseller administrator, who holds every permission of that role by construction. Forcing it to fail would need an artificial actor or fixture (a platform administrator lacking a permission of a platform role), which the review decision excludes. Guard 4 on revocation stays covered for tenant roles by role-revocation.sec-spec.ts (step6-r11 M1–M7)."
+    }
+  ]
+}

@@ -295,12 +295,18 @@ describe('shared-reseller isolation (application + acc_app)', () => {
       await tx.execute(
         sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
       );
+      await tx.execute(
+        sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+      );
       try {
         for (const id of createdUsers) {
           await tx.execute(sql`DELETE FROM sessions WHERE user_id = ${id}`);
           await tx.execute(sql`DELETE FROM user_roles WHERE user_id = ${id}`);
         }
       } finally {
+        await tx.execute(
+          sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+        );
         await tx.execute(
           sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
         );

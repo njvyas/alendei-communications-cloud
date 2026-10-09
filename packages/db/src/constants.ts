@@ -67,3 +67,18 @@ export const PLATFORM_ADMIN_LOCK_KEY = 4_820_193_077n;
  * take the same one, and the suite asserts they do.
  */
 export const ORG_ADMIN_LOCK_CLASS = 482_019_308;
+
+/**
+ * The advisory-lock class serialising every mutation that could remove the
+ * last active administrator of one reseller (ADR-015 follow-up item 4,
+ * migration `0030`).
+ *
+ * Used exactly as `ORG_ADMIN_LOCK_CLASS` is — the two-`int4` form,
+ * `pg_advisory_xact_lock(RESELLER_ADMIN_LOCK_CLASS, hashtext(reseller_id::text))`,
+ * one lock per reseller — with a class of its own, so a reseller's lock never
+ * contends with an organization's even when the two hash alike, and it cannot
+ * collide with the one-`bigint` `PLATFORM_ADMIN_LOCK_KEY`.
+ * `fn_assert_reseller_admin_remains` and the services must take the same one,
+ * and the suite asserts they do.
+ */
+export const RESELLER_ADMIN_LOCK_CLASS = 482_019_309;

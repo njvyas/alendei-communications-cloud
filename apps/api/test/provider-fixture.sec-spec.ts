@@ -198,6 +198,9 @@ describe('Phase 2.6 support — the provider-console fixture', () => {
       await tx.execute(
         sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
       );
+      await tx.execute(
+        sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+      );
       await tx.execute(sql`DELETE FROM sessions WHERE user_id IN (${list(userIds)})`);
       await tx.execute(
         sql`DELETE FROM user_roles WHERE (user_id IN (${list(userIds)}) OR org_id IN (${list(orgIds)})) AND NOT (scope_type = 'organization' AND org_id IN (${list(orgIds)}))`,
@@ -211,6 +214,9 @@ describe('Phase 2.6 support — the provider-console fixture', () => {
       // organization-scope grants, roles and role permissions cascade with them,
       // the one exemption of the last-organization-administrator rule (0028).
       await tx.execute(sql`DELETE FROM organizations WHERE id IN (${list(orgIds)})`);
+      await tx.execute(
+        sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+      );
       await tx.execute(
         sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
       );

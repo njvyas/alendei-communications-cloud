@@ -243,10 +243,10 @@ export const plantResellerAdmin = (admin: Db, resellerId: string, label: string)
   plantIdentity(admin, label, 'reseller_admin', { scopeType: 'reseller', scopeId: resellerId });
 
 /**
- * Removes planted identities. The liveness trigger is disabled for the
- * transaction because a planted administrator may be the only one present —
- * the same owner capability `purgeAuditRows` uses against the append-only
- * trigger.
+ * Removes planted identities. The platform and reseller liveness triggers are
+ * disabled for the transaction because a planted administrator may be the only
+ * one present (migrations `0005`, `0030`) — the same owner capability
+ * `purgeAuditRows` uses against the append-only trigger.
  */
 export async function removeIdentities(admin: Db, userIds: readonly string[]): Promise<void> {
   if (userIds.length === 0) return;
@@ -262,6 +262,9 @@ export async function removeIdentities(admin: Db, userIds: readonly string[]): P
     await tx.execute(
       sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_platform_admin_liveness`,
     );
+    await tx.execute(
+      sql`ALTER TABLE user_roles DISABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+    );
     try {
       for (const id of userIds) {
         await tx.execute(sql`DELETE FROM sessions WHERE user_id = ${id}`);
@@ -269,6 +272,9 @@ export async function removeIdentities(admin: Db, userIds: readonly string[]): P
         await tx.execute(sql`DELETE FROM users WHERE id = ${id}`);
       }
     } finally {
+      await tx.execute(
+        sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_reseller_admin_liveness`,
+      );
       await tx.execute(
         sql`ALTER TABLE user_roles ENABLE TRIGGER trg_user_roles_platform_admin_liveness`,
       );
