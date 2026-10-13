@@ -237,4 +237,78 @@ describe('Frontend Security Invariants', () => {
       }
     }, /SECURITY_VIOLATION/);
   });
+
+  // ---------------------------------------------------------------------------
+  // SEC-06: Session Teardown on Repeated or Non-Retryable 401 Failures
+  // ---------------------------------------------------------------------------
+  it('SEC-06: retried 401 failure triggers session teardown and transitions useSession to unauthenticated', async () => {
+    const ORG_ID = '01955b0a-7b3b-7411-9a4f-9e67d4f91111';
+    useSession.getState().setSession({
+      accessToken: 'active-session-token',
+      user: {
+        userId: 'usr-sec06',
+        actorType: 'user',
+        authMethod: 'session',
+        sessionId: 'sess-sec06',
+        authenticatedAt: new Date().toISOString(),
+        tenant: { orgId: ORG_ID, workspaceId: null, resellerId: null, isPlatformAdmin: false },
+        authorizedOrganizationIds: [ORG_ID],
+        roles: [],
+        permissions: [],
+      },
+      authorization: {
+        actorType: 'user',
+        userId: 'usr-sec06',
+        apiKeyId: null,
+        organizationIds: [ORG_ID],
+        grants: [],
+        isPlatformAdmin: false,
+      },
+    });
+
+    assert.equal(useSession.getState().status, 'ready');
+    assert.equal(getAccessToken(), 'active-session-token');
+
+    globalThis.fetch = async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/auth/refresh')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              accessToken: 'refreshed-tok-that-will-fail-retry',
+              tokenType: 'Bearer',
+              expiresIn: 900,
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      // Both initial and retried calls to protected resource return 401
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 'AUTH_SESSION_REVOKED',
+            message: 'Session revoked by administrator',
+            correlationId: 'sec06-e2e',
+            retryable: false,
+          },
+        }),
+        { status: 401, headers: { 'Content-Type': 'application/json' } },
+      );
+    };
+
+    await assert.rejects(async () => {
+      await apiFetch('/tenants/workspaces');
+    });
+
+    // Observable behavior: session must be completely torn down
+    assert.equal(getAccessToken(), null, 'access token must be cleared');
+    assert.equal(
+      useSession.getState().status,
+      'unauthenticated',
+      'useSession status must transition to unauthenticated',
+    );
+    assert.equal(useSession.getState().user, null, 'user profile must be cleared');
+    assert.equal(useSession.getState().authorization, null, 'authorization state must be cleared');
+  });
 });

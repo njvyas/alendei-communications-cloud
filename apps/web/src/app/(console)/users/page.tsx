@@ -28,6 +28,7 @@ export default function UsersPage() {
   const selectedOrgId = useSession((state) => state.selectedOrganizationId);
 
   // Authorization checks
+  const canReadUsers = useHasPermission('users.read');
   const canInvite = useHasPermission('users.invite');
 
   // Filter and pagination state
@@ -68,7 +69,7 @@ export default function UsersPage() {
         },
         signal,
       ),
-    enabled: !!selectedOrgId,
+    enabled: !!selectedOrgId && canReadUsers,
   });
 
   const handleStatusChange = (newStatus: 'all' | UserStatus) => {
@@ -108,6 +109,19 @@ export default function UsersPage() {
   const isFiltered = statusFilter !== 'all' || activeEmailQuery !== '';
   const users = data?.data ?? [];
   const pageInfo = data?.page;
+
+  // Fail-closed authorization check at page boundary
+  if (!canReadUsers) {
+    return (
+      <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center shadow-xs">
+        <p className="text-base font-semibold text-[var(--color-bad)]">Access Forbidden</p>
+        <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
+          You do not hold the required <code className="font-mono">users.read</code> permission in
+          this organization.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

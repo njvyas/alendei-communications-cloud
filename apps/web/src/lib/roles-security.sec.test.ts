@@ -148,10 +148,13 @@ describe('Roles & Permissions Security Invariants & Boundary Enforcement', () =>
     const held = getHeldOrganizationPermissions();
     // roles.read is held at organization scope
     assert.ok(held.has('roles.read'));
+    assert.equal(hasPermission('roles.read'), true);
     // users.disable held only at workspace scope MUST NOT be treated as held at organization scope
     assert.equal(held.has('users.disable'), false);
+    assert.equal(hasPermission('users.disable'), false);
     // teams.update held only at team scope MUST NOT be treated as held at organization scope
     assert.equal(held.has('teams.update'), false);
+    assert.equal(hasPermission('teams.update'), false);
   });
 
   // ---------------------------------------------------------------------------

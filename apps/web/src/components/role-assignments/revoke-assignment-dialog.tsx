@@ -1,7 +1,45 @@
 'use client';
 
 import { useState } from 'react';
+import { ERROR_CODES } from '@acc/contracts';
 import { ApiError, roleAssignmentsApi, type RoleAssignmentView } from '@/lib/api-client';
+
+export function getRevokeErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.code === ERROR_CODES.AUTHZ_LAST_PLATFORM_ADMIN) {
+      return 'Cannot revoke the last active platform administrator. The backend rejected this action to maintain the platform admin liveness invariant. Appoint another platform administrator first.';
+    }
+    if (err.code === ERROR_CODES.AUTHZ_LAST_ORGANIZATION_ADMIN) {
+      return 'Cannot revoke the last active organization administrator. The backend rejected this action to maintain the organization admin liveness invariant. Appoint another organization administrator first.';
+    }
+    if (err.code === ERROR_CODES.AUTHZ_LAST_RESELLER_ADMIN) {
+      return 'Cannot revoke the last active reseller administrator. The backend rejected this action to maintain the reseller admin liveness invariant. Appoint another reseller administrator first.';
+    }
+    if (err.code === ERROR_CODES.AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION) {
+      const rejected = Array.isArray(err.details?.rejected)
+        ? (err.details.rejected as string[])
+        : [];
+      if (rejected.length > 0) {
+        return `Cannot revoke this role assignment because it carries permissions you do not hold at this scope (${rejected.join(', ')}). Under symmetric revocation rules, you may only revoke roles carrying permissions you hold.`;
+      }
+      return 'Cannot revoke this role assignment because it carries permissions you do not hold at this scope. Under symmetric revocation rules, you may only revoke roles carrying permissions you hold.';
+    }
+    if (err.status === 404) {
+      return 'This role assignment was already revoked or does not exist.';
+    }
+    if (err.status === 403) {
+      return 'You do not have permission to revoke role assignments at this scope (role_assignments.revoke required).';
+    }
+    if (err.status === 409) {
+      return err.message || 'Cannot revoke this role assignment due to an active conflict.';
+    }
+    if (err.status === 429) {
+      return 'Rate limit exceeded. Please wait a moment and try again.';
+    }
+    return err.message || 'Failed to revoke role assignment.';
+  }
+  return 'Network error while revoking role assignment.';
+}
 
 interface RevokeAssignmentDialogProps {
   readonly isOpen: boolean;
@@ -34,29 +72,7 @@ export function RevokeAssignmentDialog({
       onSuccess();
       onClose();
     } catch (err: unknown) {
-      if (err instanceof ApiError) {
-        if (err.code === 'AUTHZ_LAST_PLATFORM_ADMIN') {
-          setErrorMessage(
-            'Cannot revoke the last active platform administrator. The backend rejected this action to maintain the platform admin liveness invariant. Appoint another platform administrator first.',
-          );
-        } else if (err.status === 404) {
-          setErrorMessage('This role assignment was already revoked or does not exist.');
-        } else if (err.status === 403) {
-          setErrorMessage(
-            'You do not have permission to revoke role assignments at this scope (role_assignments.revoke required).',
-          );
-        } else if (err.status === 409) {
-          setErrorMessage(
-            err.message || 'Cannot revoke this role assignment due to an active conflict.',
-          );
-        } else if (err.status === 429) {
-          setErrorMessage('Rate limit exceeded. Please wait a moment and try again.');
-        } else {
-          setErrorMessage(err.message || 'Failed to revoke role assignment.');
-        }
-      } else {
-        setErrorMessage('Network error while revoking role assignment.');
-      }
+      setErrorMessage(getRevokeErrorMessage(err));
     } finally {
       setIsSubmitting(false);
     }

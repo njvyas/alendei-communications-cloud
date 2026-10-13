@@ -10,6 +10,7 @@ import {
   bootstrapSession,
   useCanReadOrganizations,
   useCanReadProviders,
+  useHasPermission,
   useSession,
 } from '@/lib/session-store';
 import { OrgSelectionView } from '@/components/org-selection-view';
@@ -48,6 +49,12 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const clearSession = useSession((state) => state.clearSession);
   const canReadOrganizations = useCanReadOrganizations();
   const canReadProviders = useCanReadProviders();
+  const canReadUsers = useHasPermission('users.read');
+  const canReadWorkspaces = useHasPermission('workspaces.read');
+  const canReadTeams = useHasPermission('teams.read');
+  const canReadRoles = useHasPermission('roles.read');
+  const canReadApiKeys = useHasPermission('api_keys.read');
+  const canReadAudit = useHasPermission('audit.read');
   const isNavigatingOrganizations =
     pathname === '/organizations' || pathname.startsWith('/organizations/');
   const isNavigatingCatalogue =
@@ -167,7 +174,29 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
       <div className="flex flex-1 flex-col gap-6 pt-6 md:flex-row">
         <nav aria-label="Sections" className="md:w-44 md:shrink-0">
           <ul className="flex flex-wrap gap-1 md:flex-col">
-            {SECTIONS.map((section) => {
+            {SECTIONS.filter((section) => {
+              switch (section.href) {
+                case '/channels':
+                case '/providers':
+                  return canReadProviders;
+                case '/organizations':
+                  return canReadOrganizations;
+                case '/workspaces':
+                  return canReadWorkspaces;
+                case '/teams':
+                  return canReadTeams;
+                case '/users':
+                  return canReadUsers;
+                case '/roles':
+                  return canReadRoles;
+                case '/api-keys':
+                  return canReadApiKeys;
+                case '/audit-logs':
+                  return canReadAudit;
+                default:
+                  return true;
+              }
+            }).map((section) => {
               const isActive =
                 section.href === '/'
                   ? pathname === '/'

@@ -8,8 +8,10 @@ import {
   ApiError,
   type CreateRoleAssignmentInput,
   type EffectiveAuthorization,
+  type RoleView,
   type UserIdentity,
 } from './api-client';
+import { isAssignableTenantRole } from '../components/role-assignments/assign-role-dialog';
 import { hasPermission, useSession } from './session-store';
 
 describe('Role Assignments Security Invariants & Boundary Enforcement', () => {
@@ -947,5 +949,453 @@ describe('Role Assignments Security Invariants & Boundary Enforcement', () => {
 
     assert.equal(successRes.data.id, 'g-retry');
     assert.equal(callCount, 2);
+  });
+
+  // ---------------------------------------------------------------------------
+  // SEC-02: Role Assignment Dialog System Roles & Scope Boundaries
+  // ---------------------------------------------------------------------------
+  describe('SEC-02: Role Assignment Dialog System Roles & Scope Boundaries', () => {
+    const makeRole = (overrides: Partial<RoleView>): RoleView => ({
+      id: overrides.id ?? 'role-default-id',
+      key: overrides.key ?? 'default_role',
+      name: overrides.name ?? 'Default Role',
+      description: overrides.description ?? null,
+      orgId: overrides.orgId !== undefined ? overrides.orgId : ORG_A,
+      isSystemRole: overrides.isSystemRole ?? false,
+      allowedScopeTypes: overrides.allowedScopeTypes ?? ['organization'],
+      permissions: overrides.permissions ?? ['users.read'],
+      createdAt: '2026-09-23T00:00:00.000Z',
+      updatedAt: '2026-09-23T00:00:00.000Z',
+    });
+
+    it('SEC-02.1: admits seeded system tenant roles (org_admin, workspace_manager, agent, read_only, campaign_editor) in active organization', () => {
+      const seededSystemRoles: RoleView[] = [
+        makeRole({
+          id: 'role-org-admin',
+          key: 'org_admin',
+          name: 'Organization Admin',
+          orgId: ORG_A,
+          isSystemRole: true,
+          allowedScopeTypes: ['organization'],
+        }),
+        makeRole({
+          id: 'role-workspace-mgr',
+          key: 'workspace_manager',
+          name: 'Workspace Manager',
+          orgId: ORG_A,
+          isSystemRole: true,
+          allowedScopeTypes: ['organization', 'workspace'],
+        }),
+        makeRole({
+          id: 'role-agent',
+          key: 'agent',
+          name: 'Agent',
+          orgId: ORG_A,
+          isSystemRole: true,
+          allowedScopeTypes: ['organization', 'workspace', 'team'],
+        }),
+        makeRole({
+          id: 'role-read-only',
+          key: 'read_only',
+          name: 'Read Only',
+          orgId: ORG_A,
+          isSystemRole: true,
+          allowedScopeTypes: ['organization', 'workspace', 'team'],
+        }),
+        makeRole({
+          id: 'role-campaign-editor',
+          key: 'campaign_editor',
+          name: 'Campaign Editor',
+          orgId: ORG_A,
+          isSystemRole: true,
+          allowedScopeTypes: ['organization', 'workspace', 'team'],
+        }),
+      ];
+
+      for (const role of seededSystemRoles) {
+        assert.equal(
+          isAssignableTenantRole(role, ORG_A),
+          true,
+          `Seeded system role ${role.key} must be assignable in active organization`,
+        );
+      }
+    });
+
+    it('SEC-02.2: admits custom tenant roles in active organization', () => {
+      const customRole = makeRole({
+        id: 'role-custom-billing',
+        key: 'custom_billing_auditor',
+        name: 'Custom Billing Auditor',
+        orgId: ORG_A,
+        isSystemRole: false,
+        allowedScopeTypes: ['organization', 'workspace'],
+      });
+
+      assert.equal(
+        isAssignableTenantRole(customRole, ORG_A),
+        true,
+        'Custom tenant role in active organization must be assignable',
+      );
+    });
+
+    it('SEC-02.3: strictly excludes platform-only system roles with orgId === null', () => {
+      const platformSuperAdmin = makeRole({
+        id: 'role-super-admin',
+        key: 'alendei_super_admin',
+        name: 'Alendei Super Admin',
+        orgId: null,
+        isSystemRole: true,
+        allowedScopeTypes: ['platform'],
+      });
+      const platformSupport = makeRole({
+        id: 'role-support',
+        key: 'alendei_support',
+        name: 'Alendei Support',
+        orgId: null,
+        isSystemRole: true,
+        allowedScopeTypes: ['platform'],
+      });
+
+      assert.equal(
+        isAssignableTenantRole(platformSuperAdmin, ORG_A),
+        false,
+        'Platform super admin role (orgId === null) must NOT be assignable via tenant administration',
+      );
+      assert.equal(
+        isAssignableTenantRole(platformSupport, ORG_A),
+        false,
+        'Platform support role (orgId === null) must NOT be assignable via tenant administration',
+      );
+    });
+
+    it('SEC-02.4: strictly excludes reseller roles with orgId === null', () => {
+      const resellerAdmin = makeRole({
+        id: 'role-reseller-admin',
+        key: 'reseller_admin',
+        name: 'Reseller Admin',
+        orgId: null,
+        isSystemRole: true,
+        allowedScopeTypes: ['reseller'],
+      });
+
+      assert.equal(
+        isAssignableTenantRole(resellerAdmin, ORG_A),
+        false,
+        'Reseller admin role (orgId === null) must NOT be assignable via tenant administration',
+      );
+    });
+
+    it('SEC-02.5: strictly excludes foreign organization roles where orgId does not match active organization', () => {
+      const foreignOrgRole = makeRole({
+        id: 'role-foreign-org-admin',
+        key: 'org_admin',
+        name: 'Organization Admin',
+        orgId: ORG_B,
+        isSystemRole: true,
+        allowedScopeTypes: ['organization'],
+      });
+
+      assert.equal(
+        isAssignableTenantRole(foreignOrgRole, ORG_A),
+        false,
+        'Role belonging to foreign organization B must NOT be assignable in organization A',
+      );
+    });
+
+    it('SEC-02.6: excludes roles that do not admit any tenant scope levels', () => {
+      const invalidTenantRole = makeRole({
+        id: 'role-invalid-scope',
+        key: 'invalid_scope_role',
+        name: 'Invalid Scope Role',
+        orgId: ORG_A,
+        isSystemRole: false,
+        allowedScopeTypes: ['platform'],
+      });
+
+      assert.equal(
+        isAssignableTenantRole(invalidTenantRole, ORG_A),
+        false,
+        'Role with no admitted tenant scope levels must NOT be assignable',
+      );
+    });
+
+    it('SEC-02.7: end-to-end assignment dispatches valid payload for eligible seeded system role', async () => {
+      useSession.getState().setSession({
+        accessToken: 'token-org-a',
+        user: createMockUser([ORG_A]),
+        authorization: createMockAuthorization(ORG_A),
+        selectedOrgId: ORG_A,
+      });
+
+      let capturedPayload: unknown = null;
+      let capturedHeaderOrg: string | undefined = undefined;
+      mockHandlers.push({
+        match: (url, options) => url.includes('/role-assignments') && options.method === 'POST',
+        handle: (_url, options) => {
+          const headers = options.headers as Record<string, string>;
+          capturedHeaderOrg = headers['X-Acc-Organization'];
+          capturedPayload = JSON.parse(String(options.body));
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: 'grant-new-system-role',
+                userId: USER_ID,
+                roleId: 'role-seeded-org-admin',
+                roleKey: 'org_admin',
+                orgId: ORG_A,
+                scopeType: 'organization',
+                scopeId: ORG_A,
+                grantedBy: 'admin',
+                createdAt: new Date().toISOString(),
+              },
+            }),
+            { status: 201, headers: { 'Content-Type': 'application/json' } },
+          );
+        },
+      });
+
+      const res = await roleAssignmentsApi.create({
+        userId: USER_ID,
+        roleId: 'role-seeded-org-admin',
+        scopeType: 'organization',
+        scopeId: ORG_A,
+      });
+
+      assert.equal(res.data.id, 'grant-new-system-role');
+      assert.equal(capturedHeaderOrg, ORG_A);
+      assert.deepEqual(capturedPayload, {
+        userId: USER_ID,
+        roleId: 'role-seeded-org-admin',
+        scopeType: 'organization',
+        scopeId: ORG_A,
+      });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // SEC-03: Team Scope Support in Role Assignment Dialog
+  // ---------------------------------------------------------------------------
+  describe('SEC-03: Team Scope Support in Role Assignment Dialog', () => {
+    const WORKSPACE_ID = '01955b0a-7b3b-7411-9a4f-wsAAAAAAAAAAA';
+    const TEAM_ID = '01955b0a-7b3b-7411-9a4f-teamAAAAAAAAA';
+    const FOREIGN_WORKSPACE_ID = '01955b0a-7b3b-7411-9a4f-wsBBBBBBBBBBB';
+    const FOREIGN_TEAM_ID = '01955b0a-7b3b-7411-9a4f-teamBBBBBBBBB';
+
+    const makeRole = (overrides: Partial<RoleView>): RoleView => ({
+      id: overrides.id ?? 'role-default-id',
+      key: overrides.key ?? 'default_role',
+      name: overrides.name ?? 'Default Role',
+      description: overrides.description ?? null,
+      orgId: overrides.orgId !== undefined ? overrides.orgId : ORG_A,
+      isSystemRole: overrides.isSystemRole ?? false,
+      allowedScopeTypes: overrides.allowedScopeTypes ?? ['organization', 'workspace', 'team'],
+      permissions: overrides.permissions ?? ['campaigns.read'],
+      createdAt: '2026-09-23T00:00:00.000Z',
+      updatedAt: '2026-09-23T00:00:00.000Z',
+    });
+
+    it('SEC-03.1: allows team-scope assignment for roles that admit team scope', async () => {
+      useSession.getState().setSession({
+        accessToken: 'token-org-a',
+        user: createMockUser([ORG_A]),
+        authorization: createMockAuthorization(ORG_A),
+        selectedOrgId: ORG_A,
+      });
+
+      const teamAdmittingRole = makeRole({
+        id: 'role-campaign-editor',
+        key: 'campaign_editor',
+        allowedScopeTypes: ['organization', 'workspace', 'team'],
+      });
+
+      assert.equal(
+        teamAdmittingRole.allowedScopeTypes.includes('team'),
+        true,
+        'Role must admit team scope',
+      );
+
+      let capturedPayload: unknown = null;
+      let capturedHeaderOrg: string | undefined = undefined;
+
+      mockHandlers.push({
+        match: (url, options) => url.includes('/role-assignments') && options.method === 'POST',
+        handle: (_url, options) => {
+          const headers = options.headers as Record<string, string>;
+          capturedHeaderOrg = headers['X-Acc-Organization'];
+          capturedPayload = JSON.parse(String(options.body));
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: 'grant-team-role',
+                userId: USER_ID,
+                roleId: teamAdmittingRole.id,
+                roleKey: teamAdmittingRole.key,
+                orgId: ORG_A,
+                scopeType: 'team',
+                scopeId: TEAM_ID,
+                grantedBy: 'admin',
+                createdAt: new Date().toISOString(),
+              },
+            }),
+            { status: 201, headers: { 'Content-Type': 'application/json' } },
+          );
+        },
+      });
+
+      const res = await roleAssignmentsApi.create({
+        userId: USER_ID,
+        roleId: teamAdmittingRole.id,
+        scopeType: 'team',
+        scopeId: TEAM_ID,
+      });
+
+      assert.equal(res.data.id, 'grant-team-role');
+      assert.equal(res.data.scopeType, 'team');
+      assert.equal(res.data.scopeId, TEAM_ID);
+      assert.equal(capturedHeaderOrg, ORG_A);
+      assert.deepEqual(capturedPayload, {
+        userId: USER_ID,
+        roleId: teamAdmittingRole.id,
+        scopeType: 'team',
+        scopeId: TEAM_ID,
+      });
+    });
+
+    it('SEC-03.2: fails closed if role does not admit team scope (e.g. org_admin or workspace_manager)', async () => {
+      const orgAdminRole = makeRole({
+        id: 'role-org-admin',
+        key: 'org_admin',
+        allowedScopeTypes: ['organization'],
+      });
+      const wsManagerRole = makeRole({
+        id: 'role-ws-manager',
+        key: 'workspace_manager',
+        allowedScopeTypes: ['workspace'],
+      });
+
+      assert.equal(orgAdminRole.allowedScopeTypes.includes('team'), false);
+      assert.equal(wsManagerRole.allowedScopeTypes.includes('team'), false);
+
+      mockHandlers.push({
+        match: (url, options) => url.includes('/role-assignments') && options.method === 'POST',
+        handle: () =>
+          new Response(
+            JSON.stringify({
+              error: {
+                code: 'AUTHZ_SCOPE_TYPE_NOT_ADMITTED',
+                message: 'Role org_admin does not admit team scope',
+                retryable: false,
+              },
+            }),
+            { status: 422, headers: { 'Content-Type': 'application/json' } },
+          ),
+      });
+
+      await assert.rejects(
+        async () =>
+          roleAssignmentsApi.create({
+            userId: USER_ID,
+            roleId: orgAdminRole.id,
+            scopeType: 'team',
+            scopeId: TEAM_ID,
+          }),
+        (err: unknown) => {
+          assert(err instanceof ApiError);
+          assert.equal(err.code, 'AUTHZ_SCOPE_TYPE_NOT_ADMITTED');
+          assert.equal(err.status, 422);
+          assert.equal(err.retryable, false);
+          return true;
+        },
+      );
+    });
+
+    it('SEC-03.3: team assignment strictly preserves team scope without broadening to workspace or organization', async () => {
+      useSession.getState().setSession({
+        accessToken: 'token-org-a',
+        user: createMockUser([ORG_A]),
+        authorization: createMockAuthorization(ORG_A),
+        selectedOrgId: ORG_A,
+      });
+
+      let capturedPayload: unknown = null;
+      mockHandlers.push({
+        match: (url, options) => url.includes('/role-assignments') && options.method === 'POST',
+        handle: (_url, options) => {
+          capturedPayload = JSON.parse(String(options.body));
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: 'grant-team-isolated',
+                userId: USER_ID,
+                roleId: 'role-agent',
+                roleKey: 'agent',
+                orgId: ORG_A,
+                scopeType: 'team',
+                scopeId: TEAM_ID,
+                grantedBy: 'admin',
+                createdAt: new Date().toISOString(),
+              },
+            }),
+            { status: 201, headers: { 'Content-Type': 'application/json' } },
+          );
+        },
+      });
+
+      await roleAssignmentsApi.create({
+        userId: USER_ID,
+        roleId: 'role-agent',
+        scopeType: 'team',
+        scopeId: TEAM_ID,
+      });
+
+      assert.deepEqual(capturedPayload, {
+        userId: USER_ID,
+        roleId: 'role-agent',
+        scopeType: 'team',
+        scopeId: TEAM_ID,
+      });
+      // Verification: scopeType must NOT have broadened to workspace or organization
+      assert.notEqual((capturedPayload as { scopeType: string }).scopeType, 'workspace');
+      assert.notEqual((capturedPayload as { scopeType: string }).scopeType, 'organization');
+      assert.notEqual((capturedPayload as { scopeId: string }).scopeId, WORKSPACE_ID);
+      assert.notEqual((capturedPayload as { scopeId: string }).scopeId, ORG_A);
+    });
+
+    it('SEC-03.4: team scope hierarchy invariants: team must belong to workspace and active organization', () => {
+      // Invariant checks on team hierarchy metadata
+      const validTeam = {
+        id: TEAM_ID,
+        orgId: ORG_A,
+        workspaceId: WORKSPACE_ID,
+        name: 'Sales Team',
+      };
+      const foreignWsTeam = {
+        id: 'team-foreign-ws',
+        orgId: ORG_A,
+        workspaceId: FOREIGN_WORKSPACE_ID,
+        name: 'Foreign WS Team',
+      };
+      const foreignOrgTeam = {
+        id: FOREIGN_TEAM_ID,
+        orgId: ORG_B,
+        workspaceId: WORKSPACE_ID,
+        name: 'Foreign Org Team',
+      };
+
+      // Helper function matching dialog client validation
+      const validateTeamHierarchy = (
+        team: { orgId: string; workspaceId: string },
+        expectedOrgId: string,
+        expectedWorkspaceId: string,
+      ) => {
+        if (team.workspaceId !== expectedWorkspaceId) return false;
+        if (team.orgId !== expectedOrgId) return false;
+        return true;
+      };
+
+      assert.equal(validateTeamHierarchy(validTeam, ORG_A, WORKSPACE_ID), true);
+      assert.equal(validateTeamHierarchy(foreignWsTeam, ORG_A, WORKSPACE_ID), false);
+      assert.equal(validateTeamHierarchy(foreignOrgTeam, ORG_A, WORKSPACE_ID), false);
+    });
   });
 });

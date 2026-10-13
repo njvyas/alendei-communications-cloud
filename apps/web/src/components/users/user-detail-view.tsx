@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ApiError,
@@ -47,6 +47,16 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
   const [confirmAction, setConfirmAction] = useState<'disable' | 'reactivate' | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [isSubmittingAction, setIsSubmittingAction] = useState(false);
+
+  // Reset open dialogs and transient state if organization switches (SEC-05)
+  useEffect(() => {
+    setIsAssignDialogOpen(false);
+    setRevokingAssignment(null);
+    setIsEditingPhone(false);
+    setPhoneError(null);
+    setConfirmAction(null);
+    setActionError(null);
+  }, [selectedOrgId]);
 
   // Fetch single user detail
   const {

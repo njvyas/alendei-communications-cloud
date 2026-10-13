@@ -78,9 +78,11 @@ let inMemorySelectedOrgId: string | null = null;
 
 /** Session epoch counter to invalidate stale in-flight refresh requests on logout */
 let authSessionEpoch = 0;
+let lastNotifiedEpoch = -1;
 
 export function invalidateSessionEpoch(): void {
   authSessionEpoch++;
+  lastNotifiedEpoch = -1;
 }
 
 export function getSessionEpoch(): number {
@@ -93,6 +95,9 @@ export function getAccessToken(): string | null {
 
 export function setAccessToken(token: string | null): void {
   inMemoryAccessToken = token;
+  if (token !== null) {
+    lastNotifiedEpoch = -1;
+  }
 }
 
 export function getSelectedOrganization(): string | null {
@@ -140,6 +145,18 @@ function notifyAuthFailure(): void {
   }
 }
 
+/**
+ * Executes terminal authentication teardown: clears in-memory access token and
+ * notifies listeners once per session epoch to prevent notification storms.
+ */
+function handleTerminalAuthFailure(): void {
+  setAccessToken(null);
+  if (lastNotifiedEpoch !== authSessionEpoch) {
+    lastNotifiedEpoch = authSessionEpoch;
+    notifyAuthFailure();
+  }
+}
+
 // -----------------------------------------------------------------------------
 // Deduplicated Refresh Mechanism with Race Prevention
 // -----------------------------------------------------------------------------
@@ -169,15 +186,15 @@ export async function refreshAccessToken(): Promise<string | null> {
         },
       });
 
-      // Race condition check: If logout occurred while refresh was in-flight, discard response
+      // Race condition check: If logout or new session occurred while refresh was in-flight, discard response
       if (authSessionEpoch !== currentEpoch) {
-        setAccessToken(null);
         return null;
       }
 
       if (!response.ok) {
-        setAccessToken(null);
-        notifyAuthFailure();
+        if (authSessionEpoch === currentEpoch) {
+          handleTerminalAuthFailure();
+        }
         return null;
       }
 
@@ -191,12 +208,14 @@ export async function refreshAccessToken(): Promise<string | null> {
         return newToken;
       }
 
-      setAccessToken(null);
-      notifyAuthFailure();
+      if (authSessionEpoch === currentEpoch) {
+        handleTerminalAuthFailure();
+      }
       return null;
     } catch {
-      setAccessToken(null);
-      notifyAuthFailure();
+      if (authSessionEpoch === currentEpoch) {
+        handleTerminalAuthFailure();
+      }
       return null;
     } finally {
       refreshPromise = null;
@@ -212,6 +231,7 @@ export async function refreshAccessToken(): Promise<string | null> {
 export async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { body, headers, auth = true, skipTenant = false, _retried = false, ...rest } = options;
   const baseUrl = getBaseUrl();
+  const requestEpoch = authSessionEpoch;
 
   const reqHeaders: Record<string, string> = {
     Accept: 'application/json',
@@ -282,13 +302,29 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 
   // 4. Handle 401 Unauthorized with controlled refresh deduplication
   if (response.status === 401) {
-    const isRefreshEligible =
-      auth &&
-      !_retried &&
-      path !== '/auth/login' &&
-      path !== '/auth/refresh' &&
-      path !== '/auth/logout';
+    // 4.1 Ordinary login credential failure: do not clear session or notify auth failure
+    if (path === '/auth/login') {
+      throw toApiError(response, payload);
+    }
 
+    // 4.2 Stale request from previous session epoch: discard without affecting newer session
+    if (requestEpoch !== authSessionEpoch) {
+      throw toApiError(response, payload);
+    }
+
+    // 4.3 Terminal refresh failure on direct /auth/refresh call
+    if (path === '/auth/refresh') {
+      handleTerminalAuthFailure();
+      throw toApiError(response, payload);
+    }
+
+    // 4.4 Unauthenticated request: do not clear unrelated session state or notify auth failure
+    if (!auth) {
+      throw toApiError(response, payload);
+    }
+
+    // 4.5 Authenticated request: refresh once if eligible
+    const isRefreshEligible = !_retried && path !== '/auth/logout';
     if (isRefreshEligible) {
       const newToken = await refreshAccessToken();
       if (newToken) {
@@ -298,12 +334,13 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
           _retried: true,
         });
       }
+      // If refresh failed, handleTerminalAuthFailure() was already invoked by refreshAccessToken()
+      throw toApiError(response, payload);
     }
 
-    if (path === '/auth/refresh') {
-      setAccessToken(null);
-      notifyAuthFailure();
-    }
+    // 4.6 Terminal authentication failure for authenticated requests (e.g. retried request failed with 401,
+    // or non-refreshable authenticated request).
+    handleTerminalAuthFailure();
 
     throw toApiError(response, payload);
   }
@@ -416,6 +453,7 @@ export const authApi = {
       auth: false,
     });
     if (res.data?.accessToken) {
+      invalidateSessionEpoch();
       setAccessToken(res.data.accessToken);
     }
     return res;
@@ -433,7 +471,11 @@ export const authApi = {
   },
 
   async logout(): Promise<void> {
+    const targetToken = inMemoryAccessToken;
+    const targetOrgId = inMemorySelectedOrgId;
+    const logoutEpoch = authSessionEpoch;
     invalidateSessionEpoch();
+
     try {
       await apiFetch<void>('/auth/logout', {
         method: 'POST',
@@ -441,9 +483,16 @@ export const authApi = {
     } catch {
       // If the session is already expired or server returns 401, local teardown still completes cleanly
     } finally {
-      setAccessToken(null);
-      setSelectedOrganization(null);
-      notifyAuthFailure();
+      const isCurrentLogout = authSessionEpoch === logoutEpoch + 1;
+      if (
+        isCurrentLogout &&
+        (inMemoryAccessToken === targetToken || inMemoryAccessToken === null)
+      ) {
+        handleTerminalAuthFailure();
+      }
+      if (isCurrentLogout && inMemorySelectedOrgId === targetOrgId) {
+        setSelectedOrganization(null);
+      }
     }
   },
 

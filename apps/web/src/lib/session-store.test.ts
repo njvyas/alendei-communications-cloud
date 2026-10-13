@@ -9,7 +9,12 @@ import {
   type EffectiveAuthorization,
   type UserIdentity,
 } from './api-client';
-import { getActiveOrganizationGrants, useSession } from './session-store';
+import {
+  getActiveOrganizationGrants,
+  getHeldOrganizationPermissions,
+  hasPermission,
+  useSession,
+} from './session-store';
 
 function createMockUser(
   authorizedOrganizationIds: string[] = [],
@@ -315,6 +320,473 @@ describe('Session Store & Organization Context', () => {
 
     assert.throws(() => {
       useSession.getState().selectOrganization('org-999-unauthorized');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // SEC-01: Downward-Only Scope Inheritance & Permission Evaluation
+  // ---------------------------------------------------------------------------
+  describe('SEC-01: Canonical Scope Inheritance & Permission Evaluation', () => {
+    const ORG_A = '01955b0a-7b3b-7411-9a4f-org-alpha-111';
+    const ORG_B = '01955b0a-7b3b-7411-9a4f-org-beta--222';
+    const RESELLER_R1 = '01955b0a-7b3b-7411-9a4f-reseller-r1';
+    const RESELLER_R2 = '01955b0a-7b3b-7411-9a4f-reseller-r2';
+    const WS_1 = '01955b0a-7b3b-7411-9a4f-workspace-01';
+    const TEAM_1 = '01955b0a-7b3b-7411-9a4f-team-----01';
+
+    it('team grant cannot authorize an organization-level operation', () => {
+      // Actor holds teams.update and audit.read ONLY at team scope
+      useSession.getState().setSession({
+        accessToken: 'token-team-test',
+        user: createMockUser([ORG_A]),
+        authorization: {
+          actorType: 'user',
+          userId: 'user-team',
+          apiKeyId: null,
+          grants: [
+            {
+              roleId: 'role-team-lead',
+              roleKey: 'team_lead',
+              scopeType: 'team',
+              scopeId: TEAM_1,
+              orgId: ORG_A,
+              permissions: ['teams.update', 'audit.read', 'workspaces.read'],
+            },
+          ],
+          organizationIds: [ORG_A],
+          isPlatformAdmin: false,
+        },
+        selectedOrgId: ORG_A,
+      });
+
+      // Operation at organization level (default target) must fail closed
+      assert.equal(hasPermission('teams.update'), false);
+      assert.equal(hasPermission('audit.read'), false);
+      assert.equal(hasPermission('workspaces.read'), false);
+
+      // Nor does it appear in held organization permissions
+      const held = getHeldOrganizationPermissions();
+      assert.equal(held.has('teams.update'), false);
+      assert.equal(held.has('audit.read'), false);
+    });
+
+    it('workspace grant cannot authorize an organization-level operation', () => {
+      // Actor holds workspaces.update and users.disable ONLY at workspace scope
+      useSession.getState().setSession({
+        accessToken: 'token-ws-test',
+        user: createMockUser([ORG_A]),
+        authorization: {
+          actorType: 'user',
+          userId: 'user-ws',
+          apiKeyId: null,
+          grants: [
+            {
+              roleId: 'role-ws-manager',
+              roleKey: 'workspace_manager',
+              scopeType: 'workspace',
+              scopeId: WS_1,
+              orgId: ORG_A,
+              permissions: ['workspaces.update', 'users.disable', 'workspaces.read'],
+            },
+          ],
+          organizationIds: [ORG_A],
+          isPlatformAdmin: false,
+        },
+        selectedOrgId: ORG_A,
+      });
+
+      // Operation at organization level must fail closed
+      assert.equal(hasPermission('workspaces.update'), false);
+      assert.equal(hasPermission('users.disable'), false);
+      assert.equal(hasPermission('workspaces.read'), false);
+
+      // Nor does it appear in held organization permissions
+      const held = getHeldOrganizationPermissions();
+      assert.equal(held.has('workspaces.update'), false);
+      assert.equal(held.has('users.disable'), false);
+    });
+
+    it('organization grant behaves according to the canonical permission rules', () => {
+      // Actor holds roles.read and workspaces.create at organization scope for ORG_A
+      useSession.getState().setSession({
+        accessToken: 'token-org-test',
+        user: createMockUser([ORG_A, ORG_B]),
+        authorization: {
+          actorType: 'user',
+          userId: 'user-org',
+          apiKeyId: null,
+          grants: [
+            {
+              roleId: 'role-org-admin',
+              roleKey: 'org_admin',
+              scopeType: 'organization',
+              scopeId: ORG_A,
+              orgId: ORG_A,
+              permissions: ['roles.read', 'workspaces.create', 'workspaces.read'],
+            },
+          ],
+          organizationIds: [ORG_A, ORG_B],
+          isPlatformAdmin: false,
+        },
+        selectedOrgId: ORG_A,
+      });
+
+      // Authorizes operations at active organization scope (ORG_A)
+      assert.equal(hasPermission('roles.read'), true);
+      assert.equal(hasPermission('workspaces.create'), true);
+      assert.equal(hasPermission('workspaces.read'), true);
+
+      // Does NOT authorize operations when active organization context is changed to ORG_B
+      useSession.getState().selectOrganization(ORG_B);
+      assert.equal(hasPermission('roles.read'), false);
+      assert.equal(hasPermission('workspaces.create'), false);
+      assert.equal(hasPermission('workspaces.read'), false);
+    });
+
+    it('organization grant cannot be used to claim authorization for foreign scopes or caller-supplied arguments', () => {
+      // Actor holds organization-scoped grant for ORG_A only
+      useSession.getState().setSession({
+        accessToken: 'token-foreign-scope-test',
+        user: createMockUser([ORG_A, ORG_B]),
+        authorization: {
+          actorType: 'user',
+          userId: 'user-org-alpha',
+          apiKeyId: null,
+          grants: [
+            {
+              roleId: 'role-org-admin',
+              roleKey: 'org_admin',
+              scopeType: 'organization',
+              scopeId: ORG_A,
+              orgId: ORG_A,
+              permissions: ['workspaces.read', 'workspaces.create', 'roles.read'],
+            },
+          ],
+          organizationIds: [ORG_A, ORG_B],
+          isPlatformAdmin: false,
+        },
+        selectedOrgId: ORG_A,
+      });
+
+      // Existing active-organization permissions work
+      assert.equal(hasPermission('workspaces.read'), true);
+      assert.equal(hasPermission('workspaces.create'), true);
+      assert.equal(hasPermission('roles.read'), true);
+
+      // Caller cannot supply a foreign scope argument to influence permission result
+      const untypedHasPermission = hasPermission as unknown as (
+        perm: string,
+        foreignScope?: unknown,
+      ) => boolean;
+
+      // Evaluates strictly against active ORG_A context where workspaces.read is held
+      assert.equal(
+        untypedHasPermission('workspaces.read', {
+          scopeType: 'workspace',
+          scopeId: 'foreign-ws-in-org-b',
+        }),
+        true,
+      );
+
+      // When switching to ORG_B, the ORG_A grant cannot authorize ORG_B, even if caller passes scopeId ORG_A
+      useSession.getState().selectOrganization(ORG_B);
+      assert.equal(hasPermission('workspaces.read'), false);
+      assert.equal(hasPermission('workspaces.create'), false);
+      assert.equal(hasPermission('roles.read'), false);
+      assert.equal(
+        untypedHasPermission('workspaces.read', {
+          scopeType: 'organization',
+          scopeId: ORG_A,
+        }),
+        false,
+      );
+    });
+
+    it('valid reseller grant is recognized for an organization within that reseller', () => {
+      // User belongs to RESELLER_R1 and active organization is under RESELLER_R1
+      const user = createMockUser([ORG_A]);
+      (user as { tenant: { resellerId: string | null } }).tenant.resellerId = RESELLER_R1;
+
+      useSession.getState().setSession({
+        accessToken: 'token-reseller-test',
+        user,
+        authorization: {
+          actorType: 'user',
+          userId: 'user-reseller',
+          apiKeyId: null,
+          grants: [
+            {
+              roleId: 'role-reseller-admin',
+              roleKey: 'reseller_admin',
+              scopeType: 'reseller',
+              scopeId: RESELLER_R1,
+              orgId: null,
+              permissions: ['workspaces.read', 'audit.read'],
+            },
+          ],
+          organizationIds: [ORG_A],
+          isPlatformAdmin: false,
+        },
+        selectedOrgId: ORG_A,
+      });
+
+      // Reseller grant covers organizations beneath RESELLER_R1
+      assert.equal(hasPermission('workspaces.read'), true);
+      assert.equal(hasPermission('audit.read'), true);
+
+      // Held organization permissions include reseller-derived permissions
+      const held = getHeldOrganizationPermissions();
+      assert.ok(held.has('workspaces.read'));
+      assert.ok(held.has('audit.read'));
+
+      // Active organization grants include the covering reseller grant
+      const activeGrants = getActiveOrganizationGrants();
+      assert.equal(
+        activeGrants.some((g) => g.scopeType === 'reseller'),
+        true,
+      );
+    });
+
+    it('reseller grant does not confer access outside that reseller', () => {
+      // User holds grant for RESELLER_R1, but active organization is under RESELLER_R2
+      const user = createMockUser([ORG_B]);
+      (user as { tenant: { resellerId: string | null } }).tenant.resellerId = RESELLER_R2;
+
+      useSession.getState().setSession({
+        accessToken: 'token-reseller-mismatch',
+        user,
+        authorization: {
+          actorType: 'user',
+          userId: 'user-reseller',
+          apiKeyId: null,
+          grants: [
+            {
+              roleId: 'role-reseller-admin',
+              roleKey: 'reseller_admin',
+              scopeType: 'reseller',
+              scopeId: RESELLER_R1,
+              orgId: null,
+              permissions: ['workspaces.read', 'audit.read'],
+            },
+          ],
+          organizationIds: [ORG_B],
+          isPlatformAdmin: false,
+        },
+        selectedOrgId: ORG_B,
+      });
+
+      // Must NOT confer access to organization belonging to a different reseller
+      assert.equal(hasPermission('workspaces.read'), false);
+      assert.equal(hasPermission('audit.read'), false);
+
+      const held = getHeldOrganizationPermissions();
+      assert.equal(held.has('workspaces.read'), false);
+
+      const activeGrants = getActiveOrganizationGrants();
+      assert.equal(
+        activeGrants.some((g) => g.scopeType === 'reseller'),
+        false,
+      );
+    });
+
+    it('platform admin can exercise legitimate SUPER_ADMIN_PERMISSIONS', () => {
+      useSession.getState().setSession({
+        accessToken: 'token-super-admin',
+        user: {
+          ...createMockUser([ORG_A]),
+          tenant: { orgId: null, workspaceId: null, resellerId: null, isPlatformAdmin: true },
+        },
+        authorization: {
+          actorType: 'user',
+          userId: 'user-platform-admin',
+          apiKeyId: null,
+          grants: [],
+          organizationIds: [ORG_A],
+          isPlatformAdmin: true,
+        },
+        selectedOrgId: ORG_A,
+      });
+
+      // Legitimate tenancy administration and platform permissions in SUPER_ADMIN_PERMISSIONS
+      assert.equal(hasPermission('audit.read'), true);
+      assert.equal(hasPermission('organizations.read'), true);
+      assert.equal(hasPermission('workspaces.read'), true);
+      assert.equal(hasPermission('platform.tenants.manage'), true);
+      assert.equal(hasPermission('platform.audit.read'), true);
+
+      const held = getHeldOrganizationPermissions();
+      assert.ok(held.has('audit.read'));
+      assert.ok(held.has('organizations.read'));
+      assert.ok(held.has('workspaces.read'));
+    });
+
+    it('platform admin cannot implicitly authorize an unknown or malformed permission', () => {
+      useSession.getState().setSession({
+        accessToken: 'token-super-admin',
+        user: {
+          ...createMockUser([ORG_A]),
+          tenant: { orgId: null, workspaceId: null, resellerId: null, isPlatformAdmin: true },
+        },
+        authorization: {
+          actorType: 'user',
+          userId: 'user-platform-admin',
+          apiKeyId: null,
+          grants: [],
+          organizationIds: [ORG_A],
+          isPlatformAdmin: true,
+        },
+        selectedOrgId: ORG_A,
+      });
+
+      // Nonexistent, malformed, or arbitrary permissions must fail closed
+      assert.equal(hasPermission('nonexistent.action'), false);
+      assert.equal(hasPermission('system.admin.bypass'), false);
+      assert.equal(hasPermission('*'), false);
+      assert.equal(hasPermission(''), false);
+
+      const held = getHeldOrganizationPermissions();
+      assert.equal(held.has('nonexistent.action'), false);
+    });
+
+    it('platform admin cannot implicitly authorize tenant-content permissions', () => {
+      useSession.getState().setSession({
+        accessToken: 'token-super-admin',
+        user: {
+          ...createMockUser([ORG_A]),
+          tenant: { orgId: null, workspaceId: null, resellerId: null, isPlatformAdmin: true },
+        },
+        authorization: {
+          actorType: 'user',
+          userId: 'user-platform-admin',
+          apiKeyId: null,
+          grants: [],
+          organizationIds: [ORG_A],
+          isPlatformAdmin: true,
+        },
+        selectedOrgId: ORG_A,
+      });
+
+      // Tenant-content permissions MUST NOT be conferred via platform admin flag
+      assert.equal(hasPermission('contacts.read'), false);
+      assert.equal(hasPermission('contacts.manage'), false);
+      assert.equal(hasPermission('templates.read'), false);
+      assert.equal(hasPermission('templates.manage'), false);
+      assert.equal(hasPermission('suppressions.read'), false);
+      assert.equal(hasPermission('suppressions.manage'), false);
+      assert.equal(hasPermission('messages.read'), false);
+      assert.equal(hasPermission('messages.send'), false);
+
+      // Held organization permissions for platform admin do not include tenant content
+      const held = getHeldOrganizationPermissions();
+      assert.equal(held.has('contacts.read'), false);
+      assert.equal(held.has('templates.read'), false);
+      assert.equal(held.has('messages.send'), false);
+
+      // Even if a platform grant explicitly lists a tenant-content permission,
+      // grantConfers enforces that platform scope cannot confer tenant-content keys
+      useSession.getState().setSession({
+        accessToken: 'token-bogus-platform-grant',
+        user: createMockUser([ORG_A]),
+        authorization: {
+          actorType: 'user',
+          userId: 'user-bogus',
+          apiKeyId: null,
+          grants: [
+            {
+              roleId: 'role-bogus',
+              roleKey: 'bogus_role',
+              scopeType: 'platform',
+              scopeId: null,
+              orgId: null,
+              permissions: ['contacts.read'],
+            },
+          ],
+          organizationIds: [ORG_A],
+          isPlatformAdmin: false,
+        },
+        selectedOrgId: ORG_A,
+      });
+
+      assert.equal(hasPermission('contacts.read'), false);
+    });
+
+    it('platform admin cannot access explicit platform-catalogue permissions using admin flag alone', () => {
+      useSession.getState().setSession({
+        accessToken: 'token-super-admin',
+        user: {
+          ...createMockUser([ORG_A]),
+          tenant: { orgId: null, workspaceId: null, resellerId: null, isPlatformAdmin: true },
+        },
+        authorization: {
+          actorType: 'user',
+          userId: 'user-platform-admin',
+          apiKeyId: null,
+          grants: [],
+          organizationIds: [ORG_A],
+          isPlatformAdmin: true,
+        },
+        selectedOrgId: ORG_A,
+      });
+
+      // Explicit platform catalogue permissions require genuine qualifying grant
+      assert.equal(hasPermission('providers.read'), false);
+      assert.equal(hasPermission('providers.manage'), false);
+      assert.equal(hasPermission('providers.test_send'), false);
+
+      const held = getHeldOrganizationPermissions();
+      assert.equal(held.has('providers.read'), false);
+      assert.equal(held.has('providers.manage'), false);
+      assert.equal(held.has('providers.test_send'), false);
+    });
+
+    it('platform admin can access platform-catalogue permissions when holding genuine platform grant', () => {
+      useSession.getState().setSession({
+        accessToken: 'token-super-admin-with-grant',
+        user: {
+          ...createMockUser([ORG_A]),
+          tenant: { orgId: null, workspaceId: null, resellerId: null, isPlatformAdmin: true },
+        },
+        authorization: {
+          actorType: 'user',
+          userId: 'user-platform-admin',
+          apiKeyId: null,
+          grants: [
+            {
+              roleId: 'role-providers-manager',
+              roleKey: 'providers_manager',
+              scopeType: 'platform',
+              scopeId: null,
+              orgId: null,
+              permissions: ['providers.read', 'providers.manage', 'providers.test_send'],
+            },
+          ],
+          organizationIds: [ORG_A],
+          isPlatformAdmin: true,
+        },
+        selectedOrgId: ORG_A,
+      });
+
+      // Succeeded via genuine qualifying platform grant
+      assert.equal(hasPermission('providers.read'), true);
+      assert.equal(hasPermission('providers.manage'), true);
+      assert.equal(hasPermission('providers.test_send'), true);
+
+      const held = getHeldOrganizationPermissions();
+      assert.ok(held.has('providers.read'));
+      assert.ok(held.has('providers.manage'));
+      assert.ok(held.has('providers.test_send'));
+    });
+
+    it('missing authorization fails closed', () => {
+      useSession.getState().clearSession();
+
+      assert.equal(useSession.getState().authorization, null);
+      assert.equal(hasPermission('workspaces.read'), false);
+      assert.equal(hasPermission('audit.read'), false);
+      assert.equal(hasPermission('roles.read'), false);
+      assert.equal(hasPermission('contacts.read'), false);
+      assert.equal(getHeldOrganizationPermissions().size, 0);
+      assert.deepEqual(getActiveOrganizationGrants(), []);
     });
   });
 });

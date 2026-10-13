@@ -6,13 +6,15 @@ import {
   ApiError,
   roleAssignmentsApi,
   rolesApi,
+  teamsApi,
   workspacesApi,
   type CreateRoleAssignmentInput,
   type RoleView,
   type ScopeLevel,
+  type TeamView,
   type WorkspaceItem,
-} from '@/lib/api-client';
-import { useSession } from '@/lib/session-store';
+} from '../../lib/api-client';
+import { useSession } from '../../lib/session-store';
 
 interface AssignRoleDialogProps {
   readonly isOpen: boolean;
@@ -20,6 +22,24 @@ interface AssignRoleDialogProps {
   readonly userEmail: string;
   readonly onClose: () => void;
   readonly onSuccess: () => void;
+}
+
+/**
+ * Determines whether a role is eligible for assignment within tenant administration.
+ *
+ * Requirements (RBAC.md §§3-4, §§7-8):
+ * 1. Platform-level roles (orgId === null) are strictly excluded from tenant administration.
+ * 2. Roles must belong to the active organization (orgId === activeOrgId).
+ * 3. Seeded system roles (isSystemRole === true) that belong to the active organization
+ *    are eligible for tenant assignment within their admitted scope types.
+ * 4. The role must admit at least one tenant scope level ('organization', 'workspace', 'team').
+ */
+export function isAssignableTenantRole(role: RoleView, activeOrgId: string | null): boolean {
+  if (role.orgId === null) return false;
+  if (activeOrgId && role.orgId !== activeOrgId) return false;
+  return role.allowedScopeTypes.some(
+    (scope) => scope === 'organization' || scope === 'workspace' || scope === 'team',
+  );
 }
 
 export function AssignRoleDialog({
@@ -35,6 +55,7 @@ export function AssignRoleDialog({
   const [selectedRoleId, setSelectedRoleId] = useState<string>('');
   const [selectedScopeType, setSelectedScopeType] = useState<ScopeLevel | null>(null);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>('');
+  const [selectedTeamId, setSelectedTeamId] = useState<string>('');
   const [idempotencyKey, setIdempotencyKey] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -47,6 +68,7 @@ export function AssignRoleDialog({
       setSelectedRoleId('');
       setSelectedScopeType(null);
       setSelectedWorkspaceId('');
+      setSelectedTeamId('');
       setErrorMessage(null);
       setRejectedPermissions(null);
     }
@@ -70,13 +92,26 @@ export function AssignRoleDialog({
     enabled: isOpen && !!selectedOrgId,
   });
 
+  // Fetch teams for active organization and selected workspace when team scope is active
+  const {
+    data: teamsData,
+    isLoading: teamsLoading,
+    error: teamsError,
+  } = useQuery({
+    queryKey: ['teams', 'list', selectedOrgId, selectedWorkspaceId],
+    queryFn: ({ signal }) =>
+      teamsApi.list({ workspaceId: selectedWorkspaceId, status: 'active' }, signal),
+    enabled: isOpen && !!selectedOrgId && selectedScopeType === 'team' && !!selectedWorkspaceId,
+  });
+
   const allRoles: readonly RoleView[] = rolesData?.data ?? [];
-  // Filter assignable roles: Platform roles (orgId === null) and system roles (isSystemRole === true)
-  // are protected from tenant role assignment.
-  const assignableRoles = allRoles.filter((r) => r.orgId !== null && !r.isSystemRole);
+  // Filter assignable roles: Platform roles (orgId === null) are protected from tenant role assignment.
+  // Seeded system tenant roles and custom tenant roles are assignable within their admitted scope types.
+  const assignableRoles = allRoles.filter((r) => isAssignableTenantRole(r, selectedOrgId));
 
   const selectedRole = allRoles.find((r) => r.id === selectedRoleId);
   const workspaces: readonly WorkspaceItem[] = workspacesData?.data ?? [];
+  const teams: readonly TeamView[] = teamsData?.data ?? [];
 
   // Allowed scope types for the selected role
   const roleAllowedScopes: readonly ScopeLevel[] = selectedRole?.allowedScopeTypes ?? [];
@@ -86,6 +121,7 @@ export function AssignRoleDialog({
     setSelectedRoleId(newRoleId);
     setSelectedScopeType(null);
     setSelectedWorkspaceId('');
+    setSelectedTeamId('');
     setErrorMessage(null);
     setRejectedPermissions(null);
   };
@@ -95,10 +131,40 @@ export function AssignRoleDialog({
     setSelectedScopeType(scope);
     setErrorMessage(null);
     setRejectedPermissions(null);
-    if (scope === 'workspace' && workspaces.length > 0 && !selectedWorkspaceId) {
+    if (
+      (scope === 'workspace' || scope === 'team') &&
+      workspaces.length > 0 &&
+      !selectedWorkspaceId
+    ) {
       setSelectedWorkspaceId(workspaces[0]!.id);
     }
+    if (scope !== 'team') {
+      setSelectedTeamId('');
+    }
   };
+
+  // Ensure workspace selection when entering workspace or team scope
+  useEffect(() => {
+    if (
+      (selectedScopeType === 'workspace' || selectedScopeType === 'team') &&
+      workspaces.length > 0
+    ) {
+      if (!selectedWorkspaceId || !workspaces.some((w) => w.id === selectedWorkspaceId)) {
+        setSelectedWorkspaceId(workspaces[0]!.id);
+      }
+    }
+  }, [selectedScopeType, workspaces, selectedWorkspaceId]);
+
+  // Ensure team selection when entering team scope
+  useEffect(() => {
+    if (selectedScopeType === 'team' && teams.length > 0) {
+      if (!selectedTeamId || !teams.some((t) => t.id === selectedTeamId)) {
+        setSelectedTeamId(teams[0]!.id);
+      }
+    } else if (selectedScopeType !== 'team') {
+      setSelectedTeamId('');
+    }
+  }, [selectedScopeType, teams, selectedTeamId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -110,8 +176,23 @@ export function AssignRoleDialog({
       return;
     }
 
+    if (selectedRole.orgId === null) {
+      setErrorMessage('Platform-level roles cannot be granted through tenant administration.');
+      return;
+    }
+
+    if (selectedOrgId && selectedRole.orgId !== selectedOrgId) {
+      setErrorMessage('Roles from other organizations cannot be granted.');
+      return;
+    }
+
     if (!selectedScopeType) {
       setErrorMessage('Please choose an assignment scope.');
+      return;
+    }
+
+    if (!selectedRole.allowedScopeTypes.includes(selectedScopeType)) {
+      setErrorMessage(`The chosen role does not admit ${selectedScopeType} scope.`);
       return;
     }
 
@@ -128,6 +209,27 @@ export function AssignRoleDialog({
         return;
       }
       targetScopeId = selectedWorkspaceId;
+    } else if (selectedScopeType === 'team') {
+      if (!selectedWorkspaceId) {
+        setErrorMessage('Please select a target workspace.');
+        return;
+      }
+      if (!selectedTeamId) {
+        setErrorMessage('Please select a target team.');
+        return;
+      }
+      const team = teams.find((t) => t.id === selectedTeamId);
+      if (team) {
+        if (team.workspaceId !== selectedWorkspaceId) {
+          setErrorMessage('Selected team does not belong to the chosen workspace.');
+          return;
+        }
+        if (selectedOrgId && team.orgId !== selectedOrgId) {
+          setErrorMessage('Selected team does not belong to the active organization.');
+          return;
+        }
+      }
+      targetScopeId = selectedTeamId;
     } else {
       setErrorMessage(`Scope type "${selectedScopeType}" is not supported for tenant assignment.`);
       return;
@@ -229,8 +331,8 @@ export function AssignRoleDialog({
               <p className="mt-1 text-xs text-[var(--color-bad)]">Failed to load roles.</p>
             ) : assignableRoles.length === 0 ? (
               <div className="mt-1 rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-3 text-xs text-[var(--color-ink-muted)]">
-                No custom tenant roles found in this organization. System and platform roles cannot
-                be assigned via tenant administration.
+                No assignable roles found in this organization. Platform roles cannot be assigned
+                via tenant administration.
               </div>
             ) : (
               <select
@@ -369,19 +471,102 @@ export function AssignRoleDialog({
                   </label>
                 )}
 
-                {/* Team scope note (fail closed if role admits team, explaining roadmap limitation) */}
+                {/* Team scope option */}
                 {roleAllowedScopes.includes('team') && (
-                  <div className="flex items-start gap-3 rounded-lg border border-[var(--color-border-subtle)]/60 bg-[var(--color-surface-raised)]/40 p-3 text-xs opacity-75">
-                    <input type="radio" disabled className="mt-0.5 opacity-50" />
-                    <div>
-                      <p className="font-medium text-[var(--color-ink-muted)]">
-                        Team Scope (Unavailable)
+                  <label
+                    className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer text-xs transition-colors ${
+                      selectedScopeType === 'team'
+                        ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/5'
+                        : 'border-[var(--color-border-subtle)] hover:bg-[var(--color-surface-raised)]'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="scopeType"
+                      value="team"
+                      checked={selectedScopeType === 'team'}
+                      onChange={() => handleScopeTypeSelect('team')}
+                      className="mt-0.5 text-[var(--color-accent)]"
+                    />
+                    <div className="w-full">
+                      <p className="font-semibold text-[var(--color-ink)]">Team Scope</p>
+                      <p className="text-[var(--color-ink-muted)] mt-0.5">
+                        Restricts role authority strictly to a specific team within a workspace.
                       </p>
-                      <p className="text-[11px] text-[var(--color-ink-muted)] mt-0.5">
-                        Team-scope assignment is not yet available in this dialog.
-                      </p>
+                      {selectedScopeType === 'team' && (
+                        <div className="mt-3 space-y-2.5">
+                          <div>
+                            <label
+                              htmlFor="assign-role-team-workspace-select"
+                              className="block text-[11px] font-medium text-[var(--color-ink)]"
+                            >
+                              Workspace
+                            </label>
+                            {workspacesLoading ? (
+                              <p className="mt-1 text-[11px] text-[var(--color-ink-muted)]">
+                                Loading workspaces…
+                              </p>
+                            ) : workspaces.length === 0 ? (
+                              <p className="mt-1 text-[11px] text-[var(--color-bad)]">
+                                No workspaces exist in this organization.
+                              </p>
+                            ) : (
+                              <select
+                                id="assign-role-team-workspace-select"
+                                value={selectedWorkspaceId}
+                                onChange={(e) => {
+                                  setSelectedWorkspaceId(e.target.value);
+                                  setSelectedTeamId('');
+                                }}
+                                className="mt-1 w-full rounded border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2.5 py-1 text-xs text-[var(--color-ink)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+                              >
+                                {workspaces.map((ws) => (
+                                  <option key={ws.id} value={ws.id}>
+                                    {ws.name} ({ws.slug})
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                          </div>
+
+                          <div>
+                            <label
+                              htmlFor="assign-role-team-select"
+                              className="block text-[11px] font-medium text-[var(--color-ink)]"
+                            >
+                              Team
+                            </label>
+                            {teamsLoading ? (
+                              <p className="mt-1 text-[11px] text-[var(--color-ink-muted)]">
+                                Loading teams…
+                              </p>
+                            ) : teamsError ? (
+                              <p className="mt-1 text-[11px] text-[var(--color-bad)]">
+                                Failed to load teams.
+                              </p>
+                            ) : teams.length === 0 ? (
+                              <p className="mt-1 text-[11px] text-[var(--color-warn)]">
+                                No active teams exist in the selected workspace.
+                              </p>
+                            ) : (
+                              <select
+                                id="assign-role-team-select"
+                                value={selectedTeamId}
+                                onChange={(e) => setSelectedTeamId(e.target.value)}
+                                className="mt-1 w-full rounded border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2.5 py-1 text-xs text-[var(--color-ink)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+                              >
+                                {teams.map((team) => (
+                                  <option key={team.id} value={team.id}>
+                                    {team.name}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
+                  </label>
                 )}
               </div>
             </div>
@@ -423,7 +608,8 @@ export function AssignRoleDialog({
                 isSubmitting ||
                 !selectedRoleId ||
                 !selectedScopeType ||
-                (selectedScopeType === 'workspace' && !selectedWorkspaceId)
+                (selectedScopeType === 'workspace' && !selectedWorkspaceId) ||
+                (selectedScopeType === 'team' && (!selectedWorkspaceId || !selectedTeamId))
               }
               className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
             >

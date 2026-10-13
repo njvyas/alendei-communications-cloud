@@ -2,6 +2,7 @@
 
 import { use, useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
   ApiError,
@@ -26,6 +27,7 @@ const STATUS_TONES: Record<ScopeStatus, StatusTone> = {
 };
 
 export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const router = useRouter();
   const { id } = use(params);
   const selectedOrgId = useSession((state) => state.selectedOrganizationId);
   const canReadWorkspaces = useHasPermission('workspaces.read');
@@ -44,7 +46,32 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
   const [archivingTeam, setArchivingTeam] = useState<TeamView | null>(null);
   const [restoringTeam, setRestoringTeam] = useState<TeamView | null>(null);
 
-  // Reset dialogs if organization switches
+  // Track active organization of loaded workspace to detect cross-tenant desynchronization
+  const [loadedOrgId, setLoadedOrgId] = useState<string | null>(null);
+
+  // Fetch Workspace detail (SEC-05: disabled if loaded workspace belongs to foreign org)
+  const {
+    data: wsData,
+    isLoading: wsLoading,
+    error: wsError,
+    refetch: refetchWs,
+  } = useQuery({
+    queryKey: ['workspaces', 'detail', selectedOrgId, id],
+    queryFn: async ({ signal }) => {
+      const res = await workspacesApi.get(id, signal);
+      setLoadedOrgId(res.data.orgId);
+      return res;
+    },
+    enabled:
+      !!selectedOrgId &&
+      canReadWorkspaces &&
+      !!id &&
+      (!loadedOrgId || loadedOrgId === selectedOrgId),
+  });
+
+  const workspace = wsData?.data;
+
+  // Reset dialogs and redirect if organization switches (SEC-05 defense-in-depth)
   useEffect(() => {
     setIsEditWsOpen(false);
     setIsArchiveWsOpen(false);
@@ -53,21 +80,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
     setEditingTeam(null);
     setArchivingTeam(null);
     setRestoringTeam(null);
-  }, [selectedOrgId]);
-
-  // Fetch Workspace detail
-  const {
-    data: wsData,
-    isLoading: wsLoading,
-    error: wsError,
-    refetch: refetchWs,
-  } = useQuery({
-    queryKey: ['workspaces', 'detail', selectedOrgId, id],
-    queryFn: ({ signal }) => workspacesApi.get(id, signal),
-    enabled: !!selectedOrgId && canReadWorkspaces && !!id,
-  });
-
-  const workspace = wsData?.data;
+    if (loadedOrgId && loadedOrgId !== selectedOrgId) {
+      router.replace('/workspaces');
+    }
+  }, [selectedOrgId, loadedOrgId, router]);
 
   // Fetch teams within this workspace (Strictly no orgId in params!)
   const {

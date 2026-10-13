@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   ApiError,
   rolesApi,
+  teamsApi,
   usersApi,
   workspacesApi,
   type CreateUserInput,
@@ -22,8 +23,9 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
 
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
-  const [scopeType, setScopeType] = useState<'organization' | 'workspace'>('organization');
+  const [scopeType, setScopeType] = useState<'organization' | 'workspace' | 'team'>('organization');
   const [workspaceId, setWorkspaceId] = useState('');
+  const [teamId, setTeamId] = useState('');
   const [roleId, setRoleId] = useState('');
 
   // Stable Idempotency-Key per logical submission attempt; preserved during retries
@@ -40,6 +42,7 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
       setPhone('');
       setScopeType('organization');
       setWorkspaceId('');
+      setTeamId('');
       setRoleId('');
       setIdempotencyKey(crypto.randomUUID());
       setErrorMessage(null);
@@ -54,11 +57,22 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
     enabled: isOpen && !!selectedOrgId,
   });
 
-  // Fetch available workspaces for workspace-level assignments
+  // Fetch available workspaces for workspace- or team-level assignments
   const { data: workspacesData, isLoading: workspacesLoading } = useQuery({
     queryKey: ['workspaces', selectedOrgId],
     queryFn: ({ signal }) => workspacesApi.list(signal),
-    enabled: isOpen && !!selectedOrgId && scopeType === 'workspace',
+    enabled: isOpen && !!selectedOrgId && (scopeType === 'workspace' || scopeType === 'team'),
+  });
+
+  // Fetch available teams when scopeType is team and a workspace is selected
+  const {
+    data: teamsData,
+    isLoading: teamsLoading,
+    error: teamsError,
+  } = useQuery({
+    queryKey: ['teams', 'list', selectedOrgId, workspaceId],
+    queryFn: ({ signal }) => teamsApi.list({ workspaceId, status: 'active' }, signal),
+    enabled: isOpen && !!selectedOrgId && scopeType === 'team' && !!workspaceId,
   });
 
   // Filter out platform roles (orgId === null) and ensure role admits the chosen scopeType
@@ -74,18 +88,32 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
     const firstRole = availableRoles[0];
     if (firstRole && !availableRoles.some((r) => r.id === roleId)) {
       setRoleId(firstRole.id);
+    } else if (availableRoles.length === 0) {
+      setRoleId('');
     }
   }, [availableRoles, roleId]);
 
-  // Auto-select first workspace when scopeType is workspace
+  // Auto-select first workspace when scopeType is workspace or team
   useEffect(() => {
-    if (scopeType === 'workspace') {
+    if (scopeType === 'workspace' || scopeType === 'team') {
       const firstWs = workspacesData?.data?.[0];
       if (firstWs && !workspacesData?.data?.some((w) => w.id === workspaceId)) {
         setWorkspaceId(firstWs.id);
       }
     }
   }, [scopeType, workspacesData, workspaceId]);
+
+  // Auto-select first team when scopeType is team
+  useEffect(() => {
+    if (scopeType === 'team') {
+      const firstTeam = teamsData?.data?.[0];
+      if (firstTeam && !teamsData?.data?.some((t) => t.id === teamId)) {
+        setTeamId(firstTeam.id);
+      }
+    } else {
+      setTeamId('');
+    }
+  }, [scopeType, teamsData, teamId]);
 
   if (!isOpen) return null;
 
@@ -114,12 +142,43 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
       errors.roleId = 'An initial role is required';
     }
 
-    const targetScopeId = scopeType === 'organization' ? selectedOrgId : workspaceId;
+    let targetScopeId = '';
+    if (scopeType === 'organization') {
+      targetScopeId = selectedOrgId;
+    } else if (scopeType === 'workspace') {
+      targetScopeId = workspaceId;
+    } else if (scopeType === 'team') {
+      targetScopeId = teamId;
+    }
+
     if (!targetScopeId) {
       errors.scopeId =
         scopeType === 'organization'
           ? 'Organization context is required'
-          : 'Please select a workspace';
+          : scopeType === 'workspace'
+            ? 'Please select a workspace'
+            : 'Please select a team';
+    }
+
+    if (scopeType === 'team') {
+      if (!workspaceId) {
+        errors.workspaceId = 'Please select a workspace';
+      } else if (teamId) {
+        const team = teamsData?.data?.find((t) => t.id === teamId);
+        if (team) {
+          if (team.workspaceId !== workspaceId) {
+            errors.scopeId = 'Selected team does not belong to the chosen workspace';
+          }
+          if (selectedOrgId && team.orgId !== selectedOrgId) {
+            errors.scopeId = 'Selected team does not belong to the active organization';
+          }
+        }
+      }
+    }
+
+    const selectedRole = rolesData?.data?.find((r) => r.id === roleId);
+    if (selectedRole && !selectedRole.allowedScopeTypes.includes(scopeType)) {
+      errors.roleId = `The chosen role does not admit ${scopeType} scope`;
     }
 
     if (Object.keys(errors).length > 0) {
@@ -288,15 +347,22 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
               <select
                 id="user-scope-type"
                 value={scopeType}
-                onChange={(e) => setScopeType(e.target.value as 'organization' | 'workspace')}
+                onChange={(e) => {
+                  const newScope = e.target.value as 'organization' | 'workspace' | 'team';
+                  setScopeType(newScope);
+                  if (newScope !== 'team') {
+                    setTeamId('');
+                  }
+                }}
                 className="mt-1 w-full rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] px-3 py-1.5 text-sm text-[var(--color-ink)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
               >
                 <option value="organization">Organization (Current Organization)</option>
                 <option value="workspace">Workspace</option>
+                <option value="team">Team</option>
               </select>
             </div>
 
-            {scopeType === 'workspace' && (
+            {(scopeType === 'workspace' || scopeType === 'team') && (
               <div className="mt-3">
                 <label
                   htmlFor="user-workspace-id"
@@ -310,7 +376,10 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
                   <select
                     id="user-workspace-id"
                     value={workspaceId}
-                    onChange={(e) => setWorkspaceId(e.target.value)}
+                    onChange={(e) => {
+                      setWorkspaceId(e.target.value);
+                      setTeamId('');
+                    }}
                     className="mt-1 w-full rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] px-3 py-1.5 text-sm text-[var(--color-ink)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
                   >
                     {workspacesData.data.map((ws) => (
@@ -322,6 +391,45 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
                 ) : (
                   <p className="mt-1 text-xs text-[var(--color-warn)]">
                     No workspaces found in this organization. Select Organization scope instead.
+                  </p>
+                )}
+                {fieldErrors.workspaceId && (
+                  <p className="mt-1 text-xs text-[var(--color-bad)]">{fieldErrors.workspaceId}</p>
+                )}
+                {scopeType === 'workspace' && fieldErrors.scopeId && (
+                  <p className="mt-1 text-xs text-[var(--color-bad)]">{fieldErrors.scopeId}</p>
+                )}
+              </div>
+            )}
+
+            {scopeType === 'team' && (
+              <div className="mt-3">
+                <label
+                  htmlFor="user-team-id"
+                  className="block text-xs font-medium text-[var(--color-ink)]"
+                >
+                  Team
+                </label>
+                {teamsLoading ? (
+                  <p className="mt-1 text-xs text-[var(--color-ink-muted)]">Loading teams…</p>
+                ) : teamsError ? (
+                  <p className="mt-1 text-xs text-[var(--color-bad)]">Failed to load teams.</p>
+                ) : teamsData?.data && teamsData.data.length > 0 ? (
+                  <select
+                    id="user-team-id"
+                    value={teamId}
+                    onChange={(e) => setTeamId(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] px-3 py-1.5 text-sm text-[var(--color-ink)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
+                  >
+                    {teamsData.data.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <p className="mt-1 text-xs text-[var(--color-warn)]">
+                    No active teams found in the selected workspace.
                   </p>
                 )}
                 {fieldErrors.scopeId && (
@@ -376,7 +484,13 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
             </button>
             <button
               type="submit"
-              disabled={isSubmitting || rolesLoading}
+              disabled={
+                isSubmitting ||
+                rolesLoading ||
+                !roleId ||
+                (scopeType === 'workspace' && !workspaceId) ||
+                (scopeType === 'team' && (!workspaceId || !teamId))
+              }
               className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
             >
               {isSubmitting ? 'Inviting…' : 'Invite User'}

@@ -3,14 +3,103 @@
 import { useState, useEffect, useMemo, type FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
+  SUPER_ADMIN_PERMISSIONS,
+  permissionAllowedAt,
+  grantConfers,
+  type ScopeType,
+} from '@acc/contracts';
+import {
   ApiError,
   apiKeysApi,
   permissionsApi,
   workspacesApi,
   type ApiKeyScopeType,
   type CreatedApiKeyView,
+  type EffectiveAuthorization,
 } from '@/lib/api-client';
 import { useSession } from '@/lib/session-store';
+
+export interface ComputeHeldApiKeyPermissionsParams {
+  readonly authorization: EffectiveAuthorization | null;
+  readonly scopeType: ApiKeyScopeType;
+  readonly selectedOrgId: string | null;
+  readonly workspaceId?: string | null;
+}
+
+/**
+ * Computes permissions held by the actor that are admitted for the API key's target binding scope.
+ *
+ * Rules:
+ * 1. Platform administrators hold canonical SUPER_ADMIN_PERMISSIONS, filtered strictly
+ *    to permissions admitted at the API key's target binding scope (organization or workspace).
+ *    Platform-only permissions (platform.*) and tenant-content permissions are excluded.
+ * 2. Non-platform administrators hold permissions actually conferred by covering grants
+ *    (platform, covering organization, or target workspace) that are admitted at the target scope.
+ * 3. Organization-only permissions cannot be granted to workspace-bound keys.
+ */
+export function computeHeldApiKeyPermissions({
+  authorization,
+  scopeType,
+  selectedOrgId,
+  workspaceId,
+}: ComputeHeldApiKeyPermissionsParams): Set<string> {
+  if (!authorization) return new Set();
+
+  const targetScopeType: ScopeType = scopeType;
+  const held = new Set<string>();
+
+  if (authorization.isPlatformAdmin) {
+    for (const p of SUPER_ADMIN_PERMISSIONS) {
+      if (permissionAllowedAt(p, targetScopeType)) {
+        held.add(p);
+      }
+    }
+    return held;
+  }
+
+  for (const grant of authorization.grants) {
+    const gScope = grant.scopeType as ScopeType;
+    if (gScope === 'platform') {
+      for (const p of grant.permissions) {
+        if (
+          grantConfers({ scopeType: gScope, permissions: grant.permissions }, p) &&
+          permissionAllowedAt(p, targetScopeType)
+        ) {
+          held.add(p);
+        }
+      }
+    } else if (
+      gScope === 'organization' &&
+      selectedOrgId &&
+      (grant.scopeId === selectedOrgId || grant.orgId === selectedOrgId)
+    ) {
+      for (const p of grant.permissions) {
+        if (
+          grantConfers({ scopeType: gScope, permissions: grant.permissions }, p) &&
+          permissionAllowedAt(p, targetScopeType)
+        ) {
+          held.add(p);
+        }
+      }
+    } else if (
+      targetScopeType === 'workspace' &&
+      gScope === 'workspace' &&
+      workspaceId &&
+      grant.scopeId === workspaceId
+    ) {
+      for (const p of grant.permissions) {
+        if (
+          grantConfers({ scopeType: gScope, permissions: grant.permissions }, p) &&
+          permissionAllowedAt(p, 'workspace')
+        ) {
+          held.add(p);
+        }
+      }
+    }
+  }
+
+  return held;
+}
 
 interface CreateApiKeyDialogProps {
   readonly isOpen: boolean;
@@ -100,37 +189,13 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
 
   // Compute held permissions that cover the target scope (Downward scope inheritance: RBAC.md §7)
   const heldPermissions = useMemo<Set<string>>(() => {
-    if (!authorization) return new Set();
-    if (authorization.isPlatformAdmin) {
-      // Platform admin holds all permissions in catalogue
-      const all = new Set<string>();
-      for (const p of permissionsData?.data ?? []) {
-        all.add(p.key);
-      }
-      return all;
-    }
-
-    const held = new Set<string>();
-    for (const grant of authorization.grants) {
-      if (grant.scopeType === 'platform') {
-        for (const p of grant.permissions) held.add(p);
-      } else if (
-        grant.scopeType === 'organization' &&
-        selectedOrgId &&
-        (grant.scopeId === selectedOrgId || grant.orgId === selectedOrgId)
-      ) {
-        for (const p of grant.permissions) held.add(p);
-      } else if (
-        scopeType === 'workspace' &&
-        workspaceId &&
-        grant.scopeType === 'workspace' &&
-        grant.scopeId === workspaceId
-      ) {
-        for (const p of grant.permissions) held.add(p);
-      }
-    }
-    return held;
-  }, [authorization, permissionsData, selectedOrgId, scopeType, workspaceId]);
+    return computeHeldApiKeyPermissions({
+      authorization,
+      scopeType,
+      selectedOrgId,
+      workspaceId,
+    });
+  }, [authorization, selectedOrgId, scopeType, workspaceId]);
 
   // Auto-prune unheld scopes when scope selection changes
   useEffect(() => {
@@ -223,9 +288,11 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
       errors.workspaceId = 'Please select a workspace.';
     }
 
-    if (selectedScopes.size === 0) {
+    const validScopes = Array.from(selectedScopes).filter((s) => heldPermissions.has(s));
+
+    if (validScopes.length === 0) {
       errors.scopes = 'Select at least one permission scope for this key.';
-    } else if (selectedScopes.size > 64) {
+    } else if (validScopes.length > 64) {
       errors.scopes = 'An API key can request at most 64 permission scopes.';
     }
 
@@ -252,7 +319,7 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
           name: trimmedName,
           scopeType,
           scopeId: targetScopeId,
-          scopes: Array.from(selectedScopes),
+          scopes: validScopes,
           expiresAt: calculatedExpiry,
         },
         idempotencyKey,

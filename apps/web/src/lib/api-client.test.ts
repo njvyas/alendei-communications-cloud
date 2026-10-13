@@ -6,6 +6,7 @@ import {
   authApi,
   getAccessToken,
   getSelectedOrganization,
+  invalidateSessionEpoch,
   onAuthFailure,
   refreshAccessToken,
   registerOrgValidator,
@@ -25,6 +26,7 @@ describe('API Client Security Foundation', () => {
   beforeEach(() => {
     fetchCalls = [];
     mockHandlers = [];
+    invalidateSessionEpoch();
     setAccessToken(null);
     setSelectedOrganization(null);
     registerOrgValidator(null);
@@ -589,5 +591,565 @@ describe('API Client Security Foundation', () => {
     ]);
     assert.equal(token1, token2);
     assert.equal(token2, token3);
+  });
+
+  // ---------------------------------------------------------------------------
+  // SEC-06: Session Teardown on Repeated or Non-Retryable 401 Failures
+  // ---------------------------------------------------------------------------
+  describe('SEC-06: Session Teardown on Repeated or Non-Retryable 401 Failures', () => {
+    it('1. ordinary login failure (401 from /auth/login) does not trigger session teardown or auth failure notification', async () => {
+      let notified = false;
+      const unsub = onAuthFailure(() => {
+        notified = true;
+      });
+
+      mockHandlers.push({
+        match: (url) => url.endsWith('/auth/login'),
+        handle: () =>
+          new Response(
+            JSON.stringify({
+              error: {
+                code: 'AUTH_INVALID_CREDENTIALS',
+                message: 'Invalid credentials',
+                correlationId: 'sec06-login-fail',
+                retryable: false,
+              },
+            }),
+            { status: 401, headers: { 'Content-Type': 'application/json' } },
+          ),
+      });
+
+      await assert.rejects(
+        async () => {
+          await authApi.login({ email: 'user@example.test', password: 'bad-password' });
+        },
+        (err: unknown) => {
+          assert.ok(err instanceof ApiError);
+          assert.equal(err.status, 401);
+          assert.equal(err.code, 'AUTH_INVALID_CREDENTIALS');
+          return true;
+        },
+      );
+
+      assert.equal(notified, false, 'login failure must NEVER notify auth failure');
+      assert.equal(getAccessToken(), null, 'access token remains null');
+      unsub();
+    });
+
+    it('2. terminal 401 from /auth/refresh clears access token and notifies auth failure', async () => {
+      setAccessToken('token-prior-to-refresh');
+
+      let notified = false;
+      const unsub = onAuthFailure(() => {
+        notified = true;
+      });
+
+      mockHandlers.push({
+        match: (url) => url.endsWith('/auth/refresh'),
+        handle: () =>
+          new Response(
+            JSON.stringify({
+              error: {
+                code: 'AUTH_SESSION_EXPIRED',
+                message: 'Refresh token expired',
+                correlationId: 'sec06-refresh-expired',
+                retryable: false,
+              },
+            }),
+            { status: 401, headers: { 'Content-Type': 'application/json' } },
+          ),
+      });
+
+      await assert.rejects(async () => {
+        await authApi.refresh();
+      });
+
+      assert.equal(getAccessToken(), null, 'access token must be cleared');
+      assert.equal(notified, true, 'auth failure must be notified');
+      unsub();
+    });
+
+    it('3. retried authenticated request returning 401 clears access token, notifies auth failure, and prevents infinite retry loop', async () => {
+      setAccessToken('initial-stale-token');
+
+      let refreshCount = 0;
+      let protectedCalls = 0;
+      let failureNotified = false;
+      const unsub = onAuthFailure(() => {
+        failureNotified = true;
+      });
+
+      mockHandlers.push({
+        match: (url) => url.endsWith('/auth/refresh'),
+        handle: () => {
+          refreshCount++;
+          return new Response(
+            JSON.stringify({
+              data: {
+                accessToken: 'fresh-token-that-will-fail-retry',
+                tokenType: 'Bearer',
+                expiresIn: 900,
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        },
+      });
+
+      mockHandlers.push({
+        match: (url) => url.endsWith('/protected/workspaces'),
+        handle: (_url, options) => {
+          protectedCalls++;
+          const headers = options.headers as Record<string, string>;
+          if (protectedCalls === 1) {
+            assert.equal(headers['Authorization'], 'Bearer initial-stale-token');
+          } else if (protectedCalls === 2) {
+            assert.equal(headers['Authorization'], 'Bearer fresh-token-that-will-fail-retry');
+          }
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'AUTH_SESSION_REVOKED',
+                message: 'Session revoked on backend',
+                correlationId: `corr-prot-${protectedCalls}`,
+                retryable: false,
+              },
+            }),
+            { status: 401, headers: { 'Content-Type': 'application/json' } },
+          );
+        },
+      });
+
+      await assert.rejects(
+        async () => {
+          await apiFetch('/protected/workspaces');
+        },
+        (err: unknown) => {
+          assert.ok(err instanceof ApiError);
+          assert.equal(err.status, 401);
+          assert.equal(err.code, 'AUTH_SESSION_REVOKED');
+          return true;
+        },
+      );
+
+      // Verify sequence: initial call (401) -> refresh (200) -> retried call (401) -> teardown
+      assert.equal(
+        protectedCalls,
+        2,
+        'protected endpoint called exactly twice (1 initial + 1 retried)',
+      );
+      assert.equal(refreshCount, 1, 'refresh called exactly once (no infinite refresh loop)');
+      assert.equal(getAccessToken(), null, 'stale access token must be cleared after retry 401');
+      assert.equal(
+        failureNotified,
+        true,
+        'auth failure must be notified after retried 401 failure',
+      );
+      unsub();
+    });
+
+    it('4. terminal 401 on non-refreshable authenticated request clears access token and notifies failure', async () => {
+      setAccessToken('token-on-non-refreshable');
+
+      let notified = false;
+      const unsub = onAuthFailure(() => {
+        notified = true;
+      });
+
+      mockHandlers.push({
+        match: (url) => url.endsWith('/explicitly-non-refreshable'),
+        handle: () =>
+          new Response(
+            JSON.stringify({
+              error: {
+                code: 'AUTH_CREDENTIAL_REVOKED',
+                message: 'Credential revoked',
+                correlationId: 'sec06-terminal-401',
+                retryable: false,
+              },
+            }),
+            { status: 401, headers: { 'Content-Type': 'application/json' } },
+          ),
+      });
+
+      await assert.rejects(async () => {
+        await apiFetch('/explicitly-non-refreshable', { _retried: true });
+      });
+
+      assert.equal(getAccessToken(), null, 'access token is cleared');
+      assert.equal(notified, true, 'auth failure is notified');
+      unsub();
+    });
+
+    it('5. failed refresh on background authenticated request clears stale token and notifies failure', async () => {
+      setAccessToken('token-background-fail');
+
+      let refreshCount = 0;
+      let failureNotified = false;
+      const unsub = onAuthFailure(() => {
+        failureNotified = true;
+      });
+
+      mockHandlers.push({
+        match: (url) => url.endsWith('/auth/refresh'),
+        handle: () => {
+          refreshCount++;
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'AUTH_SESSION_EXPIRED',
+                message: 'Refresh cookie invalid or expired',
+                correlationId: 'corr-refresh-die',
+                retryable: false,
+              },
+            }),
+            { status: 401, headers: { 'Content-Type': 'application/json' } },
+          );
+        },
+      });
+
+      mockHandlers.push({
+        match: (url) => url.endsWith('/resource/needing-refresh'),
+        handle: () =>
+          new Response(
+            JSON.stringify({
+              error: {
+                code: 'AUTH_TOKEN_EXPIRED',
+                message: 'Expired access token',
+                correlationId: 'corr-init',
+                retryable: false,
+              },
+            }),
+            { status: 401, headers: { 'Content-Type': 'application/json' } },
+          ),
+      });
+
+      await assert.rejects(async () => {
+        await apiFetch('/resource/needing-refresh');
+      });
+
+      assert.equal(refreshCount, 1, 'refresh attempted once');
+      assert.equal(getAccessToken(), null, 'stale access token cleared');
+      assert.equal(failureNotified, true, 'auth failure notified');
+      unsub();
+    });
+
+    it('6. concurrent terminal 401 responses deduplicate teardown and notify failure exactly once (no notification storm)', async () => {
+      setAccessToken('token-concurrent-retried');
+
+      let notificationCount = 0;
+      const unsub = onAuthFailure(() => {
+        notificationCount++;
+      });
+
+      mockHandlers.push({
+        match: (url) => url.endsWith('/concurrent/endpoint'),
+        handle: async () => {
+          await new Promise((r) => setTimeout(r, 10));
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'AUTH_CREDENTIAL_REVOKED',
+                message: 'Revoked',
+                correlationId: 'corr-conc-rev',
+                retryable: false,
+              },
+            }),
+            { status: 401, headers: { 'Content-Type': 'application/json' } },
+          );
+        },
+      });
+
+      // 4 concurrent retried requests all encountering terminal 401
+      const results = await Promise.allSettled([
+        apiFetch('/concurrent/endpoint', { _retried: true }),
+        apiFetch('/concurrent/endpoint', { _retried: true }),
+        apiFetch('/concurrent/endpoint', { _retried: true }),
+        apiFetch('/concurrent/endpoint', { _retried: true }),
+      ]);
+
+      assert.equal(
+        results.every((r) => r.status === 'rejected'),
+        true,
+        'all 4 requests rejected',
+      );
+      assert.equal(getAccessToken(), null, 'access token is null');
+      assert.equal(
+        notificationCount,
+        1,
+        'auth failure listeners must be notified EXACTLY ONCE across concurrent terminal failures',
+      );
+      unsub();
+    });
+
+    it('7. ordinary unauthenticated requests with auth: false do not clear session or notify auth failure', async () => {
+      setAccessToken('valid-actor-token');
+
+      let notified = false;
+      const unsub = onAuthFailure(() => {
+        notified = true;
+      });
+
+      mockHandlers.push({
+        match: (url) => url.endsWith('/public/restricted-probe'),
+        handle: () =>
+          new Response(
+            JSON.stringify({
+              error: {
+                code: 'AUTH_CREDENTIAL_REQUIRED',
+                message: 'Probe rejected without authorization',
+                correlationId: 'corr-probe',
+                retryable: false,
+              },
+            }),
+            { status: 401, headers: { 'Content-Type': 'application/json' } },
+          ),
+      });
+
+      await assert.rejects(async () => {
+        await apiFetch('/public/restricted-probe', { auth: false });
+      });
+
+      assert.equal(
+        notified,
+        false,
+        'unauthenticated request must NOT trigger auth failure notification',
+      );
+      assert.equal(
+        getAccessToken(),
+        'valid-actor-token',
+        'unauthenticated request must NOT clear unrelated active access token',
+      );
+      unsub();
+    });
+
+    it('8. delayed 401 from Session A arriving in Session B does not refresh or invalidate Session B', async () => {
+      // User A starts with token A in epoch A
+      setAccessToken('token-user-a');
+
+      let refreshAttempted = false;
+      let failureNotified = false;
+      const unsub = onAuthFailure(() => {
+        failureNotified = true;
+      });
+
+      let delayedResolve: (res: Response) => void;
+      const delayedResponsePromise = new Promise<Response>((resolve) => {
+        delayedResolve = resolve;
+      });
+
+      mockHandlers.push({
+        match: (url) => url.endsWith('/resource/session-a'),
+        handle: () => delayedResponsePromise,
+      });
+
+      mockHandlers.push({
+        match: (url) => url.endsWith('/auth/refresh'),
+        handle: () => {
+          refreshAttempted = true;
+          return new Response(JSON.stringify({ error: { code: 'AUTH_SESSION_EXPIRED' } }), {
+            status: 401,
+          });
+        },
+      });
+
+      // Session A dispatches request
+      const sessionAPromise = apiFetch('/resource/session-a');
+
+      // Session A terminates and Session B establishes a new session
+      invalidateSessionEpoch();
+      setAccessToken('token-user-b');
+
+      // Delayed 401 arrives from Session A
+      delayedResolve!(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'AUTH_TOKEN_EXPIRED',
+              message: 'Token expired',
+              correlationId: 'delayed-401',
+              retryable: false,
+            },
+          }),
+          { status: 401, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+
+      await assert.rejects(async () => {
+        await sessionAPromise;
+      });
+
+      // Assert Session B was not affected
+      assert.equal(refreshAttempted, false, 'must not trigger refresh under Session B');
+      assert.equal(getAccessToken(), 'token-user-b', 'Session B access token must remain intact');
+      assert.equal(failureNotified, false, 'Session B must not receive auth failure notification');
+      unsub();
+    });
+
+    it('9. delayed /auth/refresh 401 from Session A arriving in Session B does not clear Session B', async () => {
+      setAccessToken('token-user-a');
+
+      let failureNotified = false;
+      const unsub = onAuthFailure(() => {
+        failureNotified = true;
+      });
+
+      let delayedResolve: (res: Response) => void;
+      const delayedResponsePromise = new Promise<Response>((resolve) => {
+        delayedResolve = resolve;
+      });
+
+      mockHandlers.push({
+        match: (url) => url.endsWith('/auth/refresh'),
+        handle: () => delayedResponsePromise,
+      });
+
+      // Session A calls refresh
+      const refreshPromiseA = authApi.refresh();
+
+      // Session A terminates and Session B establishes a new session
+      invalidateSessionEpoch();
+      setAccessToken('token-user-b');
+
+      // Delayed refresh response returns 401
+      delayedResolve!(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'AUTH_SESSION_EXPIRED',
+              message: 'Refresh token expired',
+              correlationId: 'delayed-refresh-401',
+              retryable: false,
+            },
+          }),
+          { status: 401, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+
+      await assert.rejects(async () => {
+        await refreshPromiseA;
+      });
+
+      // Assert Session B token and listeners are intact
+      assert.equal(
+        getAccessToken(),
+        'token-user-b',
+        'Session B access token must remain intact after delayed refresh 401',
+      );
+      assert.equal(failureNotified, false, 'must not notify auth failure for newer session epoch');
+      unsub();
+    });
+
+    it('10. successful logout in Session A does not clear Session B established while logout is in-flight', async () => {
+      setAccessToken('token-user-a');
+      setSelectedOrganization('org-user-a');
+
+      let failureNotified = false;
+      const unsub = onAuthFailure(() => {
+        failureNotified = true;
+      });
+
+      let delayedResolve: (res: Response) => void;
+      const delayedLogoutPromise = new Promise<Response>((resolve) => {
+        delayedResolve = resolve;
+      });
+
+      mockHandlers.push({
+        match: (url) => url.endsWith('/auth/logout'),
+        handle: () => delayedLogoutPromise,
+      });
+
+      // Session A starts logout
+      const logoutPromise = authApi.logout();
+
+      // Session B establishes a new session while logout network call is in flight
+      invalidateSessionEpoch();
+      setAccessToken('token-user-b');
+      setSelectedOrganization('org-user-b');
+
+      // Logout resolves successfully
+      delayedResolve!(new Response(null, { status: 204 }));
+      await logoutPromise;
+
+      // Session B must remain intact
+      assert.equal(
+        getAccessToken(),
+        'token-user-b',
+        'Session B token must remain intact after Session A logout completes',
+      );
+      assert.equal(
+        getSelectedOrganization(),
+        'org-user-b',
+        'Session B selected organization must remain intact after Session A logout completes',
+      );
+      assert.equal(
+        failureNotified,
+        false,
+        'Session B must not receive auth failure notification after Session A logout completes',
+      );
+      unsub();
+    });
+
+    it('11. failed logout in Session A does not clear Session B established while logout is in-flight', async () => {
+      setAccessToken('token-user-a');
+      setSelectedOrganization('org-user-a');
+
+      let failureNotified = false;
+      const unsub = onAuthFailure(() => {
+        failureNotified = true;
+      });
+
+      let delayedResolve: (res: Response) => void;
+      const delayedLogoutPromise = new Promise<Response>((resolve) => {
+        delayedResolve = resolve;
+      });
+
+      mockHandlers.push({
+        match: (url) => url.endsWith('/auth/logout'),
+        handle: () => delayedLogoutPromise,
+      });
+
+      // Session A starts logout
+      const logoutPromise = authApi.logout();
+
+      // Session B establishes a new session while logout network call is in flight
+      invalidateSessionEpoch();
+      setAccessToken('token-user-b');
+      setSelectedOrganization('org-user-b');
+
+      // Logout rejects with 401
+      delayedResolve!(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'AUTH_SESSION_EXPIRED',
+              message: 'Session expired',
+              correlationId: 'logout-fail',
+              retryable: false,
+            },
+          }),
+          { status: 401, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+      await logoutPromise;
+
+      // Session B must remain intact
+      assert.equal(
+        getAccessToken(),
+        'token-user-b',
+        'Session B token must remain intact after failed Session A logout',
+      );
+      assert.equal(
+        getSelectedOrganization(),
+        'org-user-b',
+        'Session B selected organization must remain intact after failed Session A logout',
+      );
+      assert.equal(
+        failureNotified,
+        false,
+        'Session B must not receive auth failure notification after failed Session A logout',
+      );
+      unsub();
+    });
   });
 });

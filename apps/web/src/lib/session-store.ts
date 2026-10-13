@@ -3,6 +3,16 @@
 import { create } from 'zustand';
 
 import {
+  grantConfers,
+  scopeCovers,
+  SCOPE_TYPES,
+  SUPER_ADMIN_PERMISSIONS,
+  type ScopeChain,
+  type ScopeRef,
+  type ScopeType,
+} from '@acc/contracts';
+
+import {
   authApi,
   invalidateSessionEpoch,
   onAuthFailure,
@@ -181,69 +191,126 @@ registerOrgValidator((orgId: string) => {
   return authorizedOrganizationIds.includes(orgId);
 });
 
-/**
- * Resolves authoritative grants effective for the currently selected organization.
- * Filters out grants belonging to other organizations while preserving platform grants.
- */
-export function getActiveOrganizationGrants(): readonly EffectiveGrant[] {
-  const { authorization, selectedOrganizationId } = useSession.getState();
-  if (!authorization) return [];
-  if (!selectedOrganizationId) {
-    return authorization.grants.filter((g) => g.scopeType === 'platform');
-  }
-  return authorization.grants.filter(
-    (g) => g.scopeType === 'platform' || g.orgId === selectedOrganizationId,
-  );
+const EXPLICIT_PLATFORM_CATALOGUE_PERMISSIONS = new Set<string>([
+  'providers.read',
+  'providers.manage',
+  'providers.test_send',
+]);
+
+const SUPER_ADMIN_PERMISSIONS_SET = new Set<string>(SUPER_ADMIN_PERMISSIONS);
+
+function isScopeType(val: string): val is ScopeType {
+  return (SCOPE_TYPES as readonly string[]).includes(val);
 }
 
-/**
- * Evaluates whether the current session holds a specific permission in the active organization.
- * Checks for a single grant containing the permission within the active scope, or platform admin.
- */
-export function hasPermission(permission: string): boolean {
-  const { authorization } = useSession.getState();
+interface EvaluatePermissionParams {
+  authorization: EffectiveAuthorization | null;
+  selectedOrganizationId: string | null;
+  userResellerId: string | null;
+  permission: string;
+}
+
+function evaluatePermission({
+  authorization,
+  selectedOrganizationId,
+  userResellerId,
+  permission,
+}: EvaluatePermissionParams): boolean {
   if (!authorization) return false;
-  if (authorization.isPlatformAdmin) return true;
-  return getActiveOrganizationGrants().some((grant) => grant.permissions.includes(permission));
-}
 
-/**
- * React hook to evaluate permission holding reactively within active organization context.
- */
-export function useHasPermission(permission: string): boolean {
-  return useSession((state) => {
-    if (!state.authorization) return false;
-    if (state.authorization.isPlatformAdmin) return true;
-    const grants = state.selectedOrganizationId
-      ? state.authorization.grants.filter(
-          (g) => g.scopeType === 'platform' || g.orgId === state.selectedOrganizationId,
-        )
-      : state.authorization.grants.filter((g) => g.scopeType === 'platform');
-    return grants.some((g) => g.permissions.includes(permission));
+  // Platform admin handling:
+  // 1. Conferred only for canonical SUPER_ADMIN_PERMISSIONS (ADR-015 R-5 / roles.ts §2).
+  // 2. Tenant-content permissions are excluded by construction from SUPER_ADMIN_PERMISSIONS.
+  // 3. MUST NOT bypass explicit platform catalogue permissions (providers.*).
+  // 4. Unknown, malformed, or deprecated permission strings fail closed.
+  if (
+    authorization.isPlatformAdmin &&
+    SUPER_ADMIN_PERMISSIONS_SET.has(permission) &&
+    !EXPLICIT_PLATFORM_CATALOGUE_PERMISSIONS.has(permission)
+  ) {
+    return true;
+  }
+
+  // Active organization context (or platform when no organization is selected).
+  // Callers cannot supply arbitrary target scopes or synthetic ancestry chains.
+  const target: ScopeRef = selectedOrganizationId
+    ? { scopeType: 'organization', scopeId: selectedOrganizationId }
+    : { scopeType: 'platform', scopeId: null };
+
+  const chain: ScopeChain = {
+    resellerId: userResellerId ?? null,
+    orgId: selectedOrganizationId,
+  };
+
+  // Grant evaluation: downward-only scope inheritance & admitted scope checks
+  return authorization.grants.some((grant) => {
+    const scopeType = grant.scopeType as ScopeType;
+    if (!isScopeType(scopeType)) return false;
+
+    // Grant must confer the permission (role carries permission AND scope is admitted)
+    if (!grantConfers({ scopeType, permissions: grant.permissions }, permission)) {
+      return false;
+    }
+
+    // Grant must cover the active organization scope within the validated session chain
+    const grantScope: ScopeRef = {
+      scopeType,
+      scopeId: grant.scopeId ?? (scopeType === 'organization' ? grant.orgId : null),
+    };
+
+    return scopeCovers(grantScope, target, chain);
   });
 }
 
-/**
- * Resolves permissions the current actor holds that cover the active organization scope.
- * Implements downward-only inheritance (TENANCY.md §1a.4, RBAC.md §7):
- * - Platform grant covers all scopes.
- * - Organization grant covers this organization.
- * - Workspace and team grants DO NOT cover organization scope.
- */
-export function getHeldOrganizationPermissions(): Set<string> {
-  const { authorization, selectedOrganizationId } = useSession.getState();
+function resolveHeldOrganizationPermissions(
+  authorization: EffectiveAuthorization | null,
+  selectedOrganizationId: string | null,
+  userResellerId: string | null,
+): Set<string> {
   if (!authorization) return new Set();
   const held = new Set<string>();
 
+  if (authorization.isPlatformAdmin) {
+    for (const p of SUPER_ADMIN_PERMISSIONS) {
+      if (!EXPLICIT_PLATFORM_CATALOGUE_PERMISSIONS.has(p)) {
+        held.add(p);
+      }
+    }
+  }
+
+  if (!selectedOrganizationId) {
+    for (const grant of authorization.grants) {
+      const scopeType = grant.scopeType as ScopeType;
+      if (scopeType === 'platform') {
+        for (const p of grant.permissions) {
+          if (grantConfers({ scopeType: 'platform', permissions: grant.permissions }, p)) {
+            held.add(p);
+          }
+        }
+      }
+    }
+    return held;
+  }
+
+  const target: ScopeRef = { scopeType: 'organization', scopeId: selectedOrganizationId };
+  const chain: ScopeChain = {
+    resellerId: userResellerId ?? null,
+    orgId: selectedOrganizationId,
+  };
+
   for (const grant of authorization.grants) {
-    if (grant.scopeType === 'platform') {
-      for (const p of grant.permissions) held.add(p);
-    } else if (
-      grant.scopeType === 'organization' &&
-      selectedOrganizationId &&
-      (grant.scopeId === selectedOrganizationId || grant.orgId === selectedOrganizationId)
-    ) {
-      for (const p of grant.permissions) held.add(p);
+    const scopeType = grant.scopeType as ScopeType;
+    if (!isScopeType(scopeType)) continue;
+    const grantScope: ScopeRef = {
+      scopeType,
+      scopeId: grant.scopeId ?? (scopeType === 'organization' ? grant.orgId : null),
+    };
+    if (!scopeCovers(grantScope, target, chain)) continue;
+
+    for (const p of grant.permissions) {
+      if (grantConfers({ scopeType, permissions: grant.permissions }, p)) {
+        held.add(p);
+      }
     }
   }
 
@@ -251,39 +318,118 @@ export function getHeldOrganizationPermissions(): Set<string> {
 }
 
 /**
- * React hook returning permissions held by the actor that cover the active organization scope.
+ * Resolves authoritative grants effective for the currently selected organization.
+ * Filters out grants belonging to other organizations while preserving platform grants
+ * and valid reseller grants covering the active organization.
  */
-export function useHeldOrganizationPermissions(): Set<string> {
-  return useSession((state) => {
-    if (!state.authorization) return new Set<string>();
-    const held = new Set<string>();
+export function getActiveOrganizationGrants(): readonly EffectiveGrant[] {
+  const { authorization, selectedOrganizationId, user } = useSession.getState();
+  if (!authorization) return [];
+  if (!selectedOrganizationId) {
+    return authorization.grants.filter((g) => g.scopeType === 'platform');
+  }
 
-    for (const grant of state.authorization.grants) {
-      if (grant.scopeType === 'platform') {
-        for (const p of grant.permissions) held.add(p);
-      } else if (
-        grant.scopeType === 'organization' &&
-        state.selectedOrganizationId &&
-        (grant.scopeId === state.selectedOrganizationId ||
-          grant.orgId === state.selectedOrganizationId)
-      ) {
-        for (const p of grant.permissions) held.add(p);
-      }
-    }
+  const target: ScopeRef = { scopeType: 'organization', scopeId: selectedOrganizationId };
+  const chain: ScopeChain = {
+    resellerId: user?.tenant?.resellerId ?? null,
+    orgId: selectedOrganizationId,
+  };
 
-    return held;
+  return authorization.grants.filter((grant) => {
+    const scopeType = grant.scopeType as ScopeType;
+    if (!isScopeType(scopeType)) return false;
+    const grantScope: ScopeRef = {
+      scopeType,
+      scopeId: grant.scopeId ?? (scopeType === 'organization' ? grant.orgId : null),
+    };
+    return scopeCovers(grantScope, target, chain);
   });
 }
 
 /**
+ * Evaluates whether the current session holds a specific permission in the active organization context.
+ *
+ * Implements canonical RBAC rules:
+ * 1. Downward-only scope inheritance: platform -> reseller -> organization -> workspace -> team.
+ * 2. Team and workspace grants DO NOT confer organization-level authority.
+ * 3. Valid reseller grants are recognized for organizations owned by that reseller.
+ * 4. Platform administrators do NOT bypass tenant-content permissions or platform catalogue grants.
+ * 5. Unknown, malformed, or unauthenticated authorization requests fail closed.
+ * 6. Evaluated strictly against the active organization context derived from session state;
+ *    no caller-supplied target scopes or unverified ancestry chains are accepted.
+ */
+export function hasPermission(permission: string): boolean {
+  const { authorization, selectedOrganizationId, user } = useSession.getState();
+  return evaluatePermission({
+    authorization,
+    selectedOrganizationId,
+    userResellerId: user?.tenant?.resellerId ?? null,
+    permission,
+  });
+}
+
+/**
+ * React hook to evaluate permission holding reactively within the active organization context.
+ */
+export function useHasPermission(permission: string): boolean {
+  return useSession((state) =>
+    evaluatePermission({
+      authorization: state.authorization,
+      selectedOrganizationId: state.selectedOrganizationId,
+      userResellerId: state.user?.tenant?.resellerId ?? null,
+      permission,
+    }),
+  );
+}
+
+/**
+ * Resolves permissions the current actor holds that cover the active organization scope.
+ * Implements downward-only inheritance (TENANCY.md §1a.4, RBAC.md §7):
+ * - Platform grant covers all scopes (subject to admitted scopes).
+ * - Reseller grant covers organizations beneath that reseller (subject to admitted scopes).
+ * - Organization grant covers this organization.
+ * - Workspace and team grants DO NOT cover organization scope.
+ */
+export function getHeldOrganizationPermissions(): Set<string> {
+  const { authorization, selectedOrganizationId, user } = useSession.getState();
+  return resolveHeldOrganizationPermissions(
+    authorization,
+    selectedOrganizationId,
+    user?.tenant?.resellerId ?? null,
+  );
+}
+
+/**
+ * React hook returning permissions held by the actor that cover the active organization scope.
+ */
+export function useHeldOrganizationPermissions(): Set<string> {
+  return useSession((state) =>
+    resolveHeldOrganizationPermissions(
+      state.authorization,
+      state.selectedOrganizationId,
+      state.user?.tenant?.resellerId ?? null,
+    ),
+  );
+}
+
+/**
  * React hook evaluating whether the actor can access the Organizations administration section.
- * Covered if platform admin, or holding `organizations.read` across any grant (platform, reseller, or org).
+ * Covered if platform admin, or holding `organizations.read` across any grant covering organizations.
  */
 export function useCanReadOrganizations(): boolean {
   return useSession((state) => {
     if (!state.authorization) return false;
     if (state.authorization.isPlatformAdmin) return true;
-    return state.authorization.grants.some((g) => g.permissions.includes('organizations.read'));
+    return state.authorization.grants.some(
+      (g) =>
+        (g.scopeType === 'platform' ||
+          g.scopeType === 'reseller' ||
+          g.scopeType === 'organization') &&
+        grantConfers(
+          { scopeType: g.scopeType as ScopeType, permissions: g.permissions },
+          'organizations.read',
+        ),
+    );
   });
 }
 
