@@ -1271,10 +1271,10 @@ A read-only Gate C audit (01-Oct-2026) found two §4d criteria failing — Obser
 
 - **Technical checkpoint `c640e82`.** `acc_organization_status_refusals_total{status, operation}` and `acc_session_cap_evictions_total`; `next` 16.3.6, `@grpc/grpc-js` 1.14.5, `brace-expansion` patch releases; test-only pinning of the documented `RATE_LIMIT_*` defaults in `apps/api/test/setup-env.ts`. No schema, migration, OpenAPI artifact, RBAC/RLS or frontend source change.
 - **Refusal-counter design (for acceptance).** Counted once per refused request at the response boundary (`AllExceptionsFilter`), attributed by the four genuine sources through `logContext.refusedOrganizationStatus`, rather than incremented at each of the ~14 throw sites, several of which are dependency-free functions. The filter itself contains no status literals and no new imports — see the enum-order residual below.
-- **Dependency gate `4fb752e`.** `scripts/audit-check.mjs` accepts an exception by advisory id, not by package; the `multer` exception lists its five reviewed advisories and expires 31-Oct-2026 (shortened from 31-Dec-2026) because a fix exists — `@nestjs/platform-express` ≥ 11.2.6 pins `multer` 2.4.0, within the declared `^11.2.3`. The upgrade is not applied (not authorized); `SECURITY.md`, "Dependency exceptions".
+- **Dependency gate `4fb752e`.** `scripts/audit-check.mjs` accepts an exception by advisory id, not by package; the `multer` exception lists its five reviewed advisories and expires 31-Oct-2026 (shortened from 31-Dec-2026) because a fix exists — `@nestjs/platform-express` ≥ 11.2.6 pins `multer` 2.4.0, within the declared `^11.2.3`. The upgrade is not applied (not authorized at 02-Oct-2026 Gate C; subsequently resolved via `@nestjs/platform-express@11.2.7` / `multer@2.4.0` upgrade and exception removed); `SECURITY.md`, "Dependency exceptions".
 - **Approved 1C.2 test change, recorded.** `audit-writer.spec.ts` "shares no action between the acc_auth vocabulary and the sensitive set" was replaced in `19085bb` by "overlaps the acc_auth vocabulary and the sensitive set in exactly the two approved session actions", because the approved 1C.2 audit-routing correction (Option A, migration `0013`) admits `session.revoked`/`session.revoked_all` to the `acc_auth` vocabulary. The new assertion is exact, not weaker.
 - **Mutation evidence.** All eleven §4d mutations executed and caught, with failing test names (`TESTING.md` §6t).
-- **Residuals proposed for acceptance.** (1) OpenAPI metadata enum order: the committed plugin metadata orders enum values by TypeScript literal-creation order, so innocuous early-loaded code can reorder an enum and fail `openapi:check` without a contract change (fails closed). (2) The response-boundary counter relies on sources setting `refusedOrganizationStatus`. (3) `AuthorizationCoverageInterceptor` runs after the handler, so a missing authorization check is answered `500` but a committed write may not be rolled back (observed in mutants M02/M03) — **remediated**, see "Gate C closure". (4) The `multer` exception until the `@nestjs/platform-express` upgrade.
+- **Residuals proposed for acceptance.** (1) OpenAPI metadata enum order: the committed plugin metadata orders enum values by TypeScript literal-creation order, so innocuous early-loaded code can reorder an enum and fail `openapi:check` without a contract change (fails closed). (2) The response-boundary counter relies on sources setting `refusedOrganizationStatus`. (3) `AuthorizationCoverageInterceptor` runs after the handler, so a missing authorization check is answered `500` but a committed write may not be rolled back (observed in mutants M02/M03) — **remediated**, see "Gate C closure". (4) The `multer` exception until the `@nestjs/platform-express` upgrade (subsequently resolved via `@nestjs/platform-express@11.2.7` / `multer@2.4.0` upgrade and exception removed).
 
 ### Gate C closure — APPROVED / CLOSED
 
@@ -1424,7 +1424,7 @@ The transactional outbox, event consumers and any domain-event publication; the 
   - (b) **D-2 declined for 2.5:** no test code changes in 2.5. **Separate hardening follow-up** (*done 04-Oct-2026, separately authorized after Gate D.5 — `TESTING.md` §6u "D-2 hardening"; 17/17 mutants*): extend the credential-absence check in `provider-registry.sec-spec.ts` to `provider_circuit_policy` (2.3) and `provider_configuration_revision` (2.4), and add a static source check that no credential type, port, interface or resolution code exists outside `apps/api/src/secrets/`. Absence for those two tables is now proven by a test.
   - (c) CR-4/CR-5 are ownership-model neutral: no cross-owner use, fail closed, no cross-owner fallback unless the future ADR defines and approves it. CR-7 treats locators as potentially sensitive metadata whose visibility the ADR must define. NOT FROZEN: ownership/scope model, precedence/selection, management authority per scope, no-tenant-context selection, retention/deletion, resolved-value caching, credential API/UI, storage implementation (`PROVIDER_ADAPTER.md` §4a.3).
 - **2.5 closure — Gate D.5 PASS / CLOSED — documentation-only Credential Reference Contract (user decision, 04-Oct-2026).** Closed on `0048bc3` plus a final documentation cleanup of `RUNBOOK.md` §5 and §7 (no implied credential storage model; the hot-reload wording aligned with the 2.4 design; no credential material in snapshots or notifications). Evidence: changes confined to `docs/`; OpenAPI 74 application operations; full regression 1,825/1,825; Gitleaks clean. The D-2 test hardening stays a separate, unauthorized follow-up. Not pushed at closure.
-- **Phase 2 closure plan and Gate D readiness (05-Oct-2026; user decisions; Gate D decision pending).** Phase 2 closes as a **whole**: Gate D (backend) **and** Gate D.6 (the provider console, implemented by Gemini; Claude owns backend, test and documentation work). Done before Gate D: (a) **R2** documentation reconciliation; (b) **R1** the Gate D scope-creep proof (`scope-creep.architecture.spec.ts`); (c) **repeatability** — harness cleanup that always closes, random API-key prefixes (UUIDv7 heads repeat within a millisecond), the audit-read ordering assertion aligned with the documented order, a gate race in the circuit-policy suite, and a mutation runner that counts a mutant only on assertion evidence; (d) **the provider-console fixture** (`fixture:providers`, `TESTING.md` §6v) as a **separate opt-in extension** (user choice), adding two owner-level exceptions — fixture platform roles and platform personas, made as the bootstrap makes a platform grant — and leaving the Phase 1C.4a fixture unchanged. Evidence `TESTING.md` §6u "Gate D backend evidence". Not pushed; CI on the pushed commit is still required before Gate D can close.
+- **Phase 2 closure plan and Gate D readiness (05-Oct-2026; user decisions; Gate D APPROVED / CLOSED 13-Oct-2026; §1q).** Phase 2 closes as a **whole**: Gate D (backend) **and** Gate D.6 (the provider console). Done before Gate D: (a) **R2** documentation reconciliation; (b) **R1** the Gate D scope-creep proof (`scope-creep.architecture.spec.ts`); (c) **repeatability** — harness cleanup that always closes, random API-key prefixes (UUIDv7 heads repeat within a millisecond), the audit-read ordering assertion aligned with the documented order, a gate race in the circuit-policy suite, and a mutation runner that counts a mutant only on assertion evidence; (d) **the provider-console fixture** (`fixture:providers`, `TESTING.md` §6v) as a **separate opt-in extension** (user choice), adding two owner-level exceptions — fixture platform roles and platform personas, made as the bootstrap makes a platform grant — and leaving the Phase 1C.4a fixture unchanged. Evidence `TESTING.md` §6u "Gate D backend evidence". Verified on pushed commit `7a9ed37` with successful CI run `37969162005`. Gate D formally APPROVED 13-Oct-2026 (§1q).
 - Residuals accepted by this freeze: (1) *[superseded for the transport by the "2.4 design" — PostgreSQL `LISTEN/NOTIFY`, reconciliation and a hard TTL; the bounded-convergence principle stands]* (1) 2.4 is **best-effort configuration invalidation with bounded convergence** — not transactional configuration propagation: the update commits first, invalidation is published after commit, a subscriber refreshes as soon as it receives the publication, and if a publication is lost the TTL bounds how long a stale entry can be served; outbox-backed transactional event propagation remains deferred (PD-1); (2) with no events, provider transitions are observable through `audit_logs` and metrics only; (3) RLS does not distinguish among validated platform-scope principals; within that set, the boundary is the permission layer (`AuthorizationService` plus pre-commit containment) — so `alendei_support` is RLS-eligible and denied by authorization in Phase 2 (F-3).
 
 ## 1n. ADR-014 — Phase 3 WhatsApp-first orchestration
@@ -1435,7 +1435,7 @@ The transactional outbox, event consumers and any domain-event publication; the 
 
 ## 1o. ADR-015 — Pre-Phase-3 foundation remediation
 
-**Status: APPROVED by the user (06-Oct-2026); implementation authorized; Phase 3.1 NOT authorized.** Context: the pre-Phase-3 engineering audit (06-Oct-2026, HEAD `6d4b178`) was accepted as the authoritative finding set with the verdict **BLOCKED — REMEDIATION REQUIRED** (HIGH-1 … HIGH-6, MEDIUM-1 … MEDIUM-14). The user approved a remediation design and the decisions below. Implementation stops at a **remediation gate**; Phase 3.1 starts only on the user's explicit authorization after reviewing the evidence. Any case not covered here is stopped and reported, not decided silently.
+**Status: APPROVED by the user (06-Oct-2026); implementation authorized. Remediation gate APPROVED / CLOSED (user decision, 09-Oct-2026 — see "Remediation gate closure" below). Phase 3.1 NOT authorized.** Context: the pre-Phase-3 engineering audit (06-Oct-2026, HEAD `6d4b178`) was accepted as the authoritative finding set with the verdict **BLOCKED — REMEDIATION REQUIRED** (HIGH-1 … HIGH-6, MEDIUM-1 … MEDIUM-14). The user approved a remediation design and the decisions below. Implementation stops at a **remediation gate**; Phase 3.1 starts only on the user's explicit authorization after reviewing the evidence. Any case not covered here is stopped and reported, not decided silently.
 
 ### Scope
 
@@ -1605,6 +1605,68 @@ Implemented on `develop` (commits `8e36905` feat, `196baf9` and `10ac969` test, 
 ### Required evidence (every remediation)
 
 Positive, negative security, direct database backstop, deterministic concurrency and mutation tests (every intended mutant caught); fresh migration, upgrade migration, rerun/no-op; disposable-clone regression; exact privilege catalogue; policy and trigger definition checks; full regression; CI green. HIGH-5 additionally: the full Model B matrix (organization grant, workspace/team grant allowed; sibling organization, reseller-only, platform-only, support-only, suspended user, revoked key, expired key, forged organization context denied; the `app.current_user_id` residual documented and tested exactly; `PUBLIC EXECUTE` on the helper impossible).
+
+
+### Remediation gate closure — APPROVED / CLOSED (user decision, 09-Oct-2026)
+
+**Decision.** The ADR-015 pre-Phase-3 remediation gate is **APPROVED / CLOSED**. Commit `7a9ed370c13b101294a9a6518e886f552a3f4b14` on `develop` (pushed, `6d4b178..7a9ed37`) carries ADR-015 steps 1–6 and follow-up items 2, 4 and 5, the lockfile-only dependency remediation, the `destroyUser` harness fix and the documentation. Gate C (Phase 1C, ADR-012) was closed separately on 02-Oct-2026 and is not affected.
+
+**Approving evidence.**
+- Final isolated candidate `c27a435dde9b422c64a1116be61d8b6525ea3a23` (the committed tree minus three post-validation documentation edits; `TESTING.md` §6q): **200/200 runnable mutants caught** under the standard runner across all nine catalogues, none survived; regression DB unit 5/5, DB integration 222/222, API unit 498/498, API integration 125/125, API security 1,402/1,402 (53 suites), web 183/183; static checks, `openapi:check`, `drizzle-kit generate`, migration hashes 31/31 (fingerprint `d37462ef…`), Gitleaks and `git diff --check` passed.
+- `npm run audit` exit 0: 0 critical, 2 high under the existing documented `multer` exception, 26 moderate.
+- CI run `37969162005` on `7a9ed37`: all five jobs successful — secret scan, dependency audit, OpenAPI contract drift, lint / typecheck / build, integration / database / security.
+
+**Qualifications preserved.**
+- Step 3 M6, M6b and M6c are caught by the intended race tests through wait timeouts, not explicit assertions.
+- Item 5 E1 is classified equivalent by reasoning and was not run.
+- Item 4 M1 produced teardown noise and was caught by its intended assertion failures.
+- Items 1 (organization status in the content predicate) and 3 (`delegate_tenant` structural admissibility) remain **deferred**.
+- Every accepted residual risk recorded in this section, `SECURITY.md` §4b and `RBAC.md` §7d remains documented and accepted (including the cross-scope advisory-lock ordering residual and the mutual-revocation `404` decision).
+
+**Outstanding obligation (fulfilled & verified).** The `multer` exception previously scheduled to expire on **31-Oct-2026** was resolved via workspace lockfile update to `@nestjs/platform-express@11.2.7` (pinning `multer@2.4.0`). All five reported Multer advisories (GHSA-wc9g-mqfw-jrwm, GHSA-qfvm-cv95-jqjf, GHSA-535w-7cp7-47q4, GHSA-3pph-fpjx-jg34, GHSA-qvfw-j98x-7q72) are resolved and outside affected version ranges. The exception has been removed from `security/audit-exceptions.json`. `npm run audit` passes with 0 critical, 0 high, 26 moderate, 0 low, and 0 active exceptions.
+
+**Not authorized by this closure:** Phase 3.1 and Item 6 each require separate explicit authorization.
+
+### Phase 2.6 / Gate D.6 closure — APPROVED (project owner decision, 13-Oct-2026)
+
+**Decision.** Phase 2.6 Gate D.6 (Provider & Channel Console) is **APPROVED** by the project owner following the final read-only acceptance audit.
+
+**Approving evidence.**
+- Playwright E2E suite (`apps/web/e2e/providers-console.spec.ts`): 8/8 passed repeatably (E2E-PROV-01 through E2E-PROV-08; 13.5s duration, exit code 0) against a disposable clone of `acc_r015_base` with `fixture:dev` and `fixture:providers` loaded.
+- Focused provider administration and security unit suites: 22/22 passed in `apps/web/src/lib/providers-administration.test.ts` (13 cases) and `apps/web/src/lib/providers-security.sec.test.ts` (9 cases).
+- OpenAPI contract consistency: `npm run openapi:check` passed; generated specification and metadata are current and match.
+- Direct-route authorization boundary enforcement: Direct URL navigation to `/providers` and `/channels` verified to enforce `Access Forbidden` boundary for unauthorized persona (`platform-support@acc-fixture.test`), with zero disclosure of provider or channel configuration.
+- Tenant & session security invariants: Verified under in-memory session invariants (SEC-02); no tokens or credentials stored in browser persistence.
+- Database cleanliness: Verified clean drop of disposable clone `acc_r015_base_clone_4944ce913640`; persistent template `acc_r015_base` row-count fingerprint unchanged; Next.js and API listeners released.
+
+**Preserved observations & constraints.**
+- Chained `.catch(() => {})` in E2E-PROV-08 accepted as a minor diagnostic observation, not an authorization defect.
+- Working tree state preserved (24 tracked modified files, 5 untracked security test files; empty staging area; no commit or push).
+- Phase 2.7 / subsequent increments require separate explicit authorization.
+
+## 1q. Phase 2 / Gate D closure and Phase 2 sign-off — APPROVED (project owner decision, 13-Oct-2026)
+
+**Decision.** Gate D (Phase 2 Backend Acceptance) is **APPROVED** by the project owner following formal acceptance review. Together with the previously approved Gate D.6, Phase 2 of Alendei Communications Cloud is formally **CLOSED** under `ROADMAP.md` §§5a and 5c.
+
+**Accepted evidence baseline:**
+- **Full backend regression:** 1,869/1,869 tests passed across three consecutive runs at freeze (`TESTING.md` §6u: db-unit 4, db-int 136, api-unit 426, api-int 124, api-sec 1,179). Expanded to 2,252/2,252 passing under ADR-015 candidate validation (`HANDOFF.md` §4: db-unit 5, db-int 222, api-unit 498, api-int 125, api-sec 1,402). CI run `37969162005` on pushed commit `7a9ed37` passed across all five jobs.
+- **Mutation proofs:** 104/104 caught on disposable clones (X01–X30, Y01–Y15, Z01–Z08, W01–W16, D01–D08, S01–S09, C01–C14, F01–F04; `TESTING.md` §6u). Every mutant caught on explicit assertions; zero runs killed or hanging.
+- **Migration & schema integrity:** Migrations `0018`–`0024` apply cleanly from empty and re-run as a no-op with identical dump; template `acc_r015_base` row-count fingerprint verified.
+- **OpenAPI & contract consistency:** `apps/api/openapi/openapi.v1.json` covers all 74 application operations; `openapi:check` passes with zero drift.
+- **Security & boundary invariants:** Structural `CircuitAdmission` enforced (`PROVIDER_ADAPTER.md` §6h; ADR-015 R-13); zero credential secret persistence proven across all six Phase 2 provider tables and backend code (`credential-absence.architecture.spec.ts`); scope-creep checks pass (`scope-creep.architecture.spec.ts`).
+- **Dependency audit:** Remediated via `@nestjs/platform-express@11.2.7` / `multer@2.4.0`; 0 critical, 0 high, 26 moderate, 0 active exceptions (`security/audit-exceptions.json`).
+
+**Disclosed operational limitations & accepted residual risks:**
+- Hot reload operates as best-effort configuration invalidation with bounded convergence (`R` = 5 s, `T` = 60 s) via PostgreSQL `LISTEN/NOTIFY`, not transactional propagation (ADR-013 PD-1, `PROVIDER_ADAPTER.md` §3a).
+- Provider transitions are observable through `audit_logs` and metrics only (no event publishing; ADR-013 PD-2).
+- RLS does not distinguish among validated platform-scope principals; `alendei_support` is RLS-eligible but refused by `AuthorizationService` (ADR-013 F-3).
+- 26 moderate devDependency advisories remain documented and accepted as non-blocking development risks.
+- HIGH-6 and MEDIUM-7 remain deferred until immediately before the Phase 3 dispatcher increment (R-15).
+
+**Boundaries & Next Increments:**
+- Phase 2 is formally CLOSED. Phase 2.7 remains undefined and unauthorized.
+- Phase 3.0 architecture remains FROZEN under ADR-014.
+- Phase 3.1 remains NOT STARTED and NOT AUTHORIZED; separate explicit project-owner authorization is required.
 
 ## 3. Risks explicitly accepted by design (not oversights)
 

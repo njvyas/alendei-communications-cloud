@@ -1,6 +1,6 @@
 # Provider Abstraction Architecture
 
-> **Phase 2 status (ADR-013): SCOPE FROZEN; 2.1 (migrations `0018`–`0019`) CLOSED (Gate D.1); 2.2 (migrations `0020`–`0021`) CLOSED (Gate D.2); 2.3 (health and circuit breaker, migrations `0022`–`0023`) CLOSED (Gate D.3); 2.4 (hot reload, migration `0024`, §3a) CLOSED (Gate D.4); 2.5 (credential reference contract, §4a, documentation only) CLOSED (Gate D.5); 2.6 not implemented.**
+> **Phase 2 status (ADR-013): CLOSED (project owner decision, 13-Oct-2026; Gate D and Gate D.6 approved). Increments: 2.1 (migrations `0018`–`0019`) CLOSED (Gate D.1); 2.2 (migrations `0020`–`0021`) CLOSED (Gate D.2); 2.3 (health and circuit breaker, migrations `0022`–`0023`) CLOSED (Gate D.3); 2.4 (hot reload, migration `0024`, §3a) CLOSED (Gate D.4); 2.5 (credential reference contract, §4a, documentation only) CLOSED (Gate D.5); 2.6 (frontend console) CLOSED (Gate D.6).**
 
 ## 1. Purpose
 

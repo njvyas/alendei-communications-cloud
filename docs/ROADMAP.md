@@ -227,8 +227,9 @@ Objectively testable; each is pass/fail.
 | **1C.3** ✅ implemented and closed (PASS) | OpenAPI reconciliation: full schemas, security schemes, headers, envelopes, idempotency and rate-limit documentation; generated spec; CI drift gate; authenticated UI outside development (ADR-012 F-13) | none | generated spec matches the route table and §31; snapshot drift gate in CI |
 | **1C.4a** | Deterministic dev/test fixture and bootstrap command | data only | ✅ **IMPLEMENTED and CLOSED (PASS)** (`npm run fixture:dev --workspace @acc/api`, `TESTING.md` §6r; checkpoint `91607aa`) |
 | **1C.4b** | Gemini E2E corrections (`TESTING.md` §6p) | — | ✅ **IMPLEMENTED and CLOSED (PASS)** (Gate C.4b, checkpoint `4e7effd`) |
+| **1C.5** | Unassigned / intentionally undefined pending explicit planning | none | Unassigned; skipped in Phase 1C increment sequence (no scope, deliverables, or gate assigned) |
 
-**Order:** 1C.0 → 1C.1a → 1C.1b → 1C.6 → 1C.3, with 1C.2 in parallel after 1C.0. Backend implementation then stops and the finalized frontend contract is handed to Gemini.
+**Order:** 1C.0 → 1C.1a → 1C.1b → 1C.6 → 1C.3, with 1C.2 in parallel after 1C.0. (Increment 1C.5 is unassigned / intentionally undefined pending explicit planning; subsequent increments are not renumbered.) Backend implementation then stops and the finalized frontend contract is handed to Gemini.
 
 **Out of scope for Phase 1C:** credential delivery/invitations (D16), WebSocket gateway/consumption/subscriptions (D15), providers and provider health (Phase 2), outbox/event consumers/SIEM (attributed to Phase 2 here; re-scheduled by ADR-013 PD-1 — not Phase 2 scope), delivery state (Phase 3+), routing/fallback (Phases 5–6), billing (Phase 7), reseller lifecycle/CRUD and white-label (Phase 9), deployment artifacts (separate track), workspace/team-level RLS (ADR-011 D-4), physical data deletion or retention automation, MFA, password reset, lockout, SSO/OAuth2, API-key rotation, ABAC, scope-set caching.
 
@@ -278,9 +279,9 @@ Objectively testable; each is pass/fail. Evidence runs on an isolated test datab
 | **2.3** | Health & Circuit Breaker | `provider_health`; health/circuit columns on `providers` | ✅ CLOSED — migrations `0022`, `0023`; Gate D.3 approved |
 | **2.4** | Hot Reload | `provider_configuration_revision` (migration `0024`) | ✅ CLOSED — migration `0024`; Gate D.4 approved |
 | **2.5** | Credential Reference Contract — documentation only | none | ✅ CLOSED — documentation only (`PROVIDER_ADAPTER.md` §4a); Gate D.5 approved |
-| **2.6** | Frontend console — separately authorized | none | Gate D.6 |
+| **2.6** | Frontend console — separately authorized | none | ✅ CLOSED — Gate D.6 approved 13-Oct-2026 |
 
-**Execution order:** 2.1 → 2.2 → 2.3 → 2.4; 2.5 may run alongside 2.2; 2.6 after the 2.1–2.4 contract is stable. **Phase 2 closes as a whole (user decision, 05-Oct-2026): Gate D (backend, §5c) and Gate D.6 (console).**
+**Execution order:** 2.1 → 2.2 → 2.3 → 2.4; 2.5 may run alongside 2.2; 2.6 after the 2.1–2.4 contract is stable. **Phase 2 closed as a whole (project owner decision, 13-Oct-2026): Gate D (backend, §5c) and Gate D.6 (console) are both APPROVED / CLOSED.**
 
 ### 5b. Increment specifications
 
@@ -349,7 +350,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 - *Status (04-Oct-2026)*: documented in `PROVIDER_ADAPTER.md` §4a (binding requirements CR-1–CR-8, the `SecretsPort` boundary, the NOT FROZEN list, candidate input) and reconciled in `SECURITY.md` §3–§3b and `RUNBOOK.md` §5, §7; **PASS / CLOSED — documentation-only Credential Reference Contract** (Gate D.5 approved). **Follow-up outside 2.5:** credential-absence test hardening (ADR-013 "2.5 notes" (b)) — done 04-Oct-2026 (`TESTING.md` §6u, "D-2 hardening").
 - *Exclusions*: `provider_credentials`, any ownership model, rotation, management, any real credential, any credential type in code.
 
-**2.6 — Frontend console (separately authorized and gated; implemented by Gemini)**
+**2.6 — Frontend console (Status: APPROVED / CLOSED — Gate D.6, 13-Oct-2026; separately authorized and gated; implemented by Gemini)**
 - *Objective*: a platform administrator can do in the console everything the Phase 2 acceptance line names — add, disable and drain a simulated provider, test-send to it, and see its health and circuit state change — with no deploy and no restart.
 - *Scope* (the whole Phase 2 contract, `FRONTEND_API_CONTRACT.md` §32; scope widened to the full acceptance surface by user decision, 05-Oct-2026): channels list and detail (read-only); provider list (channel and status filters, keyset pagination) and detail with capabilities; create (`disabled` on creation); rename; capability-set replacement; enable, disable, drain; test-send with a chosen simulator behaviour; health check; manual health override (set and clear); health-sample history; circuit-policy read and update (`expectedVersion`). Health and circuit are shown by polling (ADR-013 PD-8). No credential field, routing control or hot-reload control exists anywhere.
 - *Authorization in the UI*: actions are shown or enabled from the capability hints in `GET /auth/me/authorization`; the server stays the authority, and every documented refusal is handled — `401`, `403`, `404`, `409` (`PROVIDER_LIFECYCLE_CONFLICT`, `PROVIDER_CIRCUIT_OPEN`, `RESOURCE_CONFLICT`), `422` (`PROVIDER_ADAPTER_UNKNOWN`), `400` validation details, `429`.
@@ -358,7 +359,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 
 ### 5c. Gate D — Phase 2 acceptance
 
-Objectively testable; each is pass/fail. Evidence runs on disposable clones, never on the canonical test database. Sub-gates D.1–D.6 close their increments; Gate D closes Phase 2.
+**Status: APPROVED / CLOSED (project owner decision, 13-Oct-2026; `DECISIONS.md` §1q). Together with Gate D.6, Phase 2 is formally CLOSED.** Objectively testable; each is pass/fail. Evidence runs on disposable clones, never on the canonical test database. Sub-gates D.1–D.6 close their increments; Gate D closes Phase 2.
 
 - **Registry correctness** — every 2.1 route behaves as specified; the lifecycle transition matrix is exact; illegal transitions `409` and change nothing; the seeded channel catalogue is read-only.
 - **Authorization and global-catalogue security** — only holders of the required `providers.*` permission at platform scope succeed; organization, workspace, team, reseller, `alendei_support` and API-key principals are refused; with the service bypassed, a transaction without a validated platform-scope claim sees zero catalogue rows and cannot write; the RLS predicate names no role or permission (a test grants the permissions to a second, test-only platform role and shows it succeeds with no policy change, and shows `alendei_support` is RLS-eligible yet refused by authorization); `acc_auth`/`acc_relay` hold no grant; every new route is in the route-coverage test and inside the pre-commit coverage boundary.
@@ -377,7 +378,7 @@ Objectively testable; each is pass/fail. Evidence runs on disposable clones, nev
 - **Documentation** — `PROVIDER_ADAPTER.md`, `DATABASE.md`, `API.md`, `FRONTEND_API_CONTRACT.md`, `SECURITY.md`, `TESTING.md`, `OBSERVABILITY.md` and this roadmap describe exactly what exists.
 - **Explicitly not required at Gate D:** everything excluded by ADR-013; 2.6 is gated separately (D.6).
 
-**Gate D.6 — the provider console (2.6).** Phase 2 is closed only when Gate D **and** Gate D.6 pass. Each is pass/fail:
+**Gate D.6 — the provider console (2.6).** Status: **APPROVED / CLOSED** (project owner decision, 13-Oct-2026; Playwright E2E 8/8 pass; focused admin/security unit 22/22 pass; openapi:check passes; direct-route boundaries enforced). Phase 2 is closed only when Gate D **and** Gate D.6 pass (both are APPROVED / CLOSED as of 13-Oct-2026; Phase 2 is formally CLOSED). Each is pass/fail:
 
 - **Coverage** — every operation in the 2.6 scope (§5b) is reachable in the console, against the unchanged `FRONTEND_API_CONTRACT.md` §32 contract.
 - **Polling** — health and circuit state refresh by polling at a bounded interval; no WebSocket.

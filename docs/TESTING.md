@@ -339,6 +339,21 @@ Re-executed after the remediation, each mutant on its own disposable clone (belo
 
 **Isolation for mutation and other destructive runs.** `node scripts/with-db-clone.mjs -- <command>` runs the command against `CREATE DATABASE <template>_clone_<random> TEMPLATE <template>`, where the template is the database in `DATABASE_ADMIN_URL`. All four `DATABASE_*_URL` variables point at the clone, and the command runs in its own process group, which is reaped on exit. The runner prints the rows the command left behind, drops the clone `WITH (FORCE)` on every exit path and verifies it is gone. It fails if the template's per-table row counts changed. A run killed mid-suite (proven with `timeout -s KILL`) left 65 to 110 audit rows plus fixtures in its clone, none in the template. The DB audit suite then passed 58/58 on a fresh clone.
 
+**Disposable database test procedure:**
+- All database-backed integration and security suites must execute through `scripts/with-db-clone.mjs`.
+- The reference template `acc_r015_base` is intentionally frozen at migration `0024` (`1bc7fd9`). It must never be migrated, reset, or modified during test setup.
+- When running test suites that depend on subsequent migrations (currently `0025`–`0030`, e.g., teardown trigger `trg_user_roles_reseller_admin_liveness` in `auth-harness.ts`), the disposable clone must be migrated through the required migration set before running tests:
+  ```bash
+  DATABASE_URL="postgres://acc_app:acc_app_dev_password@localhost:5432/acc_r015_base" \
+  DATABASE_AUTH_URL="postgres://acc_auth:acc_auth_dev_password@localhost:5432/acc_r015_base" \
+  DATABASE_ADMIN_URL="postgres://postgres:postgres_dev_password@localhost:5432/acc_r015_base" \
+  DATABASE_RELAY_URL="postgres://acc_relay:acc_relay_dev_password@localhost:5432/acc_r015_base" \
+  RATE_LIMIT_AUTH_MAX=10 RATE_LIMIT_REFRESH_MAX=30 \
+  node scripts/with-db-clone.mjs -- bash -c "npm run db:migrate --workspace @acc/db && npm --workspace=@acc/api run test:integration"
+  ```
+- Migrations must never be applied directly to `acc_r015_base` or to persistent development databases (`acc`) as part of test execution.
+- Clone cleanup is verified automatically: `with-db-clone.mjs` executes `DROP DATABASE <clone> WITH (FORCE)` on all exit paths and validates that the template row-count fingerprint remains identical.
+
 **Process incident (07-Oct-2026): the reference template `acc_p24_fresh` was dropped.** This was not a test cleanup. During ADR-015 step 2 a scratch fresh-install script (outside the repository) named its throwaway database with a shell variable `T` and then sourced a helper that also assigned `T`, so `T` named `acc_p24_fresh`. The script applied `0025` and the seed to `acc_p24_fresh`, ran suites on it directly, and its exit trap ran `DROP DATABASE … WITH (FORCE)` on it. The other databases were untouched; all step-2 evidence gathered before the drop came from clones of the intact template, and the fresh-install run was redone on a hard-coded throwaway database. The original cannot be recreated identically and was not rebuilt under its name. **Replacement (user decision, 07-Oct-2026):** the disposable template `acc_r015_base`, built from `template0` with `0000`–`0024` applied from a worktree at `1bc7fd9` and seeded, verified before any further clone run: 25/25 migration hashes match their files, seed rows exactly 37 permissions, 3 platform roles (37/13/18 permissions), 68 role-permission rows, 1 reseller, no organization, user, session or audit row, and a schema/privilege/policy/function catalogue fingerprint identical to the upgrade-path `acc_p24`. **Rule since:** a script that creates or drops a database hard-codes the name, refuses any name outside an allowlisted throwaway pattern or naming a reference database, and never takes the name from a variable a sourced helper could set.
 
 | Generated spec ⊇ route table and route table ⊇ spec; each route's security scheme matches its `@Public`/`@RequiresPermission`/`@AuthorizationExempt` declaration; integration request/response pairs validate against the spec; committed snapshot equals generated spec (CI); UI/JSON require authentication outside development (real-bootstrap test) |
@@ -781,12 +796,13 @@ The read-only Gate C audit (01-Oct-2026) found the Observability and Regression 
 
 **Scope-creep checks (Gate D) — implemented 05-Oct-2026 (R1).** `apps/api/src/scope-creep.architecture.spec.ts`, 14 unit cases over the backend source with comments stripped: one pattern per forbidden category — outbox and event publication, worker/job infrastructure, SIEM export, routing/failover, billing/rating, real adapters and outbound network calls, the message lifecycle, reseller/white-label provider administration (provider code), a WebSocket gateway — with every pre-existing match pinned per file and its reason recorded in the spec (Phase 0/1 relay and Kafka configuration, the `acc_relay` role, organization billing fields, the `estimateCost`/`checkStatus`/`parseWebhook` stubs, the routing-eligibility contract, the deferred WebSocket ticket, the two fixture API clients); plus structural pins: the API module list, the adapter files and `PROVIDER_ADAPTER_KEYS = ['simulator']`, the exact set of tables the migrations create, and every declared dependency (`kafkajs` and `@nestjs/schedule` are pre-existing declarations imported nowhere). Mutants C01–C14 (one or more per category) are each caught by their own case.
 
-**Gate D backend evidence (05-Oct-2026; local, not pushed; Gate D decision pending).** On one commit line after R2 (`eb2435a`), R1 (`8b2ce87`), the repeatability fixes (`0dc3161`) and the provider fixture (`ba394f1`):
+**Gate D backend evidence (05-Oct-2026; APPROVED / CLOSED 13-Oct-2026; project owner decision; `DECISIONS.md` §1q).** On one commit line after R2 (`eb2435a`), R1 (`8b2ce87`), the repeatability fixes (`0dc3161`) and the provider fixture (`ba394f1`):
 
 - **Full regression, three consecutive runs, identical:** 1,869/1,869 each (db-unit 4, db-int 136, api-unit 426, api-int 124, api-sec 1,179), zero skipped, each phase on its own clone of a `0024` database.
 - **Mutation proofs, evidence-based:** 104/104 caught — X01–X30, Y01–Y15, Z01–Z08, W01–W16 (2.3/2.4), D01–D08 and S01–S09 (D-2), C01–C14 (R1), F01–F04 (fixture). A mutant counts only if one of its intended tests fails on an **assertion**: a test timeout, a suite that failed to run, or a run ended by the time limit is not evidence. No run was killed; no run left jest hanging (X23 now ends in about 20 s). Collateral per-test timeouts remain only under X08 and X14, which break probe admission itself; both also fail their intended assertions.
 - **Migrations:** an empty database migrates 25/25 with hashes matching the files; a re-run is a no-op; the schema dump is identical after the re-run and to the reference database; `drizzle-kit generate` reports no schema change.
 - **Static gates:** lint, typecheck, build, whole-repository format check, `openapi:check` (74 application operations, the document byte-identical to the Gate D.3 commit), dependency audit (accepted multer exceptions, expiring 31-Oct-2026).
+- **Formal approval & closure (13-Oct-2026):** Gate D is formally APPROVED by the project owner (`DECISIONS.md` §1q). Commit `7a9ed37` verified green across all five jobs in CI run `37969162005`. Multer dependency remediated via `multer@2.4.0` (`security/audit-exceptions.json` holds 0 active exceptions). Together with Gate D.6, Phase 2 is formally CLOSED.
 
 ### 6v. Phase 2.6 support — the provider-console fixture (`fixture:providers`; Gate D.6 preparation, 05-Oct-2026)
 
@@ -806,6 +822,26 @@ An **opt-in extension**, run after `fixture:dev` (§6r), for the provider consol
 The platform administrator is the §6r operator. Personas sign in with the fixture-user password. No persona holds `providers.manage`, `alendei_super_admin`, a tenant or a reseller grant. The owner-level writes run in their own transactions, elevated only by the transaction-local `app.is_platform_admin` the bootstrap and seed use (no trigger disabled, no policy changed), and are audited through the committed `AuditWriter` with `actor_label = provider_fixture` (`role.created`, `user.invited`, `user_role.granted`); every provider change is the operator's own audited API call.
 
 `apps/api/test/provider-fixture.sec-spec.ts` — **23 cases**: refusal outside development/test and without `fixture:dev`, nothing written; the providers exactly, made through the API and audited as the operator; the two roles' exact permissions (never `providers.manage`) and their `role.created` rows; each persona active with exactly one platform grant, the operator still the only platform administrator, the personas' audit rows; over HTTP — the read-only persona reads and is refused every write, test-send and probe, the test_send-only persona test-sends and is refused administration, the denied persona is refused the catalogue; a second run byte-identical; `fixture:dev` still a no-op; a provider in another status or past its target, a role with an extra permission and a persona with an extra grant are each refused with nothing changed; the owner write set (`INSERT INTO roles`, `role_permissions`, `user_roles`; lifecycle `invite`/`activate`; only `app.is_platform_admin`) and the import closure pinned. Mutants F01–F04 (reader role gains `providers.manage`; a persona made platform administrator; an extra owner write; inspection accepting any status) are each caught.
+
+### 6x. Phase 2.6 provider console test evidence (Gate D.6 APPROVED, 13-Oct-2026)
+
+The provider console browser test suite (`apps/web/e2e/providers-console.spec.ts`) and associated unit/security suites satisfy Gate D.6 acceptance:
+
+- **E2E Playwright Suite (8/8 pass, 13.5s):**
+  - `E2E-PROV-01: Channel catalogue and detail navigation` (seeded channels WhatsApp, SMS, Email; detail cards)
+  - `E2E-PROV-02: Provider list, status badges, and filtering` (channel/status filter queries, keyset pagination)
+  - `E2E-PROV-03: Provider lifecycle transitions` (drain -> disabled -> active transitions)
+  - `E2E-PROV-04: Provider capabilities replacement` (atomic PUT capability replacement)
+  - `E2E-PROV-05: Circuit policy administration and concurrency conflict` (read, update, 409 conflict handling)
+  - `E2E-PROV-06: Health probe and manual override` (simulator probe trigger, set/clear override)
+  - `E2E-PROV-07: Simulator test-send accepted and rejected outcomes` (SUCCESS accepted, 429 rejected with retryable error)
+  - `E2E-PROV-08: Low-privilege persona authorization boundaries` (read-only catalogue view for `providersReader`; direct route navigation to `/providers` and `/channels` enforcing `Access Forbidden` boundary for denied `platformSupport` persona with zero configuration disclosure)
+- **Focused Unit & Security Suites (22/22 pass, 130.5ms):**
+  - `apps/web/src/lib/providers-administration.test.ts` (13 cases)
+  - `apps/web/src/lib/providers-security.sec.test.ts` (9 cases: SEC-1 through SEC-9)
+- **Contract & Isolation:**
+  - `npm run openapi:check` passes without drift.
+  - Executed against disposable clone of `acc_r015_base` via `scripts/with-db-clone.mjs`; clone dropped and verified gone; template row counts unchanged.
 
 ### 6w. Phase 3 test requirements (ADR-014 — architecture frozen; nothing implemented)
 
