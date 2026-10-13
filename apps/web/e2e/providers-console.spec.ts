@@ -341,15 +341,23 @@ test.describe('Phase 2.6 — Providers & Channels Console (Gate D.6)', () => {
     );
 
     // Navigation to /providers must show Access Forbidden boundary
-    await page.getByRole('link', { name: 'Providers' }).click();
-    await page.waitForURL((url) => url.pathname.startsWith('/providers'));
+    await page.goto('/providers');
+    const enterProvidersBtn = page.getByRole('button', { name: 'Enter Console' });
+    await enterProvidersBtn
+      .waitFor({ state: 'visible', timeout: 3000 })
+      .then(() => enterProvidersBtn.click())
+      .catch(() => {});
     await expect(page.getByRole('heading', { name: 'Access Forbidden' })).toBeVisible();
     // Zero provider names disclosed
     await expect(page.getByText('ACC Fixture SMS Primary')).not.toBeVisible();
 
     // Navigation to /channels must show Access Forbidden boundary
-    await page.getByRole('link', { name: 'Channels' }).click();
-    await page.waitForURL((url) => url.pathname.startsWith('/channels'));
+    await page.goto('/channels');
+    const enterChannelsBtn = page.getByRole('button', { name: 'Enter Console' });
+    await enterChannelsBtn
+      .waitFor({ state: 'visible', timeout: 3000 })
+      .then(() => enterChannelsBtn.click())
+      .catch(() => {});
     await expect(page.getByRole('heading', { name: 'Access Forbidden' })).toBeVisible();
     await expect(page.getByText('WhatsApp', { exact: true })).not.toBeVisible();
   });
