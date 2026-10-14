@@ -45,6 +45,8 @@ const TABLES = [
   'contact_identities',
   'contacts',
   'idempotency_keys',
+  // Phase 3.2 (migration 0032): organization provider assignments
+  'organization_provider_assignments',
   'organizations',
   'permissions',
   'provider_capabilities',
@@ -86,6 +88,7 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
     contact_identities: 'INSERT,SELECT,UPDATE',
     contacts: 'INSERT,SELECT,UPDATE',
     idempotency_keys: 'INSERT,SELECT',
+    organization_provider_assignments: 'INSERT,SELECT,UPDATE',
     organizations: 'INSERT,SELECT',
     permissions: 'SELECT',
     provider_capabilities: 'DELETE,INSERT,SELECT,UPDATE',
@@ -398,7 +401,8 @@ describe('database principals and RLS coverage', () => {
 
   // ===========================================================================
   describe('no privilege path out of the application principals', () => {
-    it.each(principals)(
+    const loginPrincipals = ['acc_app', 'acc_auth', 'acc_relay'] as const;
+    it.each(loginPrincipals)(
       '%s cannot SET ROLE to the owner or to another application principal',
       async (principal) => {
         const url =

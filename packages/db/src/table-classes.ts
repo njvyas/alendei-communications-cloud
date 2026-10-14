@@ -39,6 +39,7 @@ export const TENANCY_RECORD_TABLES = [
   'ws_tickets',
   'idempotency_keys',
   'audit_logs',
+  'organization_provider_assignments',
 ] as const;
 
 /**

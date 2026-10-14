@@ -7,3 +7,4 @@ export * from './providers';
 export * from './contacts';
 export * from './templates';
 export * from './suppressions';
+export * from './assignments';

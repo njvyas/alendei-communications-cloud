@@ -8,6 +8,7 @@ import {
   pgEnum,
   pgTable,
   text,
+  unique,
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
@@ -111,6 +112,7 @@ export const providers = pgTable(
     // what makes `POST /providers` naturally idempotent: a retried create is a
     // `409`, never a second provider (`API.md` §4a).
     uniqueIndex('providers_channel_name_key').on(table.channelId, sql`lower(${table.name})`),
+    unique('providers_id_channel_id_key').on(table.id, table.channelId),
     index('providers_status_idx').on(table.status),
     check(
       'providers_name_length',

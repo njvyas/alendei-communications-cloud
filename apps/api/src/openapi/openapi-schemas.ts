@@ -510,3 +510,17 @@ export class CircuitPolicySchema {
   @ApiProperty({ type: 'integer', minimum: 1 }) version!: number;
   @ApiProperty(timestamp) updatedAt!: string;
 }
+
+// --- organization provider assignments (Phase 3.2, ADR-014 §4) ------------------
+
+@ApiSchema({ name: 'OrganizationProviderAssignment' })
+export class OrganizationProviderAssignmentSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty(uuid) orgId!: string;
+  @ApiProperty(uuid) providerId!: string;
+  @ApiProperty(uuid) channelId!: string;
+  @ApiProperty({ type: 'integer', minimum: 1 }) priority!: number;
+  @ApiProperty({ enum: ['active', 'disabled'] }) status!: string;
+  @ApiProperty(timestamp) createdAt!: string;
+  @ApiProperty(timestamp) updatedAt!: string;
+}

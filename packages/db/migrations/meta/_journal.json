@@ -225,6 +225,13 @@
       "when": 1791913084407,
       "tag": "0031_phase3_1_data_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1791945398669,
+      "tag": "0032_phase3_2_assignments_principal",
+      "breakpoints": true
     }
   ]
 }

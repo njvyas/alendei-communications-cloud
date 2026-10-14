@@ -6,6 +6,8 @@ export const DB_ROLES = {
   AUTH: 'acc_auth',
   /** Transactional-outbox publisher; cross-tenant by necessity. */
   RELAY: 'acc_relay',
+  /** Dedicated message dispatcher principal (Phase 3.2, ADR-014 §9.2). */
+  DISPATCH: 'acc_dispatch',
 } as const;
 
 /**
@@ -29,6 +31,16 @@ export const SESSION_VARS = {
    * of the organization in context. Empty for every other principal.
    */
   API_KEY_ID: 'app.current_api_key_id',
+} as const;
+
+/**
+ * Transaction-local session variables carrying dispatch context (Phase 3.2, ADR-014 §9.1–§9.2).
+ */
+export const DISPATCH_SESSION_VARS = {
+  /** The message currently claimed by the dispatcher (Phase 3.2, ADR-014 §9.1). */
+  MESSAGE_ID: 'app.dispatch_message_id',
+  /** The claim token for the claimed message (Phase 3.2, ADR-014 §9.1). */
+  CLAIM_TOKEN: 'app.dispatch_claim_token',
 } as const;
 
 /** The seeded reseller that organizations without an external reseller belong to. */

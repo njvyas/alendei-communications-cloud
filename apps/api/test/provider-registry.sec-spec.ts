@@ -906,14 +906,24 @@ describe('Phase 2.1 provider and channel registry', () => {
       // Phase 2.3 (migration 0022): test-send writes observation state; the guard
       // trigger confines it to those columns (provider-health-circuit.sec-spec.ts).
       const OBSERVE = "app_has_platform_permission('providers.test_send'::text)";
+      const DISPATCH_ASSIGNED = `(EXISTS ( SELECT 1
+   FROM organization_provider_assignments opa
+  WHERE ((opa.provider_id = providers.id) AND (opa.org_id = app_current_org_id()) AND (opa.status = 'active'::assignment_status))))`;
+      const DISPATCH_CAPABILITIES = `(EXISTS ( SELECT 1
+   FROM organization_provider_assignments opa
+  WHERE ((opa.provider_id = provider_capabilities.provider_id) AND (opa.org_id = app_current_org_id()) AND (opa.status = 'active'::assignment_status))))`;
       expect(
         policies.map((p) => `${p.policyname}:${p.cmd}:${p.roles}:${p.qual}:${p.with_check}`),
       ).toEqual([
+        `channels_dispatch_select:SELECT:{acc_dispatch}:true:null`,
         `channels_platform_read:SELECT:{acc_app}:${READ}:null`,
+        `provider_capabilities_dispatch_select:SELECT:{acc_dispatch}:${DISPATCH_CAPABILITIES}:null`,
         `provider_capabilities_platform_delete:DELETE:{acc_app}:${WRITE}:null`,
         `provider_capabilities_platform_insert:INSERT:{acc_app}:null:${WRITE}`,
         `provider_capabilities_platform_read:SELECT:{acc_app}:${READ}:null`,
         `provider_capabilities_platform_update:UPDATE:{acc_app}:${WRITE}:${WRITE}`,
+        `providers_dispatch_select:SELECT:{acc_dispatch}:${DISPATCH_ASSIGNED}:null`,
+        `providers_dispatch_update:UPDATE:{acc_dispatch}:${DISPATCH_ASSIGNED}:${DISPATCH_ASSIGNED}`,
         `providers_platform_insert:INSERT:{acc_app}:null:${WRITE}`,
         `providers_platform_observation_update:UPDATE:{acc_app}:${OBSERVE}:${OBSERVE}`,
         `providers_platform_read:SELECT:{acc_app}:${READ}:null`,

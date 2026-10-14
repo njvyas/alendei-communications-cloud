@@ -12,3 +12,4 @@ export * from './provider-configuration';
 export * from './contacts';
 export * from './templates';
 export * from './suppressions';
+export * from './assignments';

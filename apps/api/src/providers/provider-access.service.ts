@@ -188,4 +188,29 @@ export class ProviderAccess {
       tx,
     );
   }
+
+  recordAssignment(
+    tx: Transaction,
+    principal: AuthPrincipal,
+    action: AuditAction,
+    assignmentId: string,
+    before: Record<string, unknown> | null,
+    after: Record<string, unknown>,
+  ): Promise<void> {
+    return this.audit.record(
+      {
+        scopeType: 'platform',
+        scopeId: null,
+        ...actorFromPrincipal(principal),
+        action,
+        resourceType: 'OrganizationProviderAssignment',
+        resourceId: assignmentId,
+        outcome: 'success',
+        before,
+        after,
+        metadata: {},
+      },
+      tx,
+    );
+  }
 }

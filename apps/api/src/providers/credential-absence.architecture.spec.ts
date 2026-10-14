@@ -126,6 +126,7 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
         // Request authentication on the routes (the caller's session, not a provider credential).
         'apps/api/src/providers/channels.controller.ts: AUTH_CREDENTIAL_REQUIRED',
         'apps/api/src/providers/channels.controller.ts: AcceptedCredentials',
+        'apps/api/src/providers/organization-provider-assignments.controller.ts: AcceptedCredentials',
         'apps/api/src/providers/provider-circuit-policy.controller.ts: AcceptedCredentials',
         'apps/api/src/providers/providers.controller.ts: AcceptedCredentials',
         // The refusal of secret-named capability keys and its message.
@@ -203,12 +204,18 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
     const adr015Content = migrations.find((m) => m.n.startsWith('0027_'));
     expect(adr015Content).toBeDefined();
     expect(adr015Content!.sql).not.toMatch(/CREATE\s+TABLE|ADD\s+COLUMN/i);
+    // Phase 3.2 (migration 0032): creates app_dispatch_claim_token() and the
+    // session variable app.dispatch_claim_token (ADR-014 §9.1–§9.2 fencing token).
+    const DISPATCH_FENCING_0032 = new Set(['app_dispatch_claim_token', 'dispatch_claim_token']);
+    const phase32Assignments = migrations.find((m) => m.n.startsWith('0032_'));
+    expect(phase32Assignments).toBeDefined();
     expect(
       phase2.flatMap((m) =>
         [...m.sql.matchAll(/\w*(?:credential|secret|passw|api_?key|token)\w*/gi)]
           .filter((x) => !(m === adr015 && IDENTITY_BACKSTOP_0025.has(x[0])))
           .filter((x) => !(m === adr015Classification && PERMISSION_KEYS_0026.has(x[0])))
           .filter((x) => !(m === adr015Content && CONTENT_CONTEXT_0027.has(x[0])))
+          .filter((x) => !(m === phase32Assignments && DISPATCH_FENCING_0032.has(x[0])))
           .map((x) => `${m.n}: ${x[0]}`),
       ),
     ).toEqual([]);

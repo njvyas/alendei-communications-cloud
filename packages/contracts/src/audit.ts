@@ -67,6 +67,12 @@ export const AUDIT_ACTIONS = {
   // Gate D.3 remediation: the platform circuit policy (`PROVIDER_ADAPTER.md` §6a).
   PROVIDER_CIRCUIT_POLICY_UPDATED: 'provider.circuit_policy_updated',
 
+  // Phase 3.2: organization provider assignments (ADR-014 §4, P3-D05).
+  ORGANIZATION_PROVIDER_ASSIGNED: 'organization_provider.assigned',
+  ORGANIZATION_PROVIDER_UPDATED: 'organization_provider.updated',
+  ORGANIZATION_PROVIDER_DISABLED: 'organization_provider.disabled',
+  ORGANIZATION_PROVIDER_ENABLED: 'organization_provider.enabled',
+
   AUTHORIZATION_DENIED: 'authorization.denied',
 } as const;
 
@@ -204,6 +210,11 @@ export const SECURITY_SENSITIVE_AUDIT_ACTIONS: readonly AuditAction[] = Object.f
   AUDIT_ACTIONS.PROVIDER_CIRCUIT_CHANGED,
   // The circuit policy decides when every provider is taken out of traffic.
   AUDIT_ACTIONS.PROVIDER_CIRCUIT_POLICY_UPDATED,
+  // Phase 3.2: provider assignment administration
+  AUDIT_ACTIONS.ORGANIZATION_PROVIDER_ASSIGNED,
+  AUDIT_ACTIONS.ORGANIZATION_PROVIDER_UPDATED,
+  AUDIT_ACTIONS.ORGANIZATION_PROVIDER_DISABLED,
+  AUDIT_ACTIONS.ORGANIZATION_PROVIDER_ENABLED,
 ]);
 
 export function isSecuritySensitiveAction(action: string): boolean {
