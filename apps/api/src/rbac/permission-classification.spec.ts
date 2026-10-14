@@ -20,10 +20,12 @@ import {
   grantConfers,
   isTenantContentPermission,
   permissionAllowedAt,
-  type AuthPrincipal,
-  type PermissionKey,
-  type RoleGrant,
-  type ScopeType,
+} from '@acc/contracts';
+import type {
+  AuthPrincipal,
+  PermissionKey,
+  RoleGrant,
+  ScopeType,
 } from '@acc/contracts';
 
 import { creatorAuthorityFromGrants } from '../auth/auth.guard';
@@ -234,12 +236,12 @@ describe('role definitions under R-5 and R-6', () => {
     expect(Object.isFrozen(DELEGABLE_TENANT_SYSTEM_ROLES)).toBe(true);
   });
 
-  it('the API surface is the catalogue minus exactly the eight content keys', () => {
+  it('the API surface is the catalogue minus inert message keys (Phase 3.1 activates 6 content keys)', () => {
     expect(
       sorted(ALL_PERMISSION_KEYS.filter((k) => !API_SURFACE_PERMISSION_KEYS.includes(k))),
-    ).toEqual(sorted(Object.keys(ADR_014_SECTION_6)));
+    ).toEqual(sorted([PERMISSIONS.MESSAGES_READ, PERMISSIONS.MESSAGES_SEND]));
     expect(API_SURFACE_PERMISSION_KEYS).toContain(DELEGATE);
-    expect(API_SURFACE_PERMISSION_KEYS).toHaveLength(38);
+    expect(API_SURFACE_PERMISSION_KEYS).toHaveLength(44);
   });
 });
 
@@ -349,7 +351,7 @@ describe('grantConfers: the evaluator and the API-key path apply the allowed-sco
   });
 });
 
-describe('the content keys are catalogue-only: no backend code references them', () => {
+describe('the message keys are catalogue-only: no backend code references them', () => {
   const ROOT = join(__dirname, '..', '..', '..', '..');
   const sources = (dir: string): string[] =>
     readdirSync(dir).flatMap((name) => {
@@ -358,12 +360,13 @@ describe('the content keys are catalogue-only: no backend code references them',
       return path.endsWith('.ts') && !/\.spec\.ts$/.test(path) ? [path] : [];
     });
 
-  it('apps/api/src names none of the eight keys, nor their PERMISSIONS constants', () => {
+  it('apps/api/src names none of the messages keys, nor their PERMISSIONS constants', () => {
     const pattern = new RegExp(
       [
-        ...Object.keys(ADR_014_SECTION_6).map((k) => k.replace('.', '\\.')),
-        'PERMISSIONS\\.(CONTACTS|TEMPLATES|SUPPRESSIONS|MESSAGES)_',
-        '\\bP\\.(CONTACTS|TEMPLATES|SUPPRESSIONS|MESSAGES)_',
+        'messages\\.read',
+        'messages\\.send',
+        'PERMISSIONS\\.MESSAGES_',
+        '\\bP\\.MESSAGES_',
       ].join('|'),
     );
     const hits = sources(join(ROOT, 'apps/api/src'))

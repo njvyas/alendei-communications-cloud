@@ -83,8 +83,14 @@ describe('table classes — tenancy records, tenant content, exemptions', () => 
       expect(result).toEqual({ unclassified: [], multiplyClassified: [], unknown: [] });
     });
 
-    it('CONTENT_TABLES is empty before Phase 3.1, and no exemption is granted', () => {
-      expect(CONTENT_TABLES).toEqual([]);
+    it('CONTENT_TABLES contains the Phase 3.1 content tables, and no exemption is granted', () => {
+      expect([...CONTENT_TABLES].sort()).toEqual([
+        'consent_events',
+        'contact_identities',
+        'contacts',
+        'suppressions',
+        'templates',
+      ]);
       expect(ORG_ID_EXEMPT_TABLES).toEqual([]);
     });
 
@@ -98,7 +104,7 @@ describe('table classes — tenancy records, tenant content, exemptions', () => 
   });
 
   describe('catalogue rule', () => {
-    it('every registered content table conforms (none registered yet)', async () => {
+    it('every registered content table conforms', async () => {
       const violations = await rolledBack(async (c) => {
         const out: string[] = [];
         for (const table of CONTENT_TABLES) out.push(...(await contentTableViolations(c, table)));

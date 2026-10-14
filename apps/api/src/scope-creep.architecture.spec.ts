@@ -324,7 +324,7 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
     },
   );
 
-  it('the API modules are exactly the Phase 0–2 set: no outbox, worker, routing, billing, messaging, webhook or gateway module', () => {
+  it('the API modules are exactly the Phase 0–3.1 set: no outbox, worker, routing, billing, messaging, webhook or gateway module', () => {
     const modules = readdirSync(join(ROOT, 'apps/api/src'))
       .filter((n) => statSync(join(ROOT, 'apps/api/src', n)).isDirectory())
       .sort();
@@ -336,6 +336,7 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       'cli',
       'common',
       'config',
+      'contacts',
       'database',
       'health',
       'iam',
@@ -348,6 +349,8 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       'rbac',
       'redis',
       'secrets',
+      'suppressions',
+      'templates',
       'tenancy',
       'users',
       'workspaces',
@@ -369,7 +372,7 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
     ]);
   });
 
-  it('the migrations create exactly the Phase 0–2 tables: no outbox, job, message, attempt, webhook, billing, routing or SIEM table', () => {
+  it('the migrations create exactly the Phase 0–3.1 tables: no outbox, job, message, attempt, webhook, billing, routing or SIEM table', () => {
     const dir = join(ROOT, 'packages/db/migrations');
     const created = new Set<string>();
     for (const name of readdirSync(dir).filter((n) => /^\d{4}_.*\.sql$/.test(n))) {
@@ -381,6 +384,9 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       'api_keys',
       'audit_logs',
       'channels',
+      'consent_events',
+      'contact_identities',
+      'contacts',
       'idempotency_keys',
       'organizations',
       'permissions',
@@ -393,7 +399,9 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       'role_permissions',
       'roles',
       'sessions',
+      'suppressions',
       'teams',
+      'templates',
       'user_roles',
       'users',
       'workspaces',

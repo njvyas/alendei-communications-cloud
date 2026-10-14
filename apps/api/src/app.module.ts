@@ -26,6 +26,9 @@ import { UsersModule } from './users/users.module';
 import { SecretsModule } from './secrets/secrets.module';
 import { WorkspacesModule } from './workspaces/workspaces.module';
 import { ProvidersModule } from './providers/providers.module';
+import { ContactsModule } from './contacts/contacts.module';
+import { TemplatesModule } from './templates/templates.module';
+import { SuppressionsModule } from './suppressions/suppressions.module';
 import { OPENAPI_MODULES } from './openapi/openapi.module';
 
 /**
@@ -59,6 +62,9 @@ import { OPENAPI_MODULES } from './openapi/openapi.module';
     OrganizationsModule,
     WorkspacesModule,
     ProvidersModule,
+    ContactsModule,
+    TemplatesModule,
+    SuppressionsModule,
     // The OpenAPI document route, when `OPENAPI_UI_ENABLED` is on (Phase 1C.3).
     ...OPENAPI_MODULES,
   ],

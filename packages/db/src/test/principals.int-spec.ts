@@ -40,6 +40,10 @@ const TABLES = [
   // Phase 2.1 (migration 0018): the global provider/channel catalogue. No tenant
   // column; RLS admits only a validated platform-scope claim (ADR-013 F-3).
   'channels',
+  // Phase 3.1 (migration 0031): tenant content tables
+  'consent_events',
+  'contact_identities',
+  'contacts',
   'idempotency_keys',
   'organizations',
   'permissions',
@@ -55,7 +59,9 @@ const TABLES = [
   'role_permissions',
   'roles',
   'sessions',
+  'suppressions',
   'teams',
+  'templates',
   'user_roles',
   'users',
   'workspaces',
@@ -76,6 +82,9 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
     // Phase 2.1: the channel catalogue is read-only (seeded by migration); a
     // provider is never deleted; its capability set is replaced as a whole.
     channels: 'SELECT',
+    consent_events: 'INSERT,SELECT',
+    contact_identities: 'INSERT,SELECT,UPDATE',
+    contacts: 'INSERT,SELECT,UPDATE',
     idempotency_keys: 'INSERT,SELECT',
     organizations: 'INSERT,SELECT',
     permissions: 'SELECT',
@@ -91,7 +100,9 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
     role_permissions: 'DELETE,INSERT,SELECT',
     roles: 'DELETE,INSERT,SELECT',
     sessions: 'SELECT',
+    suppressions: 'INSERT,SELECT,UPDATE',
     teams: 'INSERT,SELECT',
+    templates: 'INSERT,SELECT,UPDATE',
     user_roles: 'DELETE,INSERT,SELECT',
     users: 'INSERT,SELECT',
     workspaces: 'INSERT,SELECT',

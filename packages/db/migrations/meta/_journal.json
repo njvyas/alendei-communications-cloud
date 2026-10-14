@@ -218,6 +218,13 @@
       "when": 1791474795404,
       "tag": "0030_adr015_reseller_admin_liveness",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1791913084407,
+      "tag": "0031_phase3_1_data_foundation",
+      "breakpoints": true
     }
   ]
 }

@@ -324,15 +324,20 @@ export function grantConfers(
 }
 
 /**
- * The permission keys the HTTP API accepts and lists today: every key except
- * the tenant-content keys, which are inert catalogue entries with no API
- * behaviour (ADR-015 follow-up decision 6). `CreateRoleDto`, `UpdateRoleDto`,
- * `CreateApiKeyDto` and `GET /permissions` use this list. **Phase 3.1 changes
- * it** when it activates the content keys — together with the routes that
- * check them.
+ * The permission keys that remain inert in Phase 3.1 (deferred to Phase 3.3).
+ */
+export const INERT_PERMISSION_KEYS: readonly PermissionKey[] = Object.freeze([
+  PERMISSIONS.MESSAGES_READ,
+  PERMISSIONS.MESSAGES_SEND,
+]);
+
+/**
+ * The permission keys the HTTP API accepts and lists: every key except
+ * the messages.* content keys, which remain inert until Phase 3.3.
+ * Activated in Phase 3.1: contacts.*, templates.*, suppressions.*.
  */
 export const API_SURFACE_PERMISSION_KEYS: readonly PermissionKey[] = Object.freeze(
-  ALL_PERMISSION_KEYS.filter((key) => PERMISSION_CLASS[key] !== 'tenant_content'),
+  ALL_PERMISSION_KEYS.filter((key) => !INERT_PERMISSION_KEYS.includes(key)),
 );
 
 export function isPermissionKey(value: string): value is PermissionKey {

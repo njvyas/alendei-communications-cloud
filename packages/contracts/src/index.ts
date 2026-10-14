@@ -9,3 +9,6 @@ export * from './providers';
 export * from './provider-adapter';
 export * from './provider-health';
 export * from './provider-configuration';
+export * from './contacts';
+export * from './templates';
+export * from './suppressions';

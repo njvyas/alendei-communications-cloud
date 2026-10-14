@@ -42,10 +42,16 @@ export const TENANCY_RECORD_TABLES = [
 ] as const;
 
 /**
- * Tenant-content tables (Model B). Empty until Phase 3.1 creates the first
- * one in the same migration as its policies (`DATABASE.md` §2).
+ * Tenant-content tables (Model B, ADR-015 R-7 … R-10, ADR-014 §17.1).
+ * Phase 3.1 Data Foundation tables.
  */
-export const CONTENT_TABLES: readonly string[] = [];
+export const CONTENT_TABLES = [
+  'contacts',
+  'contact_identities',
+  'consent_events',
+  'templates',
+  'suppressions',
+] as const;
 
 /**
  * Tables with an `org_id` column that are in neither class, each with its
