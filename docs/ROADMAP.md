@@ -390,7 +390,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 
 ## 6. Phase 3 — WhatsApp
 
-**Status: Phase 3.0 architecture FROZEN by ADR-014 (`ADR-014-PHASE-3-WHATSAPP-ORCHESTRATION.md`, 06-Oct-2026). Increment 3.1 Data Foundation CLOSED (migration `0031`; Gate E.1 APPROVED by project owner, 14-Oct-2026; commit `f08b48e`). Increment 3.2 is NOT STARTED and NOT AUTHORIZED.** Frozen: WhatsApp first; `SimulatorAdapter` only; no real credentials or vendor calls; **provider-to-provider fallback on the same channel is Phase 3 scope** (no delivery-outcome fallback; triggers and termination are open decisions D13/D14); no cross-channel fallback; PostgreSQL is the correctness boundary with polling, recovery and durable invocation fencing, Redis advisory only; a dedicated dispatch principal `acc_dispatch` with token-bound per-message RLS; Phase 1C idempotency reused; Phase 2 CircuitAdmission authoritative; no Kafka/outbox, no WebSocket execution, no campaigns, journeys or billing; **no delivery or webhook processing**; routing weights, routing-policy CRUD, optimization, canary and advanced routing strategy stay out of Phase 3. Increment-level decisions still open are listed in ADR-014 §15. Where the bullets below conflict with ADR-014, ADR-014 governs.
+**Status: Phase 3.0 architecture FROZEN by ADR-014 (`ADR-014-PHASE-3-WHATSAPP-ORCHESTRATION.md`, 06-Oct-2026). Increment 3.1 Data Foundation CLOSED (migration `0031`; Gate E.1 APPROVED by project owner, 14-Oct-2026; commit `f08b48e`). Increment 3.2 Assignments & Principal Scopes CLOSED (migration `0032`; Gate E.2 APPROVED by project owner, 14-Oct-2026; commit `4d4c4b7`). Increment 3.3 is NOT STARTED and NOT AUTHORIZED.** Frozen: WhatsApp first; `SimulatorAdapter` only; no real credentials or vendor calls; **provider-to-provider fallback on the same channel is Phase 3 scope** (no delivery-outcome fallback; triggers and termination are open decisions D13/D14); no cross-channel fallback; PostgreSQL is the correctness boundary with polling, recovery and durable invocation fencing, Redis advisory only; a dedicated dispatch principal `acc_dispatch` with token-bound per-message RLS; Phase 1C idempotency reused; Phase 2 CircuitAdmission authoritative; no Kafka/outbox, no WebSocket execution, no campaigns, journeys or billing; **no delivery or webhook processing**; routing weights, routing-policy CRUD, optimization, canary and advanced routing strategy stay out of Phase 3. Increment-level decisions still open are listed in ADR-014 §15. Where the bullets below conflict with ADR-014, ADR-014 governs.
 
 
 - **Objectives**: first real channel's routing/eligibility path built end-to-end (still against the simulator, unless/until explicit separate authorization is given to connect a real provider).
@@ -415,7 +415,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 |---|---|---|---|
 | **3.0** | Architecture Freeze (`ADR-014`, 06-Oct-2026) | — | ✅ FROZEN |
 | **3.1** | Data Foundation (Contacts, Identities, Consent, Templates, Suppressions) | `contacts`, `contact_identities`, `consent_events`, `templates`, `suppressions` (migration `0031`); Model B RLS; permissions activated | ✅ CLOSED — Gate E.1 APPROVED 14-Oct-2026 (`f08b48e`) |
-| **3.2** | WhatsApp Provider Adapter & Channel Router | TBD (increment decisions) | ⏸️ NOT STARTED / UNAUTHORIZED |
+| **3.2** | Organization Provider Assignments & Dispatch Principal Scopes | `organization_provider_assignments` (migration `0032`); `acc_dispatch` principal & context functions | ✅ CLOSED — Gate E.2 APPROVED 14-Oct-2026 (`4d4c4b7`) |
 | **3.3** | Orchestrator & Dispatch Execution | `messages`, `message_attempts`, `message_events`, `message_dispatch_queue` | ⏸️ NOT STARTED / UNAUTHORIZED |
 | **3.4** | Fallback & Resilience | Same-channel provider-to-provider fallback | ⏸️ NOT STARTED / UNAUTHORIZED |
 | **3.5** | WhatsApp Management Console | Frontend console | ⏸️ NOT STARTED / UNAUTHORIZED |
@@ -428,6 +428,14 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 - API surface permission keys updated to 44 active keys; `messages.read` and `messages.send` remain inert until Phase 3.3.
 - Focused security suite `phase3_1-data-foundation.sec-spec.ts` passes 18/18 tests, including multi-event contradiction fail-closed consent evaluation and cross-tenant suppression isolation/anti-enumeration.
 - Regression suite `provider-registry.sec-spec.ts` passes 31/31 tests.
+
+**Gate E.2 — Phase 3.2 Assignments & Principal Scopes acceptance.** Status: **APPROVED / CLOSED** (project owner decision, 14-Oct-2026; commit `4d4c4b7`). Objectively tested and verified:
+- Migration `0032_phase3_2_assignments_principal.sql` creates `organization_provider_assignments` (Model A tenancy RLS: tenant sees only its own, platform admin sees all).
+- Dedicated database role `acc_dispatch` created with minimal necessary grants; RLS policies confine it to active assigned providers for `app_current_org_id()`. Zero access to tenant content, credentials, or audit logs.
+- Parameterless dispatch context functions `app_dispatch_message_id()` and `app_dispatch_claim_token()` created with STABLE volatility and restricted EXECUTE.
+- `app_session_bypasses_rls()` execution granted to `acc_dispatch` as required by ADR-014 §9.2 for observation state guard; verified safe against privilege escalation.
+- REST endpoints `/v1/organizations/:orgId/provider-assignments` implemented with platform-only scope enforcement (`providers.read` / `providers.manage`), 5-scope RBAC boundaries, and anti-enumeration.
+- Focused security suite `phase3_2-assignments-principal.sec-spec.ts` passes 37/37 tests.
 
 ## 7. Phase 4 — SMS + RCS
 

@@ -1667,7 +1667,8 @@ Positive, negative security, direct database backstop, deterministic concurrency
 - Phase 2 is formally CLOSED. Phase 2.7 remains undefined and unauthorized.
 - Phase 3.0 architecture remains FROZEN under ADR-014.
 - Phase 3.1 Data Foundation is formally CLOSED (Gate E.1 approved, 14-Oct-2026; §1r).
-- Phase 3.2 remains NOT STARTED and NOT AUTHORIZED; separate explicit project-owner authorization is required.
+- Phase 3.2 Assignments & Principal Scopes is formally CLOSED (Gate E.2 approved, 14-Oct-2026; §1s).
+- Phase 3.3 remains NOT STARTED and NOT AUTHORIZED; separate explicit project-owner authorization is required.
 
 ## 1r. Phase 3.1 / Gate E.1 Data Foundation acceptance — APPROVED (project owner decision, 14-Oct-2026)
 
@@ -1694,7 +1695,42 @@ Positive, negative security, direct database backstop, deterministic concurrency
 
 **Boundaries & Next Increments:**
 - Phase 3.1 is formally CLOSED.
-- Phase 3.2 (WhatsApp Orchestrator / Routing / Channel Abstraction) remains NOT STARTED and NOT AUTHORIZED; separate explicit project-owner authorization is required.
+- Phase 3.2 Assignments & Principal Scopes is formally CLOSED (Gate E.2 approved, 14-Oct-2026; §1s).
+- Phase 3.3 (Orchestrator & Dispatch Execution) remains NOT STARTED and NOT AUTHORIZED; separate explicit project-owner authorization is required.
+
+## 1s. Phase 3.2 / Gate E.2 Assignments & Principal Scopes acceptance — APPROVED (project owner decision, 14-Oct-2026)
+
+**Decision.** Gate E.2 (Phase 3.2 Assignments & Principal Scopes Acceptance) is **APPROVED** by the project owner following final technical closure and authorization review. Phase 3.2 of Alendei Communications Cloud is formally **CLOSED** under `ROADMAP.md` §6a and ADR-014 §17.1.
+
+**Committed & Pushed Checkpoint:**
+- Commit: `4d4c4b706c88e99496e5fa18ff649479b1285e0c` on branch `develop`, synchronized with `origin/develop`.
+
+**Accepted evidence baseline:**
+- **Phase 3.2 Security Suite (`phase3_2-assignments-principal.sec-spec.ts`):** 37/37 tests passed across 1 suite, verifying:
+  - Platform assignment lifecycle (`create`, `list`, `get`, `patch` priority, `disable`, `enable`) with comprehensive platform-scoped audit trail.
+  - Priority collisions (409 `ASSIGNMENT_PRIORITY_CONFLICT`), duplicate provider assignment (409 `PROVIDER_ASSIGNMENT_CONFLICT`), channel mismatches, and negative/zero priority rejection.
+  - Strict 5-scope RBAC boundaries: only platform-level tokens with `providers.read` / `providers.manage` can access assignments; organization, reseller, workspace, team roles, and API keys are strictly rejected (403 `AUTHZ_FORBIDDEN`).
+  - Anti-enumeration protection: unauthorized callers receive uniform 403 errors before testing organization existence.
+  - Dedicated `acc_dispatch` principal isolation: token-bound per-message RLS visibility into active assignments only; observation columns (`health_state`, `circuit_state`, `latency_ms`, `consecutive_failures`) updatable while administrative columns and tenant content tables are strictly blocked (42501 `insufficient_privilege`).
+  - Parameterless dispatch context functions `app_dispatch_message_id()` and `app_dispatch_claim_token()` catalog definition, `SECURITY INVOKER`, STABLE volatility, and strict execution ACLs.
+  - Model A tenancy RLS and `acc_app` least privilege (zero `DELETE` / `TRUNCATE` grants).
+  - Parent-child provider-channel foreign key integrity (23503) and composite tenant-key immutability trigger (42501).
+- **Final Privilege Authorization Review (`app_session_bypasses_rls()`):**
+  - Confirmed `app_session_bypasses_rls()` is `SECURITY DEFINER` pinned to `search_path = public, pg_temp`, reading native `session_user` in `pg_roles` (unaffected by session GUCs).
+  - Evaluates to `false` for `acc_dispatch`, safely allowing observation updates to pass `fn_providers_state_guard()` without bypassing RLS or permitting administrative modifications.
+  - Explicitly sanctioned and required by canonical design document `ADR-014-PHASE-3-WHATSAPP-ORCHESTRATION.md` §9.2 line 142.
+- **Phase 3.1 Security Regression (`phase3_1-data-foundation.sec-spec.ts`):** 18/18 tests passed across 1 suite.
+- **Provider Registry Security Regression (`provider-registry.sec-spec.ts`):** 31/31 tests passed across 1 suite.
+- **API Unit Suite:** 528/528 tests passed across 38 suites.
+- **API Integration Suite:** 125/125 tests passed across 6 suites.
+- **Database Integration Suite:** 222/222 tests passed across 12 suites (`principals.int-spec.ts`, `table-classes.int-spec.ts`, `backstop-definitions.int-spec.ts`).
+- **OpenAPI & Contract Consistency:** `apps/api/openapi/openapi.v1.json` generated and verified with 0 drift via `npm run openapi:check`.
+- **Migration & Schema Integrity:** Migration `0032_phase3_2_assignments_principal.sql` creates `organization_provider_assignments` (Model A tenancy RLS), `assignment_status` enum, composite FK `(provider_id, channel_id)`, immutability triggers, `acc_dispatch` DB role and RLS policies; registered in `_journal.json` (`idx: 32`) with snapshot `0032_snapshot.json`.
+- **Static Checks:** `git diff --check`, `npm run lint`, and `npm run typecheck` pass with 0 errors.
+
+**Boundaries & Next Increments:**
+- Phase 3.2 is formally CLOSED.
+- Phase 3.3 (Orchestrator & Dispatch Execution) remains NOT STARTED and NOT AUTHORIZED; separate explicit project-owner authorization is required.
 
 
 ## 3. Risks explicitly accepted by design (not oversights)
