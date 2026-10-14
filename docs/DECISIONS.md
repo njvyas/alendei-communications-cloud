@@ -1703,7 +1703,7 @@ Positive, negative security, direct database backstop, deterministic concurrency
 **Decision.** Gate E.2 (Phase 3.2 Assignments & Principal Scopes Acceptance) is **APPROVED** by the project owner following final technical closure and authorization review. Phase 3.2 of Alendei Communications Cloud is formally **CLOSED** under `ROADMAP.md` §6a and ADR-014 §17.1.
 
 **Committed & Pushed Checkpoint:**
-- Commit: `4d4c4b706c88e99496e5fa18ff649479b1285e0c` on branch `develop`, synchronized with `origin/develop`.
+- Commit: `4d4c4b75fee7c07d573e383ddfad23abd4731db7` on branch `develop`, synchronized with `origin/develop`.
 
 **Accepted evidence baseline:**
 - **Phase 3.2 Security Suite (`phase3_2-assignments-principal.sec-spec.ts`):** 37/37 tests passed across 1 suite, verifying:

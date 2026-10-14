@@ -2,10 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import {
-  CreateSuppressionDto,
-  LiftSuppressionDto,
-} from './suppressions.dto';
+import { CreateSuppressionDto, LiftSuppressionDto } from './suppressions.dto';
 
 const codeOf = (file: string): string =>
   readFileSync(join(__dirname, file), 'utf8')

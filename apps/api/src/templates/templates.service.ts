@@ -19,11 +19,7 @@ import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/ht
 import { TenantDatabase } from '../database/tenant-database.service';
 import { IdempotencyService, type IdempotentOutcome } from '../idempotency/idempotency.service';
 import { requireOrganization } from '../workspaces/workspace-administration.service';
-import type {
-  CreateTemplateDto,
-  SimulateApprovalDto,
-  UpdateTemplateDto,
-} from './templates.dto';
+import type { CreateTemplateDto, SimulateApprovalDto, UpdateTemplateDto } from './templates.dto';
 
 type TemplateRow = typeof schema.templates.$inferSelect;
 
@@ -103,7 +99,8 @@ export class TemplatesService {
         isNull(schema.templates.deletedAt),
       ];
       if (filter.channelId) predicates.push(eq(schema.templates.channelId, filter.channelId));
-      if (filter.approvalStatus) predicates.push(eq(schema.templates.approvalStatus, filter.approvalStatus));
+      if (filter.approvalStatus)
+        predicates.push(eq(schema.templates.approvalStatus, filter.approvalStatus));
       if (resolved.after) predicates.push(resolved.after);
 
       return tx

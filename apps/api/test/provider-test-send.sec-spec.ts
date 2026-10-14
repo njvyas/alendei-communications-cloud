@@ -667,6 +667,8 @@ describe('Phase 2.2 provider adapter test-send', () => {
       expect(rows.map((r) => r.policyname)).toEqual([
         'audit_logs_auth_insert',
         'audit_logs_insert',
+        // Phase 3.2 (migration 0032): assignment audit policy
+        'audit_logs_organization_provider_insert',
         'audit_logs_platform_self_denial_insert',
         // Gate D.3 remediation (migration 0023), pinned in provider-circuit-policy.sec-spec.ts.
         'audit_logs_provider_circuit_policy_insert',

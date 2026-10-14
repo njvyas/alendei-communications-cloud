@@ -5,12 +5,7 @@
  * approval_status is an internal, simulated state moved by templates.manage.
  */
 
-export const TEMPLATE_APPROVAL_STATUSES = [
-  'draft',
-  'pending',
-  'approved',
-  'rejected',
-] as const;
+export const TEMPLATE_APPROVAL_STATUSES = ['draft', 'pending', 'approved', 'rejected'] as const;
 export type TemplateApprovalStatus = (typeof TEMPLATE_APPROVAL_STATUSES)[number];
 
 export interface TemplateResponse {

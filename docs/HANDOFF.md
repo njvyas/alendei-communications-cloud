@@ -18,9 +18,9 @@ Naming: the **ADR-015 pre-Phase-3 remediation gate** (09-Oct-2026), **Gate C** (
 | Item | Value |
 |---|---|
 | Branch | `develop` |
-| HEAD | `4d4c4b706c88e99496e5fa18ff649479b1285e0c` |
-| `origin/develop` | `4d4c4b7` — pushed 14-Oct-2026; local level with it |
-| Working tree | clean at `4d4c4b7` apart from canonical gate-closure documentation |
+| HEAD | `934cc9921c9dee2c786889c8027974b2fbc1efbe` |
+| `origin/develop` | `934cc99` — pushed 14-Oct-2026; local level with it |
+| Implementation | `4d4c4b75fee7c07d573e383ddfad23abd4731db7` (Phase 3.2 Gate E.2) |
 
 | `main` | untouched |
 | `stash@{0}` | "PAUSED phase 2.1 provider registry WIP" — protected; never apply, drop or inspect without explicit instruction; never run `git stash` in this repo |
@@ -197,7 +197,7 @@ All five review items are decided (`DECISIONS.md` §1o):
 - **`app_session_bypasses_rls()` Privilege Audit:** Evaluated to `false` for `acc_dispatch`, pinned to `search_path = public, pg_temp`, reading `session_user` in `pg_roles`; verified safe and explicitly mandated by ADR-014 §9.2 line 142.
 - **Regressions & Integrity:** `provider-registry.sec-spec.ts` (31/31), `phase3_1-data-foundation.sec-spec.ts` (18/18), API unit (528/528), API integration (125/125), DB integration (222/222), `openapi:check` (0 drift), `lint`/`typecheck` (0 errors).
 - **Schema & Migrations:** Migration `0032_phase3_2_assignments_principal.sql` creates `organization_provider_assignments`, `assignment_status` enum, parent-child FK `(provider_id, channel_id)`, immutability triggers, `acc_dispatch` DB role and RLS policies, and dispatch context functions.
-- **Commit:** `4d4c4b706c88e99496e5fa18ff649479b1285e0c` on branch `develop`, pushed to `origin/develop`.
+- **Commit:** `4d4c4b75fee7c07d573e383ddfad23abd4731db7` on branch `develop`, pushed to `origin/develop`.
 
 **Boundaries & Next Increments:**
 - Phase 2 is formally CLOSED. Phase 2.7 remains undefined and unauthorized.

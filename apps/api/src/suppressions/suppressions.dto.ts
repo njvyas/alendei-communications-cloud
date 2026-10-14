@@ -1,15 +1,5 @@
-import {
-  IsIn,
-  IsOptional,
-  IsString,
-  IsUUID,
-  MaxLength,
-  MinLength,
-} from 'class-validator';
-import {
-  SUPPRESSION_STATUSES,
-  type SuppressionStatus,
-} from '@acc/contracts';
+import { IsIn, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
+import { SUPPRESSION_STATUSES, type SuppressionStatus } from '@acc/contracts';
 import { ListQueryDto } from '../common/http/list-query.dto';
 
 export class ListSuppressionsDto extends ListQueryDto {

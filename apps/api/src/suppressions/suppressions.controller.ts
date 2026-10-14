@@ -19,11 +19,7 @@ import { ApiErrors, ApiIdempotencyKey } from '../openapi/openapi-responses';
 import { RequiresPermission } from '../auth/requires-permission.decorator';
 import { IdempotencyKey } from '../idempotency/idempotency.decorator';
 import { requestPrincipal } from '../workspaces/workspaces.controller';
-import {
-  CreateSuppressionDto,
-  LiftSuppressionDto,
-  ListSuppressionsDto,
-} from './suppressions.dto';
+import { CreateSuppressionDto, LiftSuppressionDto, ListSuppressionsDto } from './suppressions.dto';
 import { SuppressionsService } from './suppressions.service';
 
 const AT_ORG = 'the target is the request organization';

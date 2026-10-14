@@ -1580,6 +1580,9 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
       expect(grants.map((g) => `${g.grantee}:${g.privilege_type}`)).toEqual([
         'acc_app:INSERT',
         'acc_app:SELECT',
+        // Phase 3.2 (migration 0032, ADR-014 §9.2): acc_dispatch records submission samples
+        'acc_dispatch:INSERT',
+        'acc_dispatch:SELECT',
       ]);
       // A tenant user, no user, a forged platform flag: nothing visible, nothing writable.
       for (const [userId, flag] of [
@@ -1840,6 +1843,9 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
       const MANAGE = "app_has_platform_permission('providers.manage'::text)";
       expect(policies.map((p) => `${p.tablename}.${p.policyname}:${p.cmd}:${p.roles}`)).toEqual([
         'audit_logs.audit_logs_provider_health_insert:INSERT:{acc_app}',
+        // Phase 3.2 (migration 0032, ADR-014 §9.2): acc_dispatch policies on provider_health
+        'provider_health.provider_health_dispatch_insert:INSERT:{acc_dispatch}',
+        'provider_health.provider_health_dispatch_select:SELECT:{acc_dispatch}',
         'provider_health.provider_health_platform_insert:INSERT:{acc_app}',
         'provider_health.provider_health_platform_read:SELECT:{acc_app}',
         'providers.providers_platform_observation_update:UPDATE:{acc_app}',

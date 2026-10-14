@@ -20,10 +20,7 @@ import { normalizeAddress } from '../contacts/contacts.normalization';
 import { TenantDatabase } from '../database/tenant-database.service';
 import { IdempotencyService, type IdempotentOutcome } from '../idempotency/idempotency.service';
 import { requireOrganization } from '../workspaces/workspace-administration.service';
-import type {
-  CreateSuppressionDto,
-  LiftSuppressionDto,
-} from './suppressions.dto';
+import type { CreateSuppressionDto, LiftSuppressionDto } from './suppressions.dto';
 
 type SuppressionRow = typeof schema.suppressions.$inferSelect;
 

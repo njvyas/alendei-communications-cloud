@@ -142,12 +142,7 @@ export class ContactsController {
     @Body() dto: CreateContactIdentityDto,
   ) {
     return {
-      data: await this.contacts.createIdentity(
-        requestPrincipal(),
-        contactId,
-        dto,
-        workspaceId,
-      ),
+      data: await this.contacts.createIdentity(requestPrincipal(), contactId, dto, workspaceId),
     };
   }
 
@@ -176,11 +171,7 @@ export class ContactsController {
     @Param('contactId', new ParseUUIDPipe()) contactId: string,
   ) {
     return {
-      data: await this.contacts.listIdentities(
-        requestPrincipal(),
-        contactId,
-        workspaceId,
-      ),
+      data: await this.contacts.listIdentities(requestPrincipal(), contactId, workspaceId),
     };
   }
 
@@ -221,12 +212,7 @@ export class ContactsController {
     @Body() dto: CreateConsentEventDto,
   ) {
     return {
-      data: await this.contacts.createConsentEvent(
-        requestPrincipal(),
-        contactId,
-        dto,
-        workspaceId,
-      ),
+      data: await this.contacts.createConsentEvent(requestPrincipal(), contactId, dto, workspaceId),
     };
   }
 
@@ -255,11 +241,7 @@ export class ContactsController {
     @Param('contactId', new ParseUUIDPipe()) contactId: string,
   ) {
     return {
-      data: await this.contacts.listConsentEvents(
-        requestPrincipal(),
-        contactId,
-        workspaceId,
-      ),
+      data: await this.contacts.listConsentEvents(requestPrincipal(), contactId, workspaceId),
     };
   }
 

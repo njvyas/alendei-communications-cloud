@@ -2,11 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import {
-  CreateContactDto,
-  CreateContactIdentityDto,
-  CreateConsentEventDto,
-} from './contacts.dto';
+import { CreateContactDto, CreateContactIdentityDto, CreateConsentEventDto } from './contacts.dto';
 
 const codeOf = (file: string): string =>
   readFileSync(join(__dirname, file), 'utf8')
@@ -57,9 +53,9 @@ describe('Contacts boundary and structural guarantees', () => {
       expect(await errorsFor(CreateContactDto, { firstName: 'Alice', lastName: 'Smith' })).toEqual(
         [],
       );
-      expect(
-        await errorsFor(CreateContactDto, { firstName: 123 as unknown as string }),
-      ).toContain('firstName');
+      expect(await errorsFor(CreateContactDto, { firstName: 123 as unknown as string })).toContain(
+        'firstName',
+      );
     });
 
     it('validates CreateContactIdentityDto', async () => {

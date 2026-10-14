@@ -1030,8 +1030,9 @@ describe('organization administration and lifecycle (1C.1a)', () => {
           .where(eq(schema.workspaces.orgId, l1.orgId)),
       );
       expect(rows.length).toBeGreaterThan(0);
+      // OD-3: status is authorization, not RLS — acc_app policies never filter on organization status
       const policies = await h.admin.execute<{ n: string }>(
-        sql`SELECT count(*)::text AS n FROM pg_policies WHERE coalesce(qual,'') || coalesce(with_check,'') LIKE '%status%'`,
+        sql`SELECT count(*)::text AS n FROM pg_policies WHERE roles = '{acc_app}' AND (coalesce(qual,'') || coalesce(with_check,'') LIKE '%status%')`,
       );
       expect(policies.rows[0]!.n).toBe('0');
     });

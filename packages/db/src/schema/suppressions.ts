@@ -1,12 +1,5 @@
 import { sql } from 'drizzle-orm';
-import {
-  index,
-  pgEnum,
-  pgTable,
-  text,
-  uniqueIndex,
-  uuid,
-} from 'drizzle-orm/pg-core';
+import { index, pgEnum, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 import { primaryId, timestamps, tstz } from './_shared';
 import { organizations } from './tenancy';

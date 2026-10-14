@@ -17,10 +17,7 @@ import { organizations, workspaces } from './tenancy';
 import { channels } from './providers';
 
 /** Contact identity lifecycle status (Phase 3.1). */
-export const contactIdentityStatus = pgEnum('contact_identity_status', [
-  'active',
-  'inactive',
-]);
+export const contactIdentityStatus = pgEnum('contact_identity_status', ['active', 'inactive']);
 
 /** Consent event type: grant or revoke (Phase 3.1, ADR-014 §11). */
 export const consentEventType = pgEnum('consent_event_type', ['grant', 'revoke']);
@@ -54,11 +51,7 @@ export const contacts = pgTable(
     unique('contacts_id_workspace_org_key').on(table.id, table.workspaceId, table.orgId),
     index('contacts_org_id_idx').on(table.orgId),
     index('contacts_workspace_id_idx').on(table.workspaceId),
-    index('contacts_workspace_created_at_id_idx').on(
-      table.workspaceId,
-      table.createdAt,
-      table.id,
-    ),
+    index('contacts_workspace_created_at_id_idx').on(table.workspaceId, table.createdAt, table.id),
   ],
 );
 

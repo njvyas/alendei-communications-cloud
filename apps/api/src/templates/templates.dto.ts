@@ -8,10 +8,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
-import {
-  TEMPLATE_APPROVAL_STATUSES,
-  type TemplateApprovalStatus,
-} from '@acc/contracts';
+import { TEMPLATE_APPROVAL_STATUSES, type TemplateApprovalStatus } from '@acc/contracts';
 import { ListQueryDto } from '../common/http/list-query.dto';
 
 export class ListTemplatesDto extends ListQueryDto {

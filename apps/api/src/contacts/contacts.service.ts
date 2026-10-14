@@ -21,7 +21,10 @@ import { AppException } from '../common/errors/app.exception';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
 import { TenantDatabase } from '../database/tenant-database.service';
 import { IdempotencyService, type IdempotentOutcome } from '../idempotency/idempotency.service';
-import { requireOrganization, workspaceNotFound } from '../workspaces/workspace-administration.service';
+import {
+  requireOrganization,
+  workspaceNotFound,
+} from '../workspaces/workspace-administration.service';
 import type {
   CreateContactDto,
   CreateContactIdentityDto,
@@ -212,7 +215,13 @@ export class ContactsService {
     workspaceId?: string,
   ): Promise<ContactResponse> {
     return this.db.withRequestTenant(async (tx) => {
-      const row = await this.loadContact(tx, principal, contactId, PERMISSIONS.CONTACTS_READ, workspaceId);
+      const row = await this.loadContact(
+        tx,
+        principal,
+        contactId,
+        PERMISSIONS.CONTACTS_READ,
+        workspaceId,
+      );
       return contactView(row);
     });
   }
@@ -405,7 +414,10 @@ export class ContactsService {
         return identityView(row!);
       } catch (error) {
         const cause = (error as { cause?: { code?: string; constraint?: string } }).cause;
-        if (cause?.code === '23505' && cause.constraint === 'uq_contact_identities_workspace_active') {
+        if (
+          cause?.code === '23505' &&
+          cause.constraint === 'uq_contact_identities_workspace_active'
+        ) {
           throw new AppException({
             status: HttpStatus.CONFLICT,
             code: ERROR_CODES.RESOURCE_CONFLICT,
@@ -445,7 +457,12 @@ export class ContactsService {
       const [existing] = await tx
         .select()
         .from(schema.contactIdentities)
-        .where(and(eq(schema.contactIdentities.id, identityId), eq(schema.contactIdentities.orgId, orgId)));
+        .where(
+          and(
+            eq(schema.contactIdentities.id, identityId),
+            eq(schema.contactIdentities.orgId, orgId),
+          ),
+        );
       if (!existing) throw identityNotFound(identityId);
 
       await this.authorization.assert(tx, {
@@ -501,7 +518,10 @@ export class ContactsService {
         return identityView(row!);
       } catch (error) {
         const cause = (error as { cause?: { code?: string; constraint?: string } }).cause;
-        if (cause?.code === '23505' && cause.constraint === 'uq_contact_identities_workspace_active') {
+        if (
+          cause?.code === '23505' &&
+          cause.constraint === 'uq_contact_identities_workspace_active'
+        ) {
           throw new AppException({
             status: HttpStatus.CONFLICT,
             code: ERROR_CODES.RESOURCE_CONFLICT,

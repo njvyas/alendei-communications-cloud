@@ -788,6 +788,8 @@ describe('Gate D.3 remediation — the administrable circuit policy', () => {
       const MANAGE = "app_has_platform_permission('providers.manage'::text)";
       expect(policies.map((p) => `${p.policyname}:${p.cmd}:${p.roles}`).sort()).toEqual([
         'audit_logs_provider_circuit_policy_insert:INSERT:{acc_app}',
+        // Phase 3.2 (migration 0032, ADR-014 §9.2): acc_dispatch policy on provider_circuit_policy
+        'provider_circuit_policy_dispatch_select:SELECT:{acc_dispatch}',
         'provider_circuit_policy_platform_read:SELECT:{acc_app}',
         'provider_circuit_policy_platform_update:UPDATE:{acc_app}',
       ]);

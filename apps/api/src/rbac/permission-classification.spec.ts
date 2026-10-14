@@ -21,12 +21,7 @@ import {
   isTenantContentPermission,
   permissionAllowedAt,
 } from '@acc/contracts';
-import type {
-  AuthPrincipal,
-  PermissionKey,
-  RoleGrant,
-  ScopeType,
-} from '@acc/contracts';
+import type { AuthPrincipal, PermissionKey, RoleGrant, ScopeType } from '@acc/contracts';
 
 import { creatorAuthorityFromGrants } from '../auth/auth.guard';
 import { PermissionEvaluator } from '../auth/permission-evaluator.service';
@@ -362,12 +357,9 @@ describe('the message keys are catalogue-only: no backend code references them',
 
   it('apps/api/src names none of the messages keys, nor their PERMISSIONS constants', () => {
     const pattern = new RegExp(
-      [
-        'messages\\.read',
-        'messages\\.send',
-        'PERMISSIONS\\.MESSAGES_',
-        '\\bP\\.MESSAGES_',
-      ].join('|'),
+      ['messages\\.read', 'messages\\.send', 'PERMISSIONS\\.MESSAGES_', '\\bP\\.MESSAGES_'].join(
+        '|',
+      ),
     );
     const hits = sources(join(ROOT, 'apps/api/src'))
       .filter((path) => pattern.test(readFileSync(path, 'utf8')))

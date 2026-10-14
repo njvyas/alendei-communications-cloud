@@ -22,6 +22,7 @@ import {
   API_SURFACE_PERMISSION_KEYS,
   AUDIT_ACTIONS,
   ERROR_CODES,
+  INERT_PERMISSION_KEYS,
   PERMISSIONS,
   PLATFORM_ROLE_KEYS,
   TENANT_CONTENT_PERMISSIONS,
@@ -611,10 +612,13 @@ describe('tenant delegation on grant (ADR-015 R-6) and the content-key API surfa
             allowedScopeTypes: ['organization'],
             permissions: [key],
           });
+          const isInert = (INERT_PERMISSION_KEYS as readonly string[]).includes(key);
           expect([key, res.status, res.body.error?.code]).toEqual([
             key,
-            400,
-            ERROR_CODES.VALIDATION_FAILED,
+            isInert ? 400 : 403,
+            isInert
+              ? ERROR_CODES.VALIDATION_FAILED
+              : ERROR_CODES.AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION,
           ]);
         }
         const patch = await call(
@@ -640,12 +644,12 @@ describe('tenant delegation on grant (ADR-015 R-6) and the content-key API surfa
       expect([res.status, res.body.error?.code]).toEqual([400, ERROR_CODES.VALIDATION_FAILED]);
     });
 
-    it('GET /permissions lists the API surface: delegate_tenant, and no content key', async () => {
+    it('GET /permissions lists the API surface: delegate_tenant, and no inert content key', async () => {
       const res = await call('get', tokens.cAdmin!, '/permissions?limit=100', c.orgId).expect(200);
       const keys = (res.body.data as { key: string }[]).map((p) => p.key).sort();
       expect(keys).toEqual([...API_SURFACE_PERMISSION_KEYS].sort());
       expect(keys).toContain(DELEGATE);
-      for (const domain of ['contacts', 'templates', 'suppressions', 'messages']) {
+      for (const domain of ['messages']) {
         const filtered = await call(
           'get',
           tokens.cAdmin!,
@@ -653,6 +657,15 @@ describe('tenant delegation on grant (ADR-015 R-6) and the content-key API surfa
           c.orgId,
         ).expect(200);
         expect([domain, filtered.body.data]).toEqual([domain, []]);
+      }
+      for (const domain of ['contacts', 'templates', 'suppressions']) {
+        const filtered = await call(
+          'get',
+          tokens.cAdmin!,
+          `/permissions?domain=${domain}`,
+          c.orgId,
+        ).expect(200);
+        expect(filtered.body.data.length).toBeGreaterThan(0);
       }
     });
   });

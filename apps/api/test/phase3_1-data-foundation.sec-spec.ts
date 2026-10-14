@@ -1,7 +1,4 @@
-import {
-  ERROR_CODES,
-  PERMISSIONS,
-} from '@acc/contracts';
+import { ERROR_CODES, PERMISSIONS } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { eq, sql } from 'drizzle-orm';
 import request from 'supertest';
@@ -75,28 +72,42 @@ describe('Phase 3.1 Data Foundation Security & Integration Suite', () => {
     };
 
     // Contacts permissions (workspace-owned, admitted at org & workspace)
-    await addRoleWithPermissions(tenantA, 'ws', ['organization', 'workspace'], [
-      PERMISSIONS.CONTACTS_READ,
-      PERMISSIONS.CONTACTS_MANAGE,
-    ]);
-    await addRoleWithPermissions(tenantB, 'ws', ['organization', 'workspace'], [
-      PERMISSIONS.CONTACTS_READ,
-      PERMISSIONS.CONTACTS_MANAGE,
-    ]);
+    await addRoleWithPermissions(
+      tenantA,
+      'ws',
+      ['organization', 'workspace'],
+      [PERMISSIONS.CONTACTS_READ, PERMISSIONS.CONTACTS_MANAGE],
+    );
+    await addRoleWithPermissions(
+      tenantB,
+      'ws',
+      ['organization', 'workspace'],
+      [PERMISSIONS.CONTACTS_READ, PERMISSIONS.CONTACTS_MANAGE],
+    );
 
     // Templates and suppressions permissions (org-owned, admitted only at org)
-    await addRoleWithPermissions(tenantA, 'org', ['organization'], [
-      PERMISSIONS.TEMPLATES_READ,
-      PERMISSIONS.TEMPLATES_MANAGE,
-      PERMISSIONS.SUPPRESSIONS_READ,
-      PERMISSIONS.SUPPRESSIONS_MANAGE,
-    ]);
-    await addRoleWithPermissions(tenantB, 'org', ['organization'], [
-      PERMISSIONS.TEMPLATES_READ,
-      PERMISSIONS.TEMPLATES_MANAGE,
-      PERMISSIONS.SUPPRESSIONS_READ,
-      PERMISSIONS.SUPPRESSIONS_MANAGE,
-    ]);
+    await addRoleWithPermissions(
+      tenantA,
+      'org',
+      ['organization'],
+      [
+        PERMISSIONS.TEMPLATES_READ,
+        PERMISSIONS.TEMPLATES_MANAGE,
+        PERMISSIONS.SUPPRESSIONS_READ,
+        PERMISSIONS.SUPPRESSIONS_MANAGE,
+      ],
+    );
+    await addRoleWithPermissions(
+      tenantB,
+      'org',
+      ['organization'],
+      [
+        PERMISSIONS.TEMPLATES_READ,
+        PERMISSIONS.TEMPLATES_MANAGE,
+        PERMISSIONS.SUPPRESSIONS_READ,
+        PERMISSIONS.SUPPRESSIONS_MANAGE,
+      ],
+    );
 
     // Query seeded whatsapp channel id
     const [ch] = await h.admin
@@ -120,14 +131,28 @@ describe('Phase 3.1 Data Foundation Security & Integration Suite', () => {
 
   afterAll(async () => {
     // Clean up created tenant content
-    await h.admin.execute(sql`ALTER TABLE consent_events DISABLE TRIGGER trg_consent_events_immutable`);
-    await h.admin.execute(sql`DELETE FROM consent_events WHERE org_id = ${tenantA.orgId} OR org_id = ${tenantB.orgId}`);
-    await h.admin.execute(sql`ALTER TABLE consent_events ENABLE TRIGGER trg_consent_events_immutable`);
+    await h.admin.execute(
+      sql`ALTER TABLE consent_events DISABLE TRIGGER trg_consent_events_immutable`,
+    );
+    await h.admin.execute(
+      sql`DELETE FROM consent_events WHERE org_id = ${tenantA.orgId} OR org_id = ${tenantB.orgId}`,
+    );
+    await h.admin.execute(
+      sql`ALTER TABLE consent_events ENABLE TRIGGER trg_consent_events_immutable`,
+    );
 
-    await h.admin.execute(sql`DELETE FROM contact_identities WHERE org_id = ${tenantA.orgId} OR org_id = ${tenantB.orgId}`);
-    await h.admin.execute(sql`DELETE FROM contacts WHERE org_id = ${tenantA.orgId} OR org_id = ${tenantB.orgId}`);
-    await h.admin.execute(sql`DELETE FROM templates WHERE org_id = ${tenantA.orgId} OR org_id = ${tenantB.orgId}`);
-    await h.admin.execute(sql`DELETE FROM suppressions WHERE org_id = ${tenantA.orgId} OR org_id = ${tenantB.orgId}`);
+    await h.admin.execute(
+      sql`DELETE FROM contact_identities WHERE org_id = ${tenantA.orgId} OR org_id = ${tenantB.orgId}`,
+    );
+    await h.admin.execute(
+      sql`DELETE FROM contacts WHERE org_id = ${tenantA.orgId} OR org_id = ${tenantB.orgId}`,
+    );
+    await h.admin.execute(
+      sql`DELETE FROM templates WHERE org_id = ${tenantA.orgId} OR org_id = ${tenantB.orgId}`,
+    );
+    await h.admin.execute(
+      sql`DELETE FROM suppressions WHERE org_id = ${tenantA.orgId} OR org_id = ${tenantB.orgId}`,
+    );
 
     await destroyTenant(h.admin, tenantA);
     await destroyTenant(h.admin, tenantB);
@@ -250,7 +275,11 @@ describe('Phase 3.1 Data Foundation Security & Integration Suite', () => {
 
     it('evaluates to unconsented when no consent events exist', async () => {
       const res = await request(h.app.getHttpServer())
-        .get(url(`/contacts/${contactId}/consent-effective?channelId=${channelId}&consentType=marketing`))
+        .get(
+          url(
+            `/contacts/${contactId}/consent-effective?channelId=${channelId}&consentType=marketing`,
+          ),
+        )
         .set('authorization', `Bearer ${tokenA}`);
 
       expect(res.status).toBe(200);
@@ -289,7 +318,11 @@ describe('Phase 3.1 Data Foundation Security & Integration Suite', () => {
       expect(postGrant.status).toBe(201);
 
       const res = await request(h.app.getHttpServer())
-        .get(url(`/contacts/${contactId}/consent-effective?channelId=${channelId}&consentType=marketing`))
+        .get(
+          url(
+            `/contacts/${contactId}/consent-effective?channelId=${channelId}&consentType=marketing`,
+          ),
+        )
         .set('authorization', `Bearer ${tokenA}`);
 
       expect(res.status).toBe(200);
@@ -310,7 +343,11 @@ describe('Phase 3.1 Data Foundation Security & Integration Suite', () => {
         });
 
       const res = await request(h.app.getHttpServer())
-        .get(url(`/contacts/${contactId}/consent-effective?channelId=${channelId}&consentType=marketing`))
+        .get(
+          url(
+            `/contacts/${contactId}/consent-effective?channelId=${channelId}&consentType=marketing`,
+          ),
+        )
         .set('authorization', `Bearer ${tokenA}`);
 
       expect(res.status).toBe(200);
@@ -344,7 +381,11 @@ describe('Phase 3.1 Data Foundation Security & Integration Suite', () => {
         });
 
       const res = await request(h.app.getHttpServer())
-        .get(url(`/contacts/${contactId}/consent-effective?channelId=${channelId}&consentType=marketing`))
+        .get(
+          url(
+            `/contacts/${contactId}/consent-effective?channelId=${channelId}&consentType=marketing`,
+          ),
+        )
         .set('authorization', `Bearer ${tokenA}`);
 
       expect(res.status).toBe(200);
@@ -374,7 +415,11 @@ describe('Phase 3.1 Data Foundation Security & Integration Suite', () => {
 
       // Verify intermediate state is opted_in
       const preCheck = await request(h.app.getHttpServer())
-        .get(url(`/contacts/${cid}/consent-effective?channelId=${channelId}&consentType=transactional`))
+        .get(
+          url(
+            `/contacts/${cid}/consent-effective?channelId=${channelId}&consentType=transactional`,
+          ),
+        )
         .set('authorization', `Bearer ${tokenA}`);
       expect(preCheck.status).toBe(200);
       expect(preCheck.body.data.effectiveState).toBe('opted_in');
@@ -417,7 +462,11 @@ describe('Phase 3.1 Data Foundation Security & Integration Suite', () => {
 
       // 3. Evaluate effective consent
       const res = await request(h.app.getHttpServer())
-        .get(url(`/contacts/${cid}/consent-effective?channelId=${channelId}&consentType=transactional`))
+        .get(
+          url(
+            `/contacts/${cid}/consent-effective?channelId=${channelId}&consentType=transactional`,
+          ),
+        )
         .set('authorization', `Bearer ${tokenA}`);
 
       expect(res.status).toBe(200);
