@@ -1666,7 +1666,36 @@ Positive, negative security, direct database backstop, deterministic concurrency
 **Boundaries & Next Increments:**
 - Phase 2 is formally CLOSED. Phase 2.7 remains undefined and unauthorized.
 - Phase 3.0 architecture remains FROZEN under ADR-014.
-- Phase 3.1 remains NOT STARTED and NOT AUTHORIZED; separate explicit project-owner authorization is required.
+- Phase 3.1 Data Foundation is formally CLOSED (Gate E.1 approved, 14-Oct-2026; §1r).
+- Phase 3.2 remains NOT STARTED and NOT AUTHORIZED; separate explicit project-owner authorization is required.
+
+## 1r. Phase 3.1 / Gate E.1 Data Foundation acceptance — APPROVED (project owner decision, 14-Oct-2026)
+
+**Decision.** Gate E.1 (Phase 3.1 Data Foundation Acceptance) is **APPROVED** by the project owner following final technical closure and evidence audit. Phase 3.1 of Alendei Communications Cloud is formally **CLOSED** under `ROADMAP.md` §6a and ADR-014 §17.1.
+
+**Committed & Pushed Checkpoint:**
+- Commit: `f08b48e89e7683530b9bc81c757cd6089817f3f6` on branch `develop`, synchronized with `origin/develop`.
+
+**Accepted evidence baseline:**
+- **Phase 3.1 Security Suite (`phase3_1-data-foundation.sec-spec.ts`):** 18/18 tests passed across 1 suite, verifying:
+  - Multi-event latest `occurred_at` contradiction fail-closed evaluation (deterministic `unconsented` state when contradictory grant/revoke events coincide at maximum business timestamp across $\ge 3$ events).
+  - Cross-tenant suppression isolation, independent uniqueness, and anti-enumeration (`404 RESOURCE_NOT_FOUND` disclosing zero foreign tenant data).
+  - Model B RLS isolation across tenant content tables.
+  - Parent-child composite foreign key integrity and `FOR UPDATE` locking on consent writes.
+  - Savepoint-protected PostgreSQL 23505 duplicate conflict recovery for suppressions.
+- **Provider Registry Security Regression (`provider-registry.sec-spec.ts`):** 31/31 tests passed across 1 suite, verifying zero regression against Phase 2 platform catalogue RLS policies from the static channel lookup helper `app_channel_code()`.
+- **API Unit Suite:** 528/528 tests passed across 38 suites.
+- **API Integration Suite:** 125/125 tests passed across 6 suites.
+- **Database Integration Suite:** 222/222 tests passed across 12 suites (`principals.int-spec.ts`, `table-classes.int-spec.ts`, `backstop-definitions.int-spec.ts`).
+- **OpenAPI & Contract Consistency:** `apps/api/openapi/openapi.v1.json` generated and verified with 0 drift via `npm run openapi:check`.
+- **Migration & Schema Integrity:** Migration `0031_phase3_1_data_foundation.sql` creates 5 Model B content tables (`contacts`, `contact_identities`, `consent_events`, `templates`, `suppressions`) registered in `_journal.json` (`idx: 31`) with snapshot `0031_snapshot.json`; `drizzle-kit generate` produces 0 drift.
+- **Model B RLS & Grants:** RLS enabled on all 5 tables with dual predicate `(org_id = app_current_org_id()) AND (app_content_context_valid())`. SQL grants follow least privilege: `SELECT, INSERT, UPDATE` on 4 tables; `SELECT, INSERT` on immutable `consent_events`; zero `DELETE` / `TRUNCATE` grants.
+- **RBAC & Surface:** 6 Phase 3.1 permission keys activated in `API_SURFACE_PERMISSION_KEYS` (44 total); `messages.read` and `messages.send` remain inert until Phase 3.3.
+
+**Boundaries & Next Increments:**
+- Phase 3.1 is formally CLOSED.
+- Phase 3.2 (WhatsApp Orchestrator / Routing / Channel Abstraction) remains NOT STARTED and NOT AUTHORIZED; separate explicit project-owner authorization is required.
+
 
 ## 3. Risks explicitly accepted by design (not oversights)
 

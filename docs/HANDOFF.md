@@ -1,14 +1,15 @@
 # Continuation handoff — ADR-015 remediation gate
 
-**Updated:** 13-Oct-2026 (first captured 08-Oct-2026). **Status: ADR-015 pre-Phase-3 remediation gate APPROVED / CLOSED (09-Oct-2026); Gate C APPROVED / CLOSED (12-Oct-2026); Gate D.6 APPROVED / CLOSED (user decision, 13-Oct-2026; `DECISIONS.md` §1p); Gate D (Phase 2 Backend Acceptance) APPROVED / CLOSED and Phase 2 formally CLOSED (user decision, 13-Oct-2026; `DECISIONS.md` §1q).** This file is a pointer and evidence index for the next session. It records state; it decides nothing. The authoritative records are `DECISIONS.md` §1o (ADR-015), `DECISIONS.md` §1p (Gate D.6), `DECISIONS.md` §1q (Gate D / Phase 2 Closure), `TESTING.md` §6q, §6u, §6x, `SECURITY.md` §4b, `RBAC.md` §7–§8b and `PROVIDER_ADAPTER.md` §6h; where this file and those differ, those win.
+**Updated:** 14-Oct-2026 (first captured 08-Oct-2026). **Status: ADR-015 pre-Phase-3 remediation gate APPROVED / CLOSED (09-Oct-2026); Gate C APPROVED / CLOSED (12-Oct-2026); Gate D.6 APPROVED / CLOSED (user decision, 13-Oct-2026; `DECISIONS.md` §1p); Gate D (Phase 2 Backend Acceptance) APPROVED / CLOSED and Phase 2 formally CLOSED (user decision, 13-Oct-2026; `DECISIONS.md` §1q); Gate E.1 (Phase 3.1 Data Foundation Acceptance) APPROVED / CLOSED (user decision, 14-Oct-2026; `DECISIONS.md` §1r; commit `f08b48e`).** This file is a pointer and evidence index for the next session. It records state; it decides nothing. The authoritative records are `DECISIONS.md` §1o (ADR-015), `DECISIONS.md` §1p (Gate D.6), `DECISIONS.md` §1q (Gate D / Phase 2 Closure), `DECISIONS.md` §1r (Gate E.1 / Phase 3.1 Closure), `TESTING.md` §6q, §6u, §6x, `SECURITY.md` §4b, `RBAC.md` §7–§8b and `PROVIDER_ADAPTER.md` §6h; where this file and those differ, those win.
 
-Naming: the **ADR-015 pre-Phase-3 remediation gate** (09-Oct-2026), **Gate C** (Phase 1C acceptance, `ROADMAP.md` §4d; 02-Oct-2026), **Gate D.6** (Phase 2.6 provider console acceptance, `ROADMAP.md` §5c; 13-Oct-2026), and **Gate D** (Phase 2 backend acceptance & overall Phase 2 closure, `ROADMAP.md` §5c; 13-Oct-2026) are recorded as APPROVED / CLOSED. Do not reopen them without an explicit decision, except where new evidence requires investigation of a potential security defect, regression, or material change to the accepted risk.
+Naming: the **ADR-015 pre-Phase-3 remediation gate** (09-Oct-2026), **Gate C** (Phase 1C acceptance, `ROADMAP.md` §4d; 02-Oct-2026), **Gate D.6** (Phase 2.6 provider console acceptance, `ROADMAP.md` §5c; 13-Oct-2026), **Gate D** (Phase 2 backend acceptance & overall Phase 2 closure, `ROADMAP.md` §5c; 13-Oct-2026), and **Gate E.1** (Phase 3.1 Data Foundation acceptance, `ROADMAP.md` §6a; 14-Oct-2026) are recorded as APPROVED / CLOSED. Do not reopen them without an explicit decision, except where new evidence requires investigation of a potential security defect, regression, or material change to the accepted risk.
 
 ## 1. Current phase and gate
 
 - Phase: **Phase 2 is formally CLOSED** (Gate D and Gate D.6 both approved by project owner decision, 13-Oct-2026). **Phase 2.7 is undefined and unauthorized.**
 - **Phase 3.0 architecture remains FROZEN under ADR-014.**
-- **Phase 3.1 has NOT started and is NOT authorized.** Separate explicit project-owner authorization is required before any Phase 3.1 work begins.
+- **Phase 3.1 Data Foundation is formally CLOSED** (Gate E.1 approved by project owner decision, 14-Oct-2026; commit `f08b48e`).
+- **Phase 3.2 has NOT started and is NOT authorized.** Separate explicit project-owner authorization is required before any Phase 3.2 work begins.
 - HIGH-6 and MEDIUM-7 remain deferred to immediately before the dispatcher increment (R-15); other MEDIUM/LOW findings are deferred, not designed.
 
 ## 2. Repository state
@@ -16,9 +17,10 @@ Naming: the **ADR-015 pre-Phase-3 remediation gate** (09-Oct-2026), **Gate C** (
 | Item | Value |
 |---|---|
 | Branch | `develop` |
-| HEAD | `7a9ed370c13b101294a9a6518e886f552a3f4b14` (on top of `c8114b3`) |
-| `origin/develop` | `7a9ed37` — pushed 09-Oct-2026 (`6d4b178..7a9ed37`); local level with it |
-| Working tree | clean at `7a9ed37` apart from the uncommitted gate-closure documentation (`DECISIONS.md`, this file) |
+| HEAD | `f08b48e89e7683530b9bc81c757cd6089817f3f6` |
+| `origin/develop` | `f08b48e` — pushed 14-Oct-2026; local level with it |
+| Working tree | clean at `f08b48e` apart from canonical gate-closure documentation |
+
 | `main` | untouched |
 | `stash@{0}` | "PAUSED phase 2.1 provider registry WIP" — protected; never apply, drop or inspect without explicit instruction; never run `git stash` in this repo |
 | Branch `r13-structural-admission` | R-13 work, cherry-picked onto `develop` as `a461385 357cd9f e6ad6cd b089d4f ac226fc 93ec78f`. Kept, not merged |
@@ -178,7 +180,8 @@ All five review items are decided (`DECISIONS.md` §1o):
 **Boundaries & Next Increments:**
 - Phase 2 is formally CLOSED. Phase 2.7 remains undefined and unauthorized.
 - Phase 3.0 architecture remains FROZEN under ADR-014.
-- Phase 3.1 remains NOT STARTED and NOT AUTHORIZED; separate explicit project-owner authorization is required.
+- Phase 3.1 Data Foundation is formally CLOSED (Gate E.1 approved by project owner decision, 14-Oct-2026; commit `f08b48e`).
+- Phase 3.2 remains NOT STARTED and NOT AUTHORIZED; separate explicit project-owner authorization is required.
 
 ## 7. Residual risks (documented, accepted — not closed)
 
@@ -198,7 +201,7 @@ All five review items are decided (`DECISIONS.md` §1o):
 - **Template `acc_r015_base`** — `template0` + migrations `0000`–`0024` from worktree `wt-0024` at `1bc7fd9`, seeded; fingerprint `all=902f22bc20c8a3f9ce80f67407804cb5`. Clone source only; intentionally frozen at migration `0024`. Every validation run reported it unchanged.
 - Databases present: `acc`, `acc_gateb`, `acc_p23`, `acc_p23_fresh`, `acc_p24`, `acc_r015_base` (+ system databases). No `acc_tmp_*` or clone database remains. `acc_gateb` (18 migrations, last 28-Sep-2026) was not used by this remediation. `acc_p24_fresh` was lost on 07-Oct-2026 (`TESTING.md` §6q, "Process incident"); never recreate it.
 - **Rule** (`TESTING.md` §6q): a script that creates or drops a database hard-codes the name and refuses anything outside an allowlisted throwaway pattern or naming a reference database.
-- **Disposable database test procedure:** Run DB-touching suites through `node scripts/with-db-clone.mjs -- <cmd>` with the four `DATABASE_*_URL` pointing at `acc_r015_base`, `NODE_ENV` unset, `RATE_LIMIT_AUTH_MAX=10 RATE_LIMIT_REFRESH_MAX=30`, and `TMPDIR` on disk. Because `acc_r015_base` is intentionally frozen at migration `0024`, test suites that require migrations beyond `0024` (currently `0025`–`0030`, e.g., teardown trigger `trg_user_roles_reseller_admin_liveness` in `auth-harness.ts`) require that the disposable clone be migrated through the current migration set before running tests:
+- **Disposable database test procedure:** Run DB-touching suites through `node scripts/with-db-clone.mjs -- <cmd>` with the four `DATABASE_*_URL` pointing at `acc_r015_base`, `NODE_ENV` unset, `RATE_LIMIT_AUTH_MAX=10 RATE_LIMIT_REFRESH_MAX=30`, and `TMPDIR` on disk. Because `acc_r015_base` is intentionally frozen at migration `0024`, test suites that require migrations beyond `0024` (currently `0025`–`0031`, e.g., teardown trigger `trg_user_roles_reseller_admin_liveness` in `auth-harness.ts`) require that the disposable clone be migrated through the current migration set before running tests:
   ```bash
   node scripts/with-db-clone.mjs -- bash -c "npm run db:migrate --workspace @acc/db && npm --workspace=@acc/api run test:integration"
   node scripts/with-db-clone.mjs -- bash -c "npm run db:migrate --workspace @acc/db && npm --workspace=@acc/api run test:security"
@@ -208,17 +211,17 @@ All five review items are decided (`DECISIONS.md` §1o):
 ## 9. Next actions (in order; each needs the user's explicit approval)
 
 1. Review and commit this gate-closure documentation (only on instruction).
-2. **Multer dependency update (completed & verified):** `@nestjs/platform-express` updated to `11.2.7` (pins `multer` `2.4.0`); all five Multer advisories resolved; exception removed from `security/audit-exceptions.json` (§5).
-3. Phase 3.1 and Item 6 only on separate explicit authorization.
-4. Items 1 and 3 stay deferred until the user schedules them.
+2. Phase 3.2 (WhatsApp Provider Adapter & Channel Router) only on separate explicit authorization.
+3. Items 1 and 3 stay deferred until the user schedules them.
 
 ## 10. DO NOT
 
 - Do not commit, push, amend, rebase, squash or merge without explicit instruction.
 - Do not change `package.json`, `package-lock.json`, `security/audit-exceptions.json` or dependencies without instruction.
-- Do not alter migrations `0000`–`0030` or the OpenAPI snapshot.
+- Do not alter migrations `0000`–`0031` or the OpenAPI snapshot.
 - Do not reopen decided items or change code "while there"; items 1 and 3 stay deferred.
-- Both gates — the ADR-015 remediation gate (09-Oct-2026) and Gate C (02-Oct-2026) — are recorded as APPROVED / CLOSED. Do not reopen them without an explicit decision, except where new evidence requires investigation of a potential security defect, regression, or material change to the accepted risk.
-- Do not start Phase 3.1 or Item 6.
+- The gates — the ADR-015 remediation gate (09-Oct-2026), Gate C (02-Oct-2026), Gate D/D.6 (13-Oct-2026), and Gate E.1 (14-Oct-2026) — are recorded as APPROVED / CLOSED. Do not reopen them without an explicit decision, except where new evidence requires investigation of a potential security defect, regression, or material change to the accepted risk.
+- Do not start Phase 3.2.
 - Do not touch `main`, `stash@{0}`, `acc_gateb`, `acc_p24`, `acc_r015_base` or any reference database; mutations only on throwaway clones.
+
 - Do not delete branch `r13-structural-admission` or worktree `wt-0024` without instruction.
