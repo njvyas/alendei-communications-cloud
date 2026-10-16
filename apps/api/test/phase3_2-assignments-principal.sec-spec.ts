@@ -286,6 +286,7 @@ describe('Phase 3.2 Assignments & Principal Scopes Security Suite', () => {
     try {
       await h.clearRateLimits();
       // Remove assignments
+      await h.admin.execute(sql`DELETE FROM message_attempts`).catch(() => {});
       await h.admin.execute(sql`DELETE FROM organization_provider_assignments`);
 
       // Remove created providers

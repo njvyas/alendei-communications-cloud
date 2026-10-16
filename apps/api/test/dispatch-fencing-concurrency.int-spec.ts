@@ -9,6 +9,7 @@ import { DispatcherService } from '../src/messages/dispatch/dispatcher.service';
 import { DISPATCH_POOL } from '../src/database/database.tokens';
 import {
   createTenant,
+  destroyTenant,
   purgeMessageEvents,
   startHarness,
   type Harness,
@@ -86,18 +87,27 @@ describe('Dispatch Concurrency, Fencing, Crash Recovery & Lifecycle Serializatio
   afterAll(async () => {
     try {
       if (dispatchPool) await dispatchPool.end();
-      await h.admin.delete(schema.messageDispatchQueue);
-      await purgeMessageEvents(h.admin);
-      await h.admin.delete(schema.messageAttempts);
-      await h.admin.delete(schema.messages);
-      await h.admin.delete(schema.contacts);
-      if (tenant) {
-        await h.admin
-          .delete(schema.organizationProviderAssignments)
-          .where(eq(schema.organizationProviderAssignments.orgId, tenant.orgId));
-      }
-      if (providerId) {
-        await h.admin.delete(schema.providers).where(eq(schema.providers.id, providerId));
+      if (h?.admin) {
+        await h.admin.delete(schema.messageDispatchQueue).catch(() => {});
+        await purgeMessageEvents(h.admin).catch(() => {});
+        await h.admin.delete(schema.messageAttempts).catch(() => {});
+        await h.admin.delete(schema.messages).catch(() => {});
+        await h.admin.delete(schema.contacts).catch(() => {});
+        if (tenant) {
+          await h.admin
+            .delete(schema.organizationProviderAssignments)
+            .where(eq(schema.organizationProviderAssignments.orgId, tenant.orgId))
+            .catch(() => {});
+        }
+        if (providerId) {
+          await h.admin
+            .delete(schema.providers)
+            .where(eq(schema.providers.id, providerId))
+            .catch(() => {});
+        }
+        if (tenant) {
+          await destroyTenant(h.admin, tenant).catch(() => {});
+        }
       }
     } catch {
       // Best-effort cleanup

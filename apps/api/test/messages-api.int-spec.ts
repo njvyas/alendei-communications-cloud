@@ -10,6 +10,8 @@ import {
   PASSWORD,
   PREFIX,
   createTenant,
+  destroyTenant,
+  purgeMessageEvents,
   startHarness,
   type Harness,
   type TenantFixture,
@@ -139,23 +141,52 @@ describe('Messages API Suite (Phase 3.3)', () => {
 
   afterAll(async () => {
     try {
-      await h.admin.delete(schema.messageDispatchQueue);
-      if (createdRoleIds.length > 0) {
-        await h.admin
-          .delete(schema.userRoles)
-          .where(inArray(schema.userRoles.roleId, createdRoleIds));
-        await h.admin
-          .delete(schema.rolePermissions)
-          .where(inArray(schema.rolePermissions.roleId, createdRoleIds));
-        await h.admin.delete(schema.roles).where(inArray(schema.roles.id, createdRoleIds));
-      }
-      if (tenantA && tenantB) {
-        await h.admin
-          .delete(schema.messages)
-          .where(inArray(schema.messages.orgId, [tenantA.orgId, tenantB.orgId]));
-        await h.admin
-          .delete(schema.contacts)
-          .where(inArray(schema.contacts.orgId, [tenantA.orgId, tenantB.orgId]));
+      if (h?.admin) {
+        await h.admin.delete(schema.messageDispatchQueue).catch(() => {});
+        const orgIds = [tenantA?.orgId, tenantB?.orgId].filter(Boolean);
+        if (orgIds.length > 0) {
+          await purgeMessageEvents(h.admin, inArray(schema.messageEvents.orgId, orgIds)).catch(
+            () => {},
+          );
+          await h.admin
+            .delete(schema.messageAttempts)
+            .where(inArray(schema.messageAttempts.orgId, orgIds))
+            .catch(() => {});
+          await h.admin
+            .delete(schema.messages)
+            .where(inArray(schema.messages.orgId, orgIds))
+            .catch(() => {});
+          await h.admin
+            .delete(schema.contacts)
+            .where(inArray(schema.contacts.orgId, orgIds))
+            .catch(() => {});
+          await h.admin
+            .delete(schema.organizationProviderAssignments)
+            .where(inArray(schema.organizationProviderAssignments.orgId, orgIds))
+            .catch(() => {});
+        }
+        if (providerId) {
+          await h.admin
+            .delete(schema.providers)
+            .where(eq(schema.providers.id, providerId))
+            .catch(() => {});
+        }
+        if (createdRoleIds.length > 0) {
+          await h.admin
+            .delete(schema.userRoles)
+            .where(inArray(schema.userRoles.roleId, createdRoleIds))
+            .catch(() => {});
+          await h.admin
+            .delete(schema.rolePermissions)
+            .where(inArray(schema.rolePermissions.roleId, createdRoleIds))
+            .catch(() => {});
+          await h.admin
+            .delete(schema.roles)
+            .where(inArray(schema.roles.id, createdRoleIds))
+            .catch(() => {});
+        }
+        if (tenantA) await destroyTenant(h.admin, tenantA);
+        if (tenantB) await destroyTenant(h.admin, tenantB);
       }
     } catch {
       // Best-effort cleanup

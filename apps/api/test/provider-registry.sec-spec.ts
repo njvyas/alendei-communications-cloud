@@ -320,6 +320,14 @@ describe('Phase 2.1 provider and channel registry', () => {
         );
         await purgeAudit(h.admin, sql`resource_id IN (${idList})`);
         await purgeProviderHealth(h.admin, sql`provider_id IN (${idList})`);
+        await h.admin
+          .execute(sql`DELETE FROM message_attempts WHERE provider_id IN (${idList})`)
+          .catch(() => {});
+        await h.admin
+          .execute(
+            sql`DELETE FROM organization_provider_assignments WHERE provider_id IN (${idList})`,
+          )
+          .catch(() => {});
         await h.admin.delete(schema.providers).where(inArray(schema.providers.id, ids));
       }
       const list = (values: string[]) =>

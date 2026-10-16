@@ -471,6 +471,40 @@ export async function destroyTenant(admin: Database, tenant: TenantFixture): Pro
   await admin.execute(sql`ALTER TABLE audit_logs ENABLE TRIGGER trg_audit_logs_append_only`);
 
   await admin.execute(sql`DELETE FROM sessions WHERE user_id = ${tenant.userId}`);
+
+  // Phase 3 tenant teardown
+  await admin
+    .execute(sql`DELETE FROM message_dispatch_queue WHERE org_id = ${tenant.orgId}`)
+    .catch(() => {});
+  await purgeMessageEvents(admin, sql`org_id = ${tenant.orgId}`).catch(() => {});
+  await admin
+    .execute(sql`DELETE FROM message_attempts WHERE org_id = ${tenant.orgId}`)
+    .catch(() => {});
+  await admin.execute(sql`DELETE FROM messages WHERE org_id = ${tenant.orgId}`).catch(() => {});
+  await admin.execute(sql`DELETE FROM templates WHERE org_id = ${tenant.orgId}`).catch(() => {});
+  try {
+    const { rows } = await admin.execute(
+      sql`SELECT 1 FROM pg_trigger WHERE tgname = 'trg_consent_events_immutable'`,
+    );
+    if (rows.length > 0) {
+      await admin.execute(
+        sql`ALTER TABLE consent_events DISABLE TRIGGER trg_consent_events_immutable`,
+      );
+      await admin.execute(sql`DELETE FROM consent_events WHERE org_id = ${tenant.orgId}`);
+      await admin.execute(
+        sql`ALTER TABLE consent_events ENABLE TRIGGER trg_consent_events_immutable`,
+      );
+    }
+  } catch {
+    // Best-effort cleanup if table does not exist
+  }
+  await admin
+    .execute(sql`DELETE FROM contact_identities WHERE org_id = ${tenant.orgId}`)
+    .catch(() => {});
+  await admin.execute(sql`DELETE FROM contacts WHERE org_id = ${tenant.orgId}`).catch(() => {});
+  await admin
+    .execute(sql`DELETE FROM organization_provider_assignments WHERE org_id = ${tenant.orgId}`)
+    .catch(() => {});
   // System roles and their permission sets are protected by migration `0004`,
   // so teardown declares the same transaction-local provisioning flag the
   // fixture created them under. One transaction, because `SET LOCAL` does not

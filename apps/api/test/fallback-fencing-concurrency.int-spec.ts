@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { schema } from '@acc/db';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { Pool } from 'pg';
 import { uuidv7 } from 'uuidv7';
 
@@ -10,6 +10,7 @@ import { DISPATCH_POOL } from '../src/database/database.tokens';
 import { SimulatorAdapter } from '../src/provider-adapters/simulator.adapter';
 import {
   createTenant,
+  destroyTenant,
   purgeMessageEvents,
   startHarness,
   type Harness,
@@ -23,6 +24,7 @@ describe('Phase 3.4 Fallback, Resilience & Fencing Concurrency Integration Suite
   let dispatcher: DispatcherService;
   let dispatchPool: Pool;
   const createdProviders: string[] = [];
+  const createdTenants: TenantFixture[] = [];
 
   beforeAll(async () => {
     h = await startHarness();
@@ -59,20 +61,38 @@ describe('Phase 3.4 Fallback, Resilience & Fencing Concurrency Integration Suite
   afterAll(async () => {
     try {
       if (dispatchPool) await dispatchPool.end();
-      await h.admin.delete(schema.messageDispatchQueue);
-      await purgeMessageEvents(h.admin);
-      await h.admin.delete(schema.messageAttempts);
-      await h.admin.delete(schema.messages);
-      await h.admin.delete(schema.contacts);
+      if (h?.admin) {
+        await h.admin.delete(schema.messageDispatchQueue).catch(() => {});
+        await purgeMessageEvents(h.admin).catch(() => {});
+        await h.admin.delete(schema.messageAttempts).catch(() => {});
+        await h.admin.delete(schema.messages).catch(() => {});
+        await h.admin.delete(schema.contacts).catch(() => {});
+        await h.admin.delete(schema.organizationProviderAssignments).catch(() => {});
+        if (createdProviders.length > 0) {
+          await h.admin
+            .delete(schema.providerCapabilities)
+            .where(inArray(schema.providerCapabilities.providerId, createdProviders))
+            .catch(() => {});
+          await h.admin
+            .delete(schema.providers)
+            .where(inArray(schema.providers.id, createdProviders))
+            .catch(() => {});
+        }
+        for (const t of createdTenants) {
+          await destroyTenant(h.admin, t).catch(() => {});
+        }
+      }
     } catch {
-      // Best-effort cleanup (disposable DB clone is dropped automatically)
+      // Best-effort cleanup
     } finally {
       await h.close();
     }
   });
 
   async function createTestTenant(label = 'fb-tenant'): Promise<TenantFixture> {
-    return createTenant(h.admin, label, credentials);
+    const t = await createTenant(h.admin, label, credentials);
+    createdTenants.push(t);
+    return t;
   }
 
   async function createProvider(

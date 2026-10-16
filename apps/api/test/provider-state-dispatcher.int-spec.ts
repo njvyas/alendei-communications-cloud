@@ -5,13 +5,21 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { type AuthPrincipal } from '@acc/contracts';
 import { schema } from '@acc/db';
-import { desc, eq } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
 
 import { RequestContext } from '../src/common/context/request-context';
 import { CredentialService } from '../src/iam/credential.service';
 import { ProviderSubmissionExecutor } from '../src/provider-adapters/submission-executor';
 import { ProviderStateStore } from '../src/providers/provider-state.store';
-import { createTenant, startHarness, type Harness } from './auth-harness';
+import {
+  createTenant,
+  destroyTenant,
+  purgeMessageEvents,
+  purgeProviderHealth,
+  startHarness,
+  type Harness,
+  type TenantFixture,
+} from './auth-harness';
 
 describe('ProviderStateStore Dispatcher Execution (HIGH-6 & MEDIUM-7)', () => {
   let h: Harness;
@@ -19,6 +27,7 @@ describe('ProviderStateStore Dispatcher Execution (HIGH-6 & MEDIUM-7)', () => {
   let executor: ProviderSubmissionExecutor;
   let channelId: string;
   let providerId: string;
+  let tenant: TenantFixture | undefined;
 
   beforeAll(async () => {
     h = await startHarness();
@@ -60,7 +69,45 @@ describe('ProviderStateStore Dispatcher Execution (HIGH-6 & MEDIUM-7)', () => {
   }, 60_000);
 
   afterAll(async () => {
-    await h.close();
+    try {
+      if (h?.admin) {
+        if (providerId) {
+          await purgeProviderHealth(h.admin, sql`provider_id = ${providerId}`).catch(() => {});
+        }
+        if (tenant) {
+          await purgeMessageEvents(h.admin, eq(schema.messageEvents.orgId, tenant.orgId)).catch(
+            () => {},
+          );
+          await h.admin
+            .delete(schema.messageAttempts)
+            .where(eq(schema.messageAttempts.orgId, tenant.orgId))
+            .catch(() => {});
+          await h.admin
+            .delete(schema.messages)
+            .where(eq(schema.messages.orgId, tenant.orgId))
+            .catch(() => {});
+          await h.admin
+            .delete(schema.contacts)
+            .where(eq(schema.contacts.orgId, tenant.orgId))
+            .catch(() => {});
+          await h.admin
+            .delete(schema.organizationProviderAssignments)
+            .where(eq(schema.organizationProviderAssignments.orgId, tenant.orgId))
+            .catch(() => {});
+          await destroyTenant(h.admin, tenant).catch(() => {});
+        }
+        if (providerId) {
+          await h.admin
+            .delete(schema.providers)
+            .where(eq(schema.providers.id, providerId))
+            .catch(() => {});
+        }
+      }
+    } catch {
+      // Best-effort cleanup
+    } finally {
+      await h.close();
+    }
   });
 
   it('MEDIUM-7: RequestContext.correlationId() safely returns fallback outside HTTP context', () => {
@@ -82,7 +129,7 @@ describe('ProviderStateStore Dispatcher Execution (HIGH-6 & MEDIUM-7)', () => {
   });
 
   it('HIGH-6: System actor skips audit log insertion during submission recording, and records attemptId', async () => {
-    const tenant = await createTenant(h.admin, 'disp-test', h.app.get(CredentialService));
+    tenant = await createTenant(h.admin, 'disp-test', h.app.get(CredentialService));
 
     // Assign provider to organization for channel
     await h.admin.insert(schema.organizationProviderAssignments).values({
