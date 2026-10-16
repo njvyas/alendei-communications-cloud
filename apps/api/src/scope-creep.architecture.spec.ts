@@ -99,12 +99,36 @@ const CATEGORIES: Category[] = [
     forbids:
       'a worker/job harness or new messaging worker infrastructure (ADR-013 PD-1, ADR-004 D-5)',
     exceptions:
-      'Pre-existing: the hot-reload listener reconnect timer and an ioredis option. No queue, processor, cron, interval or job runner exists; `@nestjs/schedule` is a declared but unused dependency (pinned below).',
+      'Pre-existing: the hot-reload listener reconnect timer and an ioredis option. No queue, processor, cron, interval or job runner exists; `@nestjs/schedule` is a declared but unused dependency (pinned below). Phase 3.3: message_dispatch_queue table class and dispatcher worker (ADR-014 §9).',
     pattern: /[\w-]*(?:worker|queue|bullmq|processor|cron|setInterval|schedul|job)[\w-]*/gi,
     providerCodeOnly: false,
     pinned: {
+      'apps/api/src/messages/dispatch/dispatcher.service.ts': [
+        'dispatcher-worker',
+        'message_dispatch_queue',
+        'queue',
+        'queueResult',
+        'queueRows',
+        'queued',
+        'worker',
+      ],
+      'apps/api/src/messages/messages.service.ts': [
+        'QueuedMessageResponse',
+        'messageDispatchQueue',
+        'queued',
+      ],
       'apps/api/src/providers/provider-configuration.listener.ts': ['scheduleReconnect'],
       'apps/api/src/redis/redis.module.ts': ['enableOfflineQueue'],
+      'packages/contracts/src/messages.ts': ['QUEUED', 'QueuedMessageResponse', 'queued'],
+      'packages/db/src/schema/messages.ts': [
+        'messageDispatchQueue',
+        'message_dispatch_queue',
+        'message_dispatch_queue_claim_idx',
+        'message_dispatch_queue_message_org_fk',
+        'message_dispatch_queue_org_id_idx',
+        'queued',
+      ],
+      'packages/db/src/table-classes.ts': ['message_dispatch_queue'],
     },
   },
   {
@@ -119,11 +143,16 @@ const CATEGORIES: Category[] = [
     key: 'routing',
     forbids: 'provider routing, failover, weights, priorities or canary (ADR-013 PD-4, PD-6)',
     exceptions:
-      'Pre-existing: HTTP error-status fallbacks and a tracing fallback; the approved routing-eligibility contract (`routingEligibility`, `PROVIDER_ADAPTER.md` \u00a76h) and the advisory in-process candidate view (\u00a73a.1). Neither routes or fails over. Phase 3.2: organization_provider_assignments priority column and constraints (ADR-014 \u00a74, \u00a717.1).',
+      'Pre-existing: HTTP error-status fallbacks and a tracing fallback; the approved routing-eligibility contract (`routingEligibility`, `PROVIDER_ADAPTER.md` §6h) and the advisory in-process candidate view (§3a.1). Neither routes or fails over. Phase 3.2: organization_provider_assignments priority column and constraints (ADR-014 §4, §17.1). Phase 3.3: message status "routing" and priority selection (ADR-014 §4, §9). Phase 3.4: same-channel WhatsApp fallback and candidate exhaustion (P3-D13, P3-D14, P3-D15, P3-D03).',
     pattern: /[\w-]*(?:rout(?:er|ing)|failover|fallback|priorit|weight|canary)[\w-]*/gi,
     providerCodeOnly: false,
     pinned: {
       'apps/api/src/common/filters/all-exceptions.filter.ts': ['STATUS_CODE_FALLBACKS', 'fallback'],
+      'apps/api/src/messages/dispatch/dispatcher.service.ts': [
+        'fallback',
+        'isFallbackEligible',
+        'priority',
+      ],
       'apps/api/src/metadata.ts': ['priority'],
       'apps/api/src/observability/tracing.ts': ['fallback'],
       'apps/api/src/openapi/openapi-schemas.ts': ['priority'],
@@ -145,11 +174,13 @@ const CATEGORIES: Category[] = [
       ],
       'packages/contracts/src/assignments.ts': ['priority'],
       'packages/contracts/src/errors.ts': ['ASSIGNMENT_PRIORITY_CONFLICT'],
+      'packages/contracts/src/messages.ts': ['ROUTING', 'routing'],
       'packages/db/src/schema/assignments.ts': [
         'org_provider_assignments_priority_check',
         'priority',
         'uq_org_provider_assignments_org_channel_priority',
       ],
+      'packages/db/src/schema/messages.ts': ['routing'],
     },
   },
   {
@@ -217,16 +248,35 @@ const CATEGORIES: Category[] = [
     key: 'lifecycle',
     forbids: 'the message lifecycle \u2014 messages, attempts, delivery, webhooks (ADR-013 PD-3)',
     exceptions:
-      'Pre-existing: the `checkStatus`/`parseWebhook` interface members, which the simulator refuses (PD-6) and `GuardedProviderAdapter` declares abstract (ADR-015 R-13), a role description and a forbidden metric label name. No message, attempt, delivery or webhook code exists.',
+      'Pre-existing: the `checkStatus`/`parseWebhook` interface members, which the simulator refuses (PD-6) and `GuardedProviderAdapter` declares abstract (ADR-015 R-13), a role description and a forbidden metric label name. Phase 3.3: message attempts table and lifecycle status (ADR-014 §4, §9.2).',
     pattern:
       /[\w-]*(?:message_?attempt|webhook|deliver|dlr|checkStatus|parseWebhook|inbound_?message|conversation)[\w-]*/gi,
     providerCodeOnly: false,
     pinned: {
+      'apps/api/src/messages/dispatch/dispatcher.service.ts': ['message_attempts'],
+      'apps/api/src/messages/messages.service.ts': ['messageAttempts'],
       'apps/api/src/observability/metrics.service.ts': ['conversation_id'],
       'apps/api/src/provider-adapters/circuit-admission.ts': ['checkStatus', 'parseWebhook'],
       'apps/api/src/provider-adapters/simulator.adapter.ts': ['checkStatus', 'parseWebhook'],
+      'packages/contracts/src/messages.ts': ['MESSAGE_ATTEMPT_STATUSES', 'MessageAttemptStatus'],
       'packages/contracts/src/provider-adapter.ts': ['checkStatus', 'parseWebhook'],
       'packages/contracts/src/roles.ts': ['Conversation'],
+      'packages/db/src/schema/messages.ts': [
+        'messageAttemptStatus',
+        'messageAttempts',
+        'message_attempt_status',
+        'message_attempts',
+        'message_attempts_assignment_fk',
+        'message_attempts_claim_token_idx',
+        'message_attempts_latency_ms_nonnegative',
+        'message_attempts_message_id_idx',
+        'message_attempts_message_org_fk',
+        'message_attempts_org_id_idx',
+        'message_attempts_provider_id_idx',
+        'uq_message_attempts_id_provider_id',
+        'uq_message_attempts_message_attempt_num',
+      ],
+      'packages/db/src/table-classes.ts': ['message_attempts'],
     },
   },
   {
@@ -381,7 +431,7 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
     },
   );
 
-  it('the API modules are exactly the Phase 0–3.1 set: no outbox, worker, routing, billing, messaging, webhook or gateway module', () => {
+  it('the API modules are exactly the Phase 0–3.3 set: no outbox, worker, routing, billing, messaging, webhook or gateway module', () => {
     const modules = readdirSync(join(ROOT, 'apps/api/src'))
       .filter((n) => statSync(join(ROOT, 'apps/api/src', n)).isDirectory())
       .sort();
@@ -398,6 +448,7 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       'health',
       'iam',
       'idempotency',
+      'messages',
       'observability',
       'openapi',
       'organizations',
@@ -429,7 +480,7 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
     ]);
   });
 
-  it('the migrations create exactly the Phase 0–3.1 tables: no outbox, job, message, attempt, webhook, billing, routing or SIEM table', () => {
+  it('the migrations create exactly the Phase 0–3.3 tables: no outbox, job, message, attempt, webhook, billing, routing or SIEM table', () => {
     const dir = join(ROOT, 'packages/db/migrations');
     const created = new Set<string>();
     for (const name of readdirSync(dir).filter((n) => /^\d{4}_.*\.sql$/.test(n))) {
@@ -445,6 +496,10 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       'contact_identities',
       'contacts',
       'idempotency_keys',
+      'message_attempts',
+      'message_dispatch_queue',
+      'message_events',
+      'messages',
       'organization_provider_assignments',
       'organizations',
       'permissions',

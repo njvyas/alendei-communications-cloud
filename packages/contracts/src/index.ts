@@ -13,3 +13,4 @@ export * from './contacts';
 export * from './templates';
 export * from './suppressions';
 export * from './assignments';
+export * from './messages';

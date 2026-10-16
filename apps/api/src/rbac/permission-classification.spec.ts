@@ -231,12 +231,12 @@ describe('role definitions under R-5 and R-6', () => {
     expect(Object.isFrozen(DELEGABLE_TENANT_SYSTEM_ROLES)).toBe(true);
   });
 
-  it('the API surface is the catalogue minus inert message keys (Phase 3.1 activates 6 content keys)', () => {
+  it('the API surface is the catalogue (all 46 keys activated in Phase 3.3)', () => {
     expect(
       sorted(ALL_PERMISSION_KEYS.filter((k) => !API_SURFACE_PERMISSION_KEYS.includes(k))),
-    ).toEqual(sorted([PERMISSIONS.MESSAGES_READ, PERMISSIONS.MESSAGES_SEND]));
+    ).toEqual([]);
     expect(API_SURFACE_PERMISSION_KEYS).toContain(DELEGATE);
-    expect(API_SURFACE_PERMISSION_KEYS).toHaveLength(44);
+    expect(API_SURFACE_PERMISSION_KEYS).toHaveLength(46);
   });
 });
 
@@ -346,7 +346,7 @@ describe('grantConfers: the evaluator and the API-key path apply the allowed-sco
   });
 });
 
-describe('the message keys are catalogue-only: no backend code references them', () => {
+describe('the message keys in Phase 3.3 are referenced only by the messages module', () => {
   const ROOT = join(__dirname, '..', '..', '..', '..');
   const sources = (dir: string): string[] =>
     readdirSync(dir).flatMap((name) => {
@@ -355,7 +355,7 @@ describe('the message keys are catalogue-only: no backend code references them',
       return path.endsWith('.ts') && !/\.spec\.ts$/.test(path) ? [path] : [];
     });
 
-  it('apps/api/src names none of the messages keys, nor their PERMISSIONS constants', () => {
+  it('apps/api/src references messages keys only within the messages module', () => {
     const pattern = new RegExp(
       ['messages\\.read', 'messages\\.send', 'PERMISSIONS\\.MESSAGES_', '\\bP\\.MESSAGES_'].join(
         '|',
@@ -364,6 +364,9 @@ describe('the message keys are catalogue-only: no backend code references them',
     const hits = sources(join(ROOT, 'apps/api/src'))
       .filter((path) => pattern.test(readFileSync(path, 'utf8')))
       .map((path) => relative(ROOT, path));
-    expect(hits).toEqual([]);
+    expect(hits.sort()).toEqual([
+      'apps/api/src/messages/messages.controller.ts',
+      'apps/api/src/messages/messages.service.ts',
+    ]);
   });
 });

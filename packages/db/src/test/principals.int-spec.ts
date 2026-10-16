@@ -45,6 +45,11 @@ const TABLES = [
   'contact_identities',
   'contacts',
   'idempotency_keys',
+  // Phase 3.3 (migration 0033): message orchestrator and dispatch tables
+  'message_attempts',
+  'message_dispatch_queue',
+  'message_events',
+  'messages',
   // Phase 3.2 (migration 0032): organization provider assignments
   'organization_provider_assignments',
   'organizations',
@@ -88,6 +93,10 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
     contact_identities: 'INSERT,SELECT,UPDATE',
     contacts: 'INSERT,SELECT,UPDATE',
     idempotency_keys: 'INSERT,SELECT',
+    message_attempts: 'INSERT,SELECT,UPDATE',
+    message_dispatch_queue: 'DELETE,INSERT,SELECT,UPDATE',
+    message_events: 'INSERT,SELECT',
+    messages: 'INSERT,SELECT,UPDATE',
     organization_provider_assignments: 'INSERT,SELECT,UPDATE',
     organizations: 'INSERT,SELECT',
     permissions: 'SELECT',

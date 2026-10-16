@@ -40,11 +40,12 @@ export const TENANCY_RECORD_TABLES = [
   'idempotency_keys',
   'audit_logs',
   'organization_provider_assignments',
+  'message_dispatch_queue',
 ] as const;
 
 /**
  * Tenant-content tables (Model B, ADR-015 R-7 … R-10, ADR-014 §17.1).
- * Phase 3.1 Data Foundation tables.
+ * Phase 3.1 Data Foundation tables + Phase 3.3 Message Orchestrator tables.
  */
 export const CONTENT_TABLES = [
   'contacts',
@@ -52,6 +53,9 @@ export const CONTENT_TABLES = [
   'consent_events',
   'templates',
   'suppressions',
+  'messages',
+  'message_attempts',
+  'message_events',
 ] as const;
 
 /**

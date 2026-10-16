@@ -1,8 +1,8 @@
 # Continuation handoff — ADR-015 remediation gate
 
-**Updated:** 14-Oct-2026 (first captured 08-Oct-2026). **Status: ADR-015 pre-Phase-3 remediation gate APPROVED / CLOSED (09-Oct-2026); Gate C APPROVED / CLOSED (12-Oct-2026); Gate D.6 APPROVED / CLOSED (user decision, 13-Oct-2026; `DECISIONS.md` §1p); Gate D (Phase 2 Backend Acceptance) APPROVED / CLOSED and Phase 2 formally CLOSED (user decision, 13-Oct-2026; `DECISIONS.md` §1q); Gate E.1 (Phase 3.1 Data Foundation Acceptance) APPROVED / CLOSED (user decision, 14-Oct-2026; `DECISIONS.md` §1r; commit `f08b48e`); Gate E.2 (Phase 3.2 Assignments & Principal Scopes Acceptance) APPROVED / CLOSED (user decision, 14-Oct-2026; `DECISIONS.md` §1s; commit `4d4c4b7`).** This file is a pointer and evidence index for the next session. It records state; it decides nothing. The authoritative records are `DECISIONS.md` §1o (ADR-015), `DECISIONS.md` §1p (Gate D.6), `DECISIONS.md` §1q (Gate D / Phase 2 Closure), `DECISIONS.md` §1r (Gate E.1 / Phase 3.1 Closure), `DECISIONS.md` §1s (Gate E.2 / Phase 3.2 Closure), `TESTING.md` §6q, §6u, §6x, `SECURITY.md` §4b, `RBAC.md` §7–§8b and `PROVIDER_ADAPTER.md` §6h; where this file and those differ, those win.
+**Updated:** 16-Oct-2026 (first captured 08-Oct-2026). **Status: ADR-015 pre-Phase-3 remediation gate APPROVED / CLOSED (09-Oct-2026); Gate C APPROVED / CLOSED (12-Oct-2026); Gate D.6 APPROVED / CLOSED (user decision, 13-Oct-2026; `DECISIONS.md` §1p); Gate D (Phase 2 Backend Acceptance) APPROVED / CLOSED and Phase 2 formally CLOSED (user decision, 13-Oct-2026; `DECISIONS.md` §1q); Gate E.1 (Phase 3.1 Data Foundation Acceptance) APPROVED / CLOSED (user decision, 14-Oct-2026; `DECISIONS.md` §1r; commit `f08b48e`); Gate E.2 (Phase 3.2 Assignments & Principal Scopes Acceptance) APPROVED / CLOSED (user decision, 14-Oct-2026; `DECISIONS.md` §1s; commit `4d4c4b7`); Gate E.3 (Phase 3.3 Orchestrator & Dispatch Execution Acceptance) APPROVED / CLOSED (user decision, 15-Oct-2026; `DECISIONS.md` §1t); Gate E.4 (Phase 3.4 Fallback & Resilience Acceptance) APPROVED / CLOSED (user decision, 15-Oct-2026; `DECISIONS.md` §1u); Gate E.5 (Phase 3.5 WhatsApp Management Console Acceptance) APPROVED / CLOSED and Phase 3 formally CLOSED (user decision, 16-Oct-2026; `DECISIONS.md` §1v).** This file is a pointer and evidence index for the next session. It records state; it decides nothing. The authoritative records are `DECISIONS.md` §1o (ADR-015), `DECISIONS.md` §1p (Gate D.6), `DECISIONS.md` §1q (Gate D / Phase 2 Closure), `DECISIONS.md` §1r (Gate E.1 / Phase 3.1 Closure), `DECISIONS.md` §1s (Gate E.2 / Phase 3.2 Closure), `DECISIONS.md` §1t (Gate E.3 / Phase 3.3 Closure), `DECISIONS.md` §1u (Phase 3.4 / Gate E.4 Closure), `DECISIONS.md` §1v (Phase 3.5 / Gate E.5 Closure), `TESTING.md` §6q, §6u, §6x, `SECURITY.md` §4b, `RBAC.md` §7–§8b and `PROVIDER_ADAPTER.md` §6h; where this file and those differ, those win.
 
-Naming: the **ADR-015 pre-Phase-3 remediation gate** (09-Oct-2026), **Gate C** (Phase 1C acceptance, `ROADMAP.md` §4d; 02-Oct-2026), **Gate D.6** (Phase 2.6 provider console acceptance, `ROADMAP.md` §5c; 13-Oct-2026), **Gate D** (Phase 2 backend acceptance & overall Phase 2 closure, `ROADMAP.md` §5c; 13-Oct-2026), **Gate E.1** (Phase 3.1 Data Foundation acceptance, `ROADMAP.md` §6a; 14-Oct-2026), and **Gate E.2** (Phase 3.2 Assignments & Principal Scopes acceptance, `ROADMAP.md` §6a; 14-Oct-2026) are recorded as APPROVED / CLOSED. Do not reopen them without an explicit decision, except where new evidence requires investigation of a potential security defect, regression, or material change to the accepted risk.
+Naming: the **ADR-015 pre-Phase-3 remediation gate** (09-Oct-2026), **Gate C** (Phase 1C acceptance, `ROADMAP.md` §4d; 02-Oct-2026), **Gate D.6** (Phase 2.6 provider console acceptance, `ROADMAP.md` §5c; 13-Oct-2026), **Gate D** (Phase 2 backend acceptance & overall Phase 2 closure, `ROADMAP.md` §5c; 13-Oct-2026), **Gate E.1** (Phase 3.1 Data Foundation acceptance, `ROADMAP.md` §6a; 14-Oct-2026), **Gate E.2** (Phase 3.2 Assignments & Principal Scopes acceptance, `ROADMAP.md` §6a; 14-Oct-2026), **Gate E.3** (Phase 3.3 Orchestrator & Dispatch Execution acceptance, `ROADMAP.md` §6a; 15-Oct-2026), **Gate E.4** (Phase 3.4 Fallback & Resilience acceptance, `ROADMAP.md` §6a; 15-Oct-2026), and **Gate E.5** (Phase 3.5 WhatsApp Management Console acceptance, `ROADMAP.md` §6a; 16-Oct-2026) are recorded as APPROVED / CLOSED. Do not reopen them without an explicit decision, except where new evidence requires investigation of a potential security defect, regression, or material change to the accepted risk.
 
 ## 1. Current phase and gate
 
@@ -10,17 +10,19 @@ Naming: the **ADR-015 pre-Phase-3 remediation gate** (09-Oct-2026), **Gate C** (
 - **Phase 3.0 architecture remains FROZEN under ADR-014.**
 - **Phase 3.1 Data Foundation is formally CLOSED** (Gate E.1 approved by project owner decision, 14-Oct-2026; commit `f08b48e`).
 - **Phase 3.2 Assignments & Principal Scopes is formally CLOSED** (Gate E.2 approved by project owner decision, 14-Oct-2026; commit `4d4c4b7`).
-- **Phase 3.3 has NOT started and is NOT authorized.** Separate explicit project-owner authorization is required before any Phase 3.3 work begins.
-- HIGH-6 and MEDIUM-7 remain deferred to immediately before the dispatcher increment (R-15); other MEDIUM/LOW findings are deferred, not designed.
+- **Phase 3.3 Orchestrator & Dispatch Execution is formally CLOSED** (Gate E.3 approved by project owner decision, 15-Oct-2026; `DECISIONS.md` §1t).
+- **Phase 3.4 Fallback & Resilience is formally CLOSED** (Gate E.4 approved by project owner decision, 15-Oct-2026; `DECISIONS.md` §1u).
+- **Phase 3.5 WhatsApp Management Console is formally CLOSED** (Gate E.5 approved by project owner decision, 16-Oct-2026; `DECISIONS.md` §1v, `ROADMAP.md` §6a). **Phase 3 of Alendei Communications Cloud is formally CLOSED.**
+- HIGH-6 and MEDIUM-7 were resolved in Phase 3.3 (`DECISIONS.md` §1t); other MEDIUM/LOW findings are deferred, not designed.
 
 ## 2. Repository state
 
 | Item | Value |
 |---|---|
 | Branch | `develop` |
-| HEAD | `934cc9921c9dee2c786889c8027974b2fbc1efbe` |
-| `origin/develop` | `934cc99` — pushed 14-Oct-2026; local level with it |
-| Implementation | `4d4c4b75fee7c07d573e383ddfad23abd4731db7` (Phase 3.2 Gate E.2) |
+| HEAD | `3341a431d8efe8cceefba66028446beabfd1b773` |
+| `origin/develop` | `3341a43` — pushed 14-Oct-2026; local level with it |
+| Implementation | Phase 3.3, Phase 3.4 & Phase 3.5 working-tree changes (uncommitted, unstaged) |
 
 | `main` | untouched |
 | `stash@{0}` | "PAUSED phase 2.1 provider registry WIP" — protected; never apply, drop or inspect without explicit instruction; never run `git stash` in this repo |
@@ -60,9 +62,38 @@ Committed in `7a9ed37` on top of `c8114b3` (all accepted, `DECISIONS.md` §1o):
 | `packages/db/migrations/0028_adr015_org_admin_liveness.sql` | `dc67f945e8e044d52a1a014f28c4fc2bb5b592d7f09f4cfed0ae5240944d3158` |
 | `packages/db/migrations/0029_adr015_roles_scope_types_non_empty.sql` | `111384595caa261e0f11c5dc54d6b8e98f5b4447d79979a287d2af5af16e6fa0` |
 | `packages/db/migrations/0030_adr015_reseller_admin_liveness.sql` | `29ffe4524ca3d913a86baeea44cb1939c40e6eb5deba3e96c74dc97805d3900c` |
-| `packages/db/migrations/meta/_journal.json` | `0a46fea03efe9092e8bdbfc122a470f8669b1875687d0492712e3f711d9e8210` |
-| `apps/api/openapi/openapi.v1.json` | `a3ff1808cc7a530039c6bebe972ed0c561266d73fdc318d9dcf3e25e4c08000d` |
-| `apps/api/src/metadata.ts` | `899b68c09319f581c0d83b853e3c29de5b192f81ca243c701fd2490b2cb1add2` |
+| `packages/db/migrations/0033_phase3_3_orchestrator_dispatch.sql` | `dfc05dad5d3d5e4782d5d1c78fe0d036b5b94907ad624e67f68a4cefedd1154c` |
+| `packages/db/migrations/0034_phase3_4_fallback.sql` | `7692ee9349ddb810a4ed79a5f4926d939a38d15ffcc8118a2635745b0ea2ca6f` |
+| `packages/db/migrations/meta/0033_snapshot.json` | `43b46793ba344be7178504499c385493546c482a1acfc83fe2cdef53bf2db96e` |
+| `packages/db/migrations/meta/0034_snapshot.json` | `084d0fd620bcf764b485c9f7301667de5e6ac179dee9e1c0583037ef049e2044` |
+| `packages/db/migrations/meta/_journal.json` | `1d860f59b2b906a39a789ee3749522f8df9ae26863084b86f5481b2933a47b9f` |
+| `apps/api/openapi/openapi.v1.json` | `82a3f22870f34e3ff76d5a543526f2b95a099438edefd3ec63c520fc319f6b55` |
+| `apps/api/src/metadata.ts` | `5cb77db663bdfaf644a27bb4d463b389b694dcb197881edb154bac82e883dc8d` |
+| `packages/contracts/src/messages.ts` | `7fd7f47aa5b5603a9b13d672dfcccb2f62e935b8ad99c967610b84c368742460` |
+| `packages/db/src/schema/messages.ts` | `a75144d347189e80197d6b28c219ae82ef196197a4c99c973be6d006f2071aa1` |
+| `apps/api/src/messages/dispatch/dispatcher.service.ts` | `fbeaf509dc336bf2dea3c45e479c781c85a57a1af36e9a35b51c0d9cbbeffccc` |
+| `apps/api/test/phase3_4-fallback-resilience.sec-spec.ts` | `3e8347397aa2ace47b96d438940b1fa29069c8ddb2a077ffe8dc32206b426224` |
+| `apps/api/test/fallback-fencing-concurrency.int-spec.ts` | `cde66738f38368931d058cc87e74b9dd415fe0905c87cfde85376188bc543b7d` |
+| `apps/web/src/app/(console)/layout.tsx` | `e6c73e8f09cba22ab8c0789287124abba357d73aa6516929d13c940e33735cba` |
+| `apps/web/src/lib/api-client.ts` | `298f6f2ea21fa398cbf7d766ffdc3265f49d79acb9f0c20f5b8ad65f2bea5e90` |
+| `apps/web/src/lib/session-store.ts` | `2c6357ee948dd62df134d3b031d208fa96e6b42d6eac40563b1d827e3e8981af` |
+| `apps/web/src/app/(console)/templates/page.tsx` | `85f0077e98c55de142486e81bec51b0ce0a449772677dbf5b573faabb5178cda` |
+| `apps/web/src/app/(console)/contacts/page.tsx` | `9592ba7b13578df18c509e2564b56ff521c0e07069ddeadcd3475706babe273f` |
+| `apps/web/src/app/(console)/whatsapp/page.tsx` | `917299f68d816ec465282dbe090a7bb5064ec99ffff2c91ddf9d288f0fc88756` |
+| `apps/web/src/components/templates/template-approval-dialog.tsx` | `12fe2a0dfe452168895efb2fe60004216dbe7c39c9bd0a912033e6ed21da6191` |
+| `apps/web/src/components/templates/template-create-dialog.tsx` | `1c1b1faca292699eb2e002cf535bb26ba317b191a23412f9f75cd8c04bb19154` |
+| `apps/web/src/components/templates/template-status-badge.tsx` | `6bccdbbbb6a4df2ab4c7eb41d6ca6554362b7da875def3be464a031a78d42520` |
+| `apps/web/src/components/contacts/consent-status-badge.tsx` | `b8bb9bf664171a0938b943347142dff100fe24b42c0839d8672f23cdbefcd993` |
+| `apps/web/src/components/contacts/contact-consent-dialog.tsx` | `7fda4a2ba619c1a5dae84c8649f085540ab347bae7f1aaee9e653fea639e19da` |
+| `apps/web/src/components/contacts/contact-create-dialog.tsx` | `687cd1926beb213eafe25ba892c8c727ad0de38f69ece0be9380c569ab1611ce` |
+| `apps/web/src/components/whatsapp/attempt-history-card.tsx` | `195b9652af39d261d6639988e848614bdb3b81f919d49bed884ca64613745d6e` |
+| `apps/web/src/components/whatsapp/message-status-badge.tsx` | `8f53f11c6127113fd89caff534f19693cecd81e005cf569cabb746b0a208b071` |
+| `apps/web/src/components/whatsapp/whatsapp-send-panel.tsx` | `fa133e4997ed9bd801ef90644d104960d2c2a92c26059ec943588ce297972f8c` |
+| `apps/web/src/lib/whatsapp-management.test.ts` | `0cd85e3fcad5ea00996d6015c61b7cc4b7aa613378d7396422968018fbe29796` |
+| `apps/web/src/lib/whatsapp-security.sec.test.ts` | `b83a06854bd29f8e58eecc7c57635d44f1ed8eb46b2ef1380b828d201566085b` |
+| `apps/web/e2e/helpers/auth.ts` | `b981c35e8e21beb7d71718c22f94f7c52450aac29f687b8179f3cf730a4951b4` |
+| `apps/web/e2e/whatsapp-console.spec.ts` | `21369519b6d67d2140999a4ab273a30a242d7fa0e9bbd0d48a10495974d8eb58` |
+| `scripts/whatsapp-e2e-fixture.mjs` | `f8a5631f31caf5e422904a900f4f100436127ed87f354fd5b49bf1feef1f9cfb` |
 | `package.json` (unchanged) | `94f659a133cf20e6f4842392e8e78e78f8e0fc92dea8d6a6196d0dc21eca8dfc` |
 | `package-lock.json` | `e03da3b90da00df2d3c5a7efdc60c67ee0011adf0635cf65c489e6bcd89bdc5d` |
 | `security/audit-exceptions.json` (unchanged) | `9601043e0ae63e20fa16d327045a844be4d59416f6a2d86e479125a18a3b89e6` |
@@ -73,8 +104,8 @@ Committed in `7a9ed37` on top of `c8114b3` (all accepted, `DECISIONS.md` §1o):
 | `scripts/mutation/catalogue/item4-0030.json` | `14ed42adabfdb10a2ef122214e5886d68243e7b7577e9709ac45e5c78e15facd` |
 | `scripts/mutation/catalogue/item5-platform-asymmetry.json` | `bd775518918bd40ffa692c1dcb8357d33a523261eeff585fb8b48679d50d5e4c` |
 
-- **Schema:** migrations `0000`–`0028` unchanged; `0029`, `0030`, `0031`, and `0032` added with their snapshots and journal entries.
-- **OpenAPI:** against `6d4b178`, `openapi.v1.json` adds `platform.roles.delegate_tenant` in three permission enums (step 3) and `AUTHZ_LAST_ORGANIZATION_ADMIN` (step 6) and `AUTHZ_LAST_RESELLER_ADMIN` (item 4) to `ErrorBody.code`. `metadata.ts` unchanged. No operation added or removed.
+- **Schema:** migrations `0000`–`0028` unchanged; `0029`, `0030`, `0031`, `0032`, `0033`, and `0034` added with their snapshots and journal entries.
+- **OpenAPI:** `openapi.v1.json` covers all application routes; `openapi:check` passes with zero drift against `metadata.ts`.
 - **Dependencies:** manifests unchanged; `package-lock.json` changed only for `next`, `sharp`, `handlebars` and their own sub-packages.
 
 ## 4. Final consolidated validation (09-Oct-2026) — accepted
@@ -199,22 +230,151 @@ All five review items are decided (`DECISIONS.md` §1o):
 - **Schema & Migrations:** Migration `0032_phase3_2_assignments_principal.sql` creates `organization_provider_assignments`, `assignment_status` enum, parent-child FK `(provider_id, channel_id)`, immutability triggers, `acc_dispatch` DB role and RLS policies, and dispatch context functions.
 - **Commit:** `4d4c4b75fee7c07d573e383ddfad23abd4731db7` on branch `develop`, pushed to `origin/develop`.
 
+### Gate E.3 sign-off record and Phase 3.3 Closure — APPROVED (project owner decision, 15-Oct-2026)
+
+**Decision.** Gate E.3 (Phase 3.3 Orchestrator & Dispatch Execution Acceptance) is **APPROVED** by the project owner following final technical closure and acceptance audit. Phase 3.3 of Alendei Communications Cloud is formally **CLOSED** under `ROADMAP.md` §6a and ADR-014 §17.1.
+
+**Implementation Baseline & Commit Relationship:**
+- **Branch:** `develop`
+- **Committed HEAD:** `3341a431d8efe8cceefba66028446beabfd1b773` (`fix(ci): format Phase 3.1 files, align security test assertions with Phase 3.1/3.2 scope, and correct documentation commit hashes`)
+- **Phase 3.3 Implementation Status:** Approved in working tree, currently uncommitted pending owner authorization to stage and commit (no commit hash fabricated).
+
+**Accepted Phase 3.3 Scope:**
+- **Preflight Validation & Ingestion:** `POST /messages` implements the strict 5-stage preflight validation sequence (Channel exists -> Recipient not suppressed -> Consent not revoked -> Template approved -> Active provider assignment exists), returning `202 Accepted` with payload fingerprinting and idempotency replay deduplication (duplicate request returns identical 202; conflicting payload returns 422).
+- **Anti-Enumeration:** `GET /messages/:id` strictly enforces Model B tenant boundary, returning 404 `RESOURCE_NOT_FOUND` for non-existent IDs and cross-tenant attempts.
+- **Queue & Database Fencing:** Migration `0033_phase3_3_orchestrator_dispatch.sql` adds `messages`, `message_attempts`, `message_events` (Model B RLS), and `message_dispatch_queue` (Model A RLS). Dispatch claiming uses `FOR UPDATE SKIP LOCKED`, lease management, PostgreSQL session variables (`app.dispatch_message_id`, `app.dispatch_claim_token`), and fencing epoch verification (`dispatch_epoch`).
+- **Authoritative Circuit Admission:** Provider submission via `ProviderSubmissionExecutor` strictly verifies Phase 2 `CircuitAdmission` tokens before provider dispatch; forged, expired, or reused admissions fail closed.
+- **Dedicated Principal Isolation:** `acc_dispatch` database principal restricted to observation updates on active assigned providers for `app_current_org_id()`. Blocked from modifying administrative/content columns, deleting messages, or inserting audit logs. Fencing guards `fn_message_attempts_fencing_guard()` and `fn_provider_health_attempt_guard()` enforce attempt-to-claim binding.
+- **Crash Recovery:** Leases that expire while in `submitting` status are recovered to terminal `failed` with attempt outcome `OUTCOME_UNKNOWN` (non-retryable, avoiding duplicate delivery).
+- **Organization Lifecycle Serialization:** Advisory locks serialize organization lifecycle transitions (such as suspension) with active dispatch.
+- **WhatsApp Cloud Adapter:** Contract implemented and executed against the deterministic `simulator` adapter.
+
+**Audit & Context Resolution (HIGH-6 and MEDIUM-7):**
+- **HIGH-6 (Least Privilege & Audit Suppression):** `acc_dispatch` database role intentionally lacks `INSERT` privilege on `audit_logs` to maintain least privilege. `ProviderStateStore` verifies `if (principal.actorType !== 'system')` prior to invoking `this.access.record()`. Dispatcher-originated system observations skip `audit_logs` insertion where required by least privilege, while the intended provider-health observations (`provider_health` table) and Prometheus metrics evidence remain available. Automated dispatcher observations do not produce audit-log rows.
+- **MEDIUM-7 (Correlation ID Fallback):** `RequestContext.correlationId()` safely returns fallback `'no-correlation-id'` when executed outside HTTP request contexts (such as asynchronous background dispatch workers).
+
+**Targeted Mutation Verification (Limited Scope):**
+- *Note:* Targeted proofs on isolated critical paths; does not constitute comprehensive mutation coverage across Phase 3.3.
+  - **Mutant M1 (Fencing Check Bypass):** Simulated removal of the token and epoch check in `dispatcher.service.ts` `processClaim`. KILLED by `dispatch-fencing-concurrency.int-spec.ts` (Test 3: "aborts settlement if fencing epoch or token was superseded by another worker").
+  - **Mutant M2 (Claim Token Verification Bypass):** Simulated bypassing `fn_message_attempts_fencing_guard()`. KILLED by `phase3_3-orchestrator-dispatch.sec-spec.ts` (Test 13: "binds message_attempts insertion to matching dispatch claim token and active provider").
+
+**Documented Test Isolation Constraint:**
+- `message_dispatch_queue` is a global table across tenants. Test suites that claim from the queue (`messages-api.int-spec.ts` and `dispatch-fencing-concurrency.int-spec.ts`) require isolated database clones via `scripts/with-db-clone.mjs` to avoid shared queue state interference.
+
+**Exact Validation Results:**
+- `phase3_3-orchestrator-dispatch.sec-spec.ts`: 13/13 passed (1.7s)
+- `dispatch-fencing-concurrency.int-spec.ts`: 5/5 passed (1.3s)
+- `messages-api.int-spec.ts`: 10/10 passed (1.4s)
+- `provider-state-dispatcher.int-spec.ts`: 2/2 passed (0.9s)
+- `role-assignment.sec-spec.ts` + `platform-admin-liveness.sec-spec.ts`: 83/83 passed (6.6s)
+- Database Package Tests (`@acc/db`): 227/227 passed (5 unit, 222 integration; 6.1s)
+- API Unit Tests (`@acc/api`): 528/528 passed across 38 suites, including `circuit-admission.architecture.spec.ts` (6.3s)
+- Static Checks: `npm run lint` (0 errors), `npm run format:check` (0 issues), `npm run typecheck` (0 errors), `npm run build` (clean monorepo build), `npm run openapi:check` (0 drift), `npm run db:generate -w @acc/db` (0 schema diffs).
+
 **Boundaries & Next Increments:**
 - Phase 2 is formally CLOSED. Phase 2.7 remains undefined and unauthorized.
 - Phase 3.0 architecture remains FROZEN under ADR-014.
 - Phase 3.1 Data Foundation is formally CLOSED (Gate E.1 approved by project owner decision, 14-Oct-2026; commit `f08b48e`).
 - Phase 3.2 Assignments & Principal Scopes is formally CLOSED (Gate E.2 approved by project owner decision, 14-Oct-2026; commit `4d4c4b7`).
-- Phase 3.3 remains NOT STARTED and NOT AUTHORIZED; separate explicit project-owner authorization is required.
+- Phase 3.3 Orchestrator & Dispatch Execution is formally CLOSED (Gate E.3 approved by project owner decision, 15-Oct-2026; uncommitted baseline on `develop` at HEAD `3341a43`).
+- Phase 3.4 Fallback & Resilience is formally CLOSED (Gate E.4 approved by project owner decision, 15-Oct-2026; uncommitted candidate on `develop` at HEAD `3341a43`).
+
+### Gate E.4 sign-off record and Phase 3.4 Closure — APPROVED (project owner decision, 15-Oct-2026)
+
+**Decision.** Gate E.4 (Phase 3.4 Fallback & Resilience Acceptance) is **APPROVED** by the project owner following formal acceptance review and verification audit. Phase 3.4 of Alendei Communications Cloud is formally **CLOSED** under `ROADMAP.md` §6a and ADR-014 §17.4.
+
+**Implementation Baseline & Commit Relationship:**
+- **Branch:** `develop`
+- **Committed HEAD:** `3341a431d8efe8cceefba66028446beabfd1b773`
+- **Working-Tree Status:** Uncommitted changes present (Phase 3.3 accepted baseline + Phase 3.4 approved increment); zero changes staged, committed, or pushed.
+
+**Approved Decisions & Implemented Scope:**
+- **P3-D13 (Fallback Eligibility):** Definite failures (`PROVIDER_ERROR`, `RATE_LIMITED`) trigger fallback; in-memory circuit skips advance candidates without attempts; ambiguous outcomes (`TIMEOUT`, `UNKNOWN`) settle terminally as `outcome_unknown` with zero fallback; non-fallback errors (`AUTH_ERROR`, etc.) terminate immediately.
+- **P3-D14 (Candidate Exhaustion & Single-Pass Routing):** Ascending priority evaluation (`priority ASC`) excluding previously attempted providers (`provider_id NOT IN (SELECT provider_id FROM message_attempts WHERE message_id = $3)`). Fast terminal failure (`NO_ELIGIBLE_PROVIDER`, 0 attempts, queue deleted) when all circuits open. Terminal failure when fallback candidates exhausted. Zero delayed retry timers.
+- **P3-D15 (Timeout Non-Retryability):** `TIMEOUT` and `UNKNOWN` adapter outcomes transition message terminally to `outcome_unknown` and delete queue row.
+- **P3-D03 (Dispatcher Crash Recovery):** `recoverExpiredLeases()` transitions expired submitting leases to terminal `outcome_unknown` and deletes queue row; zero blind retry.
+- **Option A State Transition Guard (Migration `0034_phase3_4_fallback.sql`):** Replaces `fn_messages_terminal_guard()` restricting `submitting -> queued` strictly to `acc_dispatch` under active claim with verified failed attempt matching claim token and epoch with fallback-eligible reason. Terminal states (`accepted`, `failed`, `outcome_unknown`) remain absolutely immutable.
+
+**Targeted Mutation Proofs (Verified Killed):**
+- **Mutant M1 (Database Fallback Authorization Boundary):** Removing Guard 1 (`current_user = 'acc_dispatch' OR app_session_bypasses_rls()`) allows `acc_app` to bypass the boundary and requeue in-flight messages; killed by `phase3_4-fallback-resilience.sec-spec.ts` (`toThrow(/UNAUTHORIZED_REQUEUE/)`).
+- **Mutant M2 (Fencing Token & Epoch Settlement Verification):** Disabling fencing check in `processClaim` settlement transaction; killed by `fallback-fencing-concurrency.int-spec.ts` (Test 8) and `dispatch-fencing-concurrency.int-spec.ts` (Test 3).
+- **Mutant M3 (Recovery Stale-Worker Protection):** Omitting queue deletion upon terminal recovery in `recoverExpiredLeases()`; killed by `dispatch-fencing-concurrency.int-spec.ts` (Test 4) and `fallback-fencing-concurrency.int-spec.ts` (Test 10).
+
+**Exact Validation Results:**
+- `phase3_4-fallback-resilience.sec-spec.ts`: 8/8 passed (1.6s)
+- `fallback-fencing-concurrency.int-spec.ts`: 11/11 passed across all 11 scenarios (1.4s)
+- `phase3_3-orchestrator-dispatch.sec-spec.ts`: 13/13 passed (1.7s)
+- `dispatch-fencing-concurrency.int-spec.ts`: 5/5 passed (1.3s)
+- `messages-api.int-spec.ts`: 10/10 passed (1.4s)
+- `provider-state-dispatcher.int-spec.ts`: 2/2 passed (0.9s)
+- `role-assignment.sec-spec.ts` + `platform-admin-liveness.sec-spec.ts`: 83/83 passed (6.6s)
+- Database Package Tests (`@acc/db`): 227/227 passed (5 unit, 222 integration)
+- API Unit Tests (`@acc/api`): 528/528 passed across 38 suites
+- Static Checks: `npm run lint` (0 errors), `npm run format:check` (0 issues), `npm run typecheck` (0 errors), `npm run build` (clean monorepo build), `npm run openapi:check` (0 drift), `npm run db:generate -w @acc/db` (0 schema diffs), `git diff --check` (0 errors).
+
+**Boundaries & Next Increments:**
+- Phase 3.3 is formally CLOSED (Gate E.3 approved).
+- Phase 3.4 is formally CLOSED (Gate E.4 approved).
+- Phase 3.5 is formally CLOSED (Gate E.5 approved by project owner decision, 16-Oct-2026; `DECISIONS.md` §1v). Phase 3 of Alendei Communications Cloud is formally CLOSED.
+
+### Gate E.5 sign-off record and Phase 3 Closure — APPROVED (project owner decision, 16-Oct-2026)
+
+**Decision.** Gate E.5 (Phase 3.5 WhatsApp Management Console Acceptance) is **APPROVED** by the project owner following final acceptance review and verification audit. Together with Gates E.1 through E.4, Phase 3 of Alendei Communications Cloud is formally **CLOSED** under `ROADMAP.md` §6a and ADR-014 §17.5.
+
+**Accepted Implementation Scope & Verification:**
+- **Navigation Shell Integration (`apps/web/src/app/(console)/layout.tsx`):**
+  - Added `WhatsApp` (`/whatsapp`), `Templates` (`/templates`), and `Contacts` (`/contacts`) sections.
+  - Dynamically gated navigation items using centralized permission checks (`canReadMessages || canSendMessages`, `canReadTemplates`, `canReadContacts`).
+- **Template Management (`/templates`):**
+  - Template listing with channel, status, and search filters; keyset pagination; empty/loading/error states.
+  - Template creation dialog (`template-create-dialog.tsx`) with dynamic token detection (`{{1}}`, `{{name}}`), channel selector, and idempotency key generation.
+  - Simulated approval dialog (`template-approval-dialog.tsx`) supporting internal state progression (`draft` -> `pending` -> `approved` / `rejected`) with explicit disclaimer distinguishing internal simulation from Meta provider approval.
+  - Status badges with simulator notices (`template-status-badge.tsx`).
+- **Contact & Consent Management (`/contacts`):**
+  - Workspace selector enforcing Model B tenancy boundaries.
+  - Contact directory listing with phone identity and effective consent badges (`opted_in`, `opted_out`, `unconsented`).
+  - Contact creation dialog (`contact-create-dialog.tsx`) with phone identity attachment and initial consent declaration.
+  - Consent event modal (`contact-consent-dialog.tsx`) for appending immutable grant/revoke records.
+- **WhatsApp Send-Test & Settlement Monitor (`/whatsapp`):**
+  - Workspace selector and approved template dropdown with dynamic variable inputs or custom JSON payload option.
+  - Recipient phone validation, visible idempotency key input with automatic generation and reuse across retry attempts.
+  - Real-time submission via `POST /messages` returning `202 Accepted`.
+  - Settlement Monitor (`attempt-history-card.tsx`): 1-second bounded polling that displays live message status, duration/latency, settled provider, failure reason/code, and full attempt history.
+  - Explicit delivery disclaimer: clearly warns operators that `PROVIDER_ACCEPTED` confirms gateway/provider acceptance only, NOT delivery to recipient handset.
+  - Polling lifecycle guard: polling terminates immediately upon reaching terminal state (`accepted`, `failed`, `outcome_unknown`), error, or component unmount.
+- **API Client & Session Infrastructure (`apps/web/src/lib/`):**
+  - `templatesApi`, `contactsApi`, `messagesApi` in `api-client.ts` with typed error handling and `X-Acc-Organization` pinning.
+  - Session store permission helpers: `useCanReadTemplates()`, `useCanManageTemplates()`, `useCanReadContacts()`, `useCanManageContacts()`, `useCanReadMessages()`, `useCanSendMessages()`.
+
+**Verification Evidence:**
+- **WhatsApp Management Unit Suite (`apps/web/src/lib/whatsapp-management.test.ts`):** 8/8 tests passed (templates, contacts, messages API client methods and idempotency headers).
+- **WhatsApp Security Suite (`apps/web/src/lib/whatsapp-security.sec.test.ts`):** 11/11 tests passed (SEC-WA-01 through SEC-WA-11: organization pinning, header forgery rejection, organization switching, idempotency key preservation across retries, fail-closed permissions, platform-admin tenant boundary, in-memory credential confinement, terminal state polling cancellation, outcome type separation, cross-tenant 404 anti-enumeration without metadata leakage, and permission-denied 403 fail-closed non-retryable ApiError).
+- **Web Package Regression:** 314/314 tests passed across 45 suites (`npm run test -w @acc/web`), including 195/195 security tests across 27 suites (`npm run test:security -w @acc/web`).
+- **Database Package Regression:** 227/227 tests passed (5 unit, 222 integration; `@acc/db`).
+- **API Unit Regression:** 528/528 tests passed across 38 suites (`@acc/api`).
+- **Role-Assignment / Admin-Liveness Regression:** 83/83 tests passed.
+- **Next.js Production Build:** Clean build with 16/16 routes compiled (`npm run build -w @acc/web`).
+- **WhatsApp Playwright E2E Suite (`apps/web/e2e/whatsapp-console.spec.ts`):** 6/6 tests passed in 9.8s against a disposable database clone (`scripts/with-db-clone.mjs`) provisioned with `scripts/whatsapp-e2e-fixture.mjs`:
+  - `E2E-WA-01`: Direct URL navigation to `/templates`, `/contacts`, `/whatsapp` enforces canonical zero-organization boundary (`No Organization Access`) for persona holding zero org memberships (`zeroOrg`).
+  - `E2E-WA-02`: Tenant admin views WhatsApp templates table with filter controls (search, channel, status).
+  - `E2E-WA-03`: Exercises full simulated approval lifecycle (`draft` -> `pending` -> `approved`) with simulator disclaimer visibility.
+  - `E2E-WA-04`: Creates contact with phone identity and records append-only consent event.
+  - `E2E-WA-05`: Dispatches message via WhatsApp send panel (`POST /messages` -> `202 Accepted`), verifies real-time Settlement Monitor with latency, status badge, and attempt history table.
+  - `E2E-WA-06`: Unauthorized tenant user lacking content permissions (`teamReader`) is denied access at UI boundary (`Access Forbidden`) upon direct navigation to `/templates`, `/contacts`, and `/whatsapp`.
+- **Database & Environment Isolation:** E2E tests executed strictly against disposable clones via `scripts/with-db-clone.mjs`; disposable clone dropped `WITH (FORCE)` on exit and verified gone; template `acc_r015_base` row-count fingerprint unchanged; background processes and listeners cleanly terminated.
 
 ## 7. Residual risks (documented, accepted — not closed)
 
+- **Simulator-only limitation** — WhatsApp submissions are executed strictly against the deterministic simulator; no real Meta credentials or vendor endpoints connected in Phase 3.3.
+- **Delivery and webhooks excluded** — No inbound webhooks, delivery receipts, delivery status simulation, or DLR handling exist in Phase 3.3.
+- **Provider fallback delivered for same-channel WhatsApp** — Provider-to-provider fallback within the WhatsApp channel is implemented in Phase 3.4; cross-channel fallback (e.g. WhatsApp -> SMS) and delayed retry timers remain deferred to Phase 5.
 - **R-13 in-process bypass** — caught only by the static boundary test and review (`DECISIONS.md` §1o; `PROVIDER_ADAPTER.md` §6h).
 - **`app.current_user_id` / `app.current_api_key_id` forgery** — confined to one organization's content (`SECURITY.md` §4b).
 - **System role key or `is_system_role` rewrite** by an owner or seeder transaction — not guarded by `0028` / `0030` (the seed's conflict update does not set `is_system_role`).
 - Role-widening guard at REPEATABLE READ/SERIALIZABLE checks through the transaction snapshot; the liveness rules rely on READ COMMITTED.
 - **Cross-scope advisory-lock ordering** — owner-level multi-scope statements can deadlock against canonical-order paths; PostgreSQL aborts one (`40P01`; an API victim answers HTTP `500`); the invariant holds (`DECISIONS.md` §1o, item 4, decision 2).
 - The reseller-deletion exemption is unreachable while `trg_resellers_grant_restrict` (`0025`) is in place.
-- Real-provider health checks are un-admitted outbound calls by design; MEDIUM-6 unchanged; HIGH-6 and MEDIUM-7 deferred (R-15).
+- Real-provider health checks are un-admitted outbound calls by design; MEDIUM-6 unchanged; HIGH-6 and MEDIUM-7 resolved under Phase 3.3.
 - Items 1 and 3 deferred (§6).
 
 **Evidence qualifications (non-blocking):** the three step 3 race mutants are caught by wait timeouts rather than explicit assertions; E1 is equivalent by reasoning only; item 5's unauthorized-principal tests prove the absence of a revocation audit row, not of every audit event; `RevocationWorld.teardown`, both `removeIdentities` helpers and the inline teardown blocks still assume migration `0030` (every catalogue command that reaches them migrates first); `run.mjs` leaves an orphaned clone if it kills a command on timeout and does not remove its active worktree on SIGTERM. Item 4 M1 produced teardown noise and was caught by its intended assertion failures. CI has since passed (run `37969162005`, §4).
@@ -224,7 +384,7 @@ All five review items are decided (`DECISIONS.md` §1o):
 - **Template `acc_r015_base`** — `template0` + migrations `0000`–`0024` from worktree `wt-0024` at `1bc7fd9`, seeded; fingerprint `all=902f22bc20c8a3f9ce80f67407804cb5`. Clone source only; intentionally frozen at migration `0024`. Every validation run reported it unchanged.
 - Databases present: `acc`, `acc_gateb`, `acc_p23`, `acc_p23_fresh`, `acc_p24`, `acc_r015_base` (+ system databases). No `acc_tmp_*` or clone database remains. `acc_gateb` (18 migrations, last 28-Sep-2026) was not used by this remediation. `acc_p24_fresh` was lost on 07-Oct-2026 (`TESTING.md` §6q, "Process incident"); never recreate it.
 - **Rule** (`TESTING.md` §6q): a script that creates or drops a database hard-codes the name and refuses anything outside an allowlisted throwaway pattern or naming a reference database.
-- **Disposable database test procedure:** Run DB-touching suites through `node scripts/with-db-clone.mjs -- <cmd>` with the four `DATABASE_*_URL` pointing at `acc_r015_base`, `NODE_ENV` unset, `RATE_LIMIT_AUTH_MAX=10 RATE_LIMIT_REFRESH_MAX=30`, and `TMPDIR` on disk. Because `acc_r015_base` is intentionally frozen at migration `0024`, test suites that require migrations beyond `0024` (currently `0025`–`0032`, e.g., teardown trigger `trg_user_roles_reseller_admin_liveness` in `auth-harness.ts`) require that the disposable clone be migrated through the current migration set before running tests:
+- **Disposable database test procedure:** Run DB-touching suites through `node scripts/with-db-clone.mjs -- <cmd>` with the four `DATABASE_*_URL` pointing at `acc_r015_base`, `NODE_ENV` unset, `RATE_LIMIT_AUTH_MAX=10 RATE_LIMIT_REFRESH_MAX=30`, and `TMPDIR` on disk. Because `acc_r015_base` is intentionally frozen at migration `0024`, test suites that require migrations beyond `0024` (currently `0025`–`0034`, e.g., teardown trigger `trg_user_roles_reseller_admin_liveness` in `auth-harness.ts`) require that the disposable clone be migrated through the current migration set before running tests:
   ```bash
   node scripts/with-db-clone.mjs -- bash -c "npm run db:migrate --workspace @acc/db && npm --workspace=@acc/api run test:integration"
   node scripts/with-db-clone.mjs -- bash -c "npm run db:migrate --workspace @acc/db && npm --workspace=@acc/api run test:security"
@@ -233,18 +393,17 @@ All five review items are decided (`DECISIONS.md` §1o):
 
 ## 9. Next actions (in order; each needs the user's explicit approval)
 
-1. Review and commit this gate-closure documentation (only on instruction).
-2. Phase 3.3 (Orchestrator & Dispatch Execution) only on separate explicit authorization.
+1. Review and commit Phase 3.3, Phase 3.4, and Phase 3.5 implementation and documentation changes (only on instruction).
+2. Subsequent phase planning (Phase 4 — SMS + RCS) only on separate explicit authorization.
 3. Items 1 and 3 stay deferred until the user schedules them.
 
 ## 10. DO NOT
 
 - Do not commit, push, amend, rebase, squash or merge without explicit instruction.
 - Do not change `package.json`, `package-lock.json`, `security/audit-exceptions.json` or dependencies without instruction.
-- Do not alter migrations `0000`–`0032` or the OpenAPI snapshot.
+- Do not alter migrations `0000`–`0034` or the OpenAPI snapshot.
 - Do not reopen decided items or change code "while there"; items 1 and 3 stay deferred.
-- The gates — the ADR-015 remediation gate (09-Oct-2026), Gate C (02-Oct-2026), Gate D/D.6 (13-Oct-2026), Gate E.1 (14-Oct-2026), and Gate E.2 (14-Oct-2026) — are recorded as APPROVED / CLOSED. Do not reopen them without an explicit decision, except where new evidence requires investigation of a potential security defect, regression, or material change to the accepted risk.
-- Do not start Phase 3.3.
+- The gates — the ADR-015 remediation gate (09-Oct-2026), Gate C (02-Oct-2026), Gate D/D.6 (13-Oct-2026), Gate E.1 (14-Oct-2026), Gate E.2 (14-Oct-2026), Gate E.3 (15-Oct-2026), Gate E.4 (15-Oct-2026), and Gate E.5 (16-Oct-2026) — are recorded as APPROVED / CLOSED. Do not reopen them without an explicit decision, except where new evidence requires investigation of a potential security defect, regression, or material change to the accepted risk. Phase 3 is formally CLOSED.
+- Do not start Phase 4 without explicit project-owner authorization.
 - Do not touch `main`, `stash@{0}`, `acc_gateb`, `acc_p24`, `acc_r015_base` or any reference database; mutations only on throwaway clones.
-
 - Do not delete branch `r13-structural-admission` or worktree `wt-0024` without instruction.

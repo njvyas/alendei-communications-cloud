@@ -94,3 +94,13 @@ export const ORG_ADMIN_LOCK_CLASS = 482_019_308;
  * and the suite asserts they do.
  */
 export const RESELLER_ADMIN_LOCK_CLASS = 482_019_309;
+
+/**
+ * The advisory-lock class serialising organization lifecycle status changes
+ * against dispatch worker claims (ADR-014 §12, D29, Phase 3.3).
+ *
+ * Used in the two-int4 form:
+ * `pg_advisory_xact_lock(ORG_LIFECYCLE_LOCK_CLASS, hashtext(org_id::text))` (exclusive on status change)
+ * `pg_advisory_xact_lock_shared(ORG_LIFECYCLE_LOCK_CLASS, hashtext(org_id::text))` (shared during dispatch claim)
+ */
+export const ORG_LIFECYCLE_LOCK_CLASS = 482_019_310;

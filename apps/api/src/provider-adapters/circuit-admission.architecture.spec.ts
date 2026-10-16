@@ -38,7 +38,10 @@ const CONTRACTS_ADAPTER = join(
 );
 
 /** The reviewed submission paths. A future router is added here deliberately. */
-const SUBMISSION_PATHS = ['providers/provider-registry.service.ts'];
+const SUBMISSION_PATHS = [
+  'providers/provider-registry.service.ts',
+  'messages/dispatch/dispatcher.service.ts',
+];
 const STORE = 'providers/provider-state.store.ts';
 const EXECUTOR = 'provider-adapters/submission-executor.ts';
 const LEDGER = 'provider-adapters/circuit-admission.ts';
@@ -85,8 +88,12 @@ const IMPORT_RULES: Readonly<Record<string, Allowlist>> = {
     [MODULE]: ['*'],
     'providers/provider-registry.service.ts': ['ProviderSubmissionExecutor'],
     'providers/provider-health.service.ts': ['ProviderSubmissionExecutor'],
+    'messages/dispatch/dispatcher.service.ts': ['ProviderSubmissionExecutor'],
   },
-  [MODULE]: { 'providers/providers.module.ts': ['ProviderAdaptersModule'] },
+  [MODULE]: {
+    'providers/providers.module.ts': ['ProviderAdaptersModule'],
+    'messages/messages.module.ts': ['ProviderAdaptersModule'],
+  },
 };
 
 /** Who may construct what. */
@@ -476,6 +483,11 @@ describe('circuit admission — structural invariant, by the type checker (ADR-0
     expect(seen(LEDGER)).toContain('references GuardedProviderAdapter.submit');
     expect(seen(STORE)).toEqual(['references CircuitAdmissions.claimIssuer']);
     expect(seen(SUBMISSION_PATHS[0]!)).toEqual([
+      'references ProviderStateStore.admit',
+      'references ProviderStateStore.recordSubmission',
+      'references ProviderSubmissionExecutor.execute',
+    ]);
+    expect(seen(SUBMISSION_PATHS[1]!)).toEqual([
       'references ProviderStateStore.admit',
       'references ProviderStateStore.recordSubmission',
       'references ProviderSubmissionExecutor.execute',

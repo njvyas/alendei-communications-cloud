@@ -64,6 +64,7 @@ export class AppConfigService {
       appUrl: this.get('DATABASE_URL'),
       authUrl: this.get('DATABASE_AUTH_URL'),
       relayUrl: this.get('DATABASE_RELAY_URL'),
+      dispatchUrl: this.get('DATABASE_DISPATCH_URL'),
       poolMax: this.get('DATABASE_POOL_MAX'),
       idleTimeoutMs: this.get('DATABASE_POOL_IDLE_TIMEOUT_MS'),
       statementTimeoutMs: this.get('DATABASE_STATEMENT_TIMEOUT_MS'),

@@ -41,6 +41,6 @@ import { ProvidersController } from './providers.controller';
     ProviderCatalogueService,
     OrganizationProviderAssignmentsService,
   ],
-  exports: [OrganizationProviderAssignmentsService],
+  exports: [OrganizationProviderAssignmentsService, ProviderStateStore],
 })
 export class ProvidersModule {}

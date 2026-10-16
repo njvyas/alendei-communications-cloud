@@ -196,6 +196,7 @@ export class ProviderStateStore {
     tx: Transaction,
     principal: AuthPrincipal,
     settled: SettledSubmission,
+    options?: { attemptId?: string | null },
   ): Promise<RecordedState> {
     const { providerId, ticket, result } = this.#issuer.takeForRecording(settled);
     const provider = await loadProvider(tx, providerId, { forUpdate: true });
@@ -236,6 +237,7 @@ export class ProviderStateStore {
       circuitGeneration: ticket.generation,
       circuitPolicyVersion: policyRow.version,
       observedAt: now,
+      attemptId: options?.attemptId ?? null,
     });
     await this.persist(tx, providerId, {
       circuit: decision.next !== before ? decision.next : undefined,
@@ -427,6 +429,7 @@ export class ProviderStateStore {
       circuitGeneration: number;
       circuitPolicyVersion: number;
       observedAt: Date;
+      attemptId?: string | null;
     },
   ): Promise<void> {
     await tx.insert(schema.providerHealth).values({
@@ -482,20 +485,23 @@ export class ProviderStateStore {
     policyVersion: number,
   ): Promise<void> {
     for (const t of transitions) {
-      await this.access.record(
-        tx,
-        principal,
-        AUDIT_ACTIONS.PROVIDER_CIRCUIT_CHANGED,
-        providerId,
-        { circuitState: t.from, circuitGeneration: t.generation - 1 },
-        {
-          circuitState: t.to,
-          circuitGeneration: t.generation,
-          cause: t.cause,
-          circuitPolicyVersion: policyVersion,
-          ...(t.key === 'T1' && window ? { window } : {}),
-        },
-      );
+      // HIGH-6: System actors (e.g. background dispatcher) hold no audit_logs INSERT privilege.
+      if (principal.actorType !== 'system') {
+        await this.access.record(
+          tx,
+          principal,
+          AUDIT_ACTIONS.PROVIDER_CIRCUIT_CHANGED,
+          providerId,
+          { circuitState: t.from, circuitGeneration: t.generation - 1 },
+          {
+            circuitState: t.to,
+            circuitGeneration: t.generation,
+            cause: t.cause,
+            circuitPolicyVersion: policyVersion,
+            ...(t.key === 'T1' && window ? { window } : {}),
+          },
+        );
+      }
       this.metrics?.providerCircuitTransitions.inc({
         provider: providerId,
         from_state: t.from,
@@ -523,14 +529,17 @@ export class ProviderStateStore {
     cause: HealthCause,
   ): Promise<void> {
     if (healthState === provider.healthState) return;
-    await this.access.record(
-      tx,
-      principal,
-      AUDIT_ACTIONS.PROVIDER_HEALTH_CHANGED,
-      provider.id,
-      { healthState: provider.healthState },
-      { healthState, source: cause === 'override' ? 'manual' : 'automatic', cause },
-    );
+    // HIGH-6: System actors (e.g. background dispatcher) hold no audit_logs INSERT privilege.
+    if (principal.actorType !== 'system') {
+      await this.access.record(
+        tx,
+        principal,
+        AUDIT_ACTIONS.PROVIDER_HEALTH_CHANGED,
+        provider.id,
+        { healthState: provider.healthState },
+        { healthState, source: cause === 'override' ? 'manual' : 'automatic', cause },
+      );
+    }
     this.metrics?.providerHealthTransitions.inc({
       provider: provider.id,
       from_state: provider.healthState,

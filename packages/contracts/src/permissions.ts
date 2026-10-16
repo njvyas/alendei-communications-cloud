@@ -324,17 +324,14 @@ export function grantConfers(
 }
 
 /**
- * The permission keys that remain inert in Phase 3.1 (deferred to Phase 3.3).
+ * The permission keys that remain inert (none in Phase 3.3; all content keys activated).
  */
-export const INERT_PERMISSION_KEYS: readonly PermissionKey[] = Object.freeze([
-  PERMISSIONS.MESSAGES_READ,
-  PERMISSIONS.MESSAGES_SEND,
-]);
+export const INERT_PERMISSION_KEYS: readonly PermissionKey[] = Object.freeze([]);
 
 /**
- * The permission keys the HTTP API accepts and lists: every key except
- * the messages.* content keys, which remain inert until Phase 3.3.
+ * The permission keys the HTTP API accepts and lists: all 46 permission keys.
  * Activated in Phase 3.1: contacts.*, templates.*, suppressions.*.
+ * Activated in Phase 3.3: messages.read, messages.send.
  */
 export const API_SURFACE_PERMISSION_KEYS: readonly PermissionKey[] = Object.freeze(
   ALL_PERMISSION_KEYS.filter((key) => !INERT_PERMISSION_KEYS.includes(key)),

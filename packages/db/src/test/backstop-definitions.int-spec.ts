@@ -393,10 +393,10 @@ describe('migration 0027 catalogue: app_content_context_valid()', () => {
     }
   });
 
-  it('every Phase 3.1 content table calls it: exactly the 14 Phase 3.1 content policies', async () => {
+  it('every Phase 3.1 and Phase 3.3 content table calls it: exactly the 22 content policies', async () => {
     const { rows } = await db.admin.execute<{ n: string }>(sql`
       SELECT count(*)::text AS n FROM pg_policies
       WHERE coalesce(qual, '') || coalesce(with_check, '') LIKE '%app_content_context_valid%'`);
-    expect(rows[0]!.n).toBe('14');
+    expect(rows[0]!.n).toBe('22');
   });
 });

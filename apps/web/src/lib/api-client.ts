@@ -4,6 +4,14 @@ import type {
   ApiPagedResponse,
   ChannelCode,
   ChannelStatus,
+  ConsentEventResponse,
+  ConsentEventType,
+  ContactIdentityResponse,
+  ContactResponse,
+  EffectiveConsentResponse,
+  EffectiveConsentState,
+  MessageDetailResponse,
+  MessageStatus,
   ProviderCircuitPolicy,
   ProviderCircuitState,
   ProviderFailureCategory,
@@ -13,9 +21,14 @@ import type {
   ProviderHealthState,
   ProviderProbeOutcome,
   ProviderStatus,
+  QueuedMessageResponse,
   SimulatorBehavior,
   SimulatorHealthBehavior,
+  TemplateApprovalStatus,
+  TemplateResponse,
 } from '@acc/contracts';
+
+export type { EffectiveConsentState, MessageDetailResponse };
 
 /**
  * Browser-side API client for Alendei Communications Cloud.
@@ -1863,5 +1876,342 @@ export const providerCircuitPolicyApi = {
       signal,
       skipTenant: true,
     });
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Templates API
+// -----------------------------------------------------------------------------
+
+export interface ListTemplatesParams {
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly channelId?: string;
+  readonly approvalStatus?: TemplateApprovalStatus;
+  readonly sort?: string;
+}
+
+export interface CreateTemplateParams {
+  readonly channelId: string;
+  readonly name: string;
+  readonly body: string;
+  readonly variables?: readonly string[];
+}
+
+export interface UpdateTemplateParams {
+  readonly name?: string;
+  readonly body?: string;
+  readonly variables?: readonly string[];
+}
+
+export type TargetApprovalStatus = 'pending' | 'approved' | 'rejected';
+
+export const templatesApi = {
+  async list(
+    params: ListTemplatesParams = {},
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<TemplateResponse>> {
+    const search = new URLSearchParams();
+    if (params.cursor) search.set('cursor', params.cursor);
+    if (params.limit) search.set('limit', String(params.limit));
+    if (params.channelId) search.set('channelId', params.channelId);
+    if (params.approvalStatus) search.set('approvalStatus', params.approvalStatus);
+    if (params.sort) search.set('sort', params.sort);
+
+    const query = search.toString();
+    const path = query ? `/templates?${query}` : '/templates';
+    return apiFetch<ApiPagedResponse<TemplateResponse>>(path, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  async create(
+    params: CreateTemplateParams,
+    idempotencyKey?: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<TemplateResponse>> {
+    const headers: Record<string, string> = {};
+    if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+
+    return apiFetch<ApiDataResponse<TemplateResponse>>('/templates', {
+      method: 'POST',
+      body: params,
+      headers,
+      signal,
+    });
+  },
+
+  async get(templateId: string, signal?: AbortSignal): Promise<ApiDataResponse<TemplateResponse>> {
+    return apiFetch<ApiDataResponse<TemplateResponse>>(
+      `/templates/${encodeURIComponent(templateId)}`,
+      {
+        method: 'GET',
+        signal,
+      },
+    );
+  },
+
+  async update(
+    templateId: string,
+    params: UpdateTemplateParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<TemplateResponse>> {
+    return apiFetch<ApiDataResponse<TemplateResponse>>(
+      `/templates/${encodeURIComponent(templateId)}`,
+      {
+        method: 'PATCH',
+        body: params,
+        signal,
+      },
+    );
+  },
+
+  async simulateApproval(
+    templateId: string,
+    targetStatus: TargetApprovalStatus,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<TemplateResponse>> {
+    return apiFetch<ApiDataResponse<TemplateResponse>>(
+      `/templates/${encodeURIComponent(templateId)}/simulate-approval`,
+      {
+        method: 'POST',
+        body: { targetStatus },
+        signal,
+      },
+    );
+  },
+
+  async delete(templateId: string, signal?: AbortSignal): Promise<void> {
+    return apiFetch<void>(`/templates/${encodeURIComponent(templateId)}`, {
+      method: 'DELETE',
+      signal,
+    });
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Contacts API
+// -----------------------------------------------------------------------------
+
+export interface ListContactsParams {
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: string;
+}
+
+export interface CreateContactParams {
+  readonly firstName?: string;
+  readonly lastName?: string;
+  readonly metadata?: Record<string, unknown>;
+}
+
+export interface UpdateContactParams {
+  readonly firstName?: string | null;
+  readonly lastName?: string | null;
+  readonly metadata?: Record<string, unknown>;
+}
+
+export interface CreateContactIdentityParams {
+  readonly channelId: string;
+  readonly rawAddress: string;
+  readonly isPrimary?: boolean;
+}
+
+export interface CreateConsentEventParams {
+  readonly channelId: string;
+  readonly consentType: string;
+  readonly event: ConsentEventType;
+  readonly occurredAt: string;
+  readonly source: string;
+}
+
+export interface GetEffectiveConsentParams {
+  readonly channelId: string;
+  readonly consentType: string;
+}
+
+export const contactsApi = {
+  async list(
+    workspaceId: string,
+    params: ListContactsParams = {},
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<ContactResponse>> {
+    const search = new URLSearchParams();
+    if (params.cursor) search.set('cursor', params.cursor);
+    if (params.limit) search.set('limit', String(params.limit));
+    if (params.sort) search.set('sort', params.sort);
+
+    const query = search.toString();
+    const path = `/workspaces/${encodeURIComponent(workspaceId)}/contacts${query ? `?${query}` : ''}`;
+    return apiFetch<ApiPagedResponse<ContactResponse>>(path, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  async create(
+    workspaceId: string,
+    params: CreateContactParams,
+    idempotencyKey?: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<ContactResponse>> {
+    const headers: Record<string, string> = {};
+    if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+
+    return apiFetch<ApiDataResponse<ContactResponse>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/contacts`,
+      {
+        method: 'POST',
+        body: params,
+        headers,
+        signal,
+      },
+    );
+  },
+
+  async get(
+    contactId: string,
+    workspaceId?: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<ContactResponse>> {
+    const path = workspaceId
+      ? `/workspaces/${encodeURIComponent(workspaceId)}/contacts/${encodeURIComponent(contactId)}`
+      : `/contacts/${encodeURIComponent(contactId)}`;
+    return apiFetch<ApiDataResponse<ContactResponse>>(path, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  async update(
+    contactId: string,
+    params: UpdateContactParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<ContactResponse>> {
+    return apiFetch<ApiDataResponse<ContactResponse>>(
+      `/contacts/${encodeURIComponent(contactId)}`,
+      {
+        method: 'PATCH',
+        body: params,
+        signal,
+      },
+    );
+  },
+
+  async createIdentity(
+    contactId: string,
+    params: CreateContactIdentityParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<ContactIdentityResponse>> {
+    return apiFetch<ApiDataResponse<ContactIdentityResponse>>(
+      `/contacts/${encodeURIComponent(contactId)}/identities`,
+      {
+        method: 'POST',
+        body: params,
+        signal,
+      },
+    );
+  },
+
+  async createConsentEvent(
+    contactId: string,
+    params: CreateConsentEventParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<ConsentEventResponse>> {
+    return apiFetch<ApiDataResponse<ConsentEventResponse>>(
+      `/contacts/${encodeURIComponent(contactId)}/consent-events`,
+      {
+        method: 'POST',
+        body: params,
+        signal,
+      },
+    );
+  },
+
+  async getEffectiveConsent(
+    contactId: string,
+    params: GetEffectiveConsentParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<EffectiveConsentResponse>> {
+    const search = new URLSearchParams();
+    search.set('channelId', params.channelId);
+    search.set('consentType', params.consentType);
+    return apiFetch<ApiDataResponse<EffectiveConsentResponse>>(
+      `/contacts/${encodeURIComponent(contactId)}/consent-effective?${search.toString()}`,
+      {
+        method: 'GET',
+        signal,
+      },
+    );
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Messages API
+// -----------------------------------------------------------------------------
+
+export interface SendMessageParams {
+  readonly channelCode: string;
+  readonly recipient: string;
+  readonly templateId?: string;
+  readonly workspaceId?: string;
+  readonly payload: Record<string, unknown>;
+}
+
+export interface MessageAttemptDetail {
+  readonly id: string;
+  readonly attemptNumber: number;
+  readonly providerId: string;
+  readonly status: string;
+  readonly failureReason: string | null;
+  readonly latencyMs: number | null;
+  readonly completedAt: string | null;
+}
+
+export interface MessageDetailWithAttempts {
+  readonly id: string;
+  readonly orgId: string;
+  readonly workspaceId: string | null;
+  readonly contactId: string | null;
+  readonly channelId: string;
+  readonly templateId: string | null;
+  readonly status: MessageStatus;
+  readonly recipientAddress: string;
+  readonly payload: Record<string, unknown>;
+  readonly failureReason: string | null;
+  readonly createdAt: string;
+  readonly completedAt: string | null;
+  readonly attempts: readonly MessageAttemptDetail[];
+}
+
+export const messagesApi = {
+  async send(
+    params: SendMessageParams,
+    idempotencyKey?: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<QueuedMessageResponse>> {
+    const headers: Record<string, string> = {};
+    if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+
+    return apiFetch<ApiDataResponse<QueuedMessageResponse>>('/messages', {
+      method: 'POST',
+      body: params,
+      headers,
+      signal,
+    });
+  },
+
+  async get(
+    messageId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<MessageDetailWithAttempts>> {
+    return apiFetch<ApiDataResponse<MessageDetailWithAttempts>>(
+      `/messages/${encodeURIComponent(messageId)}`,
+      {
+        method: 'GET',
+        signal,
+      },
+    );
   },
 };

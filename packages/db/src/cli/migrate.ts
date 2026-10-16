@@ -61,10 +61,13 @@ async function main(): Promise<void> {
     await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
     console.log('Migrations applied.');
 
+    const dispatchPassword = process.env.DATABASE_DISPATCH_PASSWORD ?? 'acc_dispatch_dev_password';
+
     await reconcileRoles(pool, [
       { role: DB_ROLES.APP, password: appPassword },
       { role: DB_ROLES.AUTH, password: authPassword },
       { role: DB_ROLES.RELAY, password: relayPassword },
+      { role: DB_ROLES.DISPATCH, password: dispatchPassword },
     ]);
     console.log(`Roles reconciled: ${Object.values(DB_ROLES).join(', ')}`);
   } finally {

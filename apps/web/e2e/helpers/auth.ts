@@ -87,6 +87,11 @@ export const TEST_CREDENTIALS = {
     email: 'platform-support@acc-fixture.test',
     password: fixturePassword,
   },
+  // Zero-organization persona: authenticated user holding zero organization or platform grants
+  zeroOrg: {
+    email: 'zero-org@acc-fixture.test',
+    password: fixturePassword,
+  },
 
   // Backward-compatibility aliases for existing test cases
   email: 'a1-admin@acc-fixture.test',

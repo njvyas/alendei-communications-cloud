@@ -209,6 +209,18 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
     const DISPATCH_FENCING_0032 = new Set(['app_dispatch_claim_token', 'dispatch_claim_token']);
     const phase32Assignments = migrations.find((m) => m.n.startsWith('0032_'));
     expect(phase32Assignments).toBeDefined();
+    // Phase 3.3 (migration 0033): message tables, dispatch queue and claim_token fencing (ADR-014 §9.1–§9.2).
+    const DISPATCH_FENCING_0033 = new Set([
+      'app_dispatch_claim_token',
+      'claim_token',
+      'message_attempts_claim_token_idx',
+    ]);
+    const phase33Dispatch = migrations.find((m) => m.n.startsWith('0033_'));
+    expect(phase33Dispatch).toBeDefined();
+    // Phase 3.4 (migration 0034): fallback state transition guard checks claim_token fencing and app_dispatch_claim_token().
+    const DISPATCH_FENCING_0034 = new Set(['app_dispatch_claim_token', 'claim_token']);
+    const phase34Fallback = migrations.find((m) => m.n.startsWith('0034_'));
+    expect(phase34Fallback).toBeDefined();
     expect(
       phase2.flatMap((m) =>
         [...m.sql.matchAll(/\w*(?:credential|secret|passw|api_?key|token)\w*/gi)]
@@ -216,6 +228,8 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
           .filter((x) => !(m === adr015Classification && PERMISSION_KEYS_0026.has(x[0])))
           .filter((x) => !(m === adr015Content && CONTENT_CONTEXT_0027.has(x[0])))
           .filter((x) => !(m === phase32Assignments && DISPATCH_FENCING_0032.has(x[0])))
+          .filter((x) => !(m === phase33Dispatch && DISPATCH_FENCING_0033.has(x[0])))
+          .filter((x) => !(m === phase34Fallback && DISPATCH_FENCING_0034.has(x[0])))
           .map((x) => `${m.n}: ${x[0]}`),
       ),
     ).toEqual([]);

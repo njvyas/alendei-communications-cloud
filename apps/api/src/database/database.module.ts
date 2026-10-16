@@ -16,7 +16,14 @@ import {
 import type { Pool } from 'pg';
 
 import { AppConfigService } from '../config/app-config.service';
-import { APP_DB, APP_POOL, AUTH_DB, AUTH_POOL } from './database.tokens';
+import {
+  APP_DB,
+  APP_POOL,
+  AUTH_DB,
+  AUTH_POOL,
+  DISPATCH_DB,
+  DISPATCH_POOL,
+} from './database.tokens';
 import { TenantDatabase } from './tenant-database.service';
 
 /**
@@ -37,6 +44,18 @@ import { TenantDatabase } from './tenant-database.service';
  * may take an `acc_auth` connection under an `acc_app` one but never the
  * reverse. A violation fails at acquisition instead of deadlocking the pool.
  */
+function deriveDispatchUrl(appUrl: string, configuredUrl?: string): string {
+  if (configuredUrl) return configuredUrl;
+  try {
+    const parsed = new URL(appUrl);
+    parsed.username = 'acc_dispatch';
+    parsed.password = process.env.DATABASE_DISPATCH_PASSWORD ?? 'acc_dispatch_dev_password';
+    return parsed.toString();
+  } catch {
+    return appUrl;
+  }
+}
+
 @Global()
 @Module({
   providers: [
@@ -87,9 +106,27 @@ import { TenantDatabase } from './tenant-database.service';
       inject: [AUTH_POOL],
       useFactory: (pool: Pool): Database => createDatabase(pool),
     },
+    {
+      provide: DISPATCH_POOL,
+      inject: [AppConfigService],
+      useFactory: (config: AppConfigService): Pool =>
+        createPool({
+          connectionString: deriveDispatchUrl(config.database.appUrl, config.database.dispatchUrl),
+          max: Math.max(2, Math.floor(config.database.poolMax / 2)),
+          idleTimeoutMillis: config.database.idleTimeoutMs,
+          statementTimeoutMillis: config.database.statementTimeoutMs,
+          ssl: config.database.ssl,
+          applicationName: `${config.serviceName}-dispatch`,
+        }),
+    },
+    {
+      provide: DISPATCH_DB,
+      inject: [DISPATCH_POOL],
+      useFactory: (pool: Pool): Database => createDatabase(pool),
+    },
     TenantDatabase,
   ],
-  exports: [APP_POOL, APP_DB, AUTH_POOL, AUTH_DB, TenantDatabase],
+  exports: [APP_POOL, APP_DB, AUTH_POOL, AUTH_DB, DISPATCH_POOL, DISPATCH_DB, TenantDatabase],
 })
 export class DatabaseModule implements OnModuleInit, OnApplicationShutdown {
   private readonly logger = new Logger(DatabaseModule.name);
@@ -97,6 +134,7 @@ export class DatabaseModule implements OnModuleInit, OnApplicationShutdown {
   constructor(
     @Inject(APP_POOL) private readonly appPool: Pool,
     @Inject(AUTH_POOL) private readonly authPool: Pool,
+    @Inject(DISPATCH_POOL) private readonly dispatchPool: Pool,
   ) {}
 
   /**
@@ -112,9 +150,9 @@ export class DatabaseModule implements OnModuleInit, OnApplicationShutdown {
     this.logger.log(`Database principals verified RLS-bound: ${app.role}, ${auth.role}`);
   }
 
-  /** Drains both pools so in-flight statements finish before the process exits. */
+  /** Drains all pools so in-flight statements finish before the process exits. */
   async onApplicationShutdown(): Promise<void> {
-    await Promise.allSettled([this.appPool.end(), this.authPool.end()]);
+    await Promise.allSettled([this.appPool.end(), this.authPool.end(), this.dispatchPool.end()]);
     this.logger.log('Database pools closed');
   }
 }

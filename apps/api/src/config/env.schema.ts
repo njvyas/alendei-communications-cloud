@@ -74,6 +74,7 @@ export const envSchema = z.object({
   DATABASE_AUTH_URL: postgresUrl,
   DATABASE_ADMIN_URL: postgresUrl.optional(),
   DATABASE_RELAY_URL: postgresUrl.optional(),
+  DATABASE_DISPATCH_URL: postgresUrl.optional(),
   DATABASE_POOL_MAX: positiveInt.max(500).default(10),
   DATABASE_POOL_IDLE_TIMEOUT_MS: positiveInt.default(30_000),
   DATABASE_STATEMENT_TIMEOUT_MS: positiveInt.default(15_000),

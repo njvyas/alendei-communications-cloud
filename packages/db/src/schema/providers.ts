@@ -178,6 +178,7 @@ export const providerHealth = pgTable(
       .notNull()
       .references(() => providers.id, { onDelete: 'restrict' }),
     kind: providerHealthSampleKind('kind').notNull(),
+    attemptId: uuid('attempt_id'),
     outcome: text('outcome').notNull(),
     classification: providerHealthClassification('classification').notNull(),
     latencyMs: integer('latency_ms'),

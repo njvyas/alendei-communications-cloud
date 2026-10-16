@@ -237,6 +237,7 @@ describe('tenant-context trust model — what acc_app can do with session variab
    * last-organization-administrator guards since migration 0028 (ADR-015 R-11).
    */
   const TRIGGER_ONLY = [
+    'fn_organization_lifecycle_lock',
     'fn_organizations_guard_reseller_id',
     'fn_protect_system_role_permissions',
     'fn_protect_system_roles',

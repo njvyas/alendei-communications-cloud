@@ -530,6 +530,72 @@ export function useCanTestSendProviders(): boolean {
 }
 
 /**
+ * Evaluates whether the actor can view templates in the active organization.
+ */
+export function canReadTemplates(): boolean {
+  return hasPermission('templates.read');
+}
+
+export function useCanReadTemplates(): boolean {
+  return useHasPermission('templates.read');
+}
+
+/**
+ * Evaluates whether the actor can manage templates in the active organization.
+ */
+export function canManageTemplates(): boolean {
+  return hasPermission('templates.manage');
+}
+
+export function useCanManageTemplates(): boolean {
+  return useHasPermission('templates.manage');
+}
+
+/**
+ * Evaluates whether the actor can view contacts in the active organization.
+ */
+export function canReadContacts(): boolean {
+  return hasPermission('contacts.read');
+}
+
+export function useCanReadContacts(): boolean {
+  return useHasPermission('contacts.read');
+}
+
+/**
+ * Evaluates whether the actor can manage contacts in the active organization.
+ */
+export function canManageContacts(): boolean {
+  return hasPermission('contacts.manage');
+}
+
+export function useCanManageContacts(): boolean {
+  return useHasPermission('contacts.manage');
+}
+
+/**
+ * Evaluates whether the actor can view messages in the active organization.
+ */
+export function canReadMessages(): boolean {
+  return hasPermission('messages.read');
+}
+
+export function useCanReadMessages(): boolean {
+  return useHasPermission('messages.read');
+}
+
+/**
+ * Evaluates whether the actor can send messages in the active organization.
+ */
+export function canSendMessages(): boolean {
+  return hasPermission('messages.send');
+}
+
+export function useCanSendMessages(): boolean {
+  return useHasPermission('messages.send');
+}
+
+/**
  * Initializes the session on application startup via silent refresh.
  * Transitions to 'unauthenticated' if no active session exists.
  */
