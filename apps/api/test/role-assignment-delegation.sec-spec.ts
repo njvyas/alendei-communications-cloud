@@ -621,44 +621,45 @@ describe('tenant delegation on grant (ADR-015 R-6) and the content-key API surfa
               : ERROR_CODES.AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION,
           ]);
         }
+        const isInert = (INERT_PERMISSION_KEYS as readonly string[]).includes('messages.send');
         const patch = await call(
           'patch',
           token,
           `/roles/${c.roles[TENANT_ROLE_KEYS.READ_ONLY]}`,
           org,
         ).send({ permissions: ['messages.send'] });
-        expect([patch.status, patch.body.error?.code]).toEqual([
-          400,
-          ERROR_CODES.VALIDATION_FAILED,
-        ]);
+        expect(patch.status).toBe(isInert ? 400 : 403);
+        if (isInert) {
+          expect(patch.body.error?.code).toBe(ERROR_CODES.VALIDATION_FAILED);
+        } else {
+          expect([
+            ERROR_CODES.AUTHZ_PERMISSION_DENIED,
+            ERROR_CODES.AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION,
+          ]).toContain(patch.body.error?.code);
+        }
       }
     });
 
-    it('API-key creation with a content scope is a 400', async () => {
+    it('API-key creation with a content scope is refused', async () => {
       const res = await call('post', tokens.cAdmin!, '/api-keys', c.orgId).send({
         name: 'content key',
         scopeType: 'organization',
         scopeId: c.orgId,
         scopes: ['messages.send'],
       });
-      expect([res.status, res.body.error?.code]).toEqual([400, ERROR_CODES.VALIDATION_FAILED]);
+      const isInert = (INERT_PERMISSION_KEYS as readonly string[]).includes('messages.send');
+      expect([res.status, res.body.error?.code]).toEqual([
+        isInert ? 400 : 403,
+        isInert ? ERROR_CODES.VALIDATION_FAILED : ERROR_CODES.AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION,
+      ]);
     });
 
-    it('GET /permissions lists the API surface: delegate_tenant, and no inert content key', async () => {
+    it('GET /permissions lists the API surface: delegate_tenant, and all active content keys', async () => {
       const res = await call('get', tokens.cAdmin!, '/permissions?limit=100', c.orgId).expect(200);
       const keys = (res.body.data as { key: string }[]).map((p) => p.key).sort();
       expect(keys).toEqual([...API_SURFACE_PERMISSION_KEYS].sort());
       expect(keys).toContain(DELEGATE);
-      for (const domain of ['messages']) {
-        const filtered = await call(
-          'get',
-          tokens.cAdmin!,
-          `/permissions?domain=${domain}`,
-          c.orgId,
-        ).expect(200);
-        expect([domain, filtered.body.data]).toEqual([domain, []]);
-      }
-      for (const domain of ['contacts', 'templates', 'suppressions']) {
+      for (const domain of ['contacts', 'templates', 'suppressions', 'messages']) {
         const filtered = await call(
           'get',
           tokens.cAdmin!,

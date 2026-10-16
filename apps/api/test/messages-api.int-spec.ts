@@ -26,6 +26,7 @@ describe('Messages API Suite (Phase 3.3)', () => {
   let providerId: string;
   let userAToken: string;
   let userBToken: string;
+  const createdRoleIds: string[] = [];
 
   beforeAll(async () => {
     h = await startHarness();
@@ -44,6 +45,7 @@ describe('Messages API Suite (Phase 3.3)', () => {
 
     for (const t of [tenantA, tenantB]) {
       const roleId = uuidv7();
+      createdRoleIds.push(roleId);
       await h.admin.insert(schema.roles).values({
         id: roleId,
         orgId: t.orgId,
@@ -136,7 +138,30 @@ describe('Messages API Suite (Phase 3.3)', () => {
   }, 60_000);
 
   afterAll(async () => {
-    await h.close();
+    try {
+      await h.admin.delete(schema.messageDispatchQueue);
+      if (createdRoleIds.length > 0) {
+        await h.admin
+          .delete(schema.userRoles)
+          .where(inArray(schema.userRoles.roleId, createdRoleIds));
+        await h.admin
+          .delete(schema.rolePermissions)
+          .where(inArray(schema.rolePermissions.roleId, createdRoleIds));
+        await h.admin.delete(schema.roles).where(inArray(schema.roles.id, createdRoleIds));
+      }
+      if (tenantA && tenantB) {
+        await h.admin
+          .delete(schema.messages)
+          .where(inArray(schema.messages.orgId, [tenantA.orgId, tenantB.orgId]));
+        await h.admin
+          .delete(schema.contacts)
+          .where(inArray(schema.contacts.orgId, [tenantA.orgId, tenantB.orgId]));
+      }
+    } catch {
+      // Best-effort cleanup
+    } finally {
+      await h.close();
+    }
   });
 
   describe('POST /messages (Preflight Order & Enqueue)', () => {

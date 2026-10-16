@@ -36,6 +36,7 @@ import {
   PREFIX,
   createTenant,
   destroyTenant,
+  purgeMessageEvents,
   purgeProviderHealth,
   removeIdentities,
   startHarness,
@@ -217,8 +218,9 @@ describe('Phase 3.3 Orchestrator & Dispatch Execution Security Suite', () => {
         }
         const orgIds = [tenantA?.orgId, tenantB?.orgId].filter(Boolean);
         if (orgIds.length > 0) {
-          await h.admin.execute(
-            sql`DELETE FROM message_events WHERE org_id IN (${sql.join(
+          await purgeMessageEvents(
+            h.admin,
+            sql`org_id IN (${sql.join(
               orgIds.map((id) => sql`${id}`),
               sql`, `,
             )})`,

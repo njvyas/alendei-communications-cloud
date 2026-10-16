@@ -26,6 +26,7 @@ import { DISPATCH_POOL } from '../src/database/database.tokens';
 import {
   createTenant,
   destroyTenant,
+  purgeMessageEvents,
   startHarness,
   type Harness,
   type TenantFixture,
@@ -85,7 +86,7 @@ describe('Phase 3.4 Fallback & Resilience Security Suite', () => {
   });
 
   afterAll(async () => {
-    await h.admin.delete(schema.messageEvents).where(eq(schema.messageEvents.orgId, tenantA.orgId));
+    await purgeMessageEvents(h.admin, eq(schema.messageEvents.orgId, tenantA.orgId));
     await h.admin
       .delete(schema.messageAttempts)
       .where(eq(schema.messageAttempts.orgId, tenantA.orgId));

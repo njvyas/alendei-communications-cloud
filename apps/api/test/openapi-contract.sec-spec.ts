@@ -158,7 +158,7 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * same change; the two tests below fail on any route or operation that
      * exists on only one side.
      */
-    const APPLICATION_OPERATIONS = 107;
+    const APPLICATION_OPERATIONS = 109;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 
@@ -339,7 +339,8 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
           route.path.includes('/contacts') ||
           route.path.includes('/templates') ||
           route.path.includes('/suppressions') ||
-          route.path.includes('/identities');
+          route.path.includes('/identities') ||
+          route.path.includes('/messages');
         const success = codes.filter((c) => c.startsWith('2'));
         if (!isPhase3DataFoundation && success.length !== 1)
           problems.push(`${route.method} ${route.path}: success ${success}`);
@@ -395,7 +396,7 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
       expect(problems).toEqual([]);
       expect(
         documented().filter((r) => refs(operationOf(r)!).includes('header:Idempotency-Key')).length,
-      ).toBe(10);
+      ).toBe(11);
     });
   });
 

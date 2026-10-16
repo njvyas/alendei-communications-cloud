@@ -530,6 +530,22 @@ export async function purgeProviderHealth(admin: Database, where = sql`true`): P
 }
 
 /**
+ * Removes message events (Phase 3.3). `message_events` is append-only
+ * exactly as `audit_logs` is, so teardown disables the trigger as the owner,
+ * deletes, and re-enables it.
+ */
+export async function purgeMessageEvents(admin: Database, where = sql`true`): Promise<void> {
+  await admin.execute(sql`ALTER TABLE message_events DISABLE TRIGGER trg_message_events_immutable`);
+  try {
+    await admin.execute(sql`DELETE FROM message_events WHERE ${where}`);
+  } finally {
+    await admin.execute(
+      sql`ALTER TABLE message_events ENABLE TRIGGER trg_message_events_immutable`,
+    );
+  }
+}
+
+/**
  * Plants an active identity holding `alendei_super_admin` at platform scope, for
  * tests that run `acc_app` under a platform-admin tenant context.
  *

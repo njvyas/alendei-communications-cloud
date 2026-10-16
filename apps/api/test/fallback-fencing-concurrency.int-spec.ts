@@ -8,7 +8,13 @@ import { CredentialService } from '../src/iam/credential.service';
 import { DispatcherService } from '../src/messages/dispatch/dispatcher.service';
 import { DISPATCH_POOL } from '../src/database/database.tokens';
 import { SimulatorAdapter } from '../src/provider-adapters/simulator.adapter';
-import { createTenant, startHarness, type Harness, type TenantFixture } from './auth-harness';
+import {
+  createTenant,
+  purgeMessageEvents,
+  startHarness,
+  type Harness,
+  type TenantFixture,
+} from './auth-harness';
 
 describe('Phase 3.4 Fallback, Resilience & Fencing Concurrency Integration Suite', () => {
   let h: Harness;
@@ -53,9 +59,15 @@ describe('Phase 3.4 Fallback, Resilience & Fencing Concurrency Integration Suite
   afterAll(async () => {
     try {
       if (dispatchPool) await dispatchPool.end();
-      await h.close();
+      await h.admin.delete(schema.messageDispatchQueue);
+      await purgeMessageEvents(h.admin);
+      await h.admin.delete(schema.messageAttempts);
+      await h.admin.delete(schema.messages);
+      await h.admin.delete(schema.contacts);
     } catch {
       // Best-effort cleanup (disposable DB clone is dropped automatically)
+    } finally {
+      await h.close();
     }
   });
 

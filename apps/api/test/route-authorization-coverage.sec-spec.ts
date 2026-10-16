@@ -275,7 +275,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // `PUT /provider-circuit-policy`, scoped and deferred the same way: 60 → 62.
     // Phase 3.1 added 27 scoped routes (contacts, consent, templates, suppressions): 62 → 89.
     // Phase 3.2 added 6 scoped routes (organization provider assignments): 89 → 95.
-    expect(scoped.length).toBe(95);
+    // Phase 3.3 added 2 scoped routes (messages send and get): 95 → 97.
+    expect(scoped.length).toBe(97);
     expect(exempt.length).toBe(7);
     expect(open.length).toBe(6);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
@@ -291,7 +292,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // three health routes: 32 → 35; the two circuit-policy routes: 35 → 37.
     // Phase 3.1 added 27 scoped routes, all deferred: 37 → 64.
     // Phase 3.2 added 6 scoped routes, all deferred: 64 → 70.
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(70);
+    // Phase 3.3 added 2 scoped routes, all deferred: 70 → 72.
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(72);
   });
 });
 

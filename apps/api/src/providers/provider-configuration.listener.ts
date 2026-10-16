@@ -3,6 +3,7 @@ import {
   Logger,
   Optional,
   type OnApplicationShutdown,
+  type OnModuleDestroy,
   type OnModuleInit,
 } from '@nestjs/common';
 import { PROVIDER_CONFIGURATION_CACHE } from '@acc/contracts';
@@ -24,7 +25,9 @@ import { ProviderConfigurationCache } from './provider-configuration.cache';
  * backoff and listens again. It never fails application start.
  */
 @Injectable()
-export class ProviderConfigurationListener implements OnModuleInit, OnApplicationShutdown {
+export class ProviderConfigurationListener
+  implements OnModuleInit, OnModuleDestroy, OnApplicationShutdown
+{
   static readonly APPLICATION_NAME = 'acc-provider-config-listener';
   private readonly logger = new Logger(ProviderConfigurationListener.name);
   private client: Client | null = null;
@@ -42,12 +45,16 @@ export class ProviderConfigurationListener implements OnModuleInit, OnApplicatio
     void this.connect();
   }
 
-  async onApplicationShutdown(): Promise<void> {
+  async onModuleDestroy(): Promise<void> {
     this.stopping = true;
     if (this.reconnect) clearTimeout(this.reconnect);
     const client = this.client;
     this.client = null;
     await client?.end().catch(() => undefined);
+  }
+
+  async onApplicationShutdown(): Promise<void> {
+    await this.onModuleDestroy();
   }
 
   /** Whether the LISTEN connection is currently established. */

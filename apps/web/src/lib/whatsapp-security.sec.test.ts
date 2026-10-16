@@ -196,7 +196,7 @@ describe('WhatsApp Management Console Security Invariants & Boundary Enforcement
       },
     });
 
-    const idemKey = 'consistent-idem-key-77';
+    const idempotencyToken = 'retry-test-idem-token';
 
     // First attempt fails with 504
     await assert.rejects(async () => {
@@ -206,7 +206,7 @@ describe('WhatsApp Management Console Security Invariants & Boundary Enforcement
           recipient: '+12025550199',
           payload: { text: 'Hello' },
         },
-        idemKey,
+        idempotencyToken,
       );
     });
 
@@ -217,18 +217,18 @@ describe('WhatsApp Management Console Security Invariants & Boundary Enforcement
         recipient: '+12025550199',
         payload: { text: 'Hello' },
       },
-      idemKey,
+      idempotencyToken,
     );
 
     assert.equal(res.data.id, MESSAGE_ID);
     assert.equal(fetchCalls.length, 2);
     assert.equal(
       (fetchCalls[0]!.options.headers as Record<string, string>)['Idempotency-Key'],
-      idemKey,
+      idempotencyToken,
     );
     assert.equal(
       (fetchCalls[1]!.options.headers as Record<string, string>)['Idempotency-Key'],
-      idemKey,
+      idempotencyToken,
     );
   });
 

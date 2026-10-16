@@ -438,11 +438,13 @@ describe('Phase 2.2 provider adapter test-send', () => {
       );
     }
 
-    it('no message, attempt or webhook table exists to write to', async () => {
+    it('no webhook event table exists to write to', async () => {
       const { rows } = await h.admin.execute<{ n: number }>(
         // `provider_health` exists from Phase 2.3 by design (migration 0022); it
         // holds observations, not messages, and is proven in the 2.3 suite.
-        sql`select count(*)::int n from information_schema.tables where table_schema = 'public' and table_name in ('messages','message_attempts','webhook_events')`,
+        // `messages` and `message_attempts` exist from Phase 3.3 (migration 0033).
+        // `webhook_events` remains uncreated (deferred to Phase 4).
+        sql`select count(*)::int n from information_schema.tables where table_schema = 'public' and table_name in ('webhook_events')`,
       );
       expect(rows[0]!.n).toBe(0);
     });

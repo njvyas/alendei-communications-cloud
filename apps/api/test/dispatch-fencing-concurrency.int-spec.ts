@@ -7,7 +7,13 @@ import { uuidv7 } from 'uuidv7';
 import { CredentialService } from '../src/iam/credential.service';
 import { DispatcherService } from '../src/messages/dispatch/dispatcher.service';
 import { DISPATCH_POOL } from '../src/database/database.tokens';
-import { createTenant, startHarness, type Harness, type TenantFixture } from './auth-harness';
+import {
+  createTenant,
+  purgeMessageEvents,
+  startHarness,
+  type Harness,
+  type TenantFixture,
+} from './auth-harness';
 
 describe('Dispatch Concurrency, Fencing, Crash Recovery & Lifecycle Serialization (Phase 3.3)', () => {
   let h: Harness;
@@ -73,8 +79,31 @@ describe('Dispatch Concurrency, Fencing, Crash Recovery & Lifecycle Serializatio
     });
   }, 60_000);
 
+  beforeEach(async () => {
+    await h.admin.delete(schema.messageDispatchQueue);
+  });
+
   afterAll(async () => {
-    await h.close();
+    try {
+      if (dispatchPool) await dispatchPool.end();
+      await h.admin.delete(schema.messageDispatchQueue);
+      await purgeMessageEvents(h.admin);
+      await h.admin.delete(schema.messageAttempts);
+      await h.admin.delete(schema.messages);
+      await h.admin.delete(schema.contacts);
+      if (tenant) {
+        await h.admin
+          .delete(schema.organizationProviderAssignments)
+          .where(eq(schema.organizationProviderAssignments.orgId, tenant.orgId));
+      }
+      if (providerId) {
+        await h.admin.delete(schema.providers).where(eq(schema.providers.id, providerId));
+      }
+    } catch {
+      // Best-effort cleanup
+    } finally {
+      await h.close();
+    }
   });
 
   async function seedMessage(
