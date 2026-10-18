@@ -1878,7 +1878,7 @@ Positive, negative security, direct database backstop, deterministic concurrency
   - Commit `2c6f52915d30c1ecaf92244b75852dd1554b28af`: Atomic integration of Phase 3.3, 3.4, and 3.5 implementation and documentation.
   - Commit `6572820f01d805f3b10417cb95a3ebcdb3c44479`: CI remediation for secret scan (`.gitleaksignore` synthetic test key) and event listener teardown.
   - Commit `423d122297ec7cfc593d54cc923359196d4a3c71`: CI remediation for complete database fixture teardown across integration suites.
-- **CI Status:** GitHub Actions run `38880983348` passed across all 5 jobs on `423d122`. (The working tree now carries uncommitted Gate F.1 changes; see §1w.)
+- **CI Status:** GitHub Actions run `38880983348` passed across all 5 jobs on `423d122`. (Gate F.1 is committed locally on top of it as `5a71f13`, not pushed; see §1w.)
 
 **Approved Scope & Implemented Capabilities:**
 1. **Template Management (`/templates`):**
@@ -1951,7 +1951,7 @@ Positive, negative security, direct database backstop, deterministic concurrency
 
 ## 1w. ADR-016 — Phase 4.1 Data and Regulatory Foundation (Gate F.1) — APPROVED (17-Oct-2026)
 
-**Status:** **APPROVED by project owner decision, 17-Oct-2026 (Gate F.1).** Approved on the final evidence report: change-set fingerprint `68edac9c…`, HEAD `423d122`; unit 610/610 and lint and format re-run on that fingerprint; database suites from runs on the same code (§1w.9). Owner decisions D-7 (approved) and voice E.164 (acknowledged), recorded the same day, are preserved (§1w.10). The approval authorizes no database, process or migration operation; the operational items in §1w.10 remain separate. Phase 4.2 (Gate F.2) and Phase 4.3 (Gate F.3) remain NOT STARTED and NOT AUTHORIZED. All Gate F.1 work is uncommitted in the working tree on `develop` (HEAD `423d122`); nothing is staged, committed or pushed (§1w.9).
+**Status:** **APPROVED by project owner decision, 17-Oct-2026 (Gate F.1).** Approved on the final evidence report: change-set fingerprint `68edac9c…`, HEAD `423d122`; unit 610/610 and lint and format re-run on that fingerprint; database suites from runs on the same code (§1w.9). Owner decisions D-7 (approved) and voice E.164 (acknowledged), recorded the same day, are preserved (§1w.10). The approval authorizes no database, process or migration operation; the operational items in §1w.10 remain separate. Phase 4.2 (Gate F.2) and Phase 4.3 (Gate F.3) remain NOT STARTED and NOT AUTHORIZED. Gate F.1 is committed locally on `develop` as `5a71f13` (parent `423d122`, 18-Oct-2026); it is **not pushed** and **no CI has run on it** (§1w.9).
 
 History: implemented 16-Oct-2026; an independent review the same day returned NEEDS REMEDIATION (findings F1–F10); a first remediation and a verification review followed (NEEDS REMEDIATION, narrow); this section records the final narrow remediation of 17-Oct-2026. It replaces the earlier text of this section, whose test counts and working-tree statements were inaccurate.
 
@@ -2074,7 +2074,7 @@ Commands ran from the repository root with `NODE_ENV` unset and `RATE_LIMIT_AUTH
 
 Counts in earlier drafts of this section (11/18, 24/22, 29/29, 44/44, 568, 582) describe earlier states of the work and are superseded.
 
-**Git state:** branch `develop`, HEAD `423d122` (equal to `origin/develop`). Gate F.1 changes are uncommitted and unstaged. See `HANDOFF.md` §2 for the file list.
+**Git state:** the evidence above was produced on the uncommitted working tree at HEAD `423d122`. That change set was committed locally, unchanged, as `5a71f13` (parent `423d122`, 18-Oct-2026); it is not pushed and no CI has run on it. See `HANDOFF.md` §2.
 
 ### 1w.10 Owner decisions
 
