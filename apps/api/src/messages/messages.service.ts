@@ -2,17 +2,27 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   ERROR_CODES,
   PERMISSIONS,
+  SMS_CONSTRAINTS,
+  calculateSmsSegments,
+  renderTemplate,
+  validateDltMetadata,
+  validateRcsPayload,
+  validateSmsPayloadShape,
+  validateSmsTemplateBody,
+  validateSmsTemplateVariables,
   type AuthPrincipal,
   type QueuedMessageResponse,
+  type SmsDltMetadata,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, or, sql } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 
 import { AuthorizationService } from '../auth/authorization.service';
 import { RequestContext } from '../common/context/request-context';
 import { AppException } from '../common/errors/app.exception';
-import { normalizeEmailAddress, normalizePhoneNumber } from '../contacts/contacts.normalization';
+import { AppConfigService } from '../config/app-config.service';
+import { normalizeAddress } from '../contacts/contacts.normalization';
 import { TenantDatabase } from '../database/tenant-database.service';
 import { IdempotencyService, type IdempotentOutcome } from '../idempotency/idempotency.service';
 import { requireOrganization } from '../workspaces/workspace-administration.service';
@@ -42,6 +52,7 @@ export class MessagesService {
     private readonly db: TenantDatabase,
     private readonly authorization: AuthorizationService,
     private readonly idempotency: IdempotencyService,
+    private readonly config: AppConfigService,
   ) {}
 
   async sendMessage(
@@ -120,24 +131,20 @@ export class MessagesService {
           workspaceId = defaultWs.id;
         }
 
-        // 2. Address normalization
-        let normalizedAddress: string;
-        if (channel.code === 'whatsapp' || channel.code === 'sms') {
-          normalizedAddress = normalizePhoneNumber(dto.recipient);
-        } else if (channel.code === 'email') {
-          normalizedAddress = normalizeEmailAddress(dto.recipient);
-        } else {
-          normalizedAddress = dto.recipient.trim();
-        }
+        // 2. Address normalization (canonical normalization path across all channels)
+        const normalizedAddress = normalizeAddress(dto.recipient, channel.code);
 
-        // 3. Suppression preflight check
+        // 3. Suppression preflight check (channel-specific or org-wide suppression)
         const [suppressed] = await tx
           .select({ id: schema.suppressions.id })
           .from(schema.suppressions)
           .where(
             and(
               eq(schema.suppressions.orgId, orgId),
-              eq(schema.suppressions.channelId, channel.id),
+              or(
+                eq(schema.suppressions.channelId, channel.id),
+                isNull(schema.suppressions.channelId),
+              ),
               eq(schema.suppressions.normalizedAddress, normalizedAddress),
               eq(schema.suppressions.status, 'active'),
             ),
@@ -229,8 +236,9 @@ export class MessagesService {
         }
 
         // 6. Template preflight check (if templateId specified)
+        let template: typeof schema.templates.$inferSelect | undefined;
         if (dto.templateId) {
-          const [template] = await tx
+          const [foundTemplate] = await tx
             .select()
             .from(schema.templates)
             .where(
@@ -242,7 +250,7 @@ export class MessagesService {
             )
             .limit(1);
 
-          if (!template) {
+          if (!foundTemplate) {
             throw new AppException({
               status: HttpStatus.NOT_FOUND,
               code: ERROR_CODES.RESOURCE_NOT_FOUND,
@@ -251,7 +259,7 @@ export class MessagesService {
             });
           }
 
-          if (template.channelId !== channel.id) {
+          if (foundTemplate.channelId !== channel.id) {
             throw new AppException({
               status: HttpStatus.UNPROCESSABLE_ENTITY,
               code: ERROR_CODES.VALIDATION_FAILED,
@@ -260,12 +268,223 @@ export class MessagesService {
             });
           }
 
-          if (template.approvalStatus !== 'approved') {
+          if (foundTemplate.approvalStatus !== 'approved') {
             throw new AppException({
               status: HttpStatus.UNPROCESSABLE_ENTITY,
               code: ERROR_CODES.TEMPLATE_NOT_APPROVED,
               message: 'Template is not approved',
-              logContext: { templateId: dto.templateId, approvalStatus: template.approvalStatus },
+              logContext: {
+                templateId: dto.templateId,
+                approvalStatus: foundTemplate.approvalStatus,
+              },
+            });
+          }
+
+          template = foundTemplate;
+        }
+
+        // 6b. Channel-specific regulatory & payload validation (Phase 4.1 Gate F.1)
+        let finalPayload: Record<string, unknown> = dto.payload;
+
+        if (channel.code === 'sms') {
+          const smsPayloadInvalid = (message: string, errors?: readonly string[]) =>
+            new AppException({
+              status: HttpStatus.UNPROCESSABLE_ENTITY,
+              code: ERROR_CODES.SMS_PAYLOAD_INVALID,
+              message,
+              logContext: errors ? { errors } : undefined,
+            });
+
+          // Payload shape first: allowlisted fields and bounded size, before any template work.
+          const shape = validateSmsPayloadShape(dto.payload);
+          if (!shape.valid) {
+            throw smsPayloadInvalid(
+              `Invalid SMS payload: ${shape.errors.join('; ')}`,
+              shape.errors,
+            );
+          }
+
+          // Owner policy D-7 (approved 17-Oct-2026, DECISIONS.md §1w.1): fail closed —
+          // SMS requires an approved registered template with bound DLT metadata.
+          if (!dto.templateId || !template) {
+            throw new AppException({
+              status: HttpStatus.UNPROCESSABLE_ENTITY,
+              code: ERROR_CODES.SMS_DLT_METADATA_REQUIRED,
+              message:
+                'SMS dispatch requires an approved registered template with bound DLT metadata',
+              logContext: { channelCode: channel.code },
+            });
+          }
+
+          // Unpack and validate template-bound DLT metadata
+          let templateDlt: SmsDltMetadata | undefined;
+          if (
+            template.variables &&
+            typeof template.variables === 'object' &&
+            !Array.isArray(template.variables)
+          ) {
+            templateDlt = (template.variables as { dlt?: SmsDltMetadata }).dlt;
+          }
+
+          if (!templateDlt) {
+            throw new AppException({
+              status: HttpStatus.UNPROCESSABLE_ENTITY,
+              code: ERROR_CODES.SMS_DLT_METADATA_REQUIRED,
+              message: 'SMS template dispatch requires DLT metadata bound to the approved template',
+              logContext: { templateId: dto.templateId },
+            });
+          }
+
+          const templateDltValidation = validateDltMetadata(templateDlt);
+          if (!templateDltValidation.valid) {
+            throw new AppException({
+              status: HttpStatus.UNPROCESSABLE_ENTITY,
+              code: ERROR_CODES.SMS_DLT_METADATA_INVALID,
+              message: `Approved template DLT metadata is invalid: ${templateDltValidation.errors.join('; ')}`,
+              logContext: { templateId: dto.templateId, errors: templateDltValidation.errors },
+            });
+          }
+
+          const payloadDlt = dto.payload.dlt;
+          if (payloadDlt !== undefined) {
+            const pValidation = validateDltMetadata(payloadDlt);
+            if (!pValidation.valid) {
+              throw new AppException({
+                status: HttpStatus.UNPROCESSABLE_ENTITY,
+                code: ERROR_CODES.SMS_DLT_METADATA_INVALID,
+                message: `Invalid SMS payload DLT metadata: ${pValidation.errors.join('; ')}`,
+                logContext: { errors: pValidation.errors },
+              });
+            }
+
+            const pDlt = payloadDlt as SmsDltMetadata;
+            const entityMatches = pDlt.entityId === templateDlt.entityId;
+            const templateMatches = pDlt.templateId === templateDlt.templateId;
+            const headerMatches =
+              templateDlt.headerId !== undefined
+                ? pDlt.headerId === templateDlt.headerId
+                : pDlt.headerId === undefined;
+
+            if (!entityMatches || !templateMatches || !headerMatches) {
+              throw new AppException({
+                status: HttpStatus.UNPROCESSABLE_ENTITY,
+                code: ERROR_CODES.SMS_DLT_TEMPLATE_MISMATCH,
+                message: 'Payload DLT metadata does not match approved template DLT metadata',
+                logContext: { payloadDlt: pDlt, templateDlt },
+              });
+            }
+          }
+
+          // Re-validate the stored body: templates approved before these rules, or written
+          // outside the API, must not dispatch placeholder-only or malformed content.
+          const bodyValidation = validateSmsTemplateBody(template.body);
+          if (!bodyValidation.valid) {
+            throw new AppException({
+              status: HttpStatus.UNPROCESSABLE_ENTITY,
+              code: ERROR_CODES.SMS_TEMPLATE_INVALID,
+              message: `Approved SMS template is not dispatchable: ${bodyValidation.errors.join('; ')}`,
+              logContext: { templateId: dto.templateId, errors: bodyValidation.errors },
+            });
+          }
+
+          // Variables: names, types and lengths are checked before anything is rendered.
+          const payloadVariables = dto.payload.variables;
+          const variableValidation = validateSmsTemplateVariables(
+            template.body,
+            payloadVariables,
+            this.config.sms.templateVariableMaxLength,
+          );
+          if (!variableValidation.valid) {
+            throw new AppException({
+              status: HttpStatus.UNPROCESSABLE_ENTITY,
+              code: ERROR_CODES.SMS_TEMPLATE_VARIABLE_INVALID,
+              message: `Invalid SMS template variables: ${variableValidation.errors.join('; ')}`,
+              logContext: { templateId: dto.templateId, errors: variableValidation.errors },
+            });
+          }
+
+          const { text: renderedText, missingVariables } = renderTemplate(
+            template.body,
+            payloadVariables as Record<string, unknown> | readonly unknown[] | undefined,
+          );
+          // Defence in depth: the variable check above already guarantees both conditions.
+          if (missingVariables.length > 0 || renderedText.trim().length === 0) {
+            throw new AppException({
+              status: HttpStatus.UNPROCESSABLE_ENTITY,
+              code: ERROR_CODES.SMS_TEMPLATE_VARIABLE_INVALID,
+              message: 'SMS template could not be rendered from the supplied variables',
+              logContext: { templateId: dto.templateId, missingVariables },
+            });
+          }
+
+          // payload.text may only restate the rendered approved content, never replace it.
+          const payloadText = dto.payload.text;
+          if (payloadText !== undefined) {
+            if (typeof payloadText !== 'string') {
+              throw smsPayloadInvalid('SMS payload.text must be a string');
+            }
+            if (payloadText !== renderedText) {
+              throw smsPayloadInvalid('Payload text cannot override approved template content');
+            }
+          }
+
+          // Server-enforced segment ceiling: a client value can only lower the limit.
+          const clientMaxRaw = dto.payload.maxSegments;
+          let maxSegments: number = SMS_CONSTRAINTS.DEFAULT_MAX_SEGMENTS;
+          if (clientMaxRaw !== undefined) {
+            if (
+              typeof clientMaxRaw !== 'number' ||
+              clientMaxRaw <= 0 ||
+              !Number.isInteger(clientMaxRaw)
+            ) {
+              throw smsPayloadInvalid('SMS payload.maxSegments must be a positive integer');
+            }
+            maxSegments = Math.min(clientMaxRaw, SMS_CONSTRAINTS.DEFAULT_MAX_SEGMENTS);
+          }
+
+          const analysis = calculateSmsSegments(renderedText, { maxSegments });
+          if (analysis.segmentCount > maxSegments) {
+            throw new AppException({
+              status: HttpStatus.UNPROCESSABLE_ENTITY,
+              code: ERROR_CODES.SMS_MAX_SEGMENTS_EXCEEDED,
+              message: `SMS message length requires ${analysis.segmentCount} segments, exceeding maximum allowed limit of ${maxSegments}`,
+              logContext: {
+                segmentCount: analysis.segmentCount,
+                maxSegments,
+                encoding: analysis.encoding,
+                characterCount: analysis.characterCount,
+                totalUnits: analysis.totalUnits,
+              },
+            });
+          }
+
+          // Persist only server-derived content: rendered text and the template's own DLT.
+          finalPayload = {
+            text: renderedText,
+            dlt: templateDlt,
+            ...(payloadVariables !== undefined ? { variables: payloadVariables } : {}),
+            ...(clientMaxRaw !== undefined ? { maxSegments } : {}),
+          };
+        }
+
+        if (channel.code === 'rcs') {
+          const rcsValidation = validateRcsPayload(dto.payload);
+          if (!rcsValidation.valid) {
+            const hasUnsafeUrl = rcsValidation.errors.some(
+              (e) =>
+                e.toLowerCase().includes('unsafe') ||
+                e.toLowerCase().includes('protocol') ||
+                e.toLowerCase().includes('http or https url'),
+            );
+            const code = hasUnsafeUrl
+              ? ERROR_CODES.RCS_UNSAFE_ACTION_URL
+              : ERROR_CODES.RCS_PAYLOAD_INVALID;
+
+            throw new AppException({
+              status: HttpStatus.UNPROCESSABLE_ENTITY,
+              code,
+              message: `Invalid RCS payload: ${rcsValidation.errors.join('; ')}`,
+              logContext: { errors: rcsValidation.errors },
             });
           }
         }
@@ -305,7 +524,7 @@ export class MessagesService {
             channelId: channel.id,
             templateId: dto.templateId ?? null,
             recipientAddress: normalizedAddress,
-            payload: dto.payload,
+            payload: finalPayload,
             status: 'queued',
             correlationId,
           })

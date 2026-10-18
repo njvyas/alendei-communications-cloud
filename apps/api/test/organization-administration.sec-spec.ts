@@ -778,9 +778,24 @@ describe('organization administration and lifecycle (1C.1a)', () => {
 
     it('two-stage list: every legitimate reach pages identically at limit=1 and limit=100', async () => {
       for (const who of ['a1', 'resellerA', 'resellerB', 'platform', 'support']) {
-        const whole = await call('get', tokens[who]!, '/organizations?limit=100').expect(200);
-        const expected = whole.body.data.map((o: { id: string }) => o.id);
-        expect(whole.body.page.hasMore).toBe(false);
+        // The whole reach at the largest page size, followed to the end: a platform
+        // principal on a shared database can legitimately see more than 100
+        // organizations, so a single page is not assumed to hold everything.
+        const expected: string[] = [];
+        const wholeRows: Array<Record<string, unknown>> = [];
+        let wholeCursor: string | null = null;
+        do {
+          const whole: request.Response = await call(
+            'get',
+            tokens[who]!,
+            `/organizations?limit=100${wholeCursor ? `&cursor=${encodeURIComponent(wholeCursor)}` : ''}`,
+          ).expect(200);
+          expect(whole.body.page.hasMore).toBe(whole.body.page.nextCursor !== null);
+          wholeRows.push(...whole.body.data);
+          expected.push(...whole.body.data.map((o: { id: string }) => o.id));
+          wholeCursor = whole.body.page.nextCursor;
+        } while (wholeCursor);
+        expect(new Set(expected).size).toBe(expected.length);
 
         const walked: string[] = [];
         let cursor: string | null = null;
@@ -795,9 +810,9 @@ describe('organization administration and lifecycle (1C.1a)', () => {
           cursor = page.body.page.nextCursor;
         } while (cursor && walked.length <= expected.length);
         expect(walked).toEqual(expected);
-        for (const o of whole.body.data) expect(Object.keys(o).sort()).toEqual(ORG_KEYS);
+        for (const o of wholeRows) expect(Object.keys(o).sort()).toEqual(ORG_KEYS);
       }
-    });
+    }, 120_000); // walks the whole reach one row at a time; a shared database can hold hundreds
 
     it('24. an unconnected principal never learns a suspended organization’s status', async () => {
       // L2 (beneath reseller B) is suspended; nobody in reseller A is connected to it.

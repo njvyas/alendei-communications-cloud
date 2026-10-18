@@ -135,6 +135,12 @@ export class AppConfigService {
     } as const;
   }
 
+  get sms() {
+    return {
+      templateVariableMaxLength: this.get('SMS_TEMPLATE_VARIABLE_MAX_LENGTH'),
+    } as const;
+  }
+
   get observability() {
     return {
       otelEnabled: this.get('OTEL_ENABLED'),

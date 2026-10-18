@@ -390,7 +390,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 
 ## 6. Phase 3 — WhatsApp
 
-**Status: Phase 3.0 architecture FROZEN by ADR-014 (`ADR-014-PHASE-3-WHATSAPP-ORCHESTRATION.md`, 06-Oct-2026). Increment 3.1 Data Foundation CLOSED (migration `0031`; Gate E.1 APPROVED by project owner, 14-Oct-2026; commit `f08b48e`). Increment 3.2 Assignments & Principal Scopes CLOSED (migration `0032`; Gate E.2 APPROVED by project owner, 14-Oct-2026; commit `4d4c4b7`). Increment 3.3 Orchestrator & Dispatch Execution CLOSED (migration `0033`; Gate E.3 APPROVED by project owner, 15-Oct-2026; uncommitted baseline on `develop` at HEAD `3341a43`). Increment 3.4 is NOT STARTED and NOT AUTHORIZED.** Frozen: WhatsApp first; `SimulatorAdapter` only; no real credentials or vendor calls; **provider-to-provider fallback on the same channel is Phase 3 scope** (no delivery-outcome fallback; triggers and termination are open decisions D13/D14); no cross-channel fallback; PostgreSQL is the correctness boundary with polling, recovery and durable invocation fencing, Redis advisory only; a dedicated dispatch principal `acc_dispatch` with token-bound per-message RLS; Phase 1C idempotency reused; Phase 2 CircuitAdmission authoritative; no Kafka/outbox, no WebSocket execution, no campaigns, journeys or billing; **no delivery or webhook processing**; routing weights, routing-policy CRUD, optimization, canary and advanced routing strategy stay out of Phase 3. Increment-level decisions still open are listed in ADR-014 §15. Where the bullets below conflict with ADR-014, ADR-014 governs.
+**Status: Phase 3 is formally CLOSED (Gates E.1–E.5 APPROVED; commit `2c6f529` and CI remediation commits `6572820`, `423d122`; GitHub Actions run `38880983348` passed). Phase 4 (SMS + RCS) is NOT STARTED and NOT AUTHORIZED.** Frozen: WhatsApp first; `SimulatorAdapter` only; no real credentials or vendor calls; **provider-to-provider fallback on the same channel is Phase 3 scope** (no delivery-outcome fallback; triggers and termination are open decisions D13/D14); no cross-channel fallback; PostgreSQL is the correctness boundary with polling, recovery and durable invocation fencing, Redis advisory only; a dedicated dispatch principal `acc_dispatch` with token-bound per-message RLS; Phase 1C idempotency reused; Phase 2 CircuitAdmission authoritative; no Kafka/outbox, no WebSocket execution, no campaigns, journeys or billing; **no delivery or webhook processing**; routing weights, routing-policy CRUD, optimization, canary and advanced routing strategy stay out of Phase 3. Increment-level decisions still open are listed in ADR-014 §15. Where the bullets below conflict with ADR-014, ADR-014 governs.
 
 
 - **Objectives**: first real channel's routing/eligibility path built end-to-end (still against the simulator, unless/until explicit separate authorization is given to connect a real provider).
@@ -416,9 +416,9 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 | **3.0** | Architecture Freeze (`ADR-014`, 06-Oct-2026) | — | ✅ FROZEN |
 | **3.1** | Data Foundation (Contacts, Identities, Consent, Templates, Suppressions) | `contacts`, `contact_identities`, `consent_events`, `templates`, `suppressions` (migration `0031`); Model B RLS; permissions activated | ✅ CLOSED — Gate E.1 APPROVED 14-Oct-2026 (`f08b48e`) |
 | **3.2** | Organization Provider Assignments & Dispatch Principal Scopes | `organization_provider_assignments` (migration `0032`); `acc_dispatch` principal & context functions | ✅ CLOSED — Gate E.2 APPROVED 14-Oct-2026 (`4d4c4b7`) |
-| **3.3** | Orchestrator & Dispatch Execution | `messages`, `message_attempts`, `message_events`, `message_dispatch_queue` (migration `0033`); Model B RLS; queue fencing | ✅ CLOSED — Gate E.3 APPROVED 15-Oct-2026 |
-| **3.4** | Fallback & Resilience | Same-channel provider-to-provider fallback; migration `0034` (Option A trigger guard) | ✅ CLOSED — Gate E.4 APPROVED 15-Oct-2026 |
-| **3.5** | WhatsApp Management Console | Frontend console | ⏳ IMPLEMENTED / Gate E.5 PENDING OWNER REVIEW |
+| **3.3** | Orchestrator & Dispatch Execution | `messages`, `message_attempts`, `message_events`, `message_dispatch_queue` (migration `0033`); Model B RLS; queue fencing | ✅ CLOSED — Gate E.3 APPROVED 15-Oct-2026 (commit `2c6f529`) |
+| **3.4** | Fallback & Resilience | Same-channel provider-to-provider fallback; migration `0034` (Option A trigger guard) | ✅ CLOSED — Gate E.4 APPROVED 15-Oct-2026 (commit `2c6f529`) |
+| **3.5** | WhatsApp Management Console | Frontend console | ✅ CLOSED — Gate E.5 APPROVED 16-Oct-2026 (commit `2c6f529`) |
 
 **Gate E.1 — Phase 3.1 Data Foundation acceptance.** Status: **APPROVED / CLOSED** (project owner decision, 14-Oct-2026; commit `f08b48e`). Objectively tested and verified:
 - Migration `0031_phase3_1_data_foundation.sql` creates all 5 Model B content tables with Model B RLS enforced via `app_content_context_valid()`.
@@ -437,7 +437,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 - REST endpoints `/v1/organizations/:orgId/provider-assignments` implemented with platform-only scope enforcement (`providers.read` / `providers.manage`), 5-scope RBAC boundaries, and anti-enumeration.
 - Focused security suite `phase3_2-assignments-principal.sec-spec.ts` passes 37/37 tests.
 
-**Gate E.3 — Phase 3.3 Orchestrator & Dispatch Execution acceptance.** Status: **APPROVED / CLOSED** (project owner decision, 15-Oct-2026; uncommitted baseline on `develop` at HEAD `3341a43`). Objectively tested and verified:
+**Gate E.3 — Phase 3.3 Orchestrator & Dispatch Execution acceptance.** Status: **APPROVED / CLOSED** (project owner decision, 15-Oct-2026; commit `2c6f529`; CI remediation in `6572820`, `423d122`). Objectively tested and verified:
 - Migration `0033_phase3_3_orchestrator_dispatch.sql` creates `messages`, `message_attempts`, `message_events` (Model B RLS), and `message_dispatch_queue` (Model A RLS).
 - Ordered 5-stage preflight validation implemented on `POST /messages` with payload fingerprinting and idempotency replay returning `202 Accepted` (`messages-api.int-spec.ts`, 10/10 passed).
 - Anti-enumeration on `GET /messages/:id` returns 404 `RESOURCE_NOT_FOUND` across tenant boundaries.
@@ -448,7 +448,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 - MEDIUM-7 context fallback safe outside HTTP request contexts (`provider-state-dispatcher.int-spec.ts`).
 - Targeted mutation checks (fencing check and attempt token guard) killed by concurrency and security tests.
 
-**Gate E.4 — Phase 3.4 Fallback & Resilience acceptance.** Status: **APPROVED / CLOSED** (project owner decision, 15-Oct-2026; uncommitted candidate on `develop` at HEAD `3341a43`). Objectively tested and verified:
+**Gate E.4 — Phase 3.4 Fallback & Resilience acceptance.** Status: **APPROVED / CLOSED** (project owner decision, 15-Oct-2026; commit `2c6f529`; CI remediation in `6572820`, `423d122`). Objectively tested and verified:
 - Migration `0034_phase3_4_fallback.sql` implements Option A fallback state transition guard in `fn_messages_terminal_guard()`: restricts `submitting -> queued` strictly to `acc_dispatch` under active unexpired dispatch claim matching `OLD.current_attempt_id`, with verified attempt `status = 'failed'` and fallback-eligible reason (`PROVIDER_ERROR` or `RATE_LIMITED`).
 - Absolute immutability on terminal message states (`accepted`, `failed`, `outcome_unknown`) preserved and verified against unauthorized mutations.
 - Candidate evaluation in ascending priority order (`priority ASC`) with idempotent provider de-duplication (`provider_id NOT IN (SELECT provider_id FROM message_attempts WHERE message_id = $3)`).
@@ -463,7 +463,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 - Targeted mutation proofs (Guard 1 authorization boundary, settlement fencing check, recovery queue deletion) verified killed.
 - Regression verification: DB package 227/227 passed, API unit 528/528 passed, role-assignment/liveness 83/83 passed, static checks (lint, format, typecheck, build, openapi) pass with zero drift.
 
-**Gate E.5 — Phase 3.5 WhatsApp Management Console acceptance.** Status: **APPROVED / CLOSED** (project owner decision, 16-Oct-2026; uncommitted candidate on `develop` at HEAD `3341a43`). Phase 3 of Alendei Communications Cloud is formally CLOSED. Objectively tested and verified:
+**Gate E.5 — Phase 3.5 WhatsApp Management Console acceptance.** Status: **APPROVED / CLOSED** (project owner decision, 16-Oct-2026; commit `2c6f529`; CI remediation in `6572820`, `423d122`). Phase 3 of Alendei Communications Cloud is formally CLOSED. Objectively tested and verified:
 - Frontend console routes implemented: `/whatsapp`, `/templates`, `/contacts`, seamlessly integrated into navigation shell with permission gating (`apps/web/src/app/(console)/layout.tsx`).
 - Template management: filterable list, keyset cursor pagination, dynamic variable detection (`{{1}}`, `{{var}}`), template creation with idempotency key generation/reuse, simulated approval workflow (`draft` -> `pending` -> `approved` / `rejected`), simulator disclaimers (`template-status-badge.tsx`).
 - Contact and consent management: workspace selector, contact list, contact creation with phone identity attachment and initial consent declaration, append-only consent recording dialog (`contact-consent-dialog.tsx`), visual status badge (`consent-status-badge.tsx`).
@@ -476,19 +476,37 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 
 ## 7. Phase 4 — SMS + RCS
 
+**Status: Phase 4.1 (Gate F.1) APPROVED by project owner decision, 17-Oct-2026 (ADR-016, `DECISIONS.md` §1w). Phase 4.2 (Gate F.2) and Phase 4.3 (Gate F.3) are NOT STARTED and NOT AUTHORIZED. No migration `0035`+ may be written or applied until migration tooling (G) and history recovery (E) are resolved (`DECISIONS.md` §1w.10).**
+- **Provider integrations**: simulator-only; no real credentials, vendor endpoints or external network calls.
+- **Delivery scope**: outbound submission outcomes only; webhooks, handset DLRs and delivery-status progression deferred.
+- **SMS DLT**: bound to the approved SMS template in `templates.variables` (`{ names, dlt }`; legacy arrays still read); a payload may restate it but never supply or override it; no migration.
+- **SMS content**: always the server-rendered approved template; variables checked for name, type and length (configurable safeguard, default 30 characters, not a verified regulatory limit); 10-segment server ceiling.
+- **Policy D-7 (approved by project owner decision, 17-Oct-2026)**: SMS requires an approved template, belonging to the caller's organization, with valid bound DLT; template-less SMS is refused (`422 SMS_DLT_METADATA_REQUIRED`).
+- **RCS payload scope**: text, media and a single rich card; strict per-type field allowlists; `http`/`https` only on every URL-bearing field. Carousels and multi-turn flows deferred to Phase 8E.
+- **Phase 3 compatibility**: org-wide suppressions now apply to every channel, including WhatsApp (a documented requirement); RCS and voice recipients normalized to E.164 (voice acknowledged by project owner decision, 17-Oct-2026; no live voice-send path authorized). Details: `DECISIONS.md` §1w.6.
 
-- **Objectives**: extend the channel set; validate the abstraction genuinely generalizes to a second and third channel without core changes.
-- **Dependencies**: Phase 3.
-- **Architecture**: same as Phase 3, generalized; DLT-awareness placeholder in Eligibility Engine for SMS.
-- **Implementation scope**: additional `SimulatorAdapter` configurations per channel; channel-specific template/capability handling.
-- **DB/API/Frontend changes**: incremental (no new tables required beyond what Phase 3 established; `channels` rows added for `sms`, `rcs`).
-- **Tests**: cross-channel eligibility tests (e.g., DLT-block suppression on SMS only).
-- **Security checks**: none beyond Phase 3's baseline, reapplied.
-- **Observability**: funnel dashboards extended per channel.
-- **Documentation**: confirm no core-module change was needed to add these channels (validates the architectural principle in practice — call out any exception found).
-- **Acceptance criteria**: same send/track/audit flow proven for SMS and RCS via the simulator.
-- **Deployment requirements**: Dev + Staging.
-- **Rollback strategy**: standard.
+### Phase 4 Increments & Gates
+
+| Increment | Scope | Deliverables | Status |
+|---|---|---|---|
+| **4.1** | Data & Regulatory Foundation (Gate F.1, ADR-016) | Typed SMS/RCS contracts, GSM-7/UCS-2 segmentation, DLT validation and template binding, template-content binding, RCS rich cards and safe URLs, canonical E.164 normalization, suppression alignment | ✅ APPROVED — Gate F.1, 17-Oct-2026 |
+| **4.2** | Provider Adapters & Eligibility (Gate F.2) | SMS/RCS simulator adapters, channel capability registration, provider assignments | ⛔ NOT STARTED / NOT AUTHORIZED |
+| **4.3** | End-to-End Multi-Channel Dispatch & Verification (Gate F.3) | End-to-end multi-channel dispatch, settlement, and full regression verification | ⛔ NOT STARTED / NOT AUTHORIZED |
+
+**Gate F.1 — Phase 4.1 Data & Regulatory Foundation acceptance.** Status: **APPROVED** (project owner decision, 17-Oct-2026; D-7 approved and voice E.164 acknowledged the same day). The authoritative record is `DECISIONS.md` §1w:
+- validation rules: §1w.2–§1w.5;
+- Phase 3 compatibility: §1w.6;
+- OpenAPI gap: §1w.7;
+- database provenance, including the unresolved migration-0033 history discrepancy: §1w.8;
+- verification evidence: §1w.9;
+- owner decisions required: §1w.10.
+
+Evidence summary (17-Oct-2026, current working tree):
+- SMS unit 54/54; RCS unit 28/28; `@acc/api` unit 610/610.
+- `phase4_1-data-foundation.sec-spec.ts` 66/66.
+- Integration 153/153 and security 1544/1544, each on both a shared-data `acc` clone and a clean committed-migration clone.
+- typecheck, lint, `format:check`, `openapi:check`, `npm run build` and `git diff --check` all pass.
+- No change under `packages/db`.
 
 ## 8. Phase 5 — Provider/channel failover
 

@@ -2,8 +2,11 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   ERROR_CODES,
   PERMISSIONS,
+  validateDltMetadata,
+  validateSmsTemplateBody,
   type AuthPrincipal,
   type PageInfo,
+  type SmsDltMetadata,
   type TemplateApprovalStatus,
   type TemplateResponse,
 } from '@acc/contracts';
@@ -41,14 +44,53 @@ function channelNotFound(id: string): AppException {
   });
 }
 
+/**
+ * `dlt: null` is refused rather than read as "remove": DLT is required to approve
+ * and dispatch an SMS template, and an omitted field already means "unchanged".
+ */
+function rejectNullDlt(dlt: unknown): void {
+  if (dlt === null) {
+    throw new AppException({
+      status: HttpStatus.UNPROCESSABLE_ENTITY,
+      code: ERROR_CODES.SMS_DLT_METADATA_INVALID,
+      message: 'DLT metadata cannot be null; omit the field to leave it unchanged',
+    });
+  }
+}
+
+/** SMS bodies must carry fixed content and well-formed placeholders (Gate F.1). */
+function assertSmsTemplateBody(body: string): void {
+  const result = validateSmsTemplateBody(body);
+  if (!result.valid) {
+    throw new AppException({
+      status: HttpStatus.UNPROCESSABLE_ENTITY,
+      code: ERROR_CODES.SMS_TEMPLATE_INVALID,
+      message: `Invalid SMS template body: ${result.errors.join('; ')}`,
+      logContext: { errors: result.errors },
+    });
+  }
+}
+
 function templateView(row: TemplateRow): TemplateResponse {
+  let variables: readonly string[] = [];
+  let dlt: SmsDltMetadata | undefined;
+
+  if (Array.isArray(row.variables)) {
+    variables = row.variables as readonly string[];
+  } else if (row.variables && typeof row.variables === 'object') {
+    const raw = row.variables as { names?: string[]; dlt?: SmsDltMetadata };
+    variables = raw.names ?? [];
+    dlt = raw.dlt;
+  }
+
   return {
     id: row.id,
     orgId: row.orgId,
     channelId: row.channelId,
     name: row.name,
     body: row.body,
-    variables: (row.variables as readonly string[]) ?? [],
+    variables,
+    dlt,
     approvalStatus: row.approvalStatus,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -178,9 +220,26 @@ export class TemplatesService {
         const channelResult = await tx.execute<{ code: string }>(
           sql`SELECT app_channel_code(${dto.channelId}) AS code`,
         );
-        if (!channelResult.rows[0]?.code) throw channelNotFound(dto.channelId);
+        const channelCode = channelResult.rows[0]?.code;
+        if (!channelCode) throw channelNotFound(dto.channelId);
+
+        rejectNullDlt(dto.dlt);
+        if (channelCode === 'sms') assertSmsTemplateBody(dto.body);
+
+        if (dto.dlt !== undefined && channelCode !== 'sms') {
+          throw new AppException({
+            status: HttpStatus.UNPROCESSABLE_ENTITY,
+            code: ERROR_CODES.VALIDATION_FAILED,
+            message: 'DLT metadata can only be attached to SMS templates',
+            logContext: { channelCode, channelId: dto.channelId },
+          });
+        }
 
         const templateId = uuidv7();
+        const variablesData = dto.dlt
+          ? { names: dto.variables ?? [], dlt: dto.dlt }
+          : (dto.variables ?? []);
+
         try {
           const [row] = await tx
             .insert(schema.templates)
@@ -190,7 +249,7 @@ export class TemplatesService {
               channelId: dto.channelId,
               name: dto.name,
               body: dto.body,
-              variables: dto.variables ?? [],
+              variables: variablesData,
               approvalStatus: 'draft',
             })
             .returning();
@@ -268,7 +327,44 @@ export class TemplatesService {
       };
       if (dto.name !== undefined) updates.name = dto.name;
       if (dto.body !== undefined) updates.body = dto.body;
-      if (dto.variables !== undefined) updates.variables = dto.variables;
+
+      rejectNullDlt(dto.dlt);
+
+      if (dto.dlt !== undefined || dto.body !== undefined) {
+        const channelResult = await tx.execute<{ code: string }>(
+          sql`SELECT app_channel_code(${existing.channelId}) AS code`,
+        );
+        const channelCode = channelResult.rows[0]?.code;
+        if (channelCode === 'sms' && dto.body !== undefined) assertSmsTemplateBody(dto.body);
+        if (dto.dlt !== undefined && channelCode !== 'sms') {
+          throw new AppException({
+            status: HttpStatus.UNPROCESSABLE_ENTITY,
+            code: ERROR_CODES.VALIDATION_FAILED,
+            message: 'DLT metadata can only be attached to SMS templates',
+            logContext: { channelCode, channelId: existing.channelId },
+          });
+        }
+      }
+
+      if (dto.variables !== undefined || dto.dlt !== undefined) {
+        const currentNames =
+          dto.variables !== undefined
+            ? dto.variables
+            : Array.isArray(existing.variables)
+              ? (existing.variables as readonly string[])
+              : ((existing.variables as { names?: string[] })?.names ?? []);
+
+        const currentDlt =
+          dto.dlt !== undefined
+            ? dto.dlt
+            : existing.variables &&
+                typeof existing.variables === 'object' &&
+                !Array.isArray(existing.variables)
+              ? (existing.variables as { dlt?: SmsDltMetadata })?.dlt
+              : undefined;
+
+        updates.variables = currentDlt ? { names: currentNames, dlt: currentDlt } : currentNames;
+      }
 
       try {
         const [row] = await tx
@@ -356,6 +452,44 @@ export class TemplatesService {
           message: `Cannot transition template from status ${fromStatus} to ${toStatus}`,
           details: { currentStatus: fromStatus, requestedStatus: toStatus },
         });
+      }
+
+      if (toStatus === 'approved') {
+        const channelResult = await tx.execute<{ code: string }>(
+          sql`SELECT app_channel_code(${existing.channelId}) AS code`,
+        );
+        const channelCode = channelResult.rows[0]?.code;
+        if (channelCode === 'sms') {
+          assertSmsTemplateBody(existing.body);
+
+          let dlt: unknown;
+          if (
+            existing.variables &&
+            typeof existing.variables === 'object' &&
+            !Array.isArray(existing.variables)
+          ) {
+            dlt = (existing.variables as { dlt?: unknown }).dlt;
+          }
+
+          if (!dlt) {
+            throw new AppException({
+              status: HttpStatus.UNPROCESSABLE_ENTITY,
+              code: ERROR_CODES.SMS_DLT_METADATA_REQUIRED,
+              message: 'SMS template approval requires valid DLT metadata bound to the template',
+              logContext: { templateId: id },
+            });
+          }
+
+          const dltValidation = validateDltMetadata(dlt);
+          if (!dltValidation.valid) {
+            throw new AppException({
+              status: HttpStatus.UNPROCESSABLE_ENTITY,
+              code: ERROR_CODES.SMS_DLT_METADATA_INVALID,
+              message: `SMS template approval requires valid DLT metadata: ${dltValidation.errors.join('; ')}`,
+              logContext: { templateId: id, errors: dltValidation.errors },
+            });
+          }
+        }
       }
 
       const [row] = await tx

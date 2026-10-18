@@ -118,6 +118,14 @@ describe('Phase 1C.4a development/test fixture', () => {
   const q = async <T = Record<string, unknown>>(query: ReturnType<typeof sql>) =>
     (await h.admin.execute(query)).rows as T[];
 
+  /** Every holder of a platform-level (org-less) role, by natural key. */
+  const platformRoleHolders = () =>
+    q<{ email: string; role: string; scope_type: string }>(
+      sql`SELECT lower(u.email) AS email, r.key AS role, ur.scope_type::text AS scope_type
+            FROM user_roles ur JOIN users u ON u.id = ur.user_id JOIN roles r ON r.id = ur.role_id
+           WHERE r.org_id IS NULL ORDER BY 1, 2`,
+    );
+
   /** Every table's full content, hashed: the strongest "nothing changed" there is. */
   async function databaseHash(): Promise<string> {
     const tables = await q<{ name: string }>(
@@ -435,9 +443,11 @@ describe('Phase 1C.4a development/test fixture', () => {
     let firstRunError: unknown;
     let countsBefore: Record<string, number>;
     let countsAfter: Record<string, number>;
+    let platformHoldersBefore: Array<{ email: string; role: string; scope_type: string }>;
 
     beforeAll(async () => {
       countsBefore = await rowCounts();
+      platformHoldersBefore = await platformRoleHolders();
       // A failed run is recorded, not thrown, so each invariant below is still
       // asserted against whatever the run left in the database — a mutant that
       // makes the run fail must also fail the invariant it violates.
@@ -558,14 +568,21 @@ describe('Phase 1C.4a development/test fixture', () => {
                AND (ur.scope_type IN ('platform', 'reseller') OR r.org_id IS NULL)`,
       );
       expect(elevated).toEqual([]);
-      const holders = await q<{ email: string; role: string; scope_type: string }>(
-        sql`SELECT lower(u.email) AS email, r.key AS role, ur.scope_type::text AS scope_type
-              FROM user_roles ur JOIN users u ON u.id = ur.user_id JOIN roles r ON r.id = ur.role_id
-             WHERE r.org_id IS NULL ORDER BY 1, 2`,
+      // Measured as a delta over this run, so holders that pre-date the suite on a
+      // shared database are neither blamed on the fixture nor hidden by it. On a
+      // fresh database `platformHoldersBefore` is empty and this is the original
+      // "exactly the operator" assertion.
+      const operatorGrant = {
+        email: OPERATOR,
+        role: PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN,
+        scope_type: 'platform',
+      };
+      expect(platformHoldersBefore).not.toContainEqual(operatorGrant);
+      const key = (h: { email: string; role: string; scope_type: string }) =>
+        `${h.email}|${h.role}|${h.scope_type}`;
+      expect((await platformRoleHolders()).map(key).sort()).toEqual(
+        [...platformHoldersBefore, operatorGrant].map(key).sort(),
       );
-      expect(holders).toEqual([
-        { email: OPERATOR, role: PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN, scope_type: 'platform' },
-      ]);
     });
 
     it('signs in every fixture user through the real login path with the configured password only', async () => {

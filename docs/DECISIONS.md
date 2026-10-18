@@ -1873,8 +1873,12 @@ Positive, negative security, direct database backstop, deterministic concurrency
 
 **Implementation Baseline & Commit Relationship:**
 - **Branch:** `develop`
-- **Committed HEAD:** `3341a431d8efe8cceefba66028446beabfd1b773`
-- **Working-Tree Status:** Uncommitted changes present (Phase 3.3 accepted baseline + Phase 3.4 approved increment + Phase 3.5 frontend implementation candidate); zero changes staged, committed, or pushed.
+- **Committed HEAD:** `423d122297ec7cfc593d54cc923359196d4a3c71`
+- **Commit History:**
+  - Commit `2c6f52915d30c1ecaf92244b75852dd1554b28af`: Atomic integration of Phase 3.3, 3.4, and 3.5 implementation and documentation.
+  - Commit `6572820f01d805f3b10417cb95a3ebcdb3c44479`: CI remediation for secret scan (`.gitleaksignore` synthetic test key) and event listener teardown.
+  - Commit `423d122297ec7cfc593d54cc923359196d4a3c71`: CI remediation for complete database fixture teardown across integration suites.
+- **CI Status:** GitHub Actions run `38880983348` passed across all 5 jobs on `423d122`. (The working tree now carries uncommitted Gate F.1 changes; see §1w.)
 
 **Approved Scope & Implemented Capabilities:**
 1. **Template Management (`/templates`):**
@@ -1942,9 +1946,156 @@ Positive, negative security, direct database backstop, deterministic concurrency
 - Phase 3.3 is formally CLOSED (Gate E.3 approved, 15-Oct-2026).
 - Phase 3.4 is formally CLOSED (Gate E.4 approved, 15-Oct-2026).
 - Phase 3.5 is formally CLOSED (Gate E.5 approved by project owner decision, 16-Oct-2026). Phase 3 of Alendei Communications Cloud is formally CLOSED.
-- Phase 4 (SMS + RCS) remains NOT STARTED and NOT AUTHORIZED.
+- Phase 4.1 (Gate F.1) is APPROVED by project owner decision (17-Oct-2026; §1w).
+- Phase 4.2 (Gate F.2) and Phase 4.3 (Gate F.3) remain NOT STARTED and NOT AUTHORIZED.
 
+## 1w. ADR-016 — Phase 4.1 Data and Regulatory Foundation (Gate F.1) — APPROVED (17-Oct-2026)
 
+**Status:** **APPROVED by project owner decision, 17-Oct-2026 (Gate F.1).** Approved on the final evidence report: change-set fingerprint `68edac9c…`, HEAD `423d122`; unit 610/610 and lint and format re-run on that fingerprint; database suites from runs on the same code (§1w.9). Owner decisions D-7 (approved) and voice E.164 (acknowledged), recorded the same day, are preserved (§1w.10). The approval authorizes no database, process or migration operation; the operational items in §1w.10 remain separate. Phase 4.2 (Gate F.2) and Phase 4.3 (Gate F.3) remain NOT STARTED and NOT AUTHORIZED. All Gate F.1 work is uncommitted in the working tree on `develop` (HEAD `423d122`); nothing is staged, committed or pushed (§1w.9).
+
+History: implemented 16-Oct-2026; an independent review the same day returned NEEDS REMEDIATION (findings F1–F10); a first remediation and a verification review followed (NEEDS REMEDIATION, narrow); this section records the final narrow remediation of 17-Oct-2026. It replaces the earlier text of this section, whose test counts and working-tree statements were inaccurate.
+
+### 1w.1 Decisions
+
+D-1 to D-6 below are the decisions this increment was implemented under. D-7 was approved by project owner decision on 17-Oct-2026.
+
+1. **D-1 — Provider integrations: simulator-only.** No real provider integration, vendor credential, external endpoint or messaging call.
+2. **D-2 — Delivery scope: outbound submission outcomes only.** Inbound webhooks and delivery receipts are deferred.
+3. **D-3 — SMS DLT metadata bound to the template, without a migration.** DLT metadata (`entityId`, `templateId`, optional `headerId`) is stored on the template in the existing `templates.variables` JSONB column (§1w.3) and validated with `validateDltMetadata`. A payload may restate it; it can never supply or replace it (§1w.4). A dedicated migration with first-class DLT columns stays deferred until audit constraints, indexing at scale, or registry synchronisation require it. `headerId` remains optional in Gate F.1; when present it must match exactly in both directions and is never client-supplied. Header (sender ID) resolution, including whether `headerId` becomes mandatory at approval, must be decided before any live-provider implementation and is an acceptance criterion for F.2 design (recorded 17-Oct-2026). No regulatory compliance is claimed.
+4. **D-4 — RCS scope:** text, media and a single rich card with `reply`, `action_open_url`, `action_dial` and `action_view_location`. Carousels and multi-turn flows are deferred to Phase 8E.
+5. **D-5 — RCS URL safety:** every URL-bearing field (`action_open_url.url`, `media.url`, `media.thumbnailUri`, at the top level and inside a card) must parse as `http:` or `https:`.
+6. **D-6 — Normalization and suppression:** `MessagesService` uses the canonical `normalizeAddress(recipient, channel.code)`; org-wide suppressions (`channel_id IS NULL`) are honoured on every channel. Phase 3 compatibility impact: §1w.6.
+7. **D-7 — SMS requires an approved template with valid bound DLT metadata. APPROVED by project owner decision, 17-Oct-2026.** `POST /messages` on the `sms` channel is accepted only with an approved SMS template, belonging to the caller's organization, that carries valid DLT metadata. Template-less SMS is refused with `422 SMS_DLT_METADATA_REQUIRED`. Payload DLT metadata may restate the template's metadata but never supply or replace it. Message content is always the server-rendered approved template. Any future template-less SMS path requires a separate design for DLT and content binding, and a new owner decision.
+
+### 1w.2 SMS validation, in the order `MessagesService` applies it
+
+1. **Payload shape** (`validateSmsPayloadShape`): a plain object; only `variables`, `dlt`, `maxSegments` and `text`; at most 8,192 UTF-8 bytes serialized → otherwise `422 SMS_PAYLOAD_INVALID`.
+2. **Template required** (D-7, approved 17-Oct-2026) → `422 SMS_DLT_METADATA_REQUIRED`. The existing Phase 3 checks still run first: tenant-scoped lookup (`404`), channel match (`422 VALIDATION_FAILED`), `approved` status (`422 TEMPLATE_NOT_APPROVED`).
+3. **Template DLT** present (`422 SMS_DLT_METADATA_REQUIRED`) and re-validated at dispatch (`422 SMS_DLT_METADATA_INVALID`), so rows written outside the API cannot dispatch malformed metadata.
+4. **Payload DLT**, if present, must be valid (`422 SMS_DLT_METADATA_INVALID`; `dlt: null` included) and match the template exactly: `entityId`, `templateId`, and `headerId` presence and value in both directions → otherwise `422 SMS_DLT_TEMPLATE_MISMATCH`.
+5. **Template body** re-validated (`validateSmsTemplateBody`) → `422 SMS_TEMPLATE_INVALID` for placeholder-only, malformed or empty bodies, including approved rows that pre-date these rules.
+6. **Variables** (`validateSmsTemplateVariables`) → `422 SMS_TEMPLATE_VARIABLE_INVALID`: an object or 1-indexed array; every placeholder supplied; no undeclared names; each value a non-empty string or finite number of at most `SMS_TEMPLATE_VARIABLE_MAX_LENGTH` code points, with no control characters and no `{{`/`}}`.
+7. **Rendering** (`renderTemplate`): single pass; must leave no unresolved placeholder and must not be empty.
+8. **`payload.text`**, if present, must be a string equal to the rendered text → otherwise `422 SMS_PAYLOAD_INVALID`. It can restate approved content, never replace it.
+9. **Segment ceiling:** `payload.maxSegments`, if present, must be a positive integer (`422 SMS_PAYLOAD_INVALID`) and can only lower the server ceiling of 10; segmentation runs on the rendered text (`422 SMS_MAX_SEGMENTS_EXCEEDED`). Substituted variables therefore cannot bypass the ceiling.
+10. **Persistence:** the stored payload is built by the server: `{ text: <rendered>, dlt: <template DLT>, variables?, maxSegments? }`. Client copies of derived fields are never persisted.
+
+**Variable-length safeguard.** `SMS_TEMPLATE_VARIABLE_MAX_LENGTH` (env; 1–500; default **30**; `SMS_TEMPLATE_CONSTRAINTS` in `packages/contracts/src/sms.ts`) is an **application safeguard**, not a statement of TRAI/DLT, regulator or operator policy. The applicable current limit has **not been verified**. It must be confirmed against current TRAI/operator DLT requirements, and verified with a qualified professional, before production use. The 8,192-byte payload cap, the 25-placeholder cap and the placeholder-name grammar (`[A-Za-z0-9_]{1,32}`) are likewise application safeguards. **Recorded 17-Oct-2026:** the default of 30 is accepted as an interim, simulator-phase application safeguard only, not a TRAI, DLT or operator requirement. Production SMS remains contingent on verification of the applicable current TRAI and operator requirements (variable length and content, including URLs and numbers).
+
+**Templates API.** `POST /templates` and `PATCH /templates/:id` on an SMS template reject a body that is empty, placeholder-only or malformed (`422 SMS_TEMPLATE_INVALID`). `dlt: null` is refused on create and update (`422 SMS_DLT_METADATA_INVALID`): an omitted `dlt` leaves the stored metadata unchanged, and DLT is never removed silently. Malformed DLT objects are refused at the DTO boundary (`400 VALIDATION_FAILED`). DLT on a non-SMS template is refused (`422 VALIDATION_FAILED`). Approving an SMS template requires a valid body and valid DLT (`422 SMS_TEMPLATE_INVALID` / `SMS_DLT_METADATA_REQUIRED` / `SMS_DLT_METADATA_INVALID`). Approved templates remain immutable (`409`).
+
+### 1w.3 `templates.variables` JSONB compatibility model
+
+`templates.variables` (`jsonb NOT NULL DEFAULT '[]'`, migration `0031`; no `CHECK` constraint; unchanged by Gate F.1) holds one of two shapes:
+
+| Shape | Written by | Meaning |
+|---|---|---|
+| `["name", …]` (legacy array) | Phase 3 rows; any template created or updated without DLT | variable names; no DLT |
+| `{ "names": ["name", …], "dlt": { "entityId", "templateId", "headerId"? } }` | create/update with `dlt` (SMS templates only) | variable names plus bound DLT |
+
+- **Read:** `templateView` unwraps both shapes. `TemplateResponse.variables` is always `string[]` and `TemplateResponse.dlt` is optional, so Phase 3 clients that read `variables` as an array are unaffected.
+- **Update:** omitted `variables` and `dlt` are preserved from either shape.
+- **Dispatch:** `MessagesService` is the only other reader, and only for SMS.
+- **No other consumer** (SQL functions, web console) reads the column directly.
+
+### 1w.4 RCS validation
+
+`validateRcsPayload`:
+- an allowlist of keys per `messageType`, card, media object and suggestion type; unknown or off-type fields are rejected, so validation cannot be bypassed by declaring a different `messageType`;
+- type checks for every field;
+- a 64 KB serialized cap; text, title, description, suggestion-count and postback-size limits;
+- protocol checks (D-5) on every URL-bearing field.
+
+Error codes: `422 RCS_UNSAFE_ACTION_URL` for URL failures, otherwise `422 RCS_PAYLOAD_INVALID`.
+
+### 1w.5 Error codes added by Gate F.1
+
+`SMS_DLT_METADATA_REQUIRED`, `SMS_DLT_TEMPLATE_MISMATCH`, `SMS_DLT_METADATA_INVALID`, `SMS_MAX_SEGMENTS_EXCEEDED`, `SMS_PAYLOAD_INVALID`, `SMS_TEMPLATE_INVALID`, `SMS_TEMPLATE_VARIABLE_INVALID`, `RCS_PAYLOAD_INVALID`, `RCS_UNSAFE_ACTION_URL`. All are HTTP 422. They appear in the OpenAPI error-envelope enum.
+
+### 1w.6 Phase 3 compatibility changes
+
+| Change | Code path | Before (HEAD `423d122`) | Now | Status |
+|---|---|---|---|---|
+| (a) Org-wide suppression applies to every channel, including WhatsApp | `messages.service.ts` step 3 | only `suppressions.channel_id = <channel>` was checked; an org-wide row (`channel_id IS NULL`), which `POST /suppressions` has always been able to create, did not block sends | `channel_id = <channel> OR channel_id IS NULL` | **Confirmed security requirement.** `DATABASE.md` (`suppressions`: "channel_id NULL (NULL = all channels)") already specified it; the Phase 3 behaviour was a defect. Tests: `phase4_1-data-foundation.sec-spec.ts` §5 (SMS, RCS and WhatsApp blocked by an org-wide row; a WhatsApp-only row does not block SMS). |
+| (b) RCS and voice recipients normalized to E.164 | `messages.service.ts` step 2 → `normalizeAddress` | RCS and voice recipients were only `trim()`med, while contacts and suppressions already normalized them to E.164 (`normalizeAddress` at HEAD) | E.164 enforced (`400 PHONE_MISSING_COUNTRY_CODE` / `INVALID_PHONE_NUMBER`) | **Confirmed security requirement for suppression consistency:** a formatted recipient (`+1 202 555 0999`) no longer slips past an E.164 suppression (test in §5). **Acknowledged by project owner decision, 17-Oct-2026:** voice recipients are normalized to E.164, consistent with contacts and suppressions; non-E.164 voice recipients are refused with `400 PHONE_MISSING_COUNTRY_CODE` / `INVALID_PHONE_NUMBER`. This acknowledges existing behaviour only and does not authorize a live voice-send path; no Phase 3 voice send path or test exists. |
+| (c) Template-less SMS refused | `messages.service.ts` step 6b | `POST /messages` on `sms` accepted any payload with or without a template | refused without an approved SMS template with valid DLT | **Approved by project owner decision, 17-Oct-2026** (D-7). No Phase 3 test sent template-less SMS through `/messages`; Phase 3 suites pass unchanged. |
+
+No change was made to the dispatcher, fencing, CircuitAdmission, fallback or terminal-state code.
+
+### 1w.7 OpenAPI
+
+The artifact changes only by:
+- the `dlt` property (`SmsDltMetadataDto`) on `CreateTemplateDto` and `UpdateTemplateDto`;
+- the nine error codes in §1w.5.
+
+`openapi:check` passes.
+
+**Known gap, not closed in Gate F.1:** the template routes declare no 2xx response schema, so `TemplateResponse` (including `dlt`) is not represented. The same is true of every Phase 3 resource (contacts, identities, suppressions, templates, messages) and of workspaces: 29 operations in total. Adding one resource alone would leave the contract inconsistent. The response-schema suite validates real responses against each declared schema, so even one resource is more than a documentation edit.
+
+**Proposal (needs owner authorization):** add documentation-only response classes to `openapi-schemas.ts` for the Phase 3 views, starting with `TemplateView`, with `dlt` optional and `variables: string[]`. Attach them with `@ApiOkResponse`/`@ApiCreatedResponse`, and extend `openapi-responses.sec-spec.ts` to validate real responses for both `templates.variables` shapes.
+
+**Recorded 17-Oct-2026: deferred.** The inherited response-schema gap (29 operations, including `TemplateResponse.dlt`) moves to a dedicated API-contract milestone that requires its own authorization. It does not block Gate F.1.
+
+### 1w.8 Database provenance and test environment
+
+- **No schema change, no migration.** `packages/db/migrations` and `packages/db/src/schema` are unchanged from HEAD.
+- **Migration 0033 history discrepancy: UNRESOLVED integrity issue.** The `acc` row for 0033 (`created_at 1791996046914`) records the hash of the committed file (`dfc05dad…`). It was edited in place on 16-Oct-2026 at 17:46:47 UTC by a Gemini agent session (`UPDATE drizzle.__drizzle_migrations SET hash = …`), replacing the applied hash `914e700a…`. Evidence: the session's local transcript (step 11532); the leftover clone `acc_clone_436072f90852` (created 16-Oct-2026 10:31 UTC), which still records `914e700a…`; and this review's earlier observation of the mismatch. The same transcript shows 0033 applied at 16:40:46 UTC on 14-Oct-2026 and edited several times afterwards, with the edits patched into `acc` directly, outside the migration runner: `CREATE OR REPLACE FUNCTION app_channel_resolve` and `fn_messages_terminal_guard`, and `DROP/CREATE POLICY` on `message_attempts` (14-Oct-2026, 17:18–17:37 UTC). It also shows `db:migrate` run directly against `acc` on 15-Oct-2026. No rationale for the hash edit is recorded, and the version of 0033 that produced `914e700a…` is in no commit.
+  - **Schema equivalence:** shown separately and only for the schema. `pg_dump --schema-only` of `acc`, compared with a clone of `acc_r015_base` migrated through the committed `0025`–`0034`, differs in 5 lines, none in Phase 3 objects: the `public` schema owner, its comment, `REVOKE USAGE ON SCHEMA public FROM PUBLIC`, and two column grants on `teams` to `postgres`. Their origin is not established.
+  - **Migration-history integrity:** **not** valid. The 0033 row asserts an application that did not happen as recorded. Matching schemas do not repair this.
+  - **Recovery (owner-authorized only; none of it performed):** (1) treat `acc` as non-canonical evidence for migration-history claims; (2) rebuild a reference database from `template0` (or from `acc_r015_base`) by applying the committed migrations through a role-neutral runner (§1w.8, last bullet), and record its hash fingerprint; (3) decide whether to retire `acc` or rebuild it the same way; (4) do not restore or re-edit the 0033 row in place; (5) decide separately on the leftover `acc_clone_436072f90852`, which is still held open by an idle `acc-provider-config-listener` connection from a leaked test process.
+- **Two previously failing security tests: environmental, now demonstrated.**
+  - On a clean, committed-migration clone, unmodified, `dev-fixture.sec-spec.ts` and `organization-administration.sec-spec.ts` passed 93/93.
+  - On clones of `acc` they failed because `acc` holds 8 leftover platform-role holders (`@example.test`, created 16-Oct-2026) and 158 organizations.
+  - Both tests were then made data-independent without weakening them. dev-fixture now asserts the platform-role holder delta across the fixture run equals exactly the operator grant, which is identical to the old assertion on a fresh database. organization-administration now follows the `limit=100` cursor to the end before comparing with the `limit=1` walk, with a timeout sized for that walk.
+  - Both now pass on clean and on shared data (§1w.9).
+  - **Recorded 17-Oct-2026:** the dev-fixture delta assertion is retained. Its exact guarantee and limitation are documented in `TESTING.md` §6r: it proves the fixture run adds no platform-role grant beyond the operator's; it is not a database-wide integrity check.
+- **Role-neutral clean database (used for this evidence).** The documented procedure (`HANDOFF.md` §8) runs `npm run db:migrate` inside the clone. That CLI ends with `ALTER ROLE … LOGIN PASSWORD` on the four application roles, which are cluster-wide and shared by every database. For Gate F.1 evidence, a clone of `acc_r015_base` was instead migrated by a script that calls only the drizzle migrator and refuses any database not named `acc_r015_base_clone_<12 hex>`. Migrations `0025`–`0034` contain no role DDL beyond 0032's `CREATE ROLE acc_dispatch` if absent; the role already exists. A digest of `pg_authid` (attributes, password hashes and memberships) was identical before and after every run.
+
+### 1w.9 Verification evidence (17-Oct-2026, current working tree)
+
+Commands ran from the repository root with `NODE_ENV` unset and `RATE_LIMIT_AUTH_MAX=10 RATE_LIMIT_REFRESH_MAX=30`; database suites ran through `scripts/with-db-clone.mjs`.
+
+| Check | Result |
+|---|---|
+| `jest --selectProjects unit --testPathPatterns messages/sms/` | 54/54 |
+| `jest --selectProjects unit --testPathPatterns messages/rcs/` | 28/28 |
+| `@acc/api` unit (all) | 610/610, 40 suites |
+| `@acc/db` unit | 5/5 |
+| `phase4_1-data-foundation.sec-spec.ts` | 66/66 (clean clone and `acc` clone) |
+| Integration — `acc` clone | 153/153, 10 suites |
+| Security — `acc` clone | 1544/1544, 58 suites |
+| Integration — clean clone (`acc_r015_base` + committed migrations) | 153/153, 10 suites |
+| Security — clean clone | 1544/1544, 58 suites |
+| `dev-fixture` + `organization-administration` — clean clone, before the test fixes | 93/93 |
+| `npm run typecheck`, `npm run lint`, `npm run format:check` | pass |
+| `npm run openapi:check` | pass ("metadata.ts is current"; "openapi.v1.json matches the generated document") |
+| `git diff --check` | clean |
+| Disposable databases | every clone dropped and verified gone; template row-count fingerprints unchanged; role digest unchanged |
+
+Counts in earlier drafts of this section (11/18, 24/22, 29/29, 44/44, 568, 582) describe earlier states of the work and are superseded.
+
+**Git state:** branch `develop`, HEAD `423d122` (equal to `origin/develop`). Gate F.1 changes are uncommitted and unstaged. See `HANDOFF.md` §2 for the file list.
+
+### 1w.10 Owner decisions
+
+**Recorded (17-Oct-2026):**
+
+1. **D-7 approved** by project owner decision (§1w.1).
+2. **Voice E.164 acknowledged** by project owner decision (§1w.6 (b)); existing behaviour only, no live voice-send path authorized.
+3. **Interim variable limit** (default 30) recorded as a simulator-phase application safeguard, not a regulatory requirement (§1w.2).
+4. **OpenAPI response-schema gap deferred** to a separately authorized API-contract milestone (§1w.7).
+5. **`headerId` optional in Gate F.1**; header resolution to be decided before live-provider implementation (§1w.1, D-3).
+6. **Fixture delta assertion retained**, with its guarantee and limitation documented (`TESTING.md` §6r; §1w.8).
+
+**Open — each requires separate owner authorization; none is part of a Gate F.1 approval:**
+
+- **E. Migration-history recovery** (§1w.8).
+- **F. Evidence preservation, termination of the orphaned test process, and removal of `acc_clone_436072f90852`** (§1w.8). Evidence must be preserved first.
+- **G. Separating schema migration from shared PostgreSQL role/password reconciliation.** Prerequisite for E.
+
+**Migration-integrity prerequisite (owner decision, 17-Oct-2026):** no migration `0035` or later may be written or applied until G and then E are resolved.
+
+**Gate F.1: APPROVED by project owner decision, 17-Oct-2026.**
 
 ## 3. Risks explicitly accepted by design (not oversights)
 

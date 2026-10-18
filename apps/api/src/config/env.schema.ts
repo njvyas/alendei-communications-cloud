@@ -1,3 +1,4 @@
+import { SMS_TEMPLATE_CONSTRAINTS } from '@acc/contracts';
 import { z } from 'zod';
 
 /**
@@ -131,6 +132,15 @@ export const envSchema = z.object({
   RATE_LIMIT_REFRESH_MAX: positiveInt.default(30),
   /** Failed API-key presentations per source IP per auth window. */
   RATE_LIMIT_API_KEY_FAILURE_MAX: positiveInt.default(20),
+
+  // --- SMS safeguards (Phase 4.1, Gate F.1) -------------------------------
+  /**
+   * Maximum characters per substituted SMS template variable. An application
+   * safeguard, not a regulatory or operator limit (`SMS_TEMPLATE_CONSTRAINTS`).
+   */
+  SMS_TEMPLATE_VARIABLE_MAX_LENGTH: positiveInt
+    .max(SMS_TEMPLATE_CONSTRAINTS.VARIABLE_MAX_LENGTH_CEILING)
+    .default(SMS_TEMPLATE_CONSTRAINTS.DEFAULT_VARIABLE_MAX_LENGTH),
 
   // --- Observability -------------------------------------------------------
   OTEL_ENABLED: booleanFromEnv.default(false),

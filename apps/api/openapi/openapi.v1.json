@@ -949,6 +949,9 @@
             "format": "uuid",
             "type": "string"
           },
+          "dlt": {
+            "$ref": "#/components/schemas/SmsDltMetadataDto"
+          },
           "name": {
             "maxLength": 200,
             "minLength": 1,
@@ -1221,6 +1224,15 @@
               "TEMPLATE_NOT_APPROVED",
               "NO_ACTIVE_PROVIDER_ASSIGNMENT",
               "MESSAGE_NOT_FOUND",
+              "SMS_DLT_METADATA_REQUIRED",
+              "SMS_DLT_TEMPLATE_MISMATCH",
+              "SMS_DLT_METADATA_INVALID",
+              "SMS_MAX_SEGMENTS_EXCEEDED",
+              "SMS_PAYLOAD_INVALID",
+              "SMS_TEMPLATE_INVALID",
+              "SMS_TEMPLATE_VARIABLE_INVALID",
+              "RCS_PAYLOAD_INVALID",
+              "RCS_UNSAFE_ACTION_URL",
               "VALIDATION_FAILED",
               "RESOURCE_NOT_FOUND",
               "RESOURCE_CONFLICT",
@@ -2690,6 +2702,25 @@
         ],
         "type": "object"
       },
+      "SmsDltMetadataDto": {
+        "additionalProperties": false,
+        "properties": {
+          "entityId": {
+            "type": "string"
+          },
+          "headerId": {
+            "type": "string"
+          },
+          "templateId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "entityId",
+          "templateId"
+        ],
+        "type": "object"
+      },
       "Team": {
         "additionalProperties": false,
         "properties": {
@@ -3033,6 +3064,9 @@
             "maxLength": 10000,
             "minLength": 1,
             "type": "string"
+          },
+          "dlt": {
+            "$ref": "#/components/schemas/SmsDltMetadataDto"
           },
           "name": {
             "maxLength": 200,
