@@ -93,6 +93,7 @@ jobs:
       DATABASE_APP_PASSWORD: acc_app_ci_password
       DATABASE_AUTH_PASSWORD: acc_auth_ci_password
       DATABASE_RELAY_PASSWORD: acc_relay_ci_password
+      DATABASE_DISPATCH_PASSWORD: acc_dispatch_ci_password
       REDIS_URL: redis://localhost:6379
       KAFKA_BROKERS: localhost:19092
       SECRETS_BACKEND: env
@@ -116,6 +117,15 @@ jobs:
 
       - name: Migrate from a clean database
         run: npm run db:migrate
+
+      # Schema migration never changes roles. This ephemeral service container
+      # needs the application roles to log in, so CI reconciles them explicitly;
+      # the command refuses test contexts unless CI=true and this opt-in are set.
+      - name: Grant LOGIN to the application roles (ephemeral CI container only)
+        run: npm run db:roles:reconcile
+        env:
+          ACC_ROLE_RECONCILE_TARGET: acc
+          ACC_ROLE_RECONCILE_EPHEMERAL_CI: '1'
 
       - name: Seed platform reference data
         run: npm run db:seed

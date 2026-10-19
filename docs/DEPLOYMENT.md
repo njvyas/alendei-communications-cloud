@@ -98,7 +98,7 @@ Frozen normatively in `TENANCY.md` §7a: a hostname may select branding and must
 
 None of the following exists in the repository today. They are the deployment-artifacts track (`ROADMAP.md`), deliberately out of scope for Phase 1B.6.3:
 
-1. Dockerfile(s) for API and workers · 2. image publication · 3. digest pinning · 4. migration job (pre-upgrade hook) · 5. Helm chart / Kubernetes manifests · 6. per-deployment values files · 7. secret references wired to a real backend · 8. health/readiness wiring (the endpoints exist; the probes do not) · 9. backup/restore automation · 10. rollback automation · 11. shared-deployment promotion pipeline · 12. dedicated-deployment provisioning · 13. private/on-prem bundle.
+1. Dockerfile(s) for API and workers · 2. image publication · 3. digest pinning · 4. migration job (pre-upgrade hook; must be a single runner per database — `db:migrate` takes no lock, see `README.md`) · 5. Helm chart / Kubernetes manifests · 6. per-deployment values files · 7. secret references wired to a real backend · 8. health/readiness wiring (the endpoints exist; the probes do not) · 9. backup/restore automation · 10. rollback automation · 11. shared-deployment promotion pipeline · 12. dedicated-deployment provisioning · 13. private/on-prem bundle.
 
 **Nothing can currently be deployed anywhere**, shared included, until at least items 1–5 exist.
 

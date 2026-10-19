@@ -90,7 +90,7 @@ const CATEGORIES: Category[] = [
       ],
       'apps/api/src/openapi/openapi-cli.ts': ['KAFKA_BROKERS'],
       'apps/api/src/provider-adapters/adapter-registry.ts': ['published'],
-      'packages/db/src/cli/migrate.ts': ['DATABASE_RELAY_PASSWORD', 'RELAY', 'relayPassword'],
+      'packages/db/src/cli/role-reconcile.ts': ['DATABASE_RELAY_PASSWORD', 'RELAY'],
       'packages/db/src/constants.ts': ['RELAY', 'acc_relay'],
     },
   },

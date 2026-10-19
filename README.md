@@ -60,11 +60,24 @@ Migrations run as the schema owner; the application never connects as a
 principal that can bypass Row-Level Security.
 
 ```bash
-npm run db:migrate      # apply migrations, then grant LOGIN to acc_app/acc_auth/acc_relay
+npm run db:migrate      # verify migration history, then apply pending migrations (schema only)
+npm run db:roles:reconcile  # grant LOGIN + passwords to acc_app/acc_auth/acc_relay/acc_dispatch
 npm run db:seed         # permission catalogue, platform roles, default reseller
-npm run db:reset        # drop, migrate and seed (development/test only)
+npm run db:reset        # drop, migrate and seed (development/test only; roles untouched)
 npm run db:generate     # regenerate a Drizzle migration after a schema change
 ```
+
+`db:migrate` refuses to run if the recorded migration history does not match the
+committed journal and files (edited, missing, extra or out-of-order migrations).
+It never changes roles. Roles are cluster-wide, so `db:roles:reconcile` is a separate,
+deliberate step: it requires `ACC_ROLE_RECONCILE_TARGET` to name the database in
+`DATABASE_ADMIN_URL`, every `DATABASE_*_PASSWORD` (including
+`DATABASE_DISPATCH_PASSWORD`; there is no default), and refuses test contexts,
+with-db-clone clones, `acc_tmp_*` and reference databases. Run it once on a new
+cluster, or when a role password changes.
+
+Run only one `db:migrate` per database at a time. drizzle-orm 0.45.x takes no
+migration lock, so concurrent runners can race on the same pending migration.
 
 `db:generate` emits table DDL only. RLS policies, triggers and grants are
 hand-written SQL appended to the same migration file, so a table and its policies

@@ -1,0 +1,5 @@
+# Migration files are hashed byte-for-byte (SHA-256) into drizzle.__drizzle_migrations,
+# and `db:migrate` refuses any history that does not match. Never convert their line
+# endings on checkout (e.g. core.autocrlf=true on Windows), or every hash changes.
+packages/db/migrations/*.sql -text
+packages/db/migrations/meta/*.json -text

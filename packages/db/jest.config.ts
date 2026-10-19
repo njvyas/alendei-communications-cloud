@@ -26,6 +26,13 @@ const config: Config = {
       setupFilesAfterEnv: ['<rootDir>/src/test/setup.ts'],
       testTimeout: 30_000,
     },
+    {
+      // Opt-in only (`test:disposable`): needs ACC_DISPOSABLE_CLUSTER_URL and a
+      // pristine, disposable cluster; never part of `test` or CI.
+      ...common,
+      displayName: 'disposable',
+      testMatch: ['<rootDir>/src/test/**/*.disposable-spec.ts'],
+    },
   ],
 };
 

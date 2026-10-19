@@ -19,6 +19,7 @@
     "clean": "npm run clean --workspaces --if-present && rm -rf node_modules/.cache",
     "db:generate": "npm run db:generate --workspace @acc/db",
     "db:migrate": "npm run db:migrate --workspace @acc/db",
+    "db:roles:reconcile": "npm run db:roles:reconcile --workspace @acc/db",
     "db:reset": "npm run db:reset --workspace @acc/db",
     "db:seed": "npm run db:seed --workspace @acc/db",
     "dev:api": "npm run dev --workspace @acc/api",

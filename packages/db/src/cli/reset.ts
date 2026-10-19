@@ -1,6 +1,10 @@
 /**
  * Drops and rebuilds the local schema, then re-applies migrations and seeds.
  * Refuses to run against anything but a development or test environment.
+ *
+ * The migration step is schema-only (`migrate.ts`): a reset never changes the
+ * cluster-global application roles. On a brand-new cluster, grant them LOGIN
+ * separately with `npm run db:roles:reconcile`.
  */
 import { Pool } from 'pg';
 import { execFileSync } from 'node:child_process';

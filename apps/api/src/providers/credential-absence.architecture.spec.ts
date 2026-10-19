@@ -101,7 +101,7 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
       'apps/api/src/openapi/accepted-credentials.decorator.ts: AcceptedCredentials',
       'apps/api/src/openapi/accepted-credentials.decorator.ts: CREDENTIALS',
       'apps/api/src/openapi/accepted-credentials.decorator.ts: Credential',
-      'packages/db/src/cli/migrate.ts: RoleCredential', // database role passwords (deployment plane)
+      'packages/db/src/cli/role-reconcile.ts: RoleCredential', // database role passwords (deployment plane)
     ]);
   });
 

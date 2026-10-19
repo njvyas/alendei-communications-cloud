@@ -15,11 +15,13 @@
     "clean": "rm -rf dist *.tsbuildinfo",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/cli/migrate.ts",
+    "db:roles:reconcile": "tsx src/cli/reconcile-roles.ts",
     "db:seed": "tsx src/cli/seed.ts",
     "db:reset": "tsx src/cli/reset.ts",
     "test": "npm run test:unit && npm run test:integration",
     "test:unit": "jest --selectProjects unit --passWithNoTests",
-    "test:integration": "jest --selectProjects integration --runInBand --passWithNoTests"
+    "test:integration": "jest --selectProjects integration --runInBand --passWithNoTests",
+    "test:disposable": "jest --selectProjects disposable --runInBand"
   },
   "dependencies": {
     "@acc/contracts": "*",
