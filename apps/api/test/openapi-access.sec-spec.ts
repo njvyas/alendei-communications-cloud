@@ -43,6 +43,11 @@ import {
 } from './auth-harness';
 import { bootApp, carriesDocument, signIn, type Booted } from './openapi-support';
 
+/** The host's dispatch credential (CI's own), else the development password (a local cluster). */
+const HOST_DISPATCH_PASSWORD =
+  process.env.DATABASE_DISPATCH_PASSWORD ?? DEVELOPMENT_DISPATCH_PASSWORD;
+const DISPATCH_IS_DEVELOPMENT = HOST_DISPATCH_PASSWORD === DEVELOPMENT_DISPATCH_PASSWORD;
+
 /** What the production-mode validation below saw, one entry per production boot. */
 interface ProductionValidation {
   problems: readonly string[];
@@ -61,18 +66,24 @@ jest.mock('../src/config/env.schema', () => {
     '../src/config/env.schema',
   );
   const DISPATCH = /^DATABASE_DISPATCH_PASSWORD must not be the development password /;
-  const HOST_ONLY_BY_ENV: Record<string, readonly RegExp[]> = {
-    production: [
-      /^SECRETS_BACKEND=env is not permitted when APP_ENV=production:/,
-      /^DATABASE_SSL must be true when APP_ENV=production /,
-      DISPATCH,
-    ],
-    staging: [DISPATCH],
+  // The dispatch refusal is host-only only when the host's acc_dispatch has no
+  // password but the development one (a local cluster); CI configures its own.
+  const hostOnlyFor = (raw: Record<string, unknown>): readonly RegExp[] | undefined => {
+    const dispatch =
+      raw.DATABASE_DISPATCH_PASSWORD === actual.DEVELOPMENT_DISPATCH_PASSWORD ? [DISPATCH] : [];
+    if (raw.APP_ENV === 'production') {
+      return [
+        /^SECRETS_BACKEND=env is not permitted when APP_ENV=production:/,
+        /^DATABASE_SSL must be true when APP_ENV=production /,
+        ...dispatch,
+      ];
+    }
+    return raw.APP_ENV === 'staging' ? dispatch : undefined;
   };
   return {
     ...actual,
     validateEnv(raw: Record<string, unknown>) {
-      const HOST_ONLY = HOST_ONLY_BY_ENV[String(raw.APP_ENV)];
+      const HOST_ONLY = hostOnlyFor(raw);
       if (!HOST_ONLY) return actual.validateEnv(raw);
       let problems: readonly string[] = [];
       try {
@@ -135,10 +146,11 @@ const UI = [
 const envFor = (appEnv: string, enabled: boolean): Record<string, string> => ({
   APP_ENV: appEnv,
   OPENAPI_UI_ENABLED: enabled ? 'true' : 'false',
-  // Staging and production name a dispatch credential; on a test host the only
-  // one that logs in is the development password, which validation refuses (B3).
+  // Staging and production name a dispatch credential (B3): the host's own when it
+  // has one (CI), otherwise the development password, the only one a local
+  // cluster's acc_dispatch accepts — and which validation then refuses.
   ...(appEnv === 'staging' || appEnv === 'production'
-    ? { DATABASE_DISPATCH_PASSWORD: DEVELOPMENT_DISPATCH_PASSWORD }
+    ? { DATABASE_DISPATCH_PASSWORD: HOST_DISPATCH_PASSWORD }
     : {}),
   // Production states every hardening requirement a test host can meet.
   ...(appEnv === 'production'
@@ -316,22 +328,22 @@ describe('Phase 1C.3 — OpenAPI exposure and access (real bootstrap)', () => {
     ].sort();
     expect(documentation).toEqual(DOCUMENTATION_ROUTES[mode]);
     const seen = productionValidations().slice(validationsBefore);
+    const dispatchRefusal = DISPATCH_IS_DEVELOPMENT
+      ? [expect.stringMatching(/^DATABASE_DISPATCH_PASSWORD must not be the development password/)]
+      : [];
     if (appEnv === 'production') {
       expect(seen.length).toBeGreaterThan(0);
       for (const { problems } of seen) {
-        expect(problems).toHaveLength(3);
-        expect(problems[0]).toMatch(/^SECRETS_BACKEND=env is not permitted/);
-        expect(problems[1]).toMatch(/^DATABASE_SSL must be true/);
-        expect(problems[2]).toMatch(
-          /^DATABASE_DISPATCH_PASSWORD must not be the development password/,
-        );
+        expect(problems).toEqual([
+          expect.stringMatching(/^SECRETS_BACKEND=env is not permitted/),
+          expect.stringMatching(/^DATABASE_SSL must be true/),
+          ...dispatchRefusal,
+        ]);
       }
     } else if (appEnv === 'staging') {
       expect(seen.length).toBeGreaterThan(0);
       for (const { problems } of seen) {
-        expect(problems).toEqual([
-          expect.stringMatching(/^DATABASE_DISPATCH_PASSWORD must not be the development password/),
-        ]);
+        expect(problems).toEqual(dispatchRefusal);
       }
     } else {
       expect(seen).toHaveLength(0);
