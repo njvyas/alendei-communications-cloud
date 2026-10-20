@@ -173,6 +173,14 @@ test.describe('Phase 3.5 — WhatsApp Management Console (Gate E.5)', () => {
     await expect(monitor).toBeVisible({ timeout: 5000 });
     await expect(monitor.getByTestId('message-status-badge')).toBeVisible();
     await expect(monitor.getByTestId('attempts-table')).toBeVisible();
+
+    // B1: the API's dispatch loop settles the message with nothing else driving
+    // it; the monitor's bounded polling shows the final state and the attempt.
+    await expect(monitor.getByTestId('message-status-badge')).toHaveText(
+      /^(PROVIDER_ACCEPTED|FAILED|OUTCOME_UNKNOWN)$/,
+      { timeout: 15_000 },
+    );
+    await expect(monitor.locator('[data-testid^="attempt-row-"]').first()).toBeVisible();
   });
 
   // ---------------------------------------------------------------------------

@@ -100,7 +100,7 @@ None of the following exists in the repository today. They are the deployment-ar
 
 1. Dockerfile(s) for API and workers · 2. image publication · 3. digest pinning · 4. migration job (pre-upgrade hook; must be a single runner per database — `db:migrate` takes no lock, see `README.md`) · 5. Helm chart / Kubernetes manifests · 6. per-deployment values files · 7. secret references wired to a real backend · 8. health/readiness wiring (the endpoints exist; the probes do not) · 9. backup/restore automation · 10. rollback automation · 11. shared-deployment promotion pipeline · 12. dedicated-deployment provisioning · 13. private/on-prem bundle.
 
-**Nothing can currently be deployed anywhere**, shared included, until at least items 1–5 exist.
+**Controlled-MVP exception (first release, 20-Oct-2026):** `deploy/api.Dockerfile`, `deploy/web.Dockerfile` and `deploy/compose.release.yml` provide items 1, 4 and 8 for a single-host Docker Compose deployment, operated by `docs/RELEASE.md`. Images are built locally, not published or digest-pinned, and there is no Helm chart; the production topology below is unchanged and still PLANNED.
 
 ## 1. Environment strategy
 

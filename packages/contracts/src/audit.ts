@@ -43,6 +43,8 @@ export const AUDIT_ACTIONS = {
   USER_UPDATED: 'user.updated',
   USER_DISABLED: 'user.disabled',
   USER_REACTIVATED: 'user.reactivated',
+  /** An invited user's first credential, set by the operator-run activation command (MVP). */
+  USER_ACTIVATED: 'user.activated',
 
   ROLE_CREATED: 'role.created',
   ROLE_UPDATED: 'role.updated',
@@ -174,6 +176,7 @@ export const SECURITY_SENSITIVE_AUDIT_ACTIONS: readonly AuditAction[] = Object.f
   AUDIT_ACTIONS.USER_INVITED,
   AUDIT_ACTIONS.USER_DISABLED,
   AUDIT_ACTIONS.USER_REACTIVATED,
+  AUDIT_ACTIONS.USER_ACTIVATED,
   AUDIT_ACTIONS.SESSION_REVOKED,
   AUDIT_ACTIONS.SESSION_REVOKED_ALL,
   // Organization creation and lifecycle (Phase 1C.1a): each changes who can act

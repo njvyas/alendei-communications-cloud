@@ -141,7 +141,7 @@ The `Assignable at scope_type` column below is `roles.allowed_scope_types` from 
 
 | Role | Assignable at `scope_type` | Default permissions focus |
 |---|---|---|
-| `org_admin` | `organization` | Full control within the organization: users, workspaces, teams, roles, API keys, audit |
+| `org_admin` | `organization` | Full control within the organization: users, workspaces, teams, roles, API keys, audit, and its contacts, templates, suppressions and messages (the eight tenant-content keys, §4c — first release, 20-Oct-2026) |
 | `workspace_manager` | `organization`, `workspace` | Manage a workspace's teams and members; contacts/templates/campaigns/journeys as those phases land |
 | `campaign_editor` | `organization`, `workspace`, `team` | Create/edit campaigns and journeys; never billing or user management |
 | `agent` | `organization`, `workspace`, `team` | Unified inbox access; cannot send campaigns |
@@ -357,7 +357,7 @@ Otherwise the ordinary refusal stands unchanged (`403 AUTHZ_CANNOT_GRANT_UNHELD_
 
 **Revocation (ADR-015 R-11; organizational recovery).** `DELETE /role-assignments/:id` runs the same guard 4 against the stored grant (the subject is the grant's user and scope), so a revocation is delegated exactly when a grant would be: the same six conditions, decided by the same function (`assertWithinActorAuthority` → `delegationApplies`), never a copy. A delegated revocation's `user_role.revoked` audit row carries `metadata.delegation = true` and the sorted `metadata.delegatedPermissions`; an ordinary one carries neither. Condition 6 can never be what decides a revocation: an actor revoking its own grant holds that grant's permissions at its scope through the grant itself, so the ordinary rule already admits it and delegation is not consulted (an ordinary self-revocation, as before). The last-organization-administrator rule (§7c) applies to every revocation, delegated or not.
 
-No seeded role carries a tenant-content key today (§1a), so delegation has no production effect until Phase 3.1 gives `org_admin` content permissions; the tests use disposable fixtures.
+Since the first release (20-Oct-2026) the seeded `org_admin` carries the eight tenant-content keys (§4c) and no other seeded role carries any. Delegation is therefore how a platform principal appoints an organization's administrator: without it no principal could confer `messages.send` at all, because a custom role can only carry permissions its author holds and platform roles never carry content keys. A reseller administrator, holding no content key, can no longer appoint an `org_admin` itself.
 
 ### 7a. The last-platform-admin invariant (Phase 1B.5.6)
 

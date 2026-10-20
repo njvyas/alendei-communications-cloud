@@ -871,14 +871,23 @@ export class DispatcherService {
   }
 
   /**
-   * Runs a single dispatch cycle: claims batch and processes each.
+   * Runs a single dispatch cycle: claims up to `limit` messages and processes
+   * them together. Every claim in a batch shares one 30 s lease, sized for a
+   * single claim's longest legitimate hold (ADR-014 D18), so they cannot be
+   * processed one after another: ten submissions at the 3 s submission timeout
+   * would outlive it. The dispatch pool bounds how many run at once.
    */
   async dispatchBatch(limit = 10): Promise<DispatchProcessResult[]> {
     const claims = await this.claimBatch(limit);
-    const results: DispatchProcessResult[] = [];
-    for (const claim of claims) {
-      results.push(await this.processClaim(claim));
-    }
-    return results;
+    const settled = await Promise.allSettled(claims.map((claim) => this.processClaim(claim)));
+    return settled.map((result, i) =>
+      result.status === 'fulfilled'
+        ? result.value
+        : {
+            messageId: claims[i]?.messageId ?? '',
+            outcome: 'unknown',
+            error: String(result.reason),
+          },
+    );
   }
 }

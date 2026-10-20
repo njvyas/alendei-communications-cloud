@@ -28,6 +28,7 @@ import {
   TENANT_CONTENT_PERMISSIONS,
   TENANT_ROLE_DEFINITIONS,
   TENANT_ROLE_KEYS,
+  isTenantContentPermission,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
@@ -46,11 +47,13 @@ interface Org {
 }
 
 const DELEGATE = PERMISSIONS.PLATFORM_ROLES_DELEGATE_TENANT;
-const ORG_ADMIN_PERMISSIONS = TENANT_ROLE_DEFINITIONS.find(
+const ORG_ADMIN_DEFINITION = TENANT_ROLE_DEFINITIONS.find(
   (r) => r.key === TENANT_ROLE_KEYS.ORG_ADMIN,
-)!.permissions;
+)!.permissions as readonly string[];
+/** org_admin's non-content permissions — what a delegator must hold (R-6). */
+const ORG_ADMIN_PERMISSIONS = ORG_ADMIN_DEFINITION.filter((k) => !isTenantContentPermission(k));
 /** The fixture content keys attached to the delegable org_admin (sorted). */
-const FIXTURE_CONTENT = ['contacts.read', 'templates.read'];
+const FIXTURE_CONTENT = ORG_ADMIN_DEFINITION.filter(isTenantContentPermission).sort();
 
 describe('tenant delegation on grant (ADR-015 R-6) and the content-key API surface (R-5)', () => {
   let h: Harness;
@@ -120,8 +123,26 @@ describe('tenant delegation on grant (ADR-015 R-6) and the content-key API surfa
     await h.admin.transaction(async (tx) => {
       await tx.execute(sql`select set_config('app.provisioning','on',true)`);
       for (const permissionId of ids) {
-        await tx.insert(schema.rolePermissions).values({ roleId, permissionId });
+        await tx
+          .insert(schema.rolePermissions)
+          .values({ roleId, permissionId })
+          .onConflictDoNothing();
       }
+    });
+  }
+
+  async function detachFixture(roleId: string, keys: readonly string[]) {
+    const ids = await permissionIds(keys);
+    await h.admin.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('app.provisioning','on',true)`);
+      await tx
+        .delete(schema.rolePermissions)
+        .where(
+          and(
+            eq(schema.rolePermissions.roleId, roleId),
+            inArray(schema.rolePermissions.permissionId, ids),
+          ),
+        );
     });
   }
 
@@ -255,6 +276,15 @@ describe('tenant delegation on grant (ADR-015 R-6) and the content-key API surfa
     u = await plantOrg('u');
 
     // Disposable-test fixtures: content keys on this clone's test roles only.
+    // A seeded org_admin carries every content key (MVP); two are reshaped:
+    // c's is content-free (the ordinary-grant control), and t2's keeps only
+    // contacts.read, the content key conferrable at the workspace scope it is
+    // widened to below.
+    await detachFixture(c.roles[TENANT_ROLE_KEYS.ORG_ADMIN]!, FIXTURE_CONTENT);
+    await detachFixture(
+      t2.roles[TENANT_ROLE_KEYS.ORG_ADMIN]!,
+      FIXTURE_CONTENT.filter((k) => k !== 'contacts.read'),
+    );
     await attachFixture(t.roles[TENANT_ROLE_KEYS.ORG_ADMIN]!, FIXTURE_CONTENT);
     await attachFixture(t.roles[TENANT_ROLE_KEYS.WORKSPACE_MANAGER]!, ['contacts.read']);
     await attachFixture(u.roles[TENANT_ROLE_KEYS.ORG_ADMIN]!, ['contacts.read']);
@@ -524,7 +554,7 @@ describe('tenant delegation on grant (ADR-015 R-6) and the content-key API surfa
         scopeType: 'organization',
         scopeId: t.orgId,
       });
-      await expectRefused(res, target, roleId, ['contacts.read']);
+      await expectRefused(res, target, roleId, FIXTURE_CONTENT);
     });
 
     it('a grant at workspace scope (org_admin widened by fixture to admit it)', async () => {

@@ -22,6 +22,7 @@ import {
   PERMISSIONS,
   TENANT_ROLE_DEFINITIONS,
   TENANT_ROLE_KEYS,
+  isTenantContentPermission,
 } from '@acc/contracts';
 import { ORG_ADMIN_LOCK_CLASS, PLATFORM_ADMIN_LOCK_KEY, schema } from '@acc/db';
 import { eq, sql } from 'drizzle-orm';
@@ -32,9 +33,10 @@ import { TenantDatabase } from '../src/database/tenant-database.service';
 import { purgeAudit, startHarness, type Harness } from './auth-harness';
 import { RevocationWorld, url, type Org, type Person } from './revocation-fixtures';
 
+/** org_admin's non-content permissions — what a delegator must hold (R-6). */
 const ORG_ADMIN_PERMISSIONS = TENANT_ROLE_DEFINITIONS.find(
   (r) => r.key === TENANT_ROLE_KEYS.ORG_ADMIN,
-)!.permissions;
+)!.permissions.filter((k) => !isTenantContentPermission(k));
 const REFUSAL = /refusing to leave organization .* with no active administrator/;
 
 describe('last-organization-administrator invariant (ADR-015 R-11)', () => {

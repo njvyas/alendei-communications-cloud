@@ -65,6 +65,7 @@ export class AppConfigService {
       authUrl: this.get('DATABASE_AUTH_URL'),
       relayUrl: this.get('DATABASE_RELAY_URL'),
       dispatchUrl: this.get('DATABASE_DISPATCH_URL'),
+      dispatchPassword: this.get('DATABASE_DISPATCH_PASSWORD'),
       poolMax: this.get('DATABASE_POOL_MAX'),
       idleTimeoutMs: this.get('DATABASE_POOL_IDLE_TIMEOUT_MS'),
       statementTimeoutMs: this.get('DATABASE_STATEMENT_TIMEOUT_MS'),
@@ -89,6 +90,14 @@ export class AppConfigService {
       relayPollIntervalMs: this.get('OUTBOX_RELAY_POLL_INTERVAL_MS'),
       relayBatchSize: this.get('OUTBOX_RELAY_BATCH_SIZE'),
       relayMaxAttempts: this.get('OUTBOX_RELAY_MAX_ATTEMPTS'),
+    } as const;
+  }
+
+  get dispatch() {
+    return {
+      workerEnabled: this.get('DISPATCH_WORKER_ENABLED'),
+      pollIntervalMs: this.get('DISPATCH_WORKER_POLL_INTERVAL_MS'),
+      batchSize: this.get('DISPATCH_WORKER_BATCH_SIZE'),
     } as const;
   }
 

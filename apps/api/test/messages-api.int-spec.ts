@@ -441,6 +441,36 @@ describe('Messages API Suite (Phase 3.3)', () => {
       expect(res.status).toBe(422);
       expect(res.body.error.code).toBe(ERROR_CODES.NO_ACTIVE_PROVIDER_ASSIGNMENT);
     });
+
+    it('9. Concurrent first sends to one new recipient all succeed and share one contact identity', async () => {
+      // Each request reads "no identity yet" and creates one; the partial unique
+      // index lets exactly one win. The others must reuse it, not fail with 500.
+      const recipient = `+1202556${randomBytes(2).readUInt16BE(0).toString().padStart(4, '0')}`;
+      const results = await Promise.all(
+        Array.from({ length: 6 }, (_, i) =>
+          request(h.app.getHttpServer())
+            .post(url('/messages'))
+            .set('Authorization', `Bearer ${userAToken}`)
+            .set('X-Acc-Organization', tenantA.orgId)
+            .set('Idempotency-Key', randomUUID())
+            .send({ channelCode: 'whatsapp', recipient, payload: { text: `first send ${i}` } }),
+        ),
+      );
+
+      expect(results.map((r) => r.status)).toEqual(results.map(() => 202));
+      const ids = results.map((r) => r.body.data.id as string);
+      const rows = await h.admin
+        .select({ contactId: schema.messages.contactId })
+        .from(schema.messages)
+        .where(inArray(schema.messages.id, ids));
+      expect(rows).toHaveLength(6);
+      expect(new Set(rows.map((r) => r.contactId)).size).toBe(1);
+      const identities = await h.admin
+        .select({ contactId: schema.contactIdentities.contactId })
+        .from(schema.contactIdentities)
+        .where(eq(schema.contactIdentities.contactId, rows[0]!.contactId));
+      expect(identities).toHaveLength(1);
+    });
   });
 
   describe('GET /messages/:id', () => {

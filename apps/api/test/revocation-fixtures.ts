@@ -110,7 +110,11 @@ export class RevocationWorld {
     await this.h.admin.transaction(async (tx) => {
       await tx.execute(sql`select set_config('app.provisioning','on',true)`);
       for (const permissionId of ids) {
-        await tx.insert(schema.rolePermissions).values({ roleId, permissionId });
+        // Idempotent: org_admin already carries every tenant-content key.
+        await tx
+          .insert(schema.rolePermissions)
+          .values({ roleId, permissionId })
+          .onConflictDoNothing();
       }
     });
   }

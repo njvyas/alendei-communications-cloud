@@ -17,6 +17,12 @@ import type { Pool } from 'pg';
 
 import { AppConfigService } from '../config/app-config.service';
 import {
+  DEVELOPMENT_DISPATCH_PASSWORD,
+  DISPATCH_ROLE,
+  allowsDevelopmentDispatchPassword,
+  type AppEnvironment,
+} from '../config/env.schema';
+import {
   APP_DB,
   APP_POOL,
   AUTH_DB,
@@ -44,16 +50,30 @@ import { TenantDatabase } from './tenant-database.service';
  * may take an `acc_auth` connection under an `acc_app` one but never the
  * reverse. A violation fails at acquisition instead of deadlocking the pool.
  */
-function deriveDispatchUrl(appUrl: string, configuredUrl?: string): string {
-  if (configuredUrl) return configuredUrl;
-  try {
-    const parsed = new URL(appUrl);
-    parsed.username = 'acc_dispatch';
-    parsed.password = process.env.DATABASE_DISPATCH_PASSWORD ?? 'acc_dispatch_dev_password';
-    return parsed.toString();
-  } catch {
-    return appUrl;
+/**
+ * The dispatch principal's connection string: `DATABASE_DISPATCH_URL` as given,
+ * or `DATABASE_URL` with the user replaced by `acc_dispatch` and its password.
+ * The development password stands in only in development and test; anywhere
+ * else configuration validation has already refused a missing credential, and
+ * this refuses again rather than fall back.
+ */
+export function resolveDispatchUrl(
+  database: { appUrl: string; dispatchUrl?: string; dispatchPassword?: string },
+  appEnv: AppEnvironment,
+): string {
+  if (database.dispatchUrl) return database.dispatchUrl;
+  const password =
+    database.dispatchPassword ??
+    (allowsDevelopmentDispatchPassword(appEnv) ? DEVELOPMENT_DISPATCH_PASSWORD : undefined);
+  if (!password) {
+    throw new Error(
+      `refusing to build the dispatch database pool: no dispatch credential is configured for APP_ENV=${appEnv}`,
+    );
   }
+  const parsed = new URL(database.appUrl);
+  parsed.username = DISPATCH_ROLE;
+  parsed.password = password;
+  return parsed.toString();
 }
 
 @Global()
@@ -111,7 +131,7 @@ function deriveDispatchUrl(appUrl: string, configuredUrl?: string): string {
       inject: [AppConfigService],
       useFactory: (config: AppConfigService): Pool =>
         createPool({
-          connectionString: deriveDispatchUrl(config.database.appUrl, config.database.dispatchUrl),
+          connectionString: resolveDispatchUrl(config.database, config.appEnv),
           max: Math.max(2, Math.floor(config.database.poolMax / 2)),
           idleTimeoutMillis: config.database.idleTimeoutMs,
           statementTimeoutMillis: config.database.statementTimeoutMs,
@@ -147,7 +167,18 @@ export class DatabaseModule implements OnModuleInit, OnApplicationShutdown {
   async onModuleInit(): Promise<void> {
     const app = await assertRlsBoundPrincipal(this.appPool, 'application (acc_app)');
     const auth = await assertRlsBoundPrincipal(this.authPool, 'identity (acc_auth)');
-    this.logger.log(`Database principals verified RLS-bound: ${app.role}, ${auth.role}`);
+    // The dispatch credential is proven at startup, not at the first poll: a
+    // missing, wrong or misdirected one refuses to start (B3) instead of
+    // leaving every message queued behind a loop that logs connection errors.
+    const dispatch = await assertRlsBoundPrincipal(this.dispatchPool, 'dispatch (acc_dispatch)');
+    if (dispatch.role !== DISPATCH_ROLE) {
+      throw new Error(
+        `refusing to use the dispatch database pool: it logs in as ${dispatch.role}, not ${DISPATCH_ROLE}`,
+      );
+    }
+    this.logger.log(
+      `Database principals verified RLS-bound: ${app.role}, ${auth.role}, ${dispatch.role}`,
+    );
   }
 
   /** Drains all pools so in-flight statements finish before the process exits. */

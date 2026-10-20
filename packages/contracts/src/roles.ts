@@ -121,8 +121,15 @@ export const TENANT_ROLE_DEFINITIONS: readonly RoleDefinition[] = Object.freeze(
   {
     key: TENANT_ROLE_KEYS.ORG_ADMIN,
     name: 'Organization Admin',
-    description: 'Full control within the organization: users, workspaces, roles, API keys.',
+    description:
+      'Full control within the organization: users, workspaces, roles, API keys, and its contacts, templates, suppressions and messages.',
     allowedScopeTypes: ['organization'],
+    // The eight tenant-content keys (ADR-014 §6) are what make the organization's
+    // own administrator able to run it: without them no principal can send at
+    // all, because a custom role can only carry permissions its author holds and
+    // platform roles never carry content. A platform principal appoints this
+    // role through R-6 delegation (`RBAC.md` §7b); every other tenant role stays
+    // content-free until a phase decides otherwise.
     permissions: [
       ...TENANT_READ_PERMISSIONS,
       P.ORGANIZATIONS_UPDATE,
@@ -145,6 +152,14 @@ export const TENANT_ROLE_DEFINITIONS: readonly RoleDefinition[] = Object.freeze(
       P.SESSIONS_READ,
       P.SESSIONS_REVOKE,
       P.AUDIT_READ,
+      P.CONTACTS_READ,
+      P.CONTACTS_MANAGE,
+      P.TEMPLATES_READ,
+      P.TEMPLATES_MANAGE,
+      P.SUPPRESSIONS_READ,
+      P.SUPPRESSIONS_MANAGE,
+      P.MESSAGES_READ,
+      P.MESSAGES_SEND,
     ],
   },
   {

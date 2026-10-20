@@ -17,6 +17,7 @@ import {
   TENANT_CONTENT_PERMISSIONS,
   TENANT_READ_PERMISSIONS,
   TENANT_ROLE_DEFINITIONS,
+  TENANT_ROLE_KEYS,
   grantConfers,
   isTenantContentPermission,
   permissionAllowedAt,
@@ -183,8 +184,24 @@ describe('role definitions under R-5 and R-6', () => {
     }
   });
 
-  it('no tenant role definition carries a tenant-content key — the keys are inert', () => {
-    for (const role of TENANT_ROLE_DEFINITIONS) {
+  it('org_admin carries exactly the eight tenant-content keys; no other tenant role carries any', () => {
+    const content = (key: string) =>
+      sorted(roleDefinition(key).permissions.filter(isTenantContentPermission));
+    expect(content(TENANT_ROLE_KEYS.ORG_ADMIN)).toEqual(
+      sorted([
+        'contacts.read',
+        'contacts.manage',
+        'templates.read',
+        'templates.manage',
+        'suppressions.read',
+        'suppressions.manage',
+        'messages.read',
+        'messages.send',
+      ]),
+    );
+    for (const role of TENANT_ROLE_DEFINITIONS.filter(
+      (r) => r.key !== TENANT_ROLE_KEYS.ORG_ADMIN,
+    )) {
       expect([role.key, role.permissions.filter(isTenantContentPermission)]).toEqual([
         role.key,
         [],

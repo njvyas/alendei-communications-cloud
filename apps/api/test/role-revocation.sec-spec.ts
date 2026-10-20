@@ -27,6 +27,7 @@ import {
   PLATFORM_ROLE_KEYS,
   TENANT_ROLE_DEFINITIONS,
   TENANT_ROLE_KEYS,
+  isTenantContentPermission,
 } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { eq, sql } from 'drizzle-orm';
@@ -42,13 +43,15 @@ const DELEGATE = PERMISSIONS.PLATFORM_ROLES_DELEGATE_TENANT;
 const defn = (key: string) =>
   [...TENANT_ROLE_DEFINITIONS, ...PLATFORM_ROLE_DEFINITIONS].find((r) => r.key === key)!
     .permissions as readonly string[];
-const ORG_ADMIN = defn(TENANT_ROLE_KEYS.ORG_ADMIN);
+// org_admin's non-content permissions — what a delegator must hold (R-6). Its
+// tenant-content keys (all eight since B1/MVP) are FIXTURE_CONTENT below.
+const ORG_ADMIN = defn(TENANT_ROLE_KEYS.ORG_ADMIN).filter((k) => !isTenantContentPermission(k));
 const WORKSPACE_MANAGER = defn(TENANT_ROLE_KEYS.WORKSPACE_MANAGER);
 const RESELLER_ADMIN = defn(PLATFORM_ROLE_KEYS.RESELLER_ADMIN);
 const minus = (a: readonly string[], b: readonly string[]) =>
   a.filter((k) => !b.includes(k)).sort();
 /** Fixture content keys on T's org_admin (sorted). */
-const FIXTURE_CONTENT = ['contacts.read', 'templates.read'];
+const FIXTURE_CONTENT = defn(TENANT_ROLE_KEYS.ORG_ADMIN).filter(isTenantContentPermission).sort();
 
 describe('symmetric revocation, role-edit removal and delegated revocation (ADR-015 R-11, R-6)', () => {
   let h: Harness;
@@ -105,6 +108,14 @@ describe('symmetric revocation, role-edit removal and delegated revocation (ADR-
     t2 = await w.org('t2');
     await w.attach(t.roles[TENANT_ROLE_KEYS.ORG_ADMIN]!, FIXTURE_CONTENT);
     await w.attach(t.roles[TENANT_ROLE_KEYS.WORKSPACE_MANAGER]!, ['contacts.read']);
+    // c's org_admin is content-free: the revoker that must be refused a content key.
+    await w.detach(c.roles[TENANT_ROLE_KEYS.ORG_ADMIN]!, FIXTURE_CONTENT);
+    // t2's org_admin is reshaped to admit workspace scope: it keeps only the
+    // content key conferrable there (contacts.read), as the case below needs.
+    await w.detach(
+      t2.roles[TENANT_ROLE_KEYS.ORG_ADMIN]!,
+      FIXTURE_CONTENT.filter((k) => k !== 'contacts.read'),
+    );
     await h.admin.transaction(async (tx) => {
       await tx.execute(sql`select set_config('app.provisioning','on',true)`);
       await tx

@@ -14,11 +14,13 @@
  * `APP_ENV=production` and `NODE_ENV=production`. It has exactly one test-only
  * substitution, at configuration validation (the `jest.mock` below): the real
  * `validateEnv` runs on the production environment and must refuse it for
- * exactly the two requirements a test host cannot meet — `SECRETS_BACKEND=env`
- * (no other backend is implemented yet) and `DATABASE_SSL=true` (the local
- * PostgreSQL has no TLS). Every other production rule must pass. Any other
- * problem, or a missing one, fails the boot. The configuration the
- * application then runs on is the schema's own parse of that same environment.
+ * exactly the requirements a test host cannot meet — `SECRETS_BACKEND=env`
+ * (no other backend is implemented yet), `DATABASE_SSL=true` (the local
+ * PostgreSQL has no TLS) and a dispatch credential other than the development
+ * password (the local `acc_dispatch` has no other; B3). Staging goes through the
+ * same substitution for the dispatch credential alone. Every other rule must
+ * pass. Any other problem, or a missing one, fails the boot. The configuration
+ * the application then runs on is the schema's own parse of that same environment.
  *
  * Exactly one route produces the document: `GET /api/v1/openapi.json`. Every
  * alternate spelling, alias, UI script and static artifact is proven absent,
@@ -30,6 +32,7 @@ import { eq, inArray, sql } from 'drizzle-orm';
 import request from 'supertest';
 import { uuidv7 } from 'uuidv7';
 
+import { DEVELOPMENT_DISPATCH_PASSWORD } from '../src/config/env.schema';
 import {
   PASSWORD,
   PREFIX,
@@ -57,14 +60,20 @@ jest.mock('../src/config/env.schema', () => {
   const actual = jest.requireActual<typeof import('../src/config/env.schema')>(
     '../src/config/env.schema',
   );
-  const HOST_ONLY = [
-    /^SECRETS_BACKEND=env is not permitted when APP_ENV=production:/,
-    /^DATABASE_SSL must be true when APP_ENV=production /,
-  ];
+  const DISPATCH = /^DATABASE_DISPATCH_PASSWORD must not be the development password /;
+  const HOST_ONLY_BY_ENV: Record<string, readonly RegExp[]> = {
+    production: [
+      /^SECRETS_BACKEND=env is not permitted when APP_ENV=production:/,
+      /^DATABASE_SSL must be true when APP_ENV=production /,
+      DISPATCH,
+    ],
+    staging: [DISPATCH],
+  };
   return {
     ...actual,
     validateEnv(raw: Record<string, unknown>) {
-      if (raw.APP_ENV !== 'production') return actual.validateEnv(raw);
+      const HOST_ONLY = HOST_ONLY_BY_ENV[String(raw.APP_ENV)];
+      if (!HOST_ONLY) return actual.validateEnv(raw);
       let problems: readonly string[] = [];
       try {
         actual.validateEnv(raw);
@@ -80,7 +89,7 @@ jest.mock('../src/config/env.schema', () => {
       const unexpected = problems.filter((p) => !HOST_ONLY.some((pattern) => pattern.test(p)));
       if (!matched || unexpected.length > 0 || problems.length !== HOST_ONLY.length) {
         throw new actual.ConfigurationError([
-          'production-mode test substitution: expected exactly the two host-only problems',
+          `${String(raw.APP_ENV)}-mode test substitution: expected exactly the host-only problems`,
           ...problems,
         ]);
       }
@@ -126,7 +135,11 @@ const UI = [
 const envFor = (appEnv: string, enabled: boolean): Record<string, string> => ({
   APP_ENV: appEnv,
   OPENAPI_UI_ENABLED: enabled ? 'true' : 'false',
-  // Staging has no production hardening of its own to satisfy; nothing else changes.
+  // Staging and production name a dispatch credential; on a test host the only
+  // one that logs in is the development password, which validation refuses (B3).
+  ...(appEnv === 'staging' || appEnv === 'production'
+    ? { DATABASE_DISPATCH_PASSWORD: DEVELOPMENT_DISPATCH_PASSWORD }
+    : {}),
   // Production states every hardening requirement a test host can meet.
   ...(appEnv === 'production'
     ? {
@@ -306,9 +319,19 @@ describe('Phase 1C.3 — OpenAPI exposure and access (real bootstrap)', () => {
     if (appEnv === 'production') {
       expect(seen.length).toBeGreaterThan(0);
       for (const { problems } of seen) {
-        expect(problems).toHaveLength(2);
+        expect(problems).toHaveLength(3);
         expect(problems[0]).toMatch(/^SECRETS_BACKEND=env is not permitted/);
         expect(problems[1]).toMatch(/^DATABASE_SSL must be true/);
+        expect(problems[2]).toMatch(
+          /^DATABASE_DISPATCH_PASSWORD must not be the development password/,
+        );
+      }
+    } else if (appEnv === 'staging') {
+      expect(seen.length).toBeGreaterThan(0);
+      for (const { problems } of seen) {
+        expect(problems).toEqual([
+          expect.stringMatching(/^DATABASE_DISPATCH_PASSWORD must not be the development password/),
+        ]);
       }
     } else {
       expect(seen).toHaveLength(0);

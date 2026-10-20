@@ -31,3 +31,8 @@ process.env.RATE_LIMIT_AUTH_WINDOW_SECONDS = '60';
 process.env.RATE_LIMIT_AUTH_MAX = '10';
 process.env.RATE_LIMIT_REFRESH_MAX = '30';
 process.env.RATE_LIMIT_API_KEY_FAILURE_MAX = '20';
+
+// The dispatch loop is off unless a suite turns it on (`dispatch-worker.int-spec.ts`).
+// Suites that drive `DispatcherService` by hand assert exact claims, epochs and
+// queue rows; a background loop in the same database would take that work first.
+process.env.DISPATCH_WORKER_ENABLED = 'false';

@@ -1,0 +1,20 @@
+# Build context for deploy/*.Dockerfile — source and lockfile only.
+# Never send local environment files, build output or VCS data into an image.
+.git
+.github
+**/node_modules
+**/dist
+**/.next
+**/*.tsbuildinfo
+**/test-results
+**/playwright-report
+**/coverage
+.env
+**/.env
+**/.env.*
+!.env.example
+deploy/*.env
+!deploy/release.env.example
+security
+docs
+infra

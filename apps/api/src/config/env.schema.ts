@@ -75,7 +75,14 @@ export const envSchema = z.object({
   DATABASE_AUTH_URL: postgresUrl,
   DATABASE_ADMIN_URL: postgresUrl.optional(),
   DATABASE_RELAY_URL: postgresUrl.optional(),
+  /**
+   * The dispatch principal (`acc_dispatch`, ADR-014 §9). Either a full URL, or
+   * only its password — the URL is then `DATABASE_URL` with the user replaced.
+   * Outside development and test one of them is required and the development
+   * password is refused (`dispatchCredentialProblems`).
+   */
   DATABASE_DISPATCH_URL: postgresUrl.optional(),
+  DATABASE_DISPATCH_PASSWORD: z.string().min(1).optional(),
   DATABASE_POOL_MAX: positiveInt.max(500).default(10),
   DATABASE_POOL_IDLE_TIMEOUT_MS: positiveInt.default(30_000),
   DATABASE_STATEMENT_TIMEOUT_MS: positiveInt.default(15_000),
@@ -97,6 +104,20 @@ export const envSchema = z.object({
   OUTBOX_RELAY_POLL_INTERVAL_MS: positiveInt.min(50).default(1_000),
   OUTBOX_RELAY_BATCH_SIZE: positiveInt.max(1_000).default(100),
   OUTBOX_RELAY_MAX_ATTEMPTS: positiveInt.max(100).default(10),
+
+  // --- Message dispatch (ADR-014 §9, D18) -----------------------------------
+  /**
+   * Runs this instance's dispatch loop, which claims queued messages and
+   * submits them. Off, the instance still accepts messages but sends nothing —
+   * an API-only replica, or a test that drives the dispatcher itself.
+   */
+  DISPATCH_WORKER_ENABLED: booleanFromEnv.default(true),
+  DISPATCH_WORKER_POLL_INTERVAL_MS: positiveInt.min(50).max(60_000).default(1_000),
+  /**
+   * Claims per cycle. Capped at 10: a batch shares one 30 s lease, which is
+   * sized for ten claims processed together (`DispatcherService.dispatchBatch`).
+   */
+  DISPATCH_WORKER_BATCH_SIZE: positiveInt.max(10).default(10),
 
   // --- Secrets -------------------------------------------------------------
   SECRETS_BACKEND: z.enum(['env', 'vault', 'aws', 'azure', 'gcp']).default('env'),
@@ -156,6 +177,57 @@ export type Env = z.infer<typeof envSchema>;
  * Requirements that only apply outside development/test. Kept in one place so
  * the full production contract is reviewable at a glance.
  */
+/** The dispatch principal every dispatch credential must log in as. */
+export const DISPATCH_ROLE = 'acc_dispatch';
+
+/**
+ * The well-known local password of `acc_dispatch` (docker-compose development
+ * stack). Used only when `APP_ENV` is `development` or `test` and no dispatch
+ * credential is configured; refused everywhere else.
+ */
+export const DEVELOPMENT_DISPATCH_PASSWORD = 'acc_dispatch_dev_password';
+
+const DEVELOPMENT_ENVIRONMENTS: readonly AppEnvironment[] = ['development', 'test'];
+
+/** Whether the development-only dispatch password may stand in for a configured one. */
+export function allowsDevelopmentDispatchPassword(appEnv: AppEnvironment): boolean {
+  return DEVELOPMENT_ENVIRONMENTS.includes(appEnv);
+}
+
+/**
+ * Staging and production must name their own dispatch credential (B3, first
+ * release): before this rule a missing one silently became the published
+ * development password. Messages name the variable, never its value.
+ */
+function dispatchCredentialProblems(env: Env): string[] {
+  if (allowsDevelopmentDispatchPassword(env.APP_ENV)) return [];
+  const where = `when APP_ENV=${env.APP_ENV}`;
+
+  if (env.DATABASE_DISPATCH_URL) {
+    const url = new URL(env.DATABASE_DISPATCH_URL);
+    const problems: string[] = [];
+    if (decodeURIComponent(url.username) !== DISPATCH_ROLE) {
+      problems.push(`DATABASE_DISPATCH_URL must log in as ${DISPATCH_ROLE} ${where}`);
+    }
+    const password = decodeURIComponent(url.password);
+    if (password === '') {
+      problems.push(`DATABASE_DISPATCH_URL must carry a password ${where}`);
+    } else if (password === DEVELOPMENT_DISPATCH_PASSWORD) {
+      problems.push(`DATABASE_DISPATCH_URL must not use the development password ${where}`);
+    }
+    return problems;
+  }
+  if (env.DATABASE_DISPATCH_PASSWORD) {
+    return env.DATABASE_DISPATCH_PASSWORD === DEVELOPMENT_DISPATCH_PASSWORD
+      ? [`DATABASE_DISPATCH_PASSWORD must not be the development password ${where}`]
+      : [];
+  }
+  return [
+    `DATABASE_DISPATCH_URL or DATABASE_DISPATCH_PASSWORD must be set ${where}: ` +
+      'the development password stands in only for development and test',
+  ];
+}
+
 function productionHardening(env: Env): string[] {
   if (env.APP_ENV !== 'production') return [];
   const problems: string[] = [];
@@ -202,7 +274,10 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     throw new ConfigurationError(problems);
   }
 
-  const problems = productionHardening(parsed.data);
+  const problems = [
+    ...productionHardening(parsed.data),
+    ...dispatchCredentialProblems(parsed.data),
+  ];
   // Checked against the raw input, because after parsing a default is
   // indistinguishable from a choice: production must *state* how many proxy
   // hops sit in front of it rather than inherit one (Gate-B audit, Blocker 5).

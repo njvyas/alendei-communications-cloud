@@ -59,6 +59,7 @@ describe('OpenAPI exposure mode', () => {
       LOG_PRETTY: 'false',
       DATABASE_SSL: 'true',
       TRUSTED_PROXY_HOPS: '1',
+      DATABASE_DISPATCH_PASSWORD: 'a-production-dispatch-credential',
       OPENAPI_UI_ENABLED: 'true',
     };
     const env = validateEnv(production);

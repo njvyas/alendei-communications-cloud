@@ -19,6 +19,9 @@ junit.xml
 .env
 .env.*
 !.env.example
+# release host environment (docs/RELEASE.md §3)
+deploy/*.env
+!deploy/release.env.example
 *.pem
 *.key
 *.p12

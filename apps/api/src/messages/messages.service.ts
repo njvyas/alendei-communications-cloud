@@ -179,24 +179,56 @@ export class MessagesService {
         if (identity) {
           contactId = identity.contactId;
         } else {
+          // First send to this address in this workspace. A concurrent first send
+          // can create the same identity (`uq_contact_identities_workspace_active`).
+          // The insert runs in a savepoint, so the request that loses rolls back
+          // only its own contact and identity and reuses the winner's — committed
+          // by then, because the unique index made the loser wait for it.
           const newContactId = uuidv7();
-          await tx.insert(schema.contacts).values({
-            id: newContactId,
-            orgId,
-            workspaceId,
-          });
-          await tx.insert(schema.contactIdentities).values({
-            id: uuidv7(),
-            orgId,
-            workspaceId,
-            contactId: newContactId,
-            channelId: channel.id,
-            rawAddress: dto.recipient,
-            normalizedAddress,
-            isPrimary: true,
-            status: 'active',
-          });
-          contactId = newContactId;
+          try {
+            await tx.transaction(async (savepoint) => {
+              await savepoint.insert(schema.contacts).values({
+                id: newContactId,
+                orgId,
+                workspaceId,
+              });
+              await savepoint.insert(schema.contactIdentities).values({
+                id: uuidv7(),
+                orgId,
+                workspaceId,
+                contactId: newContactId,
+                channelId: channel.id,
+                rawAddress: dto.recipient,
+                normalizedAddress,
+                isPrimary: true,
+                status: 'active',
+              });
+            });
+            contactId = newContactId;
+          } catch (error) {
+            const cause = (error as { cause?: { code?: string; constraint?: string } }).cause;
+            if (
+              cause?.code !== '23505' ||
+              cause.constraint !== 'uq_contact_identities_workspace_active'
+            ) {
+              throw error;
+            }
+            const [winner] = await tx
+              .select({ contactId: schema.contactIdentities.contactId })
+              .from(schema.contactIdentities)
+              .where(
+                and(
+                  eq(schema.contactIdentities.orgId, orgId),
+                  eq(schema.contactIdentities.workspaceId, workspaceId),
+                  eq(schema.contactIdentities.channelId, channel.id),
+                  eq(schema.contactIdentities.normalizedAddress, normalizedAddress),
+                  eq(schema.contactIdentities.status, 'active'),
+                ),
+              )
+              .limit(1);
+            if (!winner) throw error;
+            contactId = winner.contactId;
+          }
         }
 
         // 5. Consent preflight check

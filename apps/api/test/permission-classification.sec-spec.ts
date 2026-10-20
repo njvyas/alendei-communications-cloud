@@ -3,7 +3,7 @@
  * R-6), proven directly against PostgreSQL.
  *
  *   A  the projection: the catalogue rows are the contracts' classification
- *      and allowed scopes; the content keys are catalogue-only
+ *      and allowed scopes; only a seeded org_admin carries the content keys
  *   B  fn_validate_role_permission: role.allowed_scope_types ⊆
  *      permission.allowed_scope_types, for every writer
  *   C  widening a role past what its permissions may be conferred at
@@ -236,10 +236,13 @@ describe('migration 0026: permission classification and scope eligibility (ADR-0
       expect(rows).toHaveLength(46);
     });
 
-    it("the content keys are catalogue-only: rows exist, no role carries them (beyond this suite's own fixture)", async () => {
+    it("the content keys: rows exist, and no role but a seeded org_admin carries them (beyond this suite's own fixture)", async () => {
       const { rows } = await owner.query<{ key: string; holders: string }>(
-        `SELECT p.key, count(rp.role_id)::text AS holders FROM permissions p
+        `SELECT p.key,
+                count(rp.role_id) FILTER (WHERE NOT (r.key = 'org_admin' AND r.is_system_role))::text AS holders
+           FROM permissions p
            LEFT JOIN role_permissions rp ON rp.permission_id = p.id AND rp.org_id IS DISTINCT FROM $1
+           LEFT JOIN roles r ON r.id = rp.role_id
           WHERE p.classification = 'tenant_content' GROUP BY p.key ORDER BY p.key`,
         [f.org],
       );
@@ -588,7 +591,11 @@ describe('migration 0026: permission classification and scope eligibility (ADR-0
     const holdersOf = async (key: string) =>
       (
         await owner.query(
-          'SELECT role_id FROM role_permissions WHERE permission_id = (SELECT id FROM permissions WHERE key = $1)',
+          // The suite's own roles: seeded org_admin roles of other organizations
+          // carry every content key by definition and are not part of these races.
+          `SELECT role_id FROM role_permissions
+            WHERE permission_id = (SELECT id FROM permissions WHERE key = $1)
+              AND role_id NOT IN (SELECT id FROM roles WHERE key = 'org_admin' AND is_system_role)`,
           [key],
         )
       ).rows.map((r) => r.role_id as string);
