@@ -23,6 +23,11 @@ f8e2731f4dde0d17890aa083140ebeb8df283ae8:packages/contracts/src/events.ts:generi
 711a73a9fe9cedf9c67a3da30020b8c840e8feff:apps/web/src/lib/users-administration.test.ts:generic-api-key:190
 711a73a9fe9cedf9c67a3da30020b8c840e8feff:apps/web/src/lib/users-security.sec.test.ts:generic-api-key:370
 2c6f52915d30c1ecaf92244b75852dd1554b28af:apps/web/src/lib/whatsapp-security.sec.test.ts:generic-api-key:199
+# Suppressions client test `testIdempotencyKey` (ACC Batch 2). Audited 21-Oct-2026
+# (gitleaks 8.24.3, CI run 39612156020): UUID-layout synthetic string whose last
+# group is not hex; absent from every .env file and CI configuration; used only as
+# a mocked request header.
+dd1627afac64e1468c35029953dc5e4fba6f217b:apps/web/src/lib/suppressions-administration.test.ts:generic-api-key:136
 
 # Mocked API-key `secret` in frontend tests (a synthetic sequential string, not in
 # ACC's ak_(live|test)_<prefix>.<secret> format; it authenticates nothing).
