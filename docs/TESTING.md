@@ -853,9 +853,9 @@ The provider console browser test suite (`apps/web/e2e/providers-console.spec.ts
   - `npm run openapi:check` passes without drift.
   - Executed against disposable clone of `acc_r015_base` via `scripts/with-db-clone.mjs`; clone dropped and verified gone; template row counts unchanged.
 
-### 6y. ACC Batch 2: suppressions screen and tenant read of the channel list (uncommitted, PENDING OWNER APPROVAL)
+### 6y. ACC Batch 2: suppressions screen and tenant read of the channel list (APPROVED 21-Oct-2026; committed in `dd1627a`)
 
-**Scope.** This evidence covers the uncommitted working tree on `fd9f13d`:
+**Scope.** This evidence was produced on the Batch 2 working tree on `fd9f13d`, before it was committed as `dd1627a`. Approval did not apply migration `0035` to any persistent database (`DECISIONS.md` §1x.3). The evidence covers:
 - backend: `GET /channels` tenant read, `apps/api/test/channel-catalogue-tenant.sec-spec.ts`;
 - migration `0035`;
 - frontend FE-2: `/suppressions`.

@@ -1369,7 +1369,7 @@ Invitation / credential delivery (users created via `POST /users` still cannot s
 
 The five channels are seeded by migration `0018`. **No route creates, changes or deletes a channel** (ADR-013 F-2).
 
-Tenant read of the list (ACC Batch 2, migration `0035`; **PENDING OWNER APPROVAL**, not yet committed; `DECISIONS.md` §1x.2–§1x.3): the response body, ordering and cursors are identical to the platform caller's. A tenant operator never receives `providers.read`; `GET /channels/:id` and every provider route stay platform-only. A caller who qualifies on neither path receives the same `403 AUTHZ_SCOPE_DENIED` as before.
+Tenant read of the list (ACC Batch 2, migration `0035`; **approved by project owner decision 21-Oct-2026**, committed in `dd1627a`; `DECISIONS.md` §1x.2–§1x.3). It is available only where `0035` has been applied to the target database; approval did not apply it. The response body, ordering and cursors are identical to the platform caller's. A tenant operator never receives `providers.read`; `GET /channels/:id` and every provider route stay platform-only. A caller who qualifies on neither path receives the same `403 AUTHZ_SCOPE_DENIED` as before.
 
 ### 32b. Providers
 

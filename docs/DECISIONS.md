@@ -2095,7 +2095,7 @@ Counts in earlier drafts of this section (11/18, 24/22, 29/29, 44/44, 568, 582) 
 
 **Migration-integrity prerequisite (owner decision, 17-Oct-2026):** no migration `0035` or later may be written or applied until G and then E are resolved.
 
-*Status 21-Oct-2026: G is resolved and E is closed for development (§1x.1). F remains open. Migration `0035` is pending owner decision (§1x.3).*
+*Status 21-Oct-2026: G is resolved and E is closed for development (§1x.1). F remains open. Migration `0035` was approved by project owner decision on 21-Oct-2026 and committed in `dd1627a` (§1x.3); approval does not mean it has been applied, and it is applied to no persistent database.*
 
 **Gate F.1: APPROVED by project owner decision, 17-Oct-2026.**
 
@@ -2128,13 +2128,13 @@ The container, its database `acc_tmp_schemacmp_2a11b19bad16` and the evidence pa
 
 **What closure does not do.** It does not change `acc`, `acc_r015_base` or any other database. It authorizes no cutover, rebuild or rename of `acc`. It resolves nothing under F (the orphaned test process, its `LISTEN` session and `acc_clone_436072f90852`).
 
-### 1x.2 Proposed exception to ADR-013 F-3: tenant read of the channel list (PENDING OWNER APPROVAL)
+### 1x.2 Exception to ADR-013 F-3: tenant read of the channel list — APPROVED (project owner decision, 21-Oct-2026)
 
-**Status: proposed, implemented in the uncommitted Batch 2 working tree, not approved.**
+**Status: APPROVED by owner/architect decision, 21-Oct-2026; committed with Batch 2 in `dd1627a`.** It takes effect only in a database where migration `0035` has been applied (§1x.3).
 
 **Problem.** Tenant content (suppressions, contacts, templates and messages) refers to channels by id. The `channels` RLS (`0018`, `channels_platform_read`) admits only platform-scope principals, so a tenant operator cannot resolve those ids to channel names.
 
-**Proposal: `GET /api/v1/channels` (the list only).**
+**Decision: `GET /api/v1/channels` (the list only).**
 - **Who it admits.** A tenant operator is admitted when all of these hold:
   - the caller is a signed-in user (a user session, not an API key);
   - the caller holds no platform-scope grant;
@@ -2148,19 +2148,16 @@ The container, its database `acc_tmp_schemacmp_2a11b19bad16` and the evidence pa
   - `channels_platform_read` and the table grants are unchanged.
   - Every caller that qualifies on neither path receives the same refusal as before.
 
-**Residual for decision.** `app_channel_catalogue()` performs no authorization itself. Any `acc_app` transaction can read the six catalogue columns (`id`, `code`, `display_name`, `status`, `created_at`, `updated_at`), whatever its tenant context. Authorization stays in the application (ADR-005 D-5). The catalogue holds no tenant data and no credential (F-2, F-3).
+**Accepted residual (approved with the exception).** `app_channel_catalogue()` performs no authorization itself. Any `acc_app` transaction can read the six catalogue columns (`id`, `code`, `display_name`, `status`, `created_at`, `updated_at`), whatever its tenant context. Authorization stays in the application (ADR-005 D-5). The catalogue holds no tenant data and no credential (F-2, F-3).
 
-### 1x.3 Migration `0035_tenant_channel_catalogue`: governance (PENDING OWNER APPROVAL)
+### 1x.3 Migration `0035_tenant_channel_catalogue`: governance — APPROVED (project owner decision, 21-Oct-2026); NOT APPLIED
 
 - **The rule.** The 17-Oct-2026 rule (§1w.10) barred *writing* or applying `0035`+ until G and then E were resolved.
 - **Departure from the rule.** `0035` was written on 21-Oct-2026, before E was closed. That departed from the rule as written.
-- **Unconfirmed approval claims.** The file's header describes it as "owner-approved 21-Oct-2026 as a narrow exception to the 0035+ sequencing hold". No explicit owner approval of the exception or of `0035` is recorded, so that statement is **unconfirmed**. The same applies to:
-  - "owner-approved 21-Oct-2026" in `FRONTEND_API_CONTRACT.md` §32a;
-  - "owner decision" in the Batch 2 code comments (`provider-access.service.ts`, `permission-classification.spec.ts`, `scope-creep.architecture.spec.ts`).
-
-  Correct these when the owner decides. Until then, this record governs.
-- **Where it has been applied.** Only in disposable clones of `acc_r015_base` on 21-Oct-2026, all dropped. It is absent from `acc`, `acc_clone_436072f90852`, `acc_r015_base` and `acc_p24` (checked read-only, 21-Oct-2026). It is also absent from the isolated comparison database (§1x.1).
-- **Current status.** G and E are now resolved, so the 17-Oct-2026 rule no longer bars `0035`. It still requires owner approval together with §1x.2.
+- **Approval.** The owner/architect approved `0035`, the exception in §1x.2, and the Batch 2 tests and documentation on 21-Oct-2026. They were committed together in `dd1627a`, with the SQL file, its snapshot and its journal entry in one commit. The approval came after G and E were resolved, so it did not rely on an exception to the 17-Oct-2026 rule.
+- **Wording written before the approval.** The file's header says "owner-approved 21-Oct-2026 as a narrow exception to the 0035+ sequencing hold". That text, and the "owner decision" code comments (`provider-access.service.ts`, `permission-classification.spec.ts`, `scope-creep.architecture.spec.ts`), were written before the approval was given. The date is now accurate. The "exception to the hold" wording is historical: by the time of approval the hold no longer applied. The header was left unedited so that the approved file's SHA-256 stays as verified.
+- **Approval is not application.** Approving `0035` did not apply it. As of 21-Oct-2026 it is **not applied to any persistent database**: not `acc`, `acc_clone_436072f90852`, `acc_r015_base` or `acc_p24` (checked read-only), and not the preserved comparison database (§1x.1). It has run only in disposable clones of `acc_r015_base` (all dropped) and in the isolated verification clusters (`TESTING.md` §6y). Applying it to any shared or deployed database is a separate step, outside this approval, and must follow the deployment order below.
+- **Provenance caveat unchanged.** The approval does not affect §1x.1: historical `0033` provenance remains unresolved, and `acc`'s migration history remains invalid as provenance evidence.
 - **Content.**
   - One function, `app_channel_catalogue()`: `STABLE SECURITY DEFINER`, `search_path = public, pg_temp`, no arguments, returning the six catalogue columns. EXECUTE is revoked from PUBLIC and granted to `acc_app` only.
   - No table, data, policy or role change. No down-migration; reversal is a manual `DROP FUNCTION`.
