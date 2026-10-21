@@ -1364,10 +1364,12 @@ Invitation / credential delivery (users created via `POST /users` still cannot s
 
 | Method | Path | Auth | Permission | Request | Success | Errors |
 |---|---|---|---|---|---|---|
-| `GET` | `/api/v1/channels` | session only | `providers.read` at platform | `limit`, `cursor`, `sort` (`code` default, `-code`) | `200 {data:[channel], page}` | `400`; `401`; `403` |
+| `GET` | `/api/v1/channels` | session only | `providers.read` at platform, **or** (tenant operator) any of `suppressions.read`, `contacts.read`, `templates.read`, `messages.read` at the resolved, active organization | `limit`, `cursor`, `sort` (`code` default, `-code`); `X-Acc-Organization` for a tenant operator in more than one organization | `200 {data:[channel], page}` | `400`; `401`; `403` |
 | `GET` | `/api/v1/channels/:id` | session only | `providers.read` at platform | — | `200 {data:channel}` | `400` malformed id; `401`; `403`; `404` |
 
 The five channels are seeded by migration `0018`. **No route creates, changes or deletes a channel** (ADR-013 F-2).
+
+Tenant read of the list (ACC Batch 2, migration `0035`; **PENDING OWNER APPROVAL**, not yet committed; `DECISIONS.md` §1x.2–§1x.3): the response body, ordering and cursors are identical to the platform caller's. A tenant operator never receives `providers.read`; `GET /channels/:id` and every provider route stay platform-only. A caller who qualifies on neither path receives the same `403 AUTHZ_SCOPE_DENIED` as before.
 
 ### 32b. Providers
 

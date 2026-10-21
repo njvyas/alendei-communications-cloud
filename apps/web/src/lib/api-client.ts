@@ -28,11 +28,13 @@ import type {
   QueuedMessageResponse,
   SimulatorBehavior,
   SimulatorHealthBehavior,
+  SuppressionResponse,
+  SuppressionStatus,
   TemplateApprovalStatus,
   TemplateResponse,
   UpdateOrganizationProviderAssignmentInput,
 } from '@acc/contracts';
-import { ASSIGNMENT_STATUS } from '@acc/contracts';
+import { ASSIGNMENT_STATUS, SUPPRESSION_STATUSES } from '@acc/contracts';
 
 export type {
   AssignmentStatus,
@@ -41,9 +43,11 @@ export type {
   MessageDetailResponse,
   OrganizationProviderAssignment,
   PageInfo,
+  SuppressionResponse,
+  SuppressionStatus,
   UpdateOrganizationProviderAssignmentInput,
 };
-export { ASSIGNMENT_STATUS };
+export { ASSIGNMENT_STATUS, SUPPRESSION_STATUSES };
 
 /**
  * Browser-side API client for Alendei Communications Cloud.
@@ -1575,7 +1579,8 @@ export const auditLogsApi = {
 
 // =============================================================================
 // Channels & Providers Catalogue API (Phase 2.1 - 2.3)
-// Platform scope only; skipTenant is true on all calls.
+// Platform scope by default (skipTenant: true); channelsApi.list supports
+// tenantScoped: true to attach X-Acc-Organization for tenant operators.
 // =============================================================================
 
 export interface ChannelView {
@@ -1591,6 +1596,7 @@ export interface ListChannelsParams {
   readonly cursor?: string;
   readonly limit?: number;
   readonly sort?: string;
+  readonly tenantScoped?: boolean;
 }
 
 export const channelsApi = {
@@ -1609,7 +1615,7 @@ export const channelsApi = {
     return apiFetch<ApiPagedResponse<ChannelView>>(endpoint, {
       method: 'GET',
       signal,
-      skipTenant: true,
+      skipTenant: !params.tenantScoped,
     });
   },
 
@@ -2396,6 +2402,91 @@ export const messagesApi = {
       `/messages/${encodeURIComponent(messageId)}`,
       {
         method: 'GET',
+        signal,
+      },
+    );
+  },
+};
+
+// --- Suppressions (Organization) ---------------------------------------------
+
+export interface ListSuppressionsParams {
+  readonly channelId?: string;
+  readonly status?: SuppressionStatus;
+  readonly limit?: number;
+  readonly cursor?: string;
+  readonly sort?: 'createdAt' | '-createdAt';
+}
+
+export interface CreateSuppressionInput {
+  readonly channelId?: string | null;
+  readonly rawAddress: string;
+  readonly reason: string;
+}
+
+export interface LiftSuppressionInput {
+  readonly reason: string;
+}
+
+export const suppressionsApi = {
+  async list(
+    params: ListSuppressionsParams = {},
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<SuppressionResponse>> {
+    const query = new URLSearchParams();
+    if (params.channelId) query.set('channelId', params.channelId);
+    if (params.status) query.set('status', params.status);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.sort) query.set('sort', params.sort);
+
+    const queryString = query.toString();
+    const endpoint = queryString ? `/suppressions?${queryString}` : '/suppressions';
+
+    return apiFetch<ApiPagedResponse<SuppressionResponse>>(endpoint, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  async get(id: string, signal?: AbortSignal): Promise<ApiDataResponse<SuppressionResponse>> {
+    return apiFetch<ApiDataResponse<SuppressionResponse>>(
+      `/suppressions/${encodeURIComponent(id)}`,
+      {
+        method: 'GET',
+        signal,
+      },
+    );
+  },
+
+  async create(
+    input: CreateSuppressionInput,
+    idempotencyKey?: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<SuppressionResponse>> {
+    const headers: Record<string, string> = {};
+    if (idempotencyKey) {
+      headers['Idempotency-Key'] = idempotencyKey;
+    }
+
+    return apiFetch<ApiDataResponse<SuppressionResponse>>('/suppressions', {
+      method: 'POST',
+      headers,
+      body: input,
+      signal,
+    });
+  },
+
+  async lift(
+    id: string,
+    input: LiftSuppressionInput,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<SuppressionResponse>> {
+    return apiFetch<ApiDataResponse<SuppressionResponse>>(
+      `/suppressions/${encodeURIComponent(id)}/lift`,
+      {
+        method: 'POST',
+        body: input,
         signal,
       },
     );

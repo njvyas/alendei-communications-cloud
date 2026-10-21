@@ -1,6 +1,6 @@
 # UI readiness handoff for QA round 1 (frontend track)
 
-**Status (20-Oct-2026): Batch 1 implemented, uncommitted, on `develop` at `86a340c`. FE-1, FE-4 and FE-5 are built (frontend). Backend B1–B4 and B6–B9 are done (§4). FE-2 (suppressions screen) and FE-3 (message list screen) are not built.** Nothing here has been QA-tested; `docs/qa/QA_TEST_PLAN.md` still classifies these workflows as API-only until QA confirms them.
+**Status (21-Oct-2026): Batch 1 is committed on `develop` (`fd9f13d`). FE-1, FE-4 and FE-5 are built (frontend). Backend B1–B4 and B6–B9 are done (§4). FE-2 (suppressions screen) is implemented in the uncommitted Batch 2 working tree, pending owner approval (§3, "FE-2 status"). FE-3 (message list screen) is not built.** Nothing here has been QA-tested; `docs/qa/QA_TEST_PLAN.md` still classifies these workflows as API-only until QA confirms them.
 
 **Ownership.** The frontend track (Gemini) owns console implementation, UI/UX and frontend tests. The backend track (Claude) owns APIs, authorization, tenancy, audit, database, OpenAPI and integration. Where this file and an authoritative document differ, the authoritative document wins.
 
@@ -21,8 +21,8 @@
 ## 2. Existing frontend architecture (reuse, do not replace)
 
 - **Stack:** Next.js App Router (`apps/web`), React 19, TanStack Query (`src/lib/query-client.ts`, `src/components/providers.tsx`), Zustand session store (`src/lib/session-store.ts`), Tailwind 4 with CSS variables (`src/app/globals.css`).
-- **API access:** only through `src/lib/api-client.ts` — `apiFetch` (token refresh, organization header, `ApiError`) and one resource object per area (`usersApi`, `organizationsApi`, `providersApi`, `templatesApi`, `contactsApi`, `messagesApi`, …). New areas get a new resource object in the same file and style. Provider-assignment methods were added in Batch 1 (`providerAssignmentsApi`). **Still missing:** suppression and message-list methods (FE-2, FE-3).
-- **Permission gating:** `useHasPermission(key)` and the provider helpers (`useCanReadProviders`, `useCanManageProviders`) in `session-store.ts`; navigation filter in `src/app/(console)/layout.tsx` (`SECTIONS` + switch). UI gating is cosmetic; the backend is authoritative.
+- **API access:** only through `src/lib/api-client.ts` — `apiFetch` (token refresh, organization header, `ApiError`) and one resource object per area (`usersApi`, `organizationsApi`, `providersApi`, `templatesApi`, `contactsApi`, `messagesApi`, …). New areas get a new resource object in the same file and style. Provider-assignment methods were added in Batch 1 (`providerAssignmentsApi`). Suppression methods (`suppressionsApi.list`, `get`, `create`, `lift`) and the `tenantScoped` option of `channelsApi.list` (sends `X-Acc-Organization`) were added in Batch 2 (uncommitted). **Still missing:** message-list methods (FE-3).
+- **Permission gating:** `useHasPermission(key)`, the provider helpers (`useCanReadProviders`, `useCanManageProviders`) and, in Batch 2, the suppression helpers (`useCanReadSuppressions`, `useCanManageSuppressions`) in `session-store.ts`; navigation filter in `src/app/(console)/layout.tsx` (`SECTIONS` + switch). UI gating is cosmetic; the backend is authoritative.
 - **Screens:** `src/app/(console)/<area>/page.tsx` and `<area>/[id]/page.tsx`; dialogs in `src/components/<area>/*-dialog.tsx`; shared `components/ui/card.tsx`, `components/ui/status-dot.tsx`; status badges per area (e.g. `components/whatsapp/message-status-badge.tsx`, `components/providers/provider-status-badge.tsx`); message detail in `components/whatsapp/attempt-history-card.tsx`; organization picker in `components/org-selection-view.tsx` and `components/org-switcher.tsx`.
 - **Not present:** shared dialog primitive (focus trap, Escape, focus return), toast/notification, table component. If introduced, keep them small and use them for the new screens first.
 - **Tests:** `tsx --test` unit (`*.test.ts`) and security (`*.sec.test.ts`) suites under `src/`; Playwright E2E in `apps/web/e2e/` with `helpers/auth.ts` (`loginViaUi`, `assertNoTokensInStorage`). Fixtures do **not** seed provider assignments, suppressions or messages (see B5).
@@ -42,6 +42,20 @@
 **Rules for every essential item:** no new permission keys, no client-side authorization logic beyond hiding controls; labelled inputs, `role="dialog"`, Escape and focus return, `aria-live` for status; loading, empty, error and success states; tenant users never see provider names (they lack `providers.read`) — label attempts "Attempt n" with a short provider reference.
 
 **Tests per item:** unit test for new `api-client` methods and error mapping; security test that controls are hidden without the permission (pattern: `components/navigation-security.sec.test.ts`); one Playwright journey — FE-1: assign → org admin sends → disable → send refused; FE-2: suppress → send refused → lift → send accepted; FE-3: send → find in list by status filter; FE-4: multi-org user selects by name. Backend authorization is tested separately by the backend track; UI tests do not replace it.
+
+**FE-2 status (21-Oct-2026): implemented in the uncommitted Batch 2 working tree, pending owner approval; not QA-tested.**
+- **Built:**
+  - Route `/suppressions` (`src/app/(console)/suppressions/page.tsx`); navigation entry shown with `suppressions.read`.
+  - List card with status (`active`/`cleared`/all) and channel filters.
+  - Create dialog: address, optional channel, reason. Length and format pre-checks run in the browser; a fresh `Idempotency-Key` is generated per submission.
+  - Lift dialog: reason and confirmation, offered on `active` rows only and only with `suppressions.manage`.
+  - Detail dialog and status badge (`src/components/suppressions/`). All dialogs use the shared `AccessibleDialog` (`components/ui/dialog.tsx`).
+  - `error-mapping.ts` adds `PHONE_MISSING_COUNTRY_CODE`, `INVALID_PHONE_NUMBER` and `INVALID_EMAIL_ADDRESS`.
+- **Channel names.** The page lists channels with `channelsApi.list({ tenantScoped: true })`. For an org admin this depends on the proposed tenant read of the channel list: backend Batch 2, migration `0035`, pending owner approval (`DECISIONS.md` §1x.2, §1x.3). If that call fails, the page still renders, without channel names.
+- **Not built:**
+  - The client-side address filter over the loaded page that the FE-2 row asks for.
+  - The FE-2 Playwright journey: no spec under `apps/web/e2e/` covers suppressions.
+- **Tests.** `src/lib/suppressions-administration.test.ts` (6), `src/lib/suppressions-security.sec.test.ts` (7) and `src/components/suppressions/suppression-components.sec.test.ts` (8): 21/21 on 21-Oct-2026 (`TESTING.md` §6y). Under §5, the `QA_TEST_PLAN.md` rows stay API-only until QA confirms the screen.
 
 ### Can wait for QA feedback
 

@@ -246,6 +246,13 @@
       "when": 1792080000000,
       "tag": "0034_phase3_4_fallback",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1792540800000,
+      "tag": "0035_tenant_channel_catalogue",
+      "breakpoints": true
     }
   ]
 }

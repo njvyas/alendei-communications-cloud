@@ -19,7 +19,7 @@ import {
   type SimulatorBehavior,
 } from '@acc/contracts';
 import { schema } from '@acc/db';
-import { and, eq, sql, type SQL } from 'drizzle-orm';
+import { and, eq, sql, type AnyColumn, type SQL } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 
 import { RequestContext } from '../common/context/request-context';
@@ -53,6 +53,23 @@ import type {
   ReplaceProviderCapabilitiesDto,
   UpdateProviderDto,
 } from './provider.dto';
+
+/**
+ * The catalogue columns, named — the only fields `app_channel_catalogue()`
+ * returns. Wrapped in `sql` because the source is the function, not the table
+ * (Drizzle refuses a bare column of a table absent from the query); `mapWith`
+ * keeps each column's own decoder, so rows match the platform path's.
+ */
+const catalogueColumn = <T extends AnyColumn>(column: T) =>
+  sql<T['_']['data']>`${column}`.mapWith(column);
+const CHANNEL_COLUMNS = {
+  id: catalogueColumn(schema.channels.id),
+  code: catalogueColumn(schema.channels.code),
+  displayName: catalogueColumn(schema.channels.displayName),
+  status: catalogueColumn(schema.channels.status),
+  createdAt: catalogueColumn(schema.channels.createdAt),
+  updatedAt: catalogueColumn(schema.channels.updatedAt),
+};
 
 export type {
   ChannelView,
@@ -163,10 +180,22 @@ export class ProviderRegistryService {
   ): Promise<{ items: readonly ChannelView[]; page: PageInfo }> {
     const resolved = this.lists.resolve(filter, this.channelListSpec);
     const rows = await this.db.withRequestTenant(async (tx) => {
-      await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_READ);
+      const path = await this.access.authorizeCatalogueRead(tx, principal);
+      if (path === 'platform') {
+        return tx
+          .select()
+          .from(schema.channels)
+          .where(resolved.after)
+          .orderBy(...resolved.orderBy)
+          .limit(this.lists.fetchSize(resolved));
+      }
+      // A tenant operator, already asserted at its organization: the same six
+      // columns through the 0035 helper, aliased as `channels` so the shared
+      // cursor and ordering predicates (which name `"channels"."…"`) apply
+      // unchanged and the page is shaped exactly as on the platform path.
       return tx
-        .select()
-        .from(schema.channels)
+        .select(CHANNEL_COLUMNS)
+        .from(sql`app_channel_catalogue() AS ${schema.channels}`)
         .where(resolved.after)
         .orderBy(...resolved.orderBy)
         .limit(this.lists.fetchSize(resolved));

@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import type { Route } from 'next';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, type ReactNode } from 'react';
 
@@ -10,6 +11,7 @@ import {
   bootstrapSession,
   useCanReadOrganizations,
   useCanReadProviders,
+  useCanReadSuppressions,
   useHasPermission,
   useSession,
 } from '@/lib/session-store';
@@ -33,6 +35,7 @@ const SECTIONS = [
   { href: '/whatsapp', label: 'WhatsApp' },
   { href: '/templates', label: 'Templates' },
   { href: '/contacts', label: 'Contacts' },
+  { href: '/suppressions', label: 'Suppressions' },
   { href: '/channels', label: 'Channels' },
   { href: '/providers', label: 'Providers' },
   { href: '/organizations', label: 'Organizations' },
@@ -52,6 +55,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const clearSession = useSession((state) => state.clearSession);
   const canReadOrganizations = useCanReadOrganizations();
   const canReadProviders = useCanReadProviders();
+  const canReadSuppressions = useCanReadSuppressions();
   const canReadUsers = useHasPermission('users.read');
   const canReadWorkspaces = useHasPermission('workspaces.read');
   const canReadTeams = useHasPermission('teams.read');
@@ -203,6 +207,8 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
                   return canReadTemplates;
                 case '/contacts':
                   return canReadContacts;
+                case '/suppressions':
+                  return canReadSuppressions;
                 case '/channels':
                 case '/providers':
                   return canReadProviders;
@@ -231,7 +237,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
               return (
                 <li key={section.href}>
                   <Link
-                    href={section.href}
+                    href={section.href as Route}
                     aria-current={isActive ? 'page' : undefined}
                     className={cn(
                       'block rounded-md px-3 py-1.5 text-sm transition-colors',

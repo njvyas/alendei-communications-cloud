@@ -102,7 +102,7 @@ describe('db:migrate on a disposable cluster', () => {
     expect(run.output).not.toMatch(/Refusing|error/i);
     expect(run.status).toBe(0);
     expect(run.output).toContain('Roles were not changed');
-    expect(await historyCount()).toBe(35);
+    expect(await historyCount()).toBe(36);
     expect(await roleDigest()).toBe(before);
   }, 180_000);
 
@@ -110,7 +110,7 @@ describe('db:migrate on a disposable cluster', () => {
     const before = await roleDigest();
     const run = runMigrate();
     expect(run.status).toBe(0);
-    expect(run.output).toContain('Schema up to date (35 migrations verified)');
+    expect(run.output).toContain('Schema up to date (36 migrations verified)');
     expect(await roleDigest()).toBe(before);
   }, 180_000);
 
@@ -125,7 +125,7 @@ describe('db:migrate on a disposable cluster', () => {
     expect(run.status).not.toBe(0);
     expect(run.output).toContain('Refusing to migrate');
     expect(run.output).toContain('0033_phase3_3_orchestrator_dispatch');
-    expect(await historyCount()).toBe(35);
+    expect(await historyCount()).toBe(36);
     expect(await roleDigest()).toBe(before);
   }, 180_000);
 });

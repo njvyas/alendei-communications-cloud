@@ -15,6 +15,9 @@ import { ProviderRegistryService } from './provider-registry.service';
 export const PLATFORM_CATALOGUE =
   'the channel and provider catalogue is global; every route authorizes at platform scope (ADR-013 F-3)';
 
+export const CHANNEL_CATALOGUE_READ =
+  'platform callers authorize providers.read at platform scope (ADR-013 F-3); a tenant operator is admitted by suppressions.read, contacts.read, templates.read or messages.read at its resolved organization, decided in the request transaction (migration 0035)';
+
 export function requestPrincipal(): AuthPrincipal {
   const principal = RequestContext.get()?.principal;
   if (!principal) {
@@ -32,8 +35,12 @@ export function requestPrincipal(): AuthPrincipal {
  * Read-only: the catalogue changes by migration, never through the API
  * (ADR-013 F-2).
  *
- * `@OptionalTenantContext`: a selected organization only attributes a refusal
- * in the audit trail; it is never the target and never widens anything.
+ * `@OptionalTenantContext`: for a platform caller a selected organization only
+ * attributes a refusal in the audit trail; it is never the target and never
+ * widens anything. The list alone also serves tenant operators (ACC Batch 2):
+ * their resolved organization is the target of the tenant-content read check
+ * (`ProviderAccess.authorizeCatalogueRead`). Reading one channel by id stays
+ * platform-only.
  */
 @ApiTags('channels')
 @Controller('channels')
@@ -44,7 +51,7 @@ export class ChannelsController {
   @OptionalTenantContext()
   @RequiresPermission(PERMISSIONS.PROVIDERS_READ, {
     target: 'deferred',
-    because: PLATFORM_CATALOGUE,
+    because: CHANNEL_CATALOGUE_READ,
   })
   @AcceptedCredentials('userSession')
   @ApiOperation({ summary: 'List channels' })

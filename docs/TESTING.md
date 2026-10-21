@@ -853,6 +853,55 @@ The provider console browser test suite (`apps/web/e2e/providers-console.spec.ts
   - `npm run openapi:check` passes without drift.
   - Executed against disposable clone of `acc_r015_base` via `scripts/with-db-clone.mjs`; clone dropped and verified gone; template row counts unchanged.
 
+### 6y. ACC Batch 2: suppressions screen and tenant read of the channel list (uncommitted, PENDING OWNER APPROVAL)
+
+**Scope.** This evidence covers the uncommitted working tree on `fd9f13d`:
+- backend: `GET /channels` tenant read, `apps/api/test/channel-catalogue-tenant.sec-spec.ts`;
+- migration `0035`;
+- frontend FE-2: `/suppressions`.
+
+See `DECISIONS.md` §1x.2–§1x.3 and `docs/qa/UI_READINESS_HANDOFF.md` FE-2 status.
+
+**Run in the latest pass (21-Oct-2026), on the working tree.** None of these touches a database, and nothing was written to the repository.
+
+| Check | Result |
+|---|---|
+| `@acc/api` unit (`env -u NODE_ENV npx jest --selectProjects unit`, from `apps/api`), including the updated `permission-classification.spec.ts` and `scope-creep.architecture.spec.ts` | 646/646, 43 suites |
+| `@acc/web` unit and security (`npx tsx --test 'src/**/*.test.ts'`, from `apps/web`) | 374/374, 56 suites |
+| Of which Batch 2 web suites: `suppressions-administration.test.ts` (6), `suppressions-security.sec.test.ts` (7), `suppression-components.sec.test.ts` (8) | 21/21 |
+| `@acc/web` typecheck (`tsc -p tsconfig.json --noEmit --incremental false`) | clean |
+| ESLint on every Batch 2 file (no `--fix`) | clean |
+| `@acc/api` `tsc -p tsconfig.spec.json --noEmit --incremental false` (not the CI gate) | reports errors; **none** in Batch 2 files |
+
+**Isolated verification (21-Oct-2026), on the working tree.** Nothing touched the shared cluster.
+
+- **Environment.** Dedicated PostgreSQL 17.11 clusters, each with its own system identifier and bound to `127.0.0.1` only:
+  - port 55433 for the API suites;
+  - a pristine cluster for `test:disposable`;
+  - a dedicated Redis.
+- **Template.** In the API-suite cluster, the four application roles were created with LOGIN (in that cluster only), then `npm run db:migrate --workspace @acc/db` (36 migrations, `0000`–`0035`) and `npm run db:seed --workspace @acc/db` built the template `acc_b2v_base`. Each suite ran in its own `scripts/with-db-clone.mjs` copy of it, and every copy was dropped afterwards with the template unchanged.
+- **Shared cluster.** A host-side monitor saw no test process connect to port 5432. Shared roles, databases and per-role settings were unchanged, and `acc_app` `rolbypassrls` was `false` throughout.
+
+| Check | Result |
+|---|---|
+| `channel-catalogue-tenant.sec-spec.ts` (`jest --selectProjects security --testPathPatterns channel-catalogue-tenant`) | 21/21 |
+| `@acc/api` integration (`jest --selectProjects integration --runInBand`) | 174/174, 12 suites |
+| `@acc/api` security (`jest --selectProjects security --runInBand`) | 1586/1586, 61 suites |
+| `npm run build:packages` then `npm run openapi:check`; `git diff --exit-code -- apps/api/openapi apps/api/src/metadata.ts` | pass ("metadata.ts is current"; "openapi.v1.json matches the generated document"); nothing regenerated |
+| `npm run typecheck` (the CI command; `tsc -b`) | pass, 0 errors |
+| `test:disposable` (`migrate-roles.disposable-spec.ts`), first run, on a pristine cluster | 2/3: a stale `"35 migrations verified"` expectation at line 113 |
+| `test:disposable` after correcting that expectation to `36`, on a **fresh** pristine cluster | 3/3; each test asserts the cluster-wide role digest unchanged |
+
+Results for the same suites reported earlier on 21-Oct-2026 are **superseded** by the table above. Those runs used clones on the shared development cluster and were not reproducible from preserved artefacts. They included a run of `@acc/db` integration (222/222) that toggled `acc_app` `BYPASSRLS` cluster-wide (below).
+
+**Not run:**
+- `@acc/db` integration (deliberately; see the rule below);
+- an FE-2 Playwright journey: none exists.
+
+**Rule: never run the `@acc/db` integration suite against the shared development cluster.** `packages/db/src/test/principals.int-spec.ts` runs `ALTER ROLE acc_app BYPASSRLS` and restores `NOBYPASSRLS` (≈ lines 468 and 635). Roles are cluster-global, so a clone does not isolate it. Run it only in the CI service container or on a disposable cluster with no other `acc_app` workload, and afterwards confirm `rolbypassrls = false` (§6q, "Existing tests that change cluster-global roles").
+
+`apps/api/test` contains no role DDL. `audit-read.sec-spec.ts` and `platform-admin-liveness.sec-spec.ts` only *read* the attribute. `channel-catalogue-tenant.sec-spec.ts` sets transaction-local variables, rolls back, and expects its one write attempt to be refused. Even so, re-run the Batch 2 backend evidence on a disposable cluster, not the shared one.
+
 ### 6w. Phase 3 test requirements (ADR-014 — architecture frozen; nothing implemented)
 
 Phase 3 has **no test evidence yet**. The required security and concurrency categories, and the D06 (`acc_dispatch`, evidence-bound circuit writes) and D29 (organization-lifecycle serialization and the narrow dispatch exception) proofs, are listed in `ADR-014-PHASE-3-WHATSAPP-ORCHESTRATION.md` §14. They are **requirements for Gate E.3** (the send/dispatch increment) and are not implemented or claimed.

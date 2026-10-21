@@ -574,6 +574,28 @@ export function useCanManageContacts(): boolean {
 }
 
 /**
+ * Evaluates whether the actor can view suppressions in the active organization.
+ */
+export function canReadSuppressions(): boolean {
+  return hasPermission('suppressions.read');
+}
+
+export function useCanReadSuppressions(): boolean {
+  return useHasPermission('suppressions.read');
+}
+
+/**
+ * Evaluates whether the actor can manage suppressions in the active organization.
+ */
+export function canManageSuppressions(): boolean {
+  return hasPermission('suppressions.manage');
+}
+
+export function useCanManageSuppressions(): boolean {
+  return useHasPermission('suppressions.manage');
+}
+
+/**
  * Evaluates whether the actor can view messages in the active organization.
  */
 export function canReadMessages(): boolean {

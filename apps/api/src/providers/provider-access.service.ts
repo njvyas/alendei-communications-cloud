@@ -2,6 +2,7 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   AUDIT_ACTIONS,
   ERROR_CODES,
+  PERMISSIONS,
   type AuditAction,
   type AuthPrincipal,
   type PermissionKey,
@@ -11,10 +12,23 @@ import { sql } from 'drizzle-orm';
 
 import { actorFromPrincipal } from '../audit/audit-actor';
 import { AuditWriter } from '../audit/audit-writer.service';
+import type { ResolvedPrincipal } from '../auth/auth.guard';
 import { AuthorizationService } from '../auth/authorization.service';
 import { RequestContext } from '../common/context/request-context';
 import { AppException } from '../common/errors/app.exception';
 import { PLATFORM } from './provider-views';
+
+/**
+ * The tenant-content read permissions that admit a tenant operator to the
+ * channel catalogue (owner decision, ACC Batch 2): each guards content that
+ * names a channel by id. Any one, at the resolved organization, suffices.
+ */
+export const CATALOGUE_TENANT_READ_PERMISSIONS = Object.freeze([
+  PERMISSIONS.SUPPRESSIONS_READ,
+  PERMISSIONS.CONTACTS_READ,
+  PERMISSIONS.TEMPLATES_READ,
+  PERMISSIONS.MESSAGES_READ,
+] as const);
 
 /**
  * Authorization and audit for every provider operation (ADR-013 F-3, F-4).
@@ -95,6 +109,65 @@ export class ProviderAccess {
         logContext: { permission, targetScopeType: 'platform', reason: 'not a signed-in user' },
       });
     }
+  }
+
+  /**
+   * Who may read the channel catalogue, and through which path (ACC Batch 2,
+   * migration `0035`).
+   *
+   * Platform callers are decided exactly as before: any principal holding a
+   * platform-scope grant goes straight to `authorize(providers.read)` and reads
+   * the table under the 0018 RLS policy. Nothing about that path changes.
+   *
+   * A tenant operator — no platform grant, a signed-in user, the request's
+   * organization resolved and `active` — reads it when it holds at least one of
+   * `CATALOGUE_TENANT_READ_PERMISSIONS` **at that organization**. The candidate
+   * is found with the non-auditing `allows`, then decided by `assert` inside
+   * this transaction, so the grant that admits the read is the one checked.
+   * `providers.read` is never conferred and never evaluated on this path: a
+   * principal with no platform-scope grant cannot hold any platform-scope
+   * permission (platform coverage requires a platform-scope grant), so the
+   * answer is already known to be no. The route's declared check is recorded
+   * so coverage holds — the same "decided, not asserted" record `authorize`
+   * makes on its unattributable-refusal path — and is backed by the tenant
+   * `assert` above. The caller then reads through `app_channel_catalogue()`.
+   *
+   * Every other caller — a tenant user holding none of the four, a reseller, an
+   * API key, a principal with no organization in context — falls through to
+   * `authorize(providers.read)` and is refused precisely as it was before this
+   * path existed: same status, same code, same audit row.
+   */
+  async authorizeCatalogueRead(
+    tx: Transaction,
+    principal: AuthPrincipal,
+  ): Promise<'platform' | 'tenant'> {
+    const orgId = principal.tenant.orgId;
+    const hasPlatformGrant = principal.roles.some((grant) => grant.scopeType === 'platform');
+    const organizationActive =
+      (principal as Partial<ResolvedPrincipal>).organizationStatus === 'active';
+    if (
+      !hasPlatformGrant &&
+      orgId &&
+      organizationActive &&
+      principal.actorType === 'user' &&
+      principal.userId
+    ) {
+      const target = { scopeType: 'organization', scopeId: orgId } as const;
+      for (const permission of CATALOGUE_TENANT_READ_PERMISSIONS) {
+        if (await this.authorization.allows(tx, { principal, permission, target })) {
+          await this.authorization.assert(tx, {
+            principal,
+            permission,
+            target,
+            resourceType: 'Organization',
+          });
+          RequestContext.recordAuthorizationCheck(PERMISSIONS.PROVIDERS_READ);
+          return 'tenant';
+        }
+      }
+    }
+    await this.authorize(tx, principal, PERMISSIONS.PROVIDERS_READ);
+    return 'platform';
   }
 
   /**

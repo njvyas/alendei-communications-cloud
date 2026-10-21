@@ -314,7 +314,7 @@ const CATEGORIES: Category[] = [
     forbids:
       'reseller or white-label provider administration (ADR-013 PD-5, PD-6) \u2014 provider code only',
     exceptions:
-      "Pre-existing: provider-access attributes a refusal to the caller's own organization or reseller in the audit trail; it never scopes a provider. The catalogue has no tenant column. Phase 3.2: organization_provider_assignments platform assignment API (ADR-014 \u00a74, P3-D01).",
+      "Pre-existing: provider-access attributes a refusal to the caller's own organization or reseller in the audit trail; it never scopes a provider. The catalogue has no tenant column. Phase 3.2: organization_provider_assignments platform assignment API (ADR-014 \u00a74, P3-D01). ACC Batch 2 (owner decision, 21-Oct-2026): the channel catalogue list admits a tenant operator on a tenant-content read asserted at its own resolved, active organization; the organization is the authorization target only, never a provider scope, and no provider data is reachable.",
     pattern: /[\w-]*(?:reseller|white_?label|whitelabel|org_?id|organization)[\w-]*/gi,
     providerCodeOnly: true,
     pinned: {
@@ -352,10 +352,14 @@ const CATEGORIES: Category[] = [
         'organizationProviderAssignments',
         'organizations',
       ],
+      'apps/api/src/providers/channels.controller.ts': ['organization'],
       'apps/api/src/providers/provider-access.service.ts': [
+        'Organization',
         'OrganizationProviderAssignment',
         'orgId',
         'organization',
+        'organizationActive',
+        'organizationStatus',
         'reseller',
         'resellerId',
       ],

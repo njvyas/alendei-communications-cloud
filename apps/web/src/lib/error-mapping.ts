@@ -82,6 +82,18 @@ const ERROR_CODE_MAP: Record<string, { title: string; message: string }> = {
     title: 'Suppression Lifecycle Conflict',
     message: 'This suppression is not in an active state and cannot be lifted.',
   },
+  PHONE_MISSING_COUNTRY_CODE: {
+    title: 'Missing Country Code',
+    message: 'Phone number must start with "+" and include a valid country code (E.164 format).',
+  },
+  INVALID_PHONE_NUMBER: {
+    title: 'Invalid Phone Number',
+    message: 'Phone number is invalid (must be E.164: + followed by 7-15 digits).',
+  },
+  INVALID_EMAIL_ADDRESS: {
+    title: 'Invalid Email Address',
+    message: 'Please enter a valid email address per RFC 5322 (e.g. user@domain.com).',
+  },
 
   // --- Idempotency ---
   IDEMPOTENCY_KEY_PAYLOAD_MISMATCH: {

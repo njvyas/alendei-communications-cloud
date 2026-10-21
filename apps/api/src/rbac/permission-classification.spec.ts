@@ -381,9 +381,15 @@ describe('the message keys in Phase 3.3 are referenced only by the messages modu
     const hits = sources(join(ROOT, 'apps/api/src'))
       .filter((path) => pattern.test(readFileSync(path, 'utf8')))
       .map((path) => relative(ROOT, path));
+    // ACC Batch 2 (owner decision, 21-Oct-2026): messages.read is one of the
+    // four tenant-content reads that admit a tenant operator to the channel
+    // catalogue list — named by the route declaration and checked by
+    // ProviderAccess.authorizeCatalogueRead. Read only; nothing else.
     expect(hits.sort()).toEqual([
       'apps/api/src/messages/messages.controller.ts',
       'apps/api/src/messages/messages.service.ts',
+      'apps/api/src/providers/channels.controller.ts',
+      'apps/api/src/providers/provider-access.service.ts',
     ]);
   });
 });

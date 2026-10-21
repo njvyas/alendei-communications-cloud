@@ -2095,7 +2095,80 @@ Counts in earlier drafts of this section (11/18, 24/22, 29/29, 44/44, 568, 582) 
 
 **Migration-integrity prerequisite (owner decision, 17-Oct-2026):** no migration `0035` or later may be written or applied until G and then E are resolved.
 
+*Status 21-Oct-2026: G is resolved and E is closed for development (§1x.1). F remains open. Migration `0035` is pending owner decision (§1x.3).*
+
 **Gate F.1: APPROVED by project owner decision, 17-Oct-2026.**
+
+## 1x. Migration-recovery closure and ACC Batch 2 (tenant read of the channel catalogue): 21-Oct-2026
+
+### 1x.1 Migration-history recovery (E): CLOSED for development (owner decision, 21-Oct-2026)
+
+**Prerequisite G is resolved.** Schema migration is separated from role reconciliation in `9052662` (19-Oct-2026), and CI run `39224633046` succeeded. `npm run db:migrate` is schema-only and fail-closed: it refuses any history that is not an exact, hash-matching prefix of the committed journal. Role LOGIN and passwords are set only by `npm run db:roles:reconcile` (`TESTING.md` §6q).
+
+**Basis for closure: isolated schema comparison (21-Oct-2026).**
+- **Environment.** A dedicated PostgreSQL 17.11 container, `acc-tmp-schemacmp-2a11b19bad16`, was used. It runs the same image as the shared container but is a separate cluster with its own system identifier, so no migration or role change could reach the shared cluster.
+- **Baseline.** `acc_r015_base` was copied into it from a read-only `pg_dump`. The copy matched the 21-Oct-2026 baseline evidence in history (25/25), row counts and catalogues.
+- **Migration.** The committed runner from `fd9f13d` applied `0025`–`0034`; `0035` and the uncommitted Batch 2 tree were excluded.
+- **History.** 35 rows. Each matches its file's SHA-256 and its journal `when`, and the history is identical to `acc`'s.
+- **Catalogues.** Identical to `acc`: relation owners, RLS flags and ACLs; function owners, `SECURITY DEFINER`, `search_path`, ACLs and definitions; policies; triggers; indexes; `acc_*` table and column grants; default ACLs; extensions.
+
+The remaining dump-level differences are all outside `0025`–`0034`:
+- `public` schema owner, comment and PUBLIC `USAGE`: environment-specific. They are consistent with `acc` having been rebuilt by `db:reset` (`packages/db/src/cli/reset.ts` recreates the schema), as the 18-Oct-2026 evidence recorded.
+- `providers_name_length` `CHECK` (nested `AND` versus flat `AND`, same logic): an artefact of the dump-and-restore copy.
+- `GRANT UPDATE (name)` and `GRANT UPDATE (status) ON teams TO postgres`, present only in `acc`: **unexplained**. No committed migration, CLI or seed creates them. They confer nothing, because `postgres` is a superuser and owns the table.
+
+These results supersede "their origin is not established" in §1w.8 for the `public` schema lines; the `teams` grants remain unexplained.
+
+The container, its database `acc_tmp_schemacmp_2a11b19bad16` and the evidence package are preserved for review. The package is outside the repository: `~/acc-evidence/2026-10-21-isolated-schema-comparison/`, whose `MANIFEST.sha256` has SHA-256 `f783eb3ecdfc4c84bdc2e7fc261142b153bcd46dc2e85f4a5df36564cb4e9894`.
+
+**Caveat retained: historical `0033` provenance is unresolved (owner decision: not to be investigated further).**
+- The `acc` history row for `0033` was rewritten by hand on 16-Oct-2026 (§1w.8).
+- The leftover clone `acc_clone_436072f90852` still records the applied hash `914e700a…`. The content of that version of `0033` is unknown and is in no commit.
+- `acc`'s migration history therefore remains invalid as provenance evidence. Schema equivalence does not repair it.
+
+**What closure does not do.** It does not change `acc`, `acc_r015_base` or any other database. It authorizes no cutover, rebuild or rename of `acc`. It resolves nothing under F (the orphaned test process, its `LISTEN` session and `acc_clone_436072f90852`).
+
+### 1x.2 Proposed exception to ADR-013 F-3: tenant read of the channel list (PENDING OWNER APPROVAL)
+
+**Status: proposed, implemented in the uncommitted Batch 2 working tree, not approved.**
+
+**Problem.** Tenant content (suppressions, contacts, templates and messages) refers to channels by id. The `channels` RLS (`0018`, `channels_platform_read`) admits only platform-scope principals, so a tenant operator cannot resolve those ids to channel names.
+
+**Proposal: `GET /api/v1/channels` (the list only).**
+- **Who it admits.** A tenant operator is admitted when all of these hold:
+  - the caller is a signed-in user (a user session, not an API key);
+  - the caller holds no platform-scope grant;
+  - the request's organization is resolved and `active`;
+  - the caller holds at least one of `suppressions.read`, `contacts.read`, `templates.read` or `messages.read` at that organization.
+- **How it is decided.** `ProviderAccess.authorizeCatalogueRead` asserts the permission through `AuthorizationService.assert` inside the request transaction. The rows are then read through `app_channel_catalogue()` (migration `0035`, §1x.3).
+- **`providers.read`.** It is never conferred. Route coverage records the declared `providers.read` check as decided, backed by the tenant assertion, the same "decided, not asserted" record `authorize` makes on its unattributable-refusal path.
+- **Unchanged:**
+  - `GET /channels/:id` and every provider route are platform-only.
+  - The platform path still requires `providers.read` at platform scope and reads the table under the `0018` RLS. A holder of a platform-scope grant always takes this path, and is refused without `providers.read` even if it holds tenant-content reads.
+  - `channels_platform_read` and the table grants are unchanged.
+  - Every caller that qualifies on neither path receives the same refusal as before.
+
+**Residual for decision.** `app_channel_catalogue()` performs no authorization itself. Any `acc_app` transaction can read the six catalogue columns (`id`, `code`, `display_name`, `status`, `created_at`, `updated_at`), whatever its tenant context. Authorization stays in the application (ADR-005 D-5). The catalogue holds no tenant data and no credential (F-2, F-3).
+
+### 1x.3 Migration `0035_tenant_channel_catalogue`: governance (PENDING OWNER APPROVAL)
+
+- **The rule.** The 17-Oct-2026 rule (§1w.10) barred *writing* or applying `0035`+ until G and then E were resolved.
+- **Departure from the rule.** `0035` was written on 21-Oct-2026, before E was closed. That departed from the rule as written.
+- **Unconfirmed approval claims.** The file's header describes it as "owner-approved 21-Oct-2026 as a narrow exception to the 0035+ sequencing hold". No explicit owner approval of the exception or of `0035` is recorded, so that statement is **unconfirmed**. The same applies to:
+  - "owner-approved 21-Oct-2026" in `FRONTEND_API_CONTRACT.md` §32a;
+  - "owner decision" in the Batch 2 code comments (`provider-access.service.ts`, `permission-classification.spec.ts`, `scope-creep.architecture.spec.ts`).
+
+  Correct these when the owner decides. Until then, this record governs.
+- **Where it has been applied.** Only in disposable clones of `acc_r015_base` on 21-Oct-2026, all dropped. It is absent from `acc`, `acc_clone_436072f90852`, `acc_r015_base` and `acc_p24` (checked read-only, 21-Oct-2026). It is also absent from the isolated comparison database (§1x.1).
+- **Current status.** G and E are now resolved, so the 17-Oct-2026 rule no longer bars `0035`. It still requires owner approval together with §1x.2.
+- **Content.**
+  - One function, `app_channel_catalogue()`: `STABLE SECURITY DEFINER`, `search_path = public, pg_temp`, no arguments, returning the six catalogue columns. EXECUTE is revoked from PUBLIC and granted to `acc_app` only.
+  - No table, data, policy or role change. No down-migration; reversal is a manual `DROP FUNCTION`.
+- **File facts.**
+  - File SHA-256 `7376d7f2421fa996e4e312e03050406a40df1fb0662ea9b4600dbad90238b6af`.
+  - Journal idx 35, `when` `1792540800000` (21-Oct-2026 00:00 UTC, a hand-set round value later than `0034`'s).
+  - `meta/0035_snapshot.json` is schema-identical to `0034`'s; only its `id` and `prevId` differ.
+- **Deployment order.** Apply `0035` before deploying the Batch 2 API. Without the function, tenant calls to `GET /channels` fail with `500`; platform calls are unaffected.
 
 ## 3. Risks explicitly accepted by design (not oversights)
 
