@@ -48,7 +48,7 @@ export default function LoginPage() {
       // 3. Establish session and organization state
       setSession({
         accessToken,
-        user: meRes.data,
+        user: { ...meRes.data, email },
         authorization: authRes.data,
       });
 

@@ -1,4 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { ERROR_CODES, PERMISSIONS } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { eq, inArray, sql } from 'drizzle-orm';
@@ -9,6 +11,7 @@ import { CredentialService } from '../src/iam/credential.service';
 import {
   PASSWORD,
   PREFIX,
+  createScopedUser,
   createTenant,
   destroyTenant,
   purgeMessageEvents,
@@ -16,6 +19,7 @@ import {
   type Harness,
   type TenantFixture,
 } from './auth-harness';
+import { OpenApiValidator } from './openapi-validator';
 
 const url = (p: string) => `/${PREFIX}${p}`;
 
@@ -510,6 +514,275 @@ describe('Messages API Suite (Phase 3.3)', () => {
 
       expect(res.status).toBe(404);
       expect(res.body.error.code).toBe(ERROR_CODES.RESOURCE_NOT_FOUND);
+    });
+  });
+  describe('GET /messages (list)', () => {
+    let tenantC: TenantFixture;
+    let tokenC: string;
+    let noReadToken: string;
+    let otherWorkspaceId: string;
+    let templateId: string;
+    let smsChannelId: string;
+    /** Seeded in creation order; the list is newest first. */
+    const seeded: string[] = [];
+    const base = Date.parse('2026-10-01T00:00:00.000Z');
+
+    beforeAll(async () => {
+      tenantC = await createTenant(h.admin, 'msg-list', credentials);
+      const perms = await h.admin
+        .select({ id: schema.permissions.id })
+        .from(schema.permissions)
+        .where(eq(schema.permissions.key, PERMISSIONS.MESSAGES_READ));
+      const roleId = uuidv7();
+      createdRoleIds.push(roleId);
+      await h.admin.insert(schema.roles).values({
+        id: roleId,
+        orgId: tenantC.orgId,
+        key: `msg_list_${randomBytes(4).toString('hex')}`,
+        name: 'Messages Reader',
+        description: 'messages.read only',
+        isSystemRole: false,
+        allowedScopeTypes: ['organization'],
+      });
+      for (const p of perms) {
+        await h.admin
+          .insert(schema.rolePermissions)
+          .values({ roleId, permissionId: p.id, orgId: tenantC.orgId });
+      }
+      await h.admin.transaction(async (tx) => {
+        await tx.execute(sql`select set_config('app.is_platform_admin','on',true)`);
+        await tx.insert(schema.userRoles).values({
+          userId: tenantC.userId,
+          roleId,
+          scopeType: 'organization',
+          scopeId: tenantC.orgId,
+        });
+      });
+
+      const [sms] = await h.admin
+        .select({ id: schema.channels.id })
+        .from(schema.channels)
+        .where(eq(schema.channels.code, 'sms'));
+      smsChannelId = sms!.id;
+      const [ws] = await h.admin
+        .insert(schema.workspaces)
+        .values({
+          orgId: tenantC.orgId,
+          name: 'Second',
+          slug: `second-${randomBytes(3).toString('hex')}`,
+        })
+        .returning({ id: schema.workspaces.id });
+      otherWorkspaceId = ws!.id;
+      const [tpl] = await h.admin
+        .insert(schema.templates)
+        .values({ orgId: tenantC.orgId, channelId, name: 'list_tpl', body: 'Hello' })
+        .returning({ id: schema.templates.id });
+      templateId = tpl!.id;
+
+      // Five messages, one day apart: varied status, channel, workspace, template.
+      const plan = [
+        { status: 'accepted', channel: channelId, workspace: tenantC.workspaceId, template: null },
+        {
+          status: 'failed',
+          channel: channelId,
+          workspace: tenantC.workspaceId,
+          template: templateId,
+        },
+        { status: 'queued', channel: smsChannelId, workspace: tenantC.workspaceId, template: null },
+        { status: 'failed', channel: channelId, workspace: otherWorkspaceId, template: null },
+        {
+          status: 'outcome_unknown',
+          channel: channelId,
+          workspace: tenantC.workspaceId,
+          template: null,
+        },
+      ] as const;
+      for (const [i, m] of plan.entries()) {
+        const contactId = uuidv7();
+        await h.admin.insert(schema.contacts).values({
+          id: contactId,
+          orgId: tenantC.orgId,
+          workspaceId: m.workspace,
+          displayName: `List ${i}`,
+        });
+        const id = uuidv7();
+        await h.admin.insert(schema.messages).values({
+          id,
+          orgId: tenantC.orgId,
+          workspaceId: m.workspace,
+          contactId,
+          channelId: m.channel,
+          templateId: m.template,
+          status: m.status,
+          payload: { text: `secret body ${i}` },
+          recipientAddress: `+120255577${10 + i}`,
+          failureReason: m.status === 'failed' ? 'NO_ELIGIBLE_PROVIDER' : null,
+          correlationId: uuidv7(),
+          createdAt: new Date(base + i * 86_400_000),
+        });
+        seeded.push(id);
+      }
+
+      await h.clearRateLimits();
+      tokenC = (
+        await request(h.app.getHttpServer())
+          .post(url('/auth/login'))
+          .send({ email: tenantC.email, password: PASSWORD })
+          .expect(200)
+      ).body.data.accessToken;
+      const reader = await createScopedUser(
+        h.admin,
+        tenantC,
+        credentials,
+        'organization',
+        tenantC.orgId,
+        'msg-noread',
+      );
+      await h.clearRateLimits();
+      noReadToken = (
+        await request(h.app.getHttpServer())
+          .post(url('/auth/login'))
+          .send({ email: reader.email, password: PASSWORD })
+          .expect(200)
+      ).body.data.accessToken;
+    }, 60_000);
+
+    afterAll(async () => {
+      await h.admin.delete(schema.messages).where(eq(schema.messages.orgId, tenantC.orgId));
+      await h.admin.delete(schema.contacts).where(eq(schema.contacts.orgId, tenantC.orgId));
+      await destroyTenant(h.admin, tenantC);
+    });
+
+    const list = (query = '', token = tokenC) =>
+      request(h.app.getHttpServer())
+        .get(url(`/messages${query ? `?${query}` : ''}`))
+        .set('Authorization', `Bearer ${token}`);
+    const ids = (res: request.Response) => res.body.data.map((m: { id: string }) => m.id);
+
+    it('1. lists the organization’s messages newest first, metadata only (no payload)', async () => {
+      const res = await list().expect(200);
+      expect(ids(res)).toEqual([...seeded].reverse());
+      expect(res.body.page).toMatchObject({ hasMore: false, nextCursor: null });
+      const first = res.body.data[0];
+      expect(Object.keys(first).sort()).toEqual(
+        [
+          'attemptCount',
+          'channelCode',
+          'channelId',
+          'completedAt',
+          'contactId',
+          'createdAt',
+          'failureReason',
+          'id',
+          'orgId',
+          'recipientAddress',
+          'status',
+          'templateId',
+          'workspaceId',
+        ].sort(),
+      );
+      expect(first).toMatchObject({
+        orgId: tenantC.orgId,
+        channelCode: 'whatsapp',
+        attemptCount: 0,
+      });
+      expect(JSON.stringify(res.body)).not.toContain('secret body');
+    });
+
+    it('2. pages with a cursor, without gaps or repeats', async () => {
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      do {
+        const res = await list(
+          `limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+        ).expect(200);
+        expect(res.body.data.length).toBeLessThanOrEqual(2);
+        seen.push(...ids(res));
+        cursor = res.body.page.nextCursor;
+      } while (cursor);
+      expect(seen).toEqual([...seeded].reverse());
+
+      const asc = await list('sort=createdAt').expect(200);
+      expect(ids(asc)).toEqual(seeded);
+    });
+
+    it('3. filters by status, channel, workspace, template and creation window', async () => {
+      expect(ids(await list('status=failed').expect(200))).toEqual([seeded[3], seeded[1]]);
+      expect(ids(await list('channelCode=sms').expect(200))).toEqual([seeded[2]]);
+      expect(ids(await list('channelCode=email').expect(200))).toEqual([]);
+      expect(ids(await list(`workspaceId=${otherWorkspaceId}`).expect(200))).toEqual([seeded[3]]);
+      expect(ids(await list(`templateId=${templateId}`).expect(200))).toEqual([seeded[1]]);
+      const from = new Date(base + 86_400_000).toISOString();
+      const to = new Date(base + 3 * 86_400_000).toISOString();
+      expect(
+        ids(
+          await list(
+            `createdFrom=${encodeURIComponent(from)}&createdTo=${encodeURIComponent(to)}`,
+          ).expect(200),
+        ),
+      ).toEqual([seeded[2], seeded[1]]);
+      expect(ids(await list('status=failed&channelCode=whatsapp').expect(200))).toEqual([
+        seeded[3],
+        seeded[1],
+      ]);
+    });
+
+    it('4. refuses invalid filters and unknown fields with 400', async () => {
+      for (const query of [
+        'status=delivered',
+        'channelCode=fax',
+        'workspaceId=not-a-uuid',
+        'providerId=1',
+        'createdFrom=yesterday',
+        'sort=status',
+        'limit=0',
+        'recipient=%2B12025557710',
+        `orgId=${tenantA.orgId}`,
+      ]) {
+        const res = await list(query);
+        expect([query, res.status]).toEqual([query, 400]);
+      }
+    });
+
+    it('5. requires messages.read (403 without it, 401 without a credential)', async () => {
+      const res = await list('', noReadToken);
+      expect(res.status).toBe(403);
+      await request(h.app.getHttpServer()).get(url('/messages')).expect(401);
+    });
+
+    it('6. never shows another organization’s messages, whatever the filters or header', async () => {
+      const resA = await request(h.app.getHttpServer())
+        .get(url(`/messages?workspaceId=${tenantC.workspaceId}`))
+        .set('Authorization', `Bearer ${userAToken}`)
+        .set('X-Acc-Organization', tenantA.orgId)
+        .expect(200);
+      expect(ids(resA)).toEqual([]);
+      const all = await request(h.app.getHttpServer())
+        .get(url('/messages?limit=100'))
+        .set('Authorization', `Bearer ${userAToken}`)
+        .set('X-Acc-Organization', tenantA.orgId)
+        .expect(200);
+      for (const m of all.body.data) expect(m.orgId).toBe(tenantA.orgId);
+      expect(ids(all)).not.toEqual(expect.arrayContaining([seeded[0]]));
+
+      const forged = await request(h.app.getHttpServer())
+        .get(url('/messages'))
+        .set('Authorization', `Bearer ${userAToken}`)
+        .set('X-Acc-Organization', tenantC.orgId);
+      expect(forged.status).toBe(403);
+    });
+
+    it('7. responses conform to the OpenAPI document', async () => {
+      const validator = new OpenApiValidator(
+        JSON.parse(readFileSync(join(__dirname, '..', 'openapi', 'openapi.v1.json'), 'utf8')),
+      );
+      const problems: string[] = [];
+      for (const query of ['', 'limit=2', 'status=failed', 'status=delivered']) {
+        const path = `/messages${query ? `?${query}` : ''}`;
+        problems.push(...validator.check('GET', url(path), await list(query)));
+      }
+      problems.push(...validator.check('GET', url('/messages'), await list('', noReadToken)));
+      expect(problems).toEqual([]);
     });
   });
 });

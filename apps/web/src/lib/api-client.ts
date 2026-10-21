@@ -2,16 +2,20 @@ import type {
   ApiDataResponse,
   ApiErrorResponse,
   ApiPagedResponse,
+  AssignmentStatus,
   ChannelCode,
   ChannelStatus,
   ConsentEventResponse,
   ConsentEventType,
   ContactIdentityResponse,
   ContactResponse,
+  CreateOrganizationProviderAssignmentInput,
   EffectiveConsentResponse,
   EffectiveConsentState,
   MessageDetailResponse,
   MessageStatus,
+  OrganizationProviderAssignment,
+  PageInfo,
   ProviderCircuitPolicy,
   ProviderCircuitState,
   ProviderFailureCategory,
@@ -26,9 +30,20 @@ import type {
   SimulatorHealthBehavior,
   TemplateApprovalStatus,
   TemplateResponse,
+  UpdateOrganizationProviderAssignmentInput,
 } from '@acc/contracts';
+import { ASSIGNMENT_STATUS } from '@acc/contracts';
 
-export type { EffectiveConsentState, MessageDetailResponse };
+export type {
+  AssignmentStatus,
+  CreateOrganizationProviderAssignmentInput,
+  EffectiveConsentState,
+  MessageDetailResponse,
+  OrganizationProviderAssignment,
+  PageInfo,
+  UpdateOrganizationProviderAssignmentInput,
+};
+export { ASSIGNMENT_STATUS };
 
 /**
  * Browser-side API client for Alendei Communications Cloud.
@@ -403,6 +418,7 @@ export interface AuthTokens {
 
 export interface UserIdentity {
   readonly userId: string;
+  readonly email?: string;
   readonly actorType: 'user' | string;
   readonly authMethod: 'session' | string;
   readonly sessionId: string;
@@ -955,6 +971,62 @@ export const organizationsApi = {
       signal,
       skipTenant: true,
     });
+  },
+
+  /**
+   * Fetches all accessible organizations across pages up to maxPages (safety bound, default 10).
+   * Follows page.nextCursor until hasMore is false or the bound is reached.
+   * If any page request fails, preserves loading/error states and UUID fallback behavior.
+   */
+  async listAll(
+    params: Omit<ListOrganizationsParams, 'cursor'> = {},
+    signal?: AbortSignal,
+    maxPages = 10,
+  ): Promise<ApiPagedResponse<OrganizationView>> {
+    let cursor: string | null = null;
+    const allOrgs: OrganizationView[] = [];
+    let pageCount = 0;
+    let lastHasMore = false;
+    let lastNextCursor: string | null = null;
+    let lastLimit = params.limit ?? 100;
+
+    while (pageCount < maxPages) {
+      pageCount++;
+      try {
+        const res = await this.list(
+          { ...params, limit: 100, ...(cursor ? { cursor } : {}) },
+          signal,
+        );
+        allOrgs.push(...res.data);
+        lastHasMore = res.page.hasMore;
+        lastNextCursor = res.page.nextCursor;
+        lastLimit = res.page.limit;
+
+        if (!res.page.hasMore || !res.page.nextCursor) {
+          break;
+        }
+        cursor = res.page.nextCursor;
+      } catch (err) {
+        if (signal?.aborted) {
+          throw err;
+        }
+        // If the very first page failed, rethrow so callers know lookup failed and fallback to UUIDs
+        if (pageCount === 1) {
+          throw err;
+        }
+        // If a subsequent page failed, return partial results already collected; remaining will fall back to UUIDs
+        break;
+      }
+    }
+
+    return {
+      data: allOrgs,
+      page: {
+        limit: lastLimit,
+        hasMore: lastHasMore,
+        nextCursor: lastNextCursor,
+      },
+    };
   },
 
   async get(id: string, signal?: AbortSignal): Promise<ApiDataResponse<OrganizationView>> {
@@ -1876,6 +1948,120 @@ export const providerCircuitPolicyApi = {
       signal,
       skipTenant: true,
     });
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Organization Provider Assignments API (Phase 3.2, ADR-014 §4)
+// -----------------------------------------------------------------------------
+
+export interface ListProviderAssignmentsParams {
+  readonly channelId?: string;
+  readonly status?: AssignmentStatus;
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: string;
+}
+
+export const providerAssignmentsApi = {
+  async list(
+    orgId: string,
+    params: ListProviderAssignmentsParams = {},
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<OrganizationProviderAssignment>> {
+    const query = new URLSearchParams();
+    if (params.channelId) query.set('channelId', params.channelId);
+    if (params.status) query.set('status', params.status);
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.sort) query.set('sort', params.sort);
+
+    const queryString = query.toString();
+    const endpoint = `/organizations/${encodeURIComponent(orgId)}/provider-assignments${queryString ? `?${queryString}` : ''}`;
+
+    return apiFetch<ApiPagedResponse<OrganizationProviderAssignment>>(endpoint, {
+      method: 'GET',
+      signal,
+      skipTenant: true,
+    });
+  },
+
+  async get(
+    orgId: string,
+    assignmentId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<OrganizationProviderAssignment>> {
+    return apiFetch<ApiDataResponse<OrganizationProviderAssignment>>(
+      `/organizations/${encodeURIComponent(orgId)}/provider-assignments/${encodeURIComponent(assignmentId)}`,
+      {
+        method: 'GET',
+        signal,
+        skipTenant: true,
+      },
+    );
+  },
+
+  async create(
+    orgId: string,
+    input: CreateOrganizationProviderAssignmentInput,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<OrganizationProviderAssignment>> {
+    return apiFetch<ApiDataResponse<OrganizationProviderAssignment>>(
+      `/organizations/${encodeURIComponent(orgId)}/provider-assignments`,
+      {
+        method: 'POST',
+        body: input,
+        signal,
+        skipTenant: true,
+      },
+    );
+  },
+
+  async update(
+    orgId: string,
+    assignmentId: string,
+    input: UpdateOrganizationProviderAssignmentInput,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<OrganizationProviderAssignment>> {
+    return apiFetch<ApiDataResponse<OrganizationProviderAssignment>>(
+      `/organizations/${encodeURIComponent(orgId)}/provider-assignments/${encodeURIComponent(assignmentId)}`,
+      {
+        method: 'PATCH',
+        body: input,
+        signal,
+        skipTenant: true,
+      },
+    );
+  },
+
+  async enable(
+    orgId: string,
+    assignmentId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<OrganizationProviderAssignment>> {
+    return apiFetch<ApiDataResponse<OrganizationProviderAssignment>>(
+      `/organizations/${encodeURIComponent(orgId)}/provider-assignments/${encodeURIComponent(assignmentId)}/enable`,
+      {
+        method: 'POST',
+        signal,
+        skipTenant: true,
+      },
+    );
+  },
+
+  async disable(
+    orgId: string,
+    assignmentId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<OrganizationProviderAssignment>> {
+    return apiFetch<ApiDataResponse<OrganizationProviderAssignment>>(
+      `/organizations/${encodeURIComponent(orgId)}/provider-assignments/${encodeURIComponent(assignmentId)}/disable`,
+      {
+        method: 'POST',
+        signal,
+        skipTenant: true,
+      },
+    );
   },
 };
 

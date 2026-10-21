@@ -47,11 +47,13 @@ export const ALL_MESSAGE_EVENT_TYPES: readonly MessageEventType[] = Object.freez
   Object.values(MESSAGE_EVENT_TYPES),
 );
 
+/** `POST /messages` body — mirrors `SendMessageDto`. */
 export interface SendMessageRequest {
-  readonly recipientAddress: string;
-  readonly templateId?: string | null;
-  readonly workspaceId?: string | null;
-  readonly payload?: Record<string, unknown>;
+  readonly channelCode: string;
+  readonly recipient: string;
+  readonly templateId?: string;
+  readonly workspaceId?: string;
+  readonly payload: Record<string, unknown>;
 }
 
 export interface QueuedMessageResponse {
@@ -61,6 +63,38 @@ export interface QueuedMessageResponse {
   readonly correlationId: string;
 }
 
+/** One dispatch attempt as `GET /messages/:id` returns it, ordered by `attemptNumber`. */
+export interface MessageAttemptResponse {
+  readonly id: string;
+  readonly attemptNumber: number;
+  readonly providerId: string;
+  readonly status: MessageAttemptStatus;
+  readonly failureReason: string | null;
+  readonly latencyMs: number | null;
+  readonly completedAt: string | null;
+}
+
+/**
+ * One row of `GET /messages` — metadata and an attempt count only. The payload
+ * and per-attempt detail are on `GET /messages/:id`.
+ */
+export interface MessageSummaryResponse {
+  readonly id: string;
+  readonly orgId: string;
+  readonly workspaceId: string;
+  readonly contactId: string;
+  readonly channelId: string;
+  readonly channelCode: string;
+  readonly templateId: string | null;
+  readonly status: MessageStatus;
+  readonly recipientAddress: string;
+  readonly failureReason: string | null;
+  readonly attemptCount: number;
+  readonly createdAt: string;
+  readonly completedAt: string | null;
+}
+
+/** `GET /messages/:id` — exactly the fields `MessagesService.getMessage` returns. */
 export interface MessageDetailResponse {
   readonly id: string;
   readonly orgId: string;
@@ -71,10 +105,8 @@ export interface MessageDetailResponse {
   readonly status: MessageStatus;
   readonly recipientAddress: string;
   readonly payload: Record<string, unknown>;
-  readonly currentAttemptId: string | null;
   readonly failureReason: string | null;
-  readonly correlationId: string;
   readonly createdAt: string;
-  readonly updatedAt: string;
   readonly completedAt: string | null;
+  readonly attempts: readonly MessageAttemptResponse[];
 }

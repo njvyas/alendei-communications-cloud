@@ -99,7 +99,7 @@ const CATEGORIES: Category[] = [
     forbids:
       'a worker/job harness or new messaging worker infrastructure (ADR-013 PD-1, ADR-004 D-5)',
     exceptions:
-      'Pre-existing: the hot-reload listener reconnect timer and an ioredis option. No queue, processor, cron, interval or job runner exists; `@nestjs/schedule` is a declared but unused dependency (pinned below). Phase 3.3: message_dispatch_queue table class and dispatcher worker (ADR-014 §9). B1 (first release, 20-Oct-2026): the in-process loop that runs that dispatcher (`DispatchWorker`, ADR-014 D18 — poll 1 s ±20 %, batch ≤ 10, lease 30 s) and its three configuration keys. It is a single setTimeout chain over the existing PostgreSQL queue: no queue library, job framework, cron or `@nestjs/schedule`.',
+      'Pre-existing: the hot-reload listener reconnect timer and an ioredis option. No queue, processor, cron, interval or job runner exists; `@nestjs/schedule` is a declared but unused dependency (pinned below). Phase 3.3: message_dispatch_queue table class and dispatcher worker (ADR-014 §9). B1 (first release, 20-Oct-2026): the in-process loop that runs that dispatcher (`DispatchWorker`, ADR-014 D18 — poll 1 s ±20 %, batch ≤ 10, lease 30 s) and its three configuration keys. It is a single setTimeout chain over the existing PostgreSQL queue: no queue library, job framework, cron or `@nestjs/schedule`. UI readiness (20-Oct-2026): the documentation-only `QueuedMessage` OpenAPI schema describing the existing `POST /messages` 202 body, and the `queued` value of the `GET /messages` `status` filter enum in the generated `metadata.ts`.',
     pattern: /[\w-]*(?:worker|queue|bullmq|processor|cron|setInterval|schedul|job)[\w-]*/gi,
     providerCodeOnly: false,
     pinned: {
@@ -129,12 +129,15 @@ const CATEGORIES: Category[] = [
         'queued',
         'worker',
       ],
+      'apps/api/src/messages/messages.controller.ts': ['QueuedMessageSchema'],
       'apps/api/src/messages/messages.module.ts': ['DispatchWorker', 'worker'],
       'apps/api/src/messages/messages.service.ts': [
         'QueuedMessageResponse',
         'messageDispatchQueue',
         'queued',
       ],
+      'apps/api/src/metadata.ts': ['queued'],
+      'apps/api/src/openapi/openapi-schemas.ts': ['QueuedMessage', 'QueuedMessageSchema', 'queued'],
       'apps/api/src/providers/provider-configuration.listener.ts': ['scheduleReconnect'],
       'apps/api/src/redis/redis.module.ts': ['enableOfflineQueue'],
       'packages/contracts/src/messages.ts': ['QUEUED', 'QueuedMessageResponse', 'queued'],
@@ -161,7 +164,7 @@ const CATEGORIES: Category[] = [
     key: 'routing',
     forbids: 'provider routing, failover, weights, priorities or canary (ADR-013 PD-4, PD-6)',
     exceptions:
-      'Pre-existing: HTTP error-status fallbacks and a tracing fallback; the approved routing-eligibility contract (`routingEligibility`, `PROVIDER_ADAPTER.md` §6h) and the advisory in-process candidate view (§3a.1). Neither routes or fails over. Phase 3.2: organization_provider_assignments priority column and constraints (ADR-014 §4, §17.1). Phase 3.3: message status "routing" and priority selection (ADR-014 §4, §9). Phase 3.4: same-channel WhatsApp fallback and candidate exhaustion (P3-D13, P3-D14, P3-D15, P3-D03).',
+      'Pre-existing: HTTP error-status fallbacks and a tracing fallback; the approved routing-eligibility contract (`routingEligibility`, `PROVIDER_ADAPTER.md` §6h) and the advisory in-process candidate view (§3a.1). Neither routes or fails over. Phase 3.2: organization_provider_assignments priority column and constraints (ADR-014 §4, §17.1). Phase 3.3: message status "routing" and priority selection (ADR-014 §4, §9). Phase 3.4: same-channel WhatsApp fallback and candidate exhaustion (P3-D13, P3-D14, P3-D15, P3-D03). UI readiness (20-Oct-2026): the existing message status "routing" as a value of the `GET /messages` `status` filter enum in the generated `metadata.ts`; no routing behaviour.',
     pattern: /[\w-]*(?:rout(?:er|ing)|failover|fallback|priorit|weight|canary)[\w-]*/gi,
     providerCodeOnly: false,
     pinned: {
@@ -171,7 +174,7 @@ const CATEGORIES: Category[] = [
         'isFallbackEligible',
         'priority',
       ],
-      'apps/api/src/metadata.ts': ['priority'],
+      'apps/api/src/metadata.ts': ['priority', 'routing'],
       'apps/api/src/observability/tracing.ts': ['fallback'],
       'apps/api/src/openapi/openapi-schemas.ts': ['priority'],
       'apps/api/src/providers/organization-provider-assignments.controller.ts': ['priority'],
@@ -266,7 +269,7 @@ const CATEGORIES: Category[] = [
     key: 'lifecycle',
     forbids: 'the message lifecycle \u2014 messages, attempts, delivery, webhooks (ADR-013 PD-3)',
     exceptions:
-      'Pre-existing: the `checkStatus`/`parseWebhook` interface members, which the simulator refuses (PD-6) and `GuardedProviderAdapter` declares abstract (ADR-015 R-13), a role description and a forbidden metric label name. Phase 3.3: message attempts table and lifecycle status (ADR-014 §4, §9.2).',
+      'Pre-existing: the `checkStatus`/`parseWebhook` interface members, which the simulator refuses (PD-6) and `GuardedProviderAdapter` declares abstract (ADR-015 R-13), a role description and a forbidden metric label name. Phase 3.3: message attempts table and lifecycle status (ADR-014 §4, §9.2). UI readiness (20-Oct-2026): the `MessageAttemptResponse` contract type and the documentation-only `MessageAttempt` OpenAPI schema, describing the attempts `GET /messages/:id` already returns.',
     pattern:
       /[\w-]*(?:message_?attempt|webhook|deliver|dlr|checkStatus|parseWebhook|inbound_?message|conversation)[\w-]*/gi,
     providerCodeOnly: false,
@@ -274,9 +277,18 @@ const CATEGORIES: Category[] = [
       'apps/api/src/messages/dispatch/dispatcher.service.ts': ['message_attempts'],
       'apps/api/src/messages/messages.service.ts': ['messageAttempts'],
       'apps/api/src/observability/metrics.service.ts': ['conversation_id'],
+      'apps/api/src/openapi/openapi-schemas.ts': [
+        'MESSAGE_ATTEMPT_STATUSES',
+        'MessageAttempt',
+        'MessageAttemptSchema',
+      ],
       'apps/api/src/provider-adapters/circuit-admission.ts': ['checkStatus', 'parseWebhook'],
       'apps/api/src/provider-adapters/simulator.adapter.ts': ['checkStatus', 'parseWebhook'],
-      'packages/contracts/src/messages.ts': ['MESSAGE_ATTEMPT_STATUSES', 'MessageAttemptStatus'],
+      'packages/contracts/src/messages.ts': [
+        'MESSAGE_ATTEMPT_STATUSES',
+        'MessageAttemptResponse',
+        'MessageAttemptStatus',
+      ],
       'packages/contracts/src/provider-adapter.ts': ['checkStatus', 'parseWebhook'],
       'packages/contracts/src/roles.ts': ['Conversation'],
       'packages/db/src/schema/messages.ts': [

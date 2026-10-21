@@ -1,7 +1,10 @@
 'use client';
 
+import { useContext } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import { QueryClientContext, useQuery } from '@tanstack/react-query';
 
+import { organizationsApi, type OrganizationView } from '../lib/api-client';
 import { clearAuthenticatedQueryCache } from '../lib/query-client';
 import { useSession } from '../lib/session-store';
 
@@ -39,6 +42,32 @@ export function getScopedCollectionRoot(
  *    404s, and context desynchronization.
  */
 export function OrgSwitcher() {
+  const queryClient = useContext(QueryClientContext);
+  if (!queryClient) {
+    return <OrgSwitcherBase />;
+  }
+  return <OrgSwitcherWithQuery />;
+}
+
+function OrgSwitcherWithQuery() {
+  const { data } = useQuery({
+    queryKey: ['organizations', 'lookup'],
+    queryFn: ({ signal }) => organizationsApi.listAll({}, signal),
+    staleTime: 60_000,
+    retry: false,
+  });
+
+  const orgMap = new Map<string, OrganizationView>();
+  if (data?.data) {
+    for (const org of data.data) {
+      orgMap.set(org.id, org);
+    }
+  }
+
+  return <OrgSwitcherBase orgMap={orgMap} />;
+}
+
+function OrgSwitcherBase({ orgMap }: { orgMap?: Map<string, OrganizationView> }) {
   const router = useRouter();
   const pathname = usePathname();
   const authorizedOrganizationIds = useSession((state) => state.authorizedOrganizationIds);
@@ -51,10 +80,12 @@ export function OrgSwitcher() {
 
   if (authorizedOrganizationIds.length === 1) {
     const orgId = authorizedOrganizationIds[0];
+    const org = orgId ? orgMap?.get(orgId) : undefined;
+    const label = org ? `${org.name} (${org.slug})` : orgId;
     return (
       <div className="flex items-center gap-1.5 rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2.5 py-1 text-xs font-mono text-[var(--color-ink-muted)]">
         <span className="font-sans text-[var(--color-ink)]">Org:</span>
-        <span className="truncate max-w-[120px] sm:max-w-none">{orgId}</span>
+        <span className="truncate max-w-[160px] sm:max-w-none">{label}</span>
       </div>
     );
   }
@@ -86,11 +117,15 @@ export function OrgSwitcher() {
         }}
         className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2.5 py-1 text-xs font-mono text-[var(--color-ink)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
       >
-        {authorizedOrganizationIds.map((id) => (
-          <option key={id} value={id}>
-            {id}
-          </option>
-        ))}
+        {authorizedOrganizationIds.map((id) => {
+          const org = orgMap?.get(id);
+          const label = org ? `${org.name} (${org.slug})` : id;
+          return (
+            <option key={id} value={id}>
+              {label}
+            </option>
+          );
+        })}
       </select>
     </div>
   );

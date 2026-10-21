@@ -56,8 +56,10 @@ export class OrganizationProviderAssignmentsService {
         column: schema.organizationProviderAssignments.priority,
         encode: (row) => String((row as unknown as Record<string, unknown>).priority),
       },
+      // By the UUIDv7 id, as every other list sorts `createdAt`: the cursor
+      // carries the id, so the keyset predicate must compare the id column.
       createdAt: {
-        column: schema.organizationProviderAssignments.createdAt,
+        column: schema.organizationProviderAssignments.id,
         encode: (row) => String((row as unknown as Record<string, unknown>).id),
       },
     },

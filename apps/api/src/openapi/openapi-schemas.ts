@@ -3,6 +3,8 @@ import {
   AUDIT_OUTCOMES,
   CHANNEL_CODES,
   CHANNEL_STATUSES,
+  MESSAGE_ATTEMPT_STATUSES,
+  MESSAGE_STATUSES,
   PROVIDER_CIRCUIT_POLICY_BOUNDS,
   PROVIDER_CIRCUIT_STATES,
   PROVIDER_HEALTH_CLASSIFICATIONS,
@@ -16,6 +18,7 @@ import {
   SCOPE_TYPES,
   SIMULATOR_BEHAVIORS,
   SIMULATOR_HEALTH_BEHAVIORS,
+  SUPPRESSION_STATUSES,
 } from '@acc/contracts';
 import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 
@@ -218,6 +221,12 @@ export class PrincipalSchema {
   @ApiProperty({ enum: ACTOR_TYPES }) actorType!: string;
   @ApiProperty({ enum: ['session', 'api_key'] }) authMethod!: string;
   @ApiProperty(nullableUuid) userId!: string | null;
+  @ApiProperty({
+    type: 'string',
+    nullable: true,
+    description: "The signed-in user's own email; null for an API-key principal.",
+  })
+  email!: string | null;
   @ApiProperty(nullableUuid) apiKeyId!: string | null;
   @ApiProperty(nullableUuid) sessionId!: string | null;
   @ApiProperty(timestamp) authenticatedAt!: string;
@@ -523,4 +532,83 @@ export class OrganizationProviderAssignmentSchema {
   @ApiProperty({ enum: ['active', 'disabled'] }) status!: string;
   @ApiProperty(timestamp) createdAt!: string;
   @ApiProperty(timestamp) updatedAt!: string;
+}
+
+// --- suppressions (Phase 3.1, ADR-014 §6) ----------------------------------------
+
+@ApiSchema({ name: 'Suppression' })
+export class SuppressionSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty(uuid) orgId!: string;
+  @ApiProperty({ ...nullableUuid, description: 'Null: suppressed on every channel.' })
+  channelId!: string | null;
+  @ApiProperty() rawAddress!: string;
+  @ApiProperty() normalizedAddress!: string;
+  @ApiProperty() reason!: string;
+  @ApiProperty({ enum: SUPPRESSION_STATUSES }) status!: string;
+  @ApiProperty(nullableTimestamp) clearedAt!: string | null;
+  @ApiProperty(nullableString) clearedReason!: string | null;
+  @ApiProperty(timestamp) createdAt!: string;
+  @ApiProperty(timestamp) updatedAt!: string;
+}
+
+// --- messages (Phase 3.3, ADR-014 §9) --------------------------------------------
+
+@ApiSchema({ name: 'QueuedMessage' })
+export class QueuedMessageSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty({ enum: ['queued'] }) status!: string;
+  @ApiProperty(timestamp) createdAt!: string;
+  @ApiProperty() correlationId!: string;
+}
+
+@ApiSchema({ name: 'MessageSummary' })
+export class MessageSummarySchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty(uuid) orgId!: string;
+  @ApiProperty(uuid) workspaceId!: string;
+  @ApiProperty(uuid) contactId!: string;
+  @ApiProperty(uuid) channelId!: string;
+  @ApiProperty({ enum: CHANNEL_CODES }) channelCode!: string;
+  @ApiProperty(nullableUuid) templateId!: string | null;
+  @ApiProperty({ enum: MESSAGE_STATUSES }) status!: string;
+  @ApiProperty() recipientAddress!: string;
+  @ApiProperty(nullableString) failureReason!: string | null;
+  @ApiProperty({ type: 'integer', minimum: 0 }) attemptCount!: number;
+  @ApiProperty(timestamp) createdAt!: string;
+  @ApiProperty(nullableTimestamp) completedAt!: string | null;
+}
+
+@ApiSchema({ name: 'MessageAttempt' })
+export class MessageAttemptSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty({ type: 'integer', minimum: 1 }) attemptNumber!: number;
+  @ApiProperty(uuid) providerId!: string;
+  @ApiProperty({ enum: MESSAGE_ATTEMPT_STATUSES }) status!: string;
+  @ApiProperty(nullableString) failureReason!: string | null;
+  @ApiProperty({ type: 'integer', minimum: 0, nullable: true }) latencyMs!: number | null;
+  @ApiProperty(nullableTimestamp) completedAt!: string | null;
+}
+
+@ApiSchema({ name: 'MessageDetail' })
+export class MessageDetailSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty(uuid) orgId!: string;
+  @ApiProperty(uuid) workspaceId!: string;
+  @ApiProperty(uuid) contactId!: string;
+  @ApiProperty(uuid) channelId!: string;
+  @ApiProperty(nullableUuid) templateId!: string | null;
+  @ApiProperty({ enum: MESSAGE_STATUSES }) status!: string;
+  @ApiProperty() recipientAddress!: string;
+  @ApiProperty({ type: 'object', additionalProperties: true })
+  payload!: Record<string, unknown>;
+  @ApiProperty(nullableString) failureReason!: string | null;
+  @ApiProperty(timestamp) createdAt!: string;
+  @ApiProperty(nullableTimestamp) completedAt!: string | null;
+  @ApiProperty({
+    type: MessageAttemptSchema,
+    isArray: true,
+    description: 'Dispatch attempts, ordered by `attemptNumber`; empty until the first attempt.',
+  })
+  attempts!: MessageAttemptSchema[];
 }

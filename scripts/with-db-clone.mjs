@@ -88,6 +88,10 @@ function run() {
   return new Promise((resolve) => {
     const env = { ...process.env };
     for (const name of URL_VARIABLES) env[name] = urlFor(process.env[name], clone);
+    // The copy this invocation created: the test database guard
+    // (`packages/db/src/test/database-target-guard.ts`) accepts a clone-shaped
+    // name only when it equals this, so a leftover or evidence clone is refused.
+    env.ACC_TEST_CLONE = clone;
     // Its own process group, so a signal — and the final reap — reaches every
     // descendant (`npx` → `sh` → `jest`), not only the direct child: nothing
     // may still be writing to the clone when it is dropped.

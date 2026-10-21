@@ -80,6 +80,18 @@ describe('Phase 1B.3 security', () => {
         .expect(200);
     });
 
+    it('returns the signed-in user’s own email on /auth/me, and only theirs', async () => {
+      for (const tenant of [orgA, orgB]) {
+        const token = await tokenFor(tenant.email);
+        const res = await request(h.app.getHttpServer())
+          .get(url('/auth/me'))
+          .set('authorization', `Bearer ${token}`)
+          .expect(200);
+        expect(res.body.data.userId).toBe(tenant.userId);
+        expect(res.body.data.email).toBe(tenant.email);
+      }
+    });
+
     it('rejects a missing credential', async () => {
       const res = await request(h.app.getHttpServer()).get(url('/auth/me')).expect(401);
       expect(res.body.error.code).toBe(ERROR_CODES.AUTH_CREDENTIAL_REQUIRED);

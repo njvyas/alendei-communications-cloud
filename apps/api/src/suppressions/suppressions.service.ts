@@ -161,7 +161,7 @@ export class SuppressionsService {
         principal,
         pathParams: {},
         query: {},
-        body: { channelId: dto.channelId, reason: dto.reason },
+        body: { channelId: dto.channelId, rawAddress: dto.rawAddress, reason: dto.reason },
       },
       authorize,
       work: async (tx) => {
@@ -281,6 +281,16 @@ export class SuppressionsService {
         .where(and(eq(schema.suppressions.id, id), eq(schema.suppressions.orgId, orgId)))
         .for('update');
       if (!existing) throw suppressionNotFound(id);
+      // Only `active → cleared` exists. The row is locked above, so of two
+      // concurrent lifts exactly one passes this check.
+      if (existing.status !== 'active') {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.SUPPRESSION_LIFECYCLE_CONFLICT,
+          message: 'This suppression is not active',
+          details: { status: existing.status },
+        });
+      }
 
       const [row] = await tx
         .update(schema.suppressions)

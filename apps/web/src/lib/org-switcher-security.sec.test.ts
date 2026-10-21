@@ -2,7 +2,7 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { QueryClient } from '@tanstack/react-query';
+import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
 import { AppRouterContext } from 'next/dist/shared/lib/app-router-context.shared-runtime';
 import { PathnameContext } from 'next/dist/shared/lib/hooks-client-context.shared-runtime';
 
@@ -11,9 +11,12 @@ import {
   isScopedDetailRoute,
   getScopedCollectionRoot,
 } from '../components/org-switcher';
+import { OrgSelectionView } from '../components/org-selection-view';
 import {
   getSelectedOrganization,
+  organizationsApi,
   type EffectiveAuthorization,
+  type OrganizationView,
   type UserIdentity,
 } from './api-client';
 import { createAppQueryClient, registerQueryClient } from './query-client';
@@ -446,6 +449,206 @@ describe('SEC-05: Organization Switcher Context Synchronization & Route Scoping'
 
       assert.equal(replaceCalls.length, 1);
       assert.equal(replaceCalls[0], '/workspaces');
+    });
+  });
+
+  // =========================================================================
+  // 6. Human-Readable Organization Name Resolution & Graceful Fallback
+  // =========================================================================
+  describe('6. Human-Readable Organization Name Resolution & Graceful Fallback', () => {
+    const renderWithQueryClient = (
+      component: React.ReactNode,
+      client: QueryClient,
+      pathname = '/',
+    ) =>
+      renderToStaticMarkup(
+        React.createElement(
+          QueryClientProvider,
+          { client },
+          React.createElement(
+            AppRouterContext.Provider,
+            {
+              value: mockRouter as unknown as React.ComponentProps<
+                typeof AppRouterContext.Provider
+              >['value'],
+            },
+            React.createElement(PathnameContext.Provider, { value: pathname }, component),
+          ),
+        ),
+      );
+
+    it('renders human-readable Name (slug) in multi-org switcher options while preserving UUID value', () => {
+      const client = createAppQueryClient();
+      client.setQueryData(['organizations', 'lookup'], {
+        data: [
+          { id: ORG_A, name: 'Acme International', slug: 'acme' },
+          { id: ORG_B, name: 'Beta Systems', slug: 'beta' },
+        ],
+        page: { hasMore: false, nextCursor: null },
+      });
+
+      const html = renderWithQueryClient(React.createElement(OrgSwitcher), client, '/workspaces');
+      assert.ok(html.includes('Acme International (acme)'));
+      assert.ok(html.includes('Beta Systems (beta)'));
+      assert.ok(html.includes(`value="${ORG_A}"`));
+      assert.ok(html.includes(`value="${ORG_B}"`));
+    });
+
+    it('renders human-readable Name (slug) in single-org badge', () => {
+      setupSession(ORG_A, [ORG_A]);
+      const client = createAppQueryClient();
+      client.setQueryData(['organizations', 'lookup'], {
+        data: [{ id: ORG_A, name: 'Acme International', slug: 'acme' }],
+        page: { hasMore: false, nextCursor: null },
+      });
+
+      const html = renderWithQueryClient(React.createElement(OrgSwitcher), client, '/workspaces');
+      assert.ok(html.includes('Acme International (acme)'));
+      assert.ok(!html.includes('<select'));
+    });
+
+    it('gracefully falls back to raw UUID when organization is not found in lookup data', () => {
+      const client = createAppQueryClient();
+      client.setQueryData(['organizations', 'lookup'], {
+        data: [],
+        page: { hasMore: false, nextCursor: null },
+      });
+
+      const html = renderWithQueryClient(React.createElement(OrgSwitcher), client, '/workspaces');
+      assert.ok(html.includes(ORG_A));
+      assert.ok(html.includes(ORG_B));
+      assert.ok(html.includes(`value="${ORG_A}"`));
+    });
+
+    it('renders human-readable Name (slug) in OrgSelectionView', () => {
+      const client = createAppQueryClient();
+      client.setQueryData(['organizations', 'lookup'], {
+        data: [
+          { id: ORG_A, name: 'Acme International', slug: 'acme' },
+          { id: ORG_B, name: 'Beta Systems', slug: 'beta' },
+        ],
+        page: { hasMore: false, nextCursor: null },
+      });
+
+      const html = renderWithQueryClient(React.createElement(OrgSelectionView), client, '/login');
+      assert.ok(html.includes('Acme International (acme)'));
+      assert.ok(html.includes('Beta Systems (beta)'));
+      assert.ok(html.includes(`value="${ORG_A}"`));
+      assert.ok(html.includes(`value="${ORG_B}"`));
+    });
+
+    it('OrgSelectionView enforces authorizedOrganizationIds and throws on unauthorized selection', () => {
+      const UNAUTHORIZED_ORG = '01955b0a-7b3b-7411-9a4f-9e67d4f99999';
+      assert.throws(
+        () => {
+          useSession.getState().selectOrganization(UNAUTHORIZED_ORG);
+        },
+        {
+          name: 'Error',
+          message: /Cannot select unauthorized organization/,
+        },
+      );
+    });
+
+    it('organizationsApi.listAll traverses multiple pages until hasMore is false and accumulates all organizations', async () => {
+      const origList = organizationsApi.list;
+      const calls: unknown[] = [];
+      const createMockOrg = (id: string, name: string, slug: string): OrganizationView => ({
+        id,
+        name,
+        slug,
+        legalName: null,
+        gstin: null,
+        resellerId: 'reseller-1',
+        status: 'active',
+        statusChangedAt: null,
+        billingMode: 'prepaid',
+        billingPolicy: 'charge_per_logical_message',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+
+      const page1Orgs: OrganizationView[] = Array.from({ length: 100 }, (_, i) =>
+        createMockOrg(
+          `01955b0a-7b3b-7411-9a4f-page1-${String(i).padStart(3, '0')}`,
+          `Org Page 1 - ${i}`,
+          `org-p1-${i}`,
+        ),
+      );
+      const page2Orgs: OrganizationView[] = [createMockOrg(ORG_A, 'Acme International', 'acme')];
+
+      try {
+        organizationsApi.list = async (params = {}) => {
+          calls.push(params);
+          if (!params.cursor) {
+            return {
+              data: page1Orgs,
+              page: { limit: 100, hasMore: true, nextCursor: 'cursor-p2' },
+            };
+          }
+          if (params.cursor === 'cursor-p2') {
+            return {
+              data: page2Orgs,
+              page: { limit: 100, hasMore: false, nextCursor: null },
+            };
+          }
+          throw new Error('Unexpected cursor: ' + params.cursor);
+        };
+
+        const result = await organizationsApi.listAll();
+        assert.equal(calls.length, 2);
+        assert.equal(result.data.length, 101);
+        assert.equal(result.data[100]?.id, ORG_A);
+        assert.equal(result.page.hasMore, false);
+      } finally {
+        organizationsApi.list = origList;
+      }
+    });
+
+    it('organizationsApi.listAll preserves partial results if subsequent page fails, and throws if first page fails', async () => {
+      const origList = organizationsApi.list;
+      const createMockOrg = (id: string, name: string, slug: string): OrganizationView => ({
+        id,
+        name,
+        slug,
+        legalName: null,
+        gstin: null,
+        resellerId: 'reseller-1',
+        status: 'active',
+        statusChangedAt: null,
+        billingMode: 'prepaid',
+        billingPolicy: 'charge_per_logical_message',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      const page1Orgs: OrganizationView[] = [createMockOrg(ORG_A, 'Acme International', 'acme')];
+
+      try {
+        // 1. First page fails -> throws
+        organizationsApi.list = async () => {
+          throw new Error('Database unavailable on page 1');
+        };
+        await assert.rejects(() => organizationsApi.listAll(), {
+          message: /Database unavailable on page 1/,
+        });
+
+        // 2. Second page fails -> returns page 1 accumulated data
+        organizationsApi.list = async (params = {}) => {
+          if (!params.cursor) {
+            return {
+              data: page1Orgs,
+              page: { limit: 100, hasMore: true, nextCursor: 'cursor-err' },
+            };
+          }
+          throw new Error('Network error on page 2');
+        };
+
+        const partial = await organizationsApi.listAll();
+        assert.equal(partial.data.length, 1);
+        assert.equal(partial.data[0]?.id, ORG_A);
+      } finally {
+        organizationsApi.list = origList;
+      }
     });
   });
 });

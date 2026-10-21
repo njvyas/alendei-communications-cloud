@@ -15,7 +15,8 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 
 import { AcceptedCredentials } from '../openapi/accepted-credentials.decorator';
-import { ApiErrors, ApiIdempotencyKey } from '../openapi/openapi-responses';
+import { ApiData, ApiErrors, ApiIdempotencyKey, ApiPaged } from '../openapi/openapi-responses';
+import { SuppressionSchema } from '../openapi/openapi-schemas';
 import { RequiresPermission } from '../auth/requires-permission.decorator';
 import { IdempotencyKey } from '../idempotency/idempotency.decorator';
 import { requestPrincipal } from '../workspaces/workspaces.controller';
@@ -33,6 +34,7 @@ export class SuppressionsController {
   @RequiresPermission(PERMISSIONS.SUPPRESSIONS_READ, { target: 'deferred', because: AT_ORG })
   @AcceptedCredentials('userSession', 'apiKey')
   @ApiOperation({ summary: 'List suppressions in an organization' })
+  @ApiPaged(SuppressionSchema)
   @ApiErrors(400, 401, 403, 404, 429)
   async list(@Query() query: ListSuppressionsDto) {
     const { items, page } = await this.suppressions.list(requestPrincipal(), {
@@ -51,7 +53,8 @@ export class SuppressionsController {
   @AcceptedCredentials('userSession', 'apiKey')
   @ApiIdempotencyKey()
   @ApiOperation({ summary: 'Create a suppression' })
-  @ApiErrors(400, 401, 403, 409, 422, 429)
+  @ApiData(SuppressionSchema, { status: 201 })
+  @ApiErrors(400, 401, 403, 404, 409, 422, 429)
   async create(
     @Body() dto: CreateSuppressionDto,
     @IdempotencyKey() idempotencyKey: string | null,
@@ -66,6 +69,7 @@ export class SuppressionsController {
   @RequiresPermission(PERMISSIONS.SUPPRESSIONS_READ, { target: 'deferred', because: AT_ORG })
   @AcceptedCredentials('userSession', 'apiKey')
   @ApiOperation({ summary: 'Get a suppression by id' })
+  @ApiData(SuppressionSchema)
   @ApiErrors(400, 401, 403, 404, 429)
   async get(@Param('suppressionId', new ParseUUIDPipe()) suppressionId: string) {
     return { data: await this.suppressions.get(requestPrincipal(), suppressionId) };
@@ -76,6 +80,7 @@ export class SuppressionsController {
   @HttpCode(HttpStatus.OK)
   @AcceptedCredentials('userSession', 'apiKey')
   @ApiOperation({ summary: 'Lift an active suppression' })
+  @ApiData(SuppressionSchema)
   @ApiErrors(400, 401, 403, 404, 409, 429)
   async lift(
     @Param('suppressionId', new ParseUUIDPipe()) suppressionId: string,

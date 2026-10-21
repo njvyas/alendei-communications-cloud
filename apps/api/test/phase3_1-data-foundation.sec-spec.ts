@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { ERROR_CODES, PERMISSIONS } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { eq, sql } from 'drizzle-orm';
@@ -14,6 +16,7 @@ import {
   type TenantFixture,
 } from './auth-harness';
 import { CredentialService } from '../src/iam/credential.service';
+import { OpenApiValidator } from './openapi-validator';
 
 const url = (p: string) => `/${PREFIX}${p}`;
 
@@ -609,6 +612,145 @@ describe('Phase 3.1 Data Foundation Security & Integration Suite', () => {
       expect(lift.body.data.status).toBe('cleared');
       expect(lift.body.data.clearedReason).toBe('Customer re-subscribed');
       expect(lift.body.data.clearedAt).not.toBeNull();
+    });
+
+    it('refuses to lift a cleared suppression (409 SUPPRESSION_LIFECYCLE_CONFLICT) and keeps the first lift intact', async () => {
+      const create = await request(h.app.getHttpServer())
+        .post(url('/suppressions'))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ channelId: null, rawAddress: '+12025557701', reason: 'Opt-out' });
+      expect(create.status).toBe(201);
+      const id = create.body.data.id;
+
+      const first = await request(h.app.getHttpServer())
+        .post(url(`/suppressions/${id}/lift`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ reason: 'First lift' });
+      expect(first.status).toBe(200);
+
+      const second = await request(h.app.getHttpServer())
+        .post(url(`/suppressions/${id}/lift`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ reason: 'Second lift' });
+      expect(second.status).toBe(409);
+      expect(second.body.error.code).toBe(ERROR_CODES.SUPPRESSION_LIFECYCLE_CONFLICT);
+      expect(second.body.error.details).toEqual({ status: 'cleared' });
+
+      const after = await request(h.app.getHttpServer())
+        .get(url(`/suppressions/${id}`))
+        .set('authorization', `Bearer ${tokenA}`);
+      expect(after.body.data.clearedReason).toBe('First lift');
+      expect(after.body.data.clearedAt).toBe(first.body.data.clearedAt);
+
+      const { rows } = await h.admin.execute<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM audit_logs WHERE resource_id = ${id} AND action = 'suppression.lifted'`,
+      );
+      expect(rows[0]!.n).toBe(1);
+    });
+
+    it('cross-tenant lift of a cleared suppression is still 404, never the lifecycle conflict', async () => {
+      const create = await request(h.app.getHttpServer())
+        .post(url('/suppressions'))
+        .set('authorization', `Bearer ${tokenB}`)
+        .send({ channelId: null, rawAddress: '+12025557702', reason: 'Opt-out' });
+      const id = create.body.data.id;
+      await request(h.app.getHttpServer())
+        .post(url(`/suppressions/${id}/lift`))
+        .set('authorization', `Bearer ${tokenB}`)
+        .send({ reason: 'Lifted by owner' })
+        .expect(200);
+
+      const cross = await request(h.app.getHttpServer())
+        .post(url(`/suppressions/${id}/lift`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ reason: 'Cross-tenant attempt' });
+      expect(cross.status).toBe(404);
+      expect(cross.body.error.code).toBe(ERROR_CODES.RESOURCE_NOT_FOUND);
+    });
+
+    it('an Idempotency-Key reused for a different address is refused, and the new address is not reported as suppressed', async () => {
+      const key = `p31-supp-${uuidv7()}`;
+      const original = await request(h.app.getHttpServer())
+        .post(url('/suppressions'))
+        .set('authorization', `Bearer ${tokenA}`)
+        .set('idempotency-key', key)
+        .send({ channelId: null, rawAddress: '+12025557703', reason: 'Opt-out' });
+      expect(original.status).toBe(201);
+
+      const replay = await request(h.app.getHttpServer())
+        .post(url('/suppressions'))
+        .set('authorization', `Bearer ${tokenA}`)
+        .set('idempotency-key', key)
+        .send({ channelId: null, rawAddress: '+12025557703', reason: 'Opt-out' });
+      expect(replay.status).toBe(201);
+      expect(replay.body.data.id).toBe(original.body.data.id);
+
+      const changed = await request(h.app.getHttpServer())
+        .post(url('/suppressions'))
+        .set('authorization', `Bearer ${tokenA}`)
+        .set('idempotency-key', key)
+        .send({ channelId: null, rawAddress: '+12025557704', reason: 'Opt-out' });
+      expect(changed.status).toBe(422);
+      expect(changed.body.error.code).toBe(ERROR_CODES.IDEMPOTENCY_KEY_PAYLOAD_MISMATCH);
+
+      const { rows } = await h.admin.execute<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM suppressions WHERE org_id = ${tenantA.orgId} AND raw_address = '+12025557704'`,
+      );
+      expect(rows[0]!.n).toBe(0);
+    });
+
+    it('suppression responses conform to the OpenAPI document', async () => {
+      const validator = new OpenApiValidator(
+        JSON.parse(readFileSync(join(__dirname, '..', 'openapi', 'openapi.v1.json'), 'utf8')),
+      );
+      const problems: string[] = [];
+      const check = (method: string, path: string, res: request.Response) =>
+        problems.push(...validator.check(method, url(path), res));
+
+      const created = await request(h.app.getHttpServer())
+        .post(url('/suppressions'))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ channelId, rawAddress: '+12025557705', reason: 'Contract check' });
+      check('POST', '/suppressions', created);
+      const id = created.body.data.id;
+
+      check(
+        'GET',
+        '/suppressions?status=active',
+        await request(h.app.getHttpServer())
+          .get(url('/suppressions?status=active'))
+          .set('authorization', `Bearer ${tokenA}`),
+      );
+      check(
+        'GET',
+        `/suppressions/${id}`,
+        await request(h.app.getHttpServer())
+          .get(url(`/suppressions/${id}`))
+          .set('authorization', `Bearer ${tokenA}`),
+      );
+      check(
+        'POST',
+        `/suppressions/${id}/lift`,
+        await request(h.app.getHttpServer())
+          .post(url(`/suppressions/${id}/lift`))
+          .set('authorization', `Bearer ${tokenA}`)
+          .send({ reason: 'Contract check' }),
+      );
+      const conflict = await request(h.app.getHttpServer())
+        .post(url(`/suppressions/${id}/lift`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ reason: 'Contract check' });
+      expect(conflict.status).toBe(409);
+      check('POST', `/suppressions/${id}/lift`, conflict);
+
+      const unknownChannel = await request(h.app.getHttpServer())
+        .post(url('/suppressions'))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ channelId: uuidv7(), rawAddress: '+12025557706', reason: 'Contract check' });
+      expect(unknownChannel.status).toBe(404);
+      check('POST', '/suppressions', unknownChannel);
+
+      expect(problems).toEqual([]);
     });
   });
 

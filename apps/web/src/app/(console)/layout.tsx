@@ -127,7 +127,14 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
               <p className="text-sm font-semibold tracking-tight">Alendei Communications Cloud</p>
               <p className="text-xs text-[var(--color-ink-muted)]">Control plane</p>
             </div>
-            <SessionBadge />
+            <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+              <SessionBadge />
+              {user?.userId && (
+                <span className="hidden font-mono text-xs text-[var(--color-ink-muted)] sm:inline">
+                  {user.email ?? `${user.userId.slice(0, 8)}…`}
+                </span>
+              )}
+            </div>
           </header>
           <ZeroOrgView />
         </div>
@@ -144,7 +151,14 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
             <p className="text-sm font-semibold tracking-tight">Alendei Communications Cloud</p>
             <p className="text-xs text-[var(--color-ink-muted)]">Control plane</p>
           </div>
-          <SessionBadge />
+          <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+            <SessionBadge />
+            {user?.userId && (
+              <span className="hidden font-mono text-xs text-[var(--color-ink-muted)] sm:inline">
+                {user.email ?? `${user.userId.slice(0, 8)}…`}
+              </span>
+            )}
+          </div>
         </header>
         <OrgSelectionView />
       </div>
@@ -165,7 +179,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
           <SessionBadge />
           {user?.userId && (
             <span className="hidden font-mono text-xs text-[var(--color-ink-muted)] sm:inline">
-              {user.userId.slice(0, 8)}…
+              {user.email ?? `${user.userId.slice(0, 8)}…`}
             </span>
           )}
           <button

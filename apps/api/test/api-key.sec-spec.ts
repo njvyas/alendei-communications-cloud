@@ -102,6 +102,8 @@ describe('API-key authentication', () => {
       const me = await get('/auth/me', key.credential).expect(200);
       expect(me.body.data.permissions).toContain('workspaces.read');
       expect(me.body.data.permissions).not.toContain('roles.delete');
+      // An API key is not a person: its creator's email is not disclosed.
+      expect(me.body.data.email).toBeNull();
     });
 
     it('B2. a key requesting only unheld permissions is authenticated but authorizes nothing', async () => {

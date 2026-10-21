@@ -11,22 +11,38 @@ import {
   validateSmsTemplateBody,
   validateSmsTemplateVariables,
   type AuthPrincipal,
+  type MessageDetailResponse,
+  type MessageStatus,
+  type MessageSummaryResponse,
+  type PageInfo,
   type QueuedMessageResponse,
   type SmsDltMetadata,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
-import { and, desc, eq, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 
 import { AuthorizationService } from '../auth/authorization.service';
 import { RequestContext } from '../common/context/request-context';
 import { AppException } from '../common/errors/app.exception';
+import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
 import { AppConfigService } from '../config/app-config.service';
 import { normalizeAddress } from '../contacts/contacts.normalization';
 import { TenantDatabase } from '../database/tenant-database.service';
 import { IdempotencyService, type IdempotentOutcome } from '../idempotency/idempotency.service';
 import { requireOrganization } from '../workspaces/workspace-administration.service';
 import type { SendMessageDto } from './dto/send-message.dto';
+
+/** Allow-listed filters for `GET /messages`. */
+export interface ListMessagesFilter extends ListQueryInput {
+  readonly status?: MessageStatus;
+  readonly channelCode?: string;
+  readonly workspaceId?: string;
+  readonly templateId?: string;
+  readonly providerId?: string;
+  readonly createdFrom?: Date;
+  readonly createdTo?: Date;
+}
 
 function channelNotFound(channelCode: string): AppException {
   return new AppException({
@@ -53,7 +69,17 @@ export class MessagesService {
     private readonly authorization: AuthorizationService,
     private readonly idempotency: IdempotencyService,
     private readonly config: AppConfigService,
+    private readonly lists: ListQuery,
   ) {}
+
+  /** Newest first by the UUIDv7 id, which orders by creation. */
+  private readonly listSpec: ListQuerySpec = {
+    sortable: {
+      createdAt: { column: schema.messages.id, encode: (row) => String(row.id) },
+    },
+    defaultSort: '-createdAt',
+    tieBreaker: schema.messages.id,
+  };
 
   async sendMessage(
     principal: AuthPrincipal,
@@ -594,32 +620,7 @@ export class MessagesService {
     });
   }
 
-  async getMessage(
-    principal: AuthPrincipal,
-    messageId: string,
-  ): Promise<{
-    id: string;
-    orgId: string;
-    workspaceId: string;
-    contactId: string;
-    channelId: string;
-    templateId: string | null;
-    status: string;
-    recipientAddress: string;
-    payload: Record<string, unknown>;
-    failureReason: string | null;
-    createdAt: string;
-    completedAt: string | null;
-    attempts: Array<{
-      id: string;
-      attemptNumber: number;
-      providerId: string;
-      status: string;
-      failureReason: string | null;
-      latencyMs: number | null;
-      completedAt: string | null;
-    }>;
-  }> {
+  async getMessage(principal: AuthPrincipal, messageId: string): Promise<MessageDetailResponse> {
     const orgId = requireOrganization(principal);
 
     return this.db.withRequestTenant(async (tx) => {
@@ -673,5 +674,81 @@ export class MessagesService {
         })),
       };
     });
+  }
+  /**
+   * `GET /messages` — one page of the request organization's messages: metadata
+   * and an attempt count, never the payload. Every filter narrows within the
+   * organization; the tenant transaction and the `org_id` predicate bound it.
+   */
+  async listMessages(
+    principal: AuthPrincipal,
+    filter: ListMessagesFilter = {},
+  ): Promise<{ items: readonly MessageSummaryResponse[]; page: PageInfo }> {
+    const orgId = requireOrganization(principal);
+    const resolved = this.lists.resolve(filter, this.listSpec);
+
+    const rows = await this.db.withRequestTenant(async (tx) => {
+      await this.authorization.assert(tx, {
+        principal,
+        permission: PERMISSIONS.MESSAGES_READ,
+        target: { scopeType: 'organization', scopeId: orgId },
+        resourceType: 'Organization',
+      });
+
+      const predicates: SQL[] = [eq(schema.messages.orgId, orgId)];
+      if (filter.channelCode) {
+        const result = await tx.execute<{ id: string }>(
+          sql`SELECT id FROM app_channel_resolve(${filter.channelCode}::text)`,
+        );
+        const channel = result.rows[0];
+        if (!channel) return [];
+        predicates.push(eq(schema.messages.channelId, channel.id));
+      }
+      if (filter.status) predicates.push(eq(schema.messages.status, filter.status));
+      if (filter.workspaceId) predicates.push(eq(schema.messages.workspaceId, filter.workspaceId));
+      if (filter.templateId) predicates.push(eq(schema.messages.templateId, filter.templateId));
+      if (filter.createdFrom) predicates.push(gte(schema.messages.createdAt, filter.createdFrom));
+      if (filter.createdTo) predicates.push(lt(schema.messages.createdAt, filter.createdTo));
+      if (filter.providerId) {
+        predicates.push(
+          sql`EXISTS (SELECT 1 FROM ${schema.messageAttempts} WHERE ${schema.messageAttempts.messageId} = ${schema.messages.id} AND ${schema.messageAttempts.orgId} = ${schema.messages.orgId} AND ${schema.messageAttempts.providerId} = ${filter.providerId})`,
+        );
+      }
+      if (resolved.after) predicates.push(resolved.after);
+
+      return tx
+        .select({
+          id: schema.messages.id,
+          orgId: schema.messages.orgId,
+          workspaceId: schema.messages.workspaceId,
+          contactId: schema.messages.contactId,
+          channelId: schema.messages.channelId,
+          channelCode: sql<string>`app_channel_code(${schema.messages.channelId})`,
+          templateId: schema.messages.templateId,
+          status: schema.messages.status,
+          recipientAddress: schema.messages.recipientAddress,
+          failureReason: schema.messages.failureReason,
+          // Drizzle renders select-list columns unqualified, where `id` and
+          // `org_id` would bind to the attempts table; the outer columns are
+          // therefore named explicitly.
+          attemptCount: sql<number>`(SELECT count(*)::int FROM ${schema.messageAttempts} WHERE ${schema.messageAttempts.messageId} = ${schema.messages}.${sql.identifier('id')} AND ${schema.messageAttempts.orgId} = ${schema.messages}.${sql.identifier('org_id')})`,
+          createdAt: schema.messages.createdAt,
+          completedAt: schema.messages.completedAt,
+        })
+        .from(schema.messages)
+        .where(and(...predicates))
+        .orderBy(...resolved.orderBy)
+        .limit(this.lists.fetchSize(resolved));
+    });
+
+    const { items, page } = this.lists.paginate(rows, resolved, this.listSpec, (row) => row.id);
+    return {
+      items: items.map((row) => ({
+        ...row,
+        createdAt: row.createdAt.toISOString(),
+        completedAt: row.completedAt ? row.completedAt.toISOString() : null,
+      })),
+      page,
+    };
   }
 }

@@ -276,7 +276,9 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 3.1 added 27 scoped routes (contacts, consent, templates, suppressions): 62 → 89.
     // Phase 3.2 added 6 scoped routes (organization provider assignments): 89 → 95.
     // Phase 3.3 added 2 scoped routes (messages send and get): 95 → 97.
-    expect(scoped.length).toBe(97);
+    // UI readiness (20-Oct-2026) added `GET /messages`, scoped at the request
+    // organization like the other message routes: 97 → 98.
+    expect(scoped.length).toBe(98);
     expect(exempt.length).toBe(7);
     expect(open.length).toBe(6);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
@@ -293,7 +295,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 3.1 added 27 scoped routes, all deferred: 37 → 64.
     // Phase 3.2 added 6 scoped routes, all deferred: 64 → 70.
     // Phase 3.3 added 2 scoped routes, all deferred: 70 → 72.
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(72);
+    // UI readiness added `GET /messages`, deferred like them: 72 → 73.
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(73);
   });
 });
 

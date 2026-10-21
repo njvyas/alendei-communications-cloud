@@ -289,13 +289,20 @@ export class AuthController {
   @ApiOperation({ summary: 'The current principal' })
   @ApiData(PrincipalSchema)
   @ApiErrors(401, 429)
-  me() {
+  async me() {
     const principal = this.principal();
+    // A session's own user only. An API key is not a person: its response
+    // carries `null` rather than the address of the user who created it.
+    const email =
+      principal.authMethod === 'session' && principal.userId
+        ? await this.auth.emailOf(principal.userId)
+        : null;
     return {
       data: {
         actorType: principal.actorType,
         authMethod: principal.authMethod,
         userId: principal.userId,
+        email,
         apiKeyId: principal.apiKeyId,
         sessionId: principal.sessionId,
         authenticatedAt: principal.authenticatedAt.toISOString(),

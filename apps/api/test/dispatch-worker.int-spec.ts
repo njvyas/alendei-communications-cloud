@@ -3,6 +3,8 @@
 import { POLL_INTERVAL_MS, PREVIOUS } from './dispatch-worker.env';
 
 import { randomBytes, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { PERMISSIONS } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { and, eq, inArray, sql } from 'drizzle-orm';
@@ -22,6 +24,7 @@ import {
   type Harness,
   type TenantFixture,
 } from './auth-harness';
+import { OpenApiValidator } from './openapi-validator';
 
 const url = (p: string) => `/${PREFIX}${p}`;
 
@@ -333,6 +336,59 @@ describe('Dispatch worker in the booted application (B1, ADR-014 D18)', () => {
       [failing, 'failed'],
       [healthy, 'accepted'],
     ]);
+  });
+
+  it('GET /messages/:id with dispatch attempts conforms to the documented MessageDetail schema', async () => {
+    const s = await sender('dw-contract');
+    await assign(s.tenant, await provider('500'), 1);
+    await assign(s.tenant, await provider(), 2);
+
+    const messageId = await submit(s);
+    await settled(s, messageId);
+
+    const res = await request(h.app.getHttpServer())
+      .get(url(`/messages/${messageId}`))
+      .set('Authorization', `Bearer ${s.token}`)
+      .set('X-Acc-Organization', s.tenant.orgId)
+      .expect(200);
+    expect(res.body.data.attempts.map((a: { attemptNumber: number }) => a.attemptNumber)).toEqual([
+      1, 2,
+    ]);
+
+    const validator = new OpenApiValidator(
+      JSON.parse(readFileSync(join(__dirname, '..', 'openapi', 'openapi.v1.json'), 'utf8')),
+    );
+    expect(validator.check('GET', url(`/messages/${messageId}`), res)).toEqual([]);
+  });
+
+  it('GET /messages counts attempts and filters by a provider that attempted the message', async () => {
+    const s = await sender('dw-list');
+    const failing = await provider('500');
+    const healthy = await provider();
+    const unused = await provider();
+    await assign(s.tenant, failing, 1);
+    await assign(s.tenant, healthy, 2);
+
+    const messageId = await submit(s);
+    await settled(s, messageId);
+
+    const list = (query: string) =>
+      request(h.app.getHttpServer())
+        .get(url(`/messages?${query}`))
+        .set('Authorization', `Bearer ${s.token}`)
+        .set('X-Acc-Organization', s.tenant.orgId)
+        .expect(200);
+
+    const all = await list('limit=10');
+    expect(all.body.data).toEqual([
+      expect.objectContaining({ id: messageId, status: 'accepted', attemptCount: 2 }),
+    ]);
+    for (const p of [failing, healthy]) {
+      expect((await list(`providerId=${p}`)).body.data.map((m: { id: string }) => m.id)).toEqual([
+        messageId,
+      ]);
+    }
+    expect((await list(`providerId=${unused}`)).body.data).toEqual([]);
   });
 
   it('when every provider fails the message fails terminally (NO_ELIGIBLE_PROVIDER) and leaves the queue', async () => {

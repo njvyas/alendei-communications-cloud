@@ -1,6 +1,8 @@
 import { config as loadEnv } from 'dotenv';
 import { resolve } from 'node:path';
 
+import { assertDisposableTestDatabase } from '../../../packages/db/src/test/database-target-guard';
+
 /**
  * Integration tests run against the real Docker Compose stack, using the same
  * `.env` the application uses. `APP_ENV=test` keeps destructive helpers (such as
@@ -8,6 +10,10 @@ import { resolve } from 'node:path';
  */
 loadEnv({ path: resolve(__dirname, '../../../.env'), quiet: true });
 loadEnv({ path: resolve(__dirname, '../.env'), quiet: true, override: false });
+
+// Before any suite connects: only a with-db-clone.mjs copy or the CI container
+// (docs/TESTING.md §6q). Unit tests have no setup file and are unaffected.
+assertDisposableTestDatabase([resolve(__dirname, '../../../.env'), resolve(__dirname, '../.env')]);
 
 process.env.APP_ENV = 'test';
 process.env.NODE_ENV = 'test';

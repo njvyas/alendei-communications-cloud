@@ -200,6 +200,13 @@ export const ERROR_CODES = {
 
   // --- Data Foundation (Phase 3.1) -----------------------------------------
   SUPPRESSION_ALREADY_ACTIVE: 'SUPPRESSION_ALREADY_ACTIVE',
+  /**
+   * `409`: the suppression is not `active`, so it cannot be lifted — lifting an
+   * already-cleared entry would overwrite its recorded `clearedAt` and
+   * `clearedReason`. Modelled on `API_KEY_LIFECYCLE_CONFLICT`; `details.status`
+   * carries the current status.
+   */
+  SUPPRESSION_LIFECYCLE_CONFLICT: 'SUPPRESSION_LIFECYCLE_CONFLICT',
   PHONE_MISSING_COUNTRY_CODE: 'PHONE_MISSING_COUNTRY_CODE',
   INVALID_PHONE_NUMBER: 'INVALID_PHONE_NUMBER',
   INVALID_EMAIL_ADDRESS: 'INVALID_EMAIL_ADDRESS',

@@ -67,6 +67,18 @@ export class AuthService {
   ) {}
 
   /**
+   * The email of the signed-in user, for `GET /auth/me`. Read by the caller's
+   * own id — never from input — on the identity pool, the same read the guard
+   * performs for every session.
+   */
+  async emailOf(userId: string): Promise<string | null> {
+    const user = await this.db.auth.transaction(async (raw) =>
+      this.users.findById(raw as Transaction, userId),
+    );
+    return user?.email ?? null;
+  }
+
+  /**
    * Verifies a password and starts a session.
    *
    * Unknown address, wrong password and non-active account are indistinguishable

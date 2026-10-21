@@ -15,6 +15,7 @@ import {
   OrganizationTransitionDialog,
   type OrganizationLifecycleAction,
 } from '@/components/organizations/organization-transition-dialog';
+import { ProviderAssignmentsCard } from '@/components/organizations/provider-assignments-card';
 
 const STATUS_TONES: Record<OrganizationStatus, StatusTone> = {
   active: 'ok',
@@ -294,6 +295,9 @@ export default function OrganizationDetailPage({ params }: { params: Promise<{ i
           </dl>
         </div>
       </div>
+
+      {/* Provider Assignments Panel (Phase 3.2, ADR-014 §4) */}
+      <ProviderAssignmentsCard orgId={id} orgStatus={org.status} />
 
       {/* Edit Dialog */}
       <OrganizationEditDialog

@@ -156,9 +156,11 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      *
      * A route added or removed on purpose changes these numbers here, in the
      * same change; the two tests below fail on any route or operation that
-     * exists on only one side.
+     * exists on only one side. (The figures above predate Phase 3; the
+     * constant is authoritative. UI readiness, 20-Oct-2026: `GET /messages`,
+     * 109 → 110.)
      */
-    const APPLICATION_OPERATIONS = 109;
+    const APPLICATION_OPERATIONS = 110;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 
@@ -335,12 +337,13 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
         if (meta('acc:authz:requires-permission', route)) need('403', 'permission-checked');
         if (meta<boolean>('acc:auth:require-csrf', route)) need('403', 'X-Acc-Refresh');
         if (meta<boolean>('acc:auth:require-json', route)) need('415', 'JSON body required');
+        // Suppressions and messages document their success responses and are
+        // checked like every other route; contacts, templates and identities
+        // remain exempt until theirs are documented.
         const isPhase3DataFoundation =
           route.path.includes('/contacts') ||
           route.path.includes('/templates') ||
-          route.path.includes('/suppressions') ||
-          route.path.includes('/identities') ||
-          route.path.includes('/messages');
+          route.path.includes('/identities');
         const success = codes.filter((c) => c.startsWith('2'));
         if (!isPhase3DataFoundation && success.length !== 1)
           problems.push(`${route.method} ${route.path}: success ${success}`);

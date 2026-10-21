@@ -344,6 +344,69 @@ describe('Phase 3.2 Assignments & Principal Scopes Security Suite', () => {
     }
   }, 120_000);
 
+  describe('0. List contract the console relies on (UI readiness, 20-Oct-2026)', () => {
+    let tenantC: TenantFixture;
+    const createdIds: string[] = [];
+
+    beforeAll(async () => {
+      tenantC = await createTenant(h.admin, 'p32-tenant-c', credentials);
+      for (const [providerId, priority] of [
+        [providerSms1.id, 1],
+        [providerSms2.id, 2],
+        [providerEmail1.id, 1],
+      ] as const) {
+        const res = await call(
+          'post',
+          tokens.platform!,
+          `/organizations/${tenantC.orgId}/provider-assignments`,
+        )
+          .send({ providerId, priority })
+          .expect(201);
+        createdIds.push(res.body.data.id);
+      }
+    });
+
+    afterAll(async () => {
+      await h.admin
+        .delete(schema.organizationProviderAssignments)
+        .where(eq(schema.organizationProviderAssignments.orgId, tenantC.orgId));
+      await destroyTenant(h.admin, tenantC);
+    });
+
+    it.each(['createdAt', '-createdAt', 'priority', '-priority'])(
+      'pages through every assignment with sort=%s and limit=1',
+      async (sort) => {
+        const seen: string[] = [];
+        let cursor: string | null = null;
+        do {
+          const query: string = `sort=${sort}&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+          const res = await call(
+            'get',
+            tokens.platform!,
+            `/organizations/${tenantC.orgId}/provider-assignments?${query}`,
+          ).expect(200);
+          seen.push(...res.body.data.map((a: { id: string }) => a.id));
+          cursor = res.body.page.nextCursor;
+        } while (cursor);
+        expect([...seen].sort()).toEqual([...createdIds].sort());
+        if (sort === 'createdAt') expect(seen).toEqual(createdIds);
+      },
+    );
+
+    it('targets the organization in the path, whatever X-Acc-Organization names', async () => {
+      const res = await call(
+        'get',
+        tokens.platform!,
+        `/organizations/${tenantC.orgId}/provider-assignments`,
+      )
+        .set('x-acc-organization', tenantB.orgId)
+        .expect(200);
+      expect(res.body.data.map((a: { orgId: string }) => a.orgId)).toEqual(
+        createdIds.map(() => tenantC.orgId),
+      );
+    });
+  });
+
   describe('1. Platform Assignment Lifecycle & Audit Trail', () => {
     let createdAssignmentId: string;
 

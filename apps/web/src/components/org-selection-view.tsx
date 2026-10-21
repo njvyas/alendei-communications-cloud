@@ -1,12 +1,45 @@
 'use client';
 
-import { useState } from 'react';
+import { useContext, useState } from 'react';
+import { QueryClientContext, useQuery } from '@tanstack/react-query';
 
-import { authApi } from '@/lib/api-client';
-import { useSession } from '@/lib/session-store';
-import { Card, CardDescription, CardTitle } from '@/components/ui/card';
+import { authApi, organizationsApi, type OrganizationView } from '../lib/api-client';
+import { useSession } from '../lib/session-store';
+import { Card, CardDescription, CardTitle } from './ui/card';
 
 export function OrgSelectionView() {
+  const queryClient = useContext(QueryClientContext);
+  if (!queryClient) {
+    return <OrgSelectionForm />;
+  }
+  return <OrgSelectionViewWithQuery />;
+}
+
+function OrgSelectionViewWithQuery() {
+  const { data, isLoading } = useQuery({
+    queryKey: ['organizations', 'lookup'],
+    queryFn: ({ signal }) => organizationsApi.listAll({}, signal),
+    staleTime: 60_000,
+    retry: false,
+  });
+
+  const orgMap = new Map<string, OrganizationView>();
+  if (data?.data) {
+    for (const org of data.data) {
+      orgMap.set(org.id, org);
+    }
+  }
+
+  return <OrgSelectionForm orgMap={orgMap} isLoading={isLoading} />;
+}
+
+function OrgSelectionForm({
+  orgMap,
+  isLoading,
+}: {
+  orgMap?: Map<string, OrganizationView>;
+  isLoading?: boolean;
+}) {
   const authorizedOrganizationIds = useSession((state) => state.authorizedOrganizationIds);
   const selectOrganization = useSession((state) => state.selectOrganization);
   const clearSession = useSession((state) => state.clearSession);
@@ -53,23 +86,34 @@ export function OrgSelectionView() {
 
         <form onSubmit={handleSelect} className="mt-5 space-y-4">
           <div>
-            <label
-              htmlFor="organization-select"
-              className="block text-xs font-medium text-[var(--color-ink-muted)]"
-            >
-              Authorized Organizations
-            </label>
+            <div className="flex items-center justify-between">
+              <label
+                htmlFor="organization-select"
+                className="block text-xs font-medium text-[var(--color-ink-muted)]"
+              >
+                Authorized Organizations
+              </label>
+              {isLoading && (
+                <span className="text-[11px] font-mono text-[var(--color-ink-muted)]">
+                  resolving names…
+                </span>
+              )}
+            </div>
             <select
               id="organization-select"
               value={selected}
               onChange={(e) => setSelected(e.target.value)}
               className="mt-1.5 block w-full rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-3 py-2 text-sm font-mono text-[var(--color-ink)] focus:border-[var(--color-accent)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
             >
-              {authorizedOrganizationIds.map((id) => (
-                <option key={id} value={id}>
-                  {id}
-                </option>
-              ))}
+              {authorizedOrganizationIds.map((id) => {
+                const org = orgMap?.get(id);
+                const label = org ? `${org.name} (${org.slug})` : id;
+                return (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                );
+              })}
             </select>
           </div>
 

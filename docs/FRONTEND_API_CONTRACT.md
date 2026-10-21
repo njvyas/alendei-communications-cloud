@@ -24,7 +24,7 @@
 > | ~~**No API-key management**~~ — **CLOSED in 1B.6.2** (§30e). List, detail, create and revoke are live. Rotation and secret recovery are deliberately absent and are not coming: see §30e | 1B.6.2 ✅ |
 > | ~~**No audit read** endpoint~~ — **CLOSED in 1B.6.3** (§30f) | 1B.6.3 ✅ |
 > | **No way for an invited user to obtain a password**, so a user the console creates cannot sign in yet (`DECISIONS.md` D16) | D16 |
-> | ~~**OpenAPI is effectively empty of business schemas**~~ — **IMPLEMENTED in 1C.3** (§31e; Gate C.3 PASS / CLOSED): every operation is documented and validated against the runtime | 1C.3 ✅ |
+> | ~~**OpenAPI is effectively empty of business schemas**~~ — **IMPLEMENTED in 1C.3** (§31e; Gate C.3 PASS / CLOSED): every operation is documented and validated against the runtime. **Exception (verified 20-Oct-2026):** the Phase 3 contacts, templates and identities routes still document no success response (§33) | 1C.3 ✅ |
 > | ~~**No general rate limiting**~~ — **CLOSED in 1B.6.4** (§23). Every authenticated endpoint is limited and returns `X-RateLimit-*` | 1B.6.4 ✅ |
 > | **No development bootstrap**: no one-command way to obtain a working tenant and credentials — **implemented in 1C.4a** (`npm run fixture:dev --workspace @acc/api`, development/test only, `TESTING.md` §6r); Gate C.4a PASS / CLOSED | **Phase 1C (1C.4a)** — was 1B.10 |
 > | **No WebSocket or webhook surface** — plan for polling (§§24-25) | later |
@@ -140,7 +140,7 @@ has no backend mechanism today. Deciding whether one is needed is a gate item.
 {
   "actorType": "user",
   "authMethod": "session",
-  "userId": "uuid", "apiKeyId": null, "sessionId": "uuid",
+  "userId": "uuid", "email": "user@example.test", "apiKeyId": null, "sessionId": "uuid",
   "authenticatedAt": "ISO-8601",
   "tenant": { "orgId": null, "workspaceId": null,
               "resellerId": "uuid|null", "isPlatformAdmin": false },
@@ -151,6 +151,11 @@ has no backend mechanism today. Deciding whether one is needed is a gate item.
 ```
 
 No credential material of any kind appears here — no hashes, no tokens, no secret refs.
+
+**`email`** (added 20-Oct-2026) is the signed-in user's own address, read by the session's
+own user id on every call — never from input. It is `null` for an API-key principal: a key
+is not a person, and its creator's address is not disclosed to the key's holder. Treat it
+as display-only; identity is `userId`.
 
 **`tenant.orgId` is always `null` here, and `tenant.workspaceId` with it.** This is the
 single most misreadable field on the endpoint, so it is stated plainly: `/auth/me` is a
@@ -1487,7 +1492,126 @@ Health and circuit are **displayed by polling** these reads (ADR-013 PD-8); ther
 
 **Lifecycle:** `disabled → active` (enable); `active → draining` (drain); `active | draining → disabled` (disable); `draining → active` (enable). Two concurrent transitions on one provider serialize: exactly one succeeds.
 
-## 33. Related
+## 33. Phase 3 provider assignments, suppressions and messages — IMPLEMENTED (verified against the code 20-Oct-2026)
+
+> Field-level contract for the console work in `docs/qa/UI_READINESS_HANDOFF.md` (FE-1–FE-3). Response bodies for §33a–§33c are documented in `apps/api/openapi/openapi.v1.json` (`OrganizationProviderAssignment`, `Suppression`, `QueuedMessage`, `MessageDetail`, `MessageAttempt`) and validated against the runtime by `test/phase3_1-data-foundation.sec-spec.ts`, `test/messages-api.int-spec.ts`, `test/dispatch-worker.int-spec.ts` and `test/openapi-contract.sec-spec.ts` (`MessageSummary` for the list). **Not yet documented in OpenAPI:** the success bodies of `/contacts`, `/workspaces/:workspaceId/contacts`, `/identities` and `/templates`; use the `@acc/contracts` types for those.
+>
+> Envelopes, pagination, errors and rate limiting are exactly as §§9, 10, 13, 14, 23. Sort tokens are `field` or `-field`.
+
+### 33a. Organization provider assignments (platform administration)
+
+```jsonc
+// assignment — exhaustive
+{
+  "id": "uuid",
+  "orgId": "uuid",
+  "providerId": "uuid",
+  "channelId": "uuid",          // the provider's channel, derived; never sent
+  "priority": 1,                // integer ≥ 1, unique per (organization, channel)
+  "status": "active",           // active | disabled
+  "createdAt": "ISO-8601",
+  "updatedAt": "ISO-8601"
+}
+```
+
+- **Who:** a signed-in user holding `providers.read` (reads) or `providers.manage` (writes) at **platform** scope — among the system roles only `alendei_super_admin`; a custom platform role can carry `providers.read` alone. API keys and every tenant role, including `org_admin`, get `403`. The permission is checked before the organization's existence is disclosed.
+- **The target is the `orgId` in the path.** `X-Acc-Organization` is optional and never changes the result (a test pins this); the console sends none (`skipTenant: true`), as for every platform catalogue route.
+- Assignments are audited at `platform` scope: `organization_provider.assigned`, `.updated`, `.enabled`, `.disabled`, with before/after values. There is **no `DELETE`**.
+
+| Method | Path | Permission | Request | Success | Errors |
+|---|---|---|---|---|---|
+| `GET` | `/api/v1/organizations/:orgId/provider-assignments` | `providers.read` | `channelId`, `status`, `limit`, `cursor`, `sort` (`priority` default, `-priority`, `createdAt`, `-createdAt`) | `200 {data:[assignment], page}` | `400`; `401`; `403`; `404 RESOURCE_NOT_FOUND` (organization) |
+| `GET` | `…/provider-assignments/:assignmentId` | `providers.read` | — | `200 {data:assignment}` | `400`; `401`; `403`; `404 PROVIDER_ASSIGNMENT_NOT_FOUND` |
+| `POST` | `…/provider-assignments` | `providers.manage` | `{providerId, priority, status?}` | `201 {data:assignment}` | `400`; `401`; `403`; `404 RESOURCE_NOT_FOUND` (organization or provider); `409 PROVIDER_ASSIGNMENT_CONFLICT` (provider already assigned), `409 ASSIGNMENT_PRIORITY_CONFLICT` (priority taken on that channel) |
+| `PATCH` | `…/provider-assignments/:assignmentId` | `providers.manage` | `{priority?, status?}` | `200 {data:assignment}` | as above, plus `404 PROVIDER_ASSIGNMENT_NOT_FOUND` |
+| `POST` | `…/provider-assignments/:assignmentId/enable` · `/disable` | `providers.manage` | no body | `200 {data:assignment}` | `400`; `401`; `403`; `404 PROVIDER_ASSIGNMENT_NOT_FOUND` |
+
+Enable/disable of an assignment already in that state is a no-op `200` and writes no audit row. Provider names are not in the assignment: resolve them with `GET /providers` (§32b), which the same platform persona can read.
+
+### 33b. Suppressions (organization)
+
+```jsonc
+// suppression — exhaustive
+{
+  "id": "uuid",
+  "orgId": "uuid",
+  "channelId": "uuid | null",   // null = every channel
+  "rawAddress": "+1 (202) 555-0103",
+  "normalizedAddress": "+12025550103",
+  "reason": "Customer opt-out",
+  "status": "active",           // active | cleared
+  "clearedAt": "ISO-8601 | null",
+  "clearedReason": "string | null",
+  "createdAt": "ISO-8601",
+  "updatedAt": "ISO-8601"
+}
+```
+
+- **Who:** `suppressions.read` (reads) or `suppressions.manage` (writes) at the **request organization**; session or API key. Among the system roles only `org_admin` holds them (custom organization roles may); platform roles hold no tenant-content permission. A member of several organizations must send `X-Acc-Organization` (`400 TENANCY_CONTEXT_REQUIRED` otherwise). Another organization's suppression is `404 RESOURCE_NOT_FOUND`, never `403`.
+- Audit: `suppression.created`, `suppression.lifted` at organization scope, carrying **no address**. Rows are never deleted.
+
+| Method | Path | Permission | Request | Success | Errors |
+|---|---|---|---|---|---|
+| `GET` | `/api/v1/suppressions` | `suppressions.read` | `channelId`, `status` (`active` \| `cleared`), `limit`, `cursor`, `sort` (`createdAt` default, `-createdAt`) | `200 {data:[suppression], page}` | `400`; `401`; `403` |
+| `GET` | `/api/v1/suppressions/:suppressionId` | `suppressions.read` | — | `200 {data:suppression}` | `400`; `401`; `403`; `404` |
+| `POST` | `/api/v1/suppressions` | `suppressions.manage` | `{channelId?: uuid \| null, rawAddress: 1–500, reason: 1–500}`; optional `Idempotency-Key` | `201 {data:suppression}` (a replay returns the same `201`) | `400` (including invalid address: `INVALID_PHONE_NUMBER`, `PHONE_MISSING_COUNTRY_CODE`, `INVALID_EMAIL_ADDRESS`); `401`; `403`; `404` unknown channel; `409 SUPPRESSION_ALREADY_ACTIVE` (`details.existingSuppressionId`); `422 IDEMPOTENCY_KEY_PAYLOAD_MISMATCH` (same key, different channel, address or reason) |
+| `POST` | `/api/v1/suppressions/:suppressionId/lift` | `suppressions.manage` | `{reason: 1–500}` | `200 {data:suppression}` with `status: "cleared"` | `400`; `401`; `403`; `404`; `409 SUPPRESSION_LIFECYCLE_CONFLICT` (`details.status: "cleared"`) — only an active suppression can be lifted |
+
+**There is no address search.** The list filters by channel and status only.
+
+### 33c. Messages (organization)
+
+```jsonc
+// POST /messages → 202
+{ "id": "uuid", "status": "queued", "createdAt": "ISO-8601", "correlationId": "string" }
+
+// GET /messages/:id → 200 (exhaustive)
+{
+  "id": "uuid", "orgId": "uuid", "workspaceId": "uuid", "contactId": "uuid", "channelId": "uuid",
+  "templateId": "uuid | null",
+  "status": "queued",           // queued | routing | submitting | accepted | failed | outcome_unknown
+  "recipientAddress": "+12025550201",
+  "payload": { },
+  "failureReason": "string | null",   // e.g. NO_ELIGIBLE_PROVIDER
+  "createdAt": "ISO-8601",
+  "completedAt": "ISO-8601 | null",
+  "attempts": [                 // ordered by attemptNumber; empty until the first attempt
+    {
+      "id": "uuid", "attemptNumber": 1, "providerId": "uuid",
+      "status": "failed",       // submitting | accepted | failed | outcome_unknown
+      "failureReason": "string | null",   // PROVIDER_ERROR | RATE_LIMITED | TIMEOUT | UNKNOWN
+      "latencyMs": 120, "completedAt": "ISO-8601 | null"
+    }
+  ]
+}
+```
+
+- **Who:** `messages.send` / `messages.read` at the request organization; session or API key. Another organization's message is `404 RESOURCE_NOT_FOUND`; a list never contains one.
+- `providerId` is an id only: tenant users hold no `providers.read`, so the console cannot and must not resolve provider names for them.
+- `accepted` means the provider accepted the submission, not delivery (no receipts exist).
+- **The list returns no payload and no per-attempt detail** — open `GET /messages/:id` for those. There is **no recipient filter**: query strings are written to the request log, and a recipient address is personal data.
+
+```jsonc
+// messageSummary — one row of GET /messages (exhaustive)
+{
+  "id": "uuid", "orgId": "uuid", "workspaceId": "uuid", "contactId": "uuid",
+  "channelId": "uuid", "channelCode": "whatsapp",
+  "templateId": "uuid | null",
+  "status": "failed",
+  "recipientAddress": "+12025550201",
+  "failureReason": "NO_ELIGIBLE_PROVIDER",
+  "attemptCount": 1,
+  "createdAt": "ISO-8601", "completedAt": "ISO-8601 | null"
+}
+```
+
+| Method | Path | Permission | Request | Success | Errors |
+|---|---|---|---|---|---|
+| `POST` | `/api/v1/messages` | `messages.send` | `{channelCode, recipient: 3–100, templateId?, workspaceId?, payload: object}`; optional `Idempotency-Key` | `202 {data:queued}` | `400`; `401`; `403`; `404` unknown channel; `409`; `422 RECIPIENT_SUPPRESSED`, `CONSENT_REVOKED`, `TEMPLATE_NOT_APPROVED`, `NO_ACTIVE_PROVIDER_ASSIGNMENT`, `SMS_*`, `RCS_*`, `IDEMPOTENCY_KEY_PAYLOAD_MISMATCH` |
+| `GET` | `/api/v1/messages/:id` | `messages.read` | — | `200 {data:messageDetail}` | `400`; `401`; `403`; `404` |
+| `GET` | `/api/v1/messages` | `messages.read` | `status`, `channelCode` (`whatsapp` \| `rcs` \| `sms` \| `email` \| `voice`), `workspaceId`, `templateId`, `providerId` (messages with an attempt through that provider), `createdFrom` (inclusive) / `createdTo` (exclusive) ISO-8601, `limit`, `cursor`, `sort` (`-createdAt` default, `createdAt`) | `200 {data:[messageSummary], page}` | `400` (invalid value or unknown parameter); `401`; `403` |
+
+## 34. Related
 
 `API.md` (target architecture), `RBAC.md` (permission model), `TENANCY.md` (isolation),
 `SECURITY.md`, `EVENTS.md`, `ROADMAP.md` (path to the frontend-ready gate).
