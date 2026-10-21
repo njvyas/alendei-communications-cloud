@@ -2,7 +2,7 @@
 
 Purpose: a dedicated, internal-only ACC environment in which the QA team validates the current implementation and records functional, security and usability findings (`QA_TEST_PLAN.md`, `USABILITY_FEEDBACK_TEMPLATE.md`). It is **not** the external MVP and not production. It uses a fresh database; the shared development database is never reused, copied or reset.
 
-Baseline: commit `86a340ca041393471d2b9efdbb1316429208f9f8` on `develop`, CI run 39374365731 green (all five jobs). Deploy only that commit, or a later one with its own green CI run.
+Baseline: commit `f4d3cb3ed3a97e24aaa888071929aa4ea4d515e3` on `develop`, CI run 39645113250 green (all five jobs). Deploy only that commit, or a later one with its own green CI run.
 
 Artifacts reused unchanged: `deploy/api.Dockerfile`, `deploy/web.Dockerfile`, `deploy/compose.release.yml`, `deploy/release.env.example`. The general procedure is `docs/RELEASE.md`; this runbook fixes the QA-specific values and adds the QA account, data and verification steps.
 
@@ -194,7 +194,7 @@ Organization, provider and assignment IDs are shown in the console URLs and deta
 | 1 | Baseline | deployed commit = CI-green commit; image IDs recorded |
 | 2 | Exposure | only 443 internal/VPN and restricted 22 inbound; `docker ps` shows only the two loopback ports |
 | 3 | TLS | `https://acc-qa.<internal domain>/login` loads with a trusted certificate; `/metrics` returns 404 through the proxy |
-| 4 | Fresh install | migrate 35, history proof exact, roles, seed, bootstrap (re-run reports *Already bootstrapped*) |
+| 4 | Fresh install | migrate 36, history proof exact, roles, seed, bootstrap (re-run reports *Already bootstrapped*) |
 | 5 | Startup controls | principals verified line; a deliberately invalid dispatch credential (`RELEASE.md` §9.2) refuses start |
 | 6 | Health | `/health/ready` ok from the host |
 | 7 | Accounts | every persona in §7 that is supported is created, activated and can sign in |
