@@ -184,13 +184,25 @@ describe('Messages Administration API Client & Masking Tests', () => {
     const maskedUk = maskRecipientAddress('+447911123456');
     assert.equal(maskedUk, '+44 •••• 3456');
 
+    // 3-digit country code (+353 Ireland)
+    const maskedIe = maskRecipientAddress('+353871234567');
+    assert.equal(maskedIe, '+353 •••• 4567');
+
     // Standard Email
     const maskedEmail = maskRecipientAddress('operator@alendei.com');
     assert.equal(maskedEmail, 'o••••r@alendei.com');
 
-    // Short Email
+    // Complex Email with subdomains
+    const maskedSubdomain = maskRecipientAddress('first.last@eng.alendei.co.uk');
+    assert.equal(maskedSubdomain, 'f••••t@eng.alendei.co.uk');
+
+    // Short Email (2 chars)
     const maskedShort = maskRecipientAddress('ab@domain.com');
     assert.equal(maskedShort, 'a•••@domain.com');
+
+    // Single-char local-part Email
+    const maskedSingle = maskRecipientAddress('a@domain.com');
+    assert.equal(maskedSingle, 'a•••@domain.com');
 
     // Null, empty, or whitespace
     assert.equal(maskRecipientAddress(null), '');

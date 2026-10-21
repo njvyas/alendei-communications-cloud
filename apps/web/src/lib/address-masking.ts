@@ -3,6 +3,54 @@
  * by default to protect personal data in internal operator interfaces.
  */
 
+const TWO_DIGIT_CC = new Set([
+  '20',
+  '27',
+  '28',
+  '30',
+  '31',
+  '32',
+  '33',
+  '34',
+  '36',
+  '39',
+  '40',
+  '41',
+  '43',
+  '44',
+  '45',
+  '46',
+  '47',
+  '48',
+  '49',
+  '51',
+  '52',
+  '53',
+  '54',
+  '55',
+  '56',
+  '57',
+  '58',
+  '60',
+  '61',
+  '62',
+  '63',
+  '64',
+  '65',
+  '66',
+  '81',
+  '82',
+  '84',
+  '86',
+  '90',
+  '91',
+  '92',
+  '93',
+  '94',
+  '95',
+  '98',
+]);
+
 /**
  * Masks a recipient address (phone or email) while preserving prefix/suffix context.
  *
@@ -37,9 +85,14 @@ export function maskRecipientAddress(address: string | null | undefined): string
     const digits = trimmed.slice(1);
     if (digits.length >= 7) {
       let cc = '+1';
-      if (!trimmed.startsWith('+1')) {
-        const countryCodeLen = digits.length >= 13 ? 3 : 2;
-        cc = trimmed.slice(0, 1 + countryCodeLen);
+      if (digits.startsWith('1') || digits.startsWith('7')) {
+        cc = `+${digits[0]}`;
+      } else if (TWO_DIGIT_CC.has(digits.slice(0, 2))) {
+        cc = `+${digits.slice(0, 2)}`;
+      } else if (digits.length >= 8) {
+        cc = `+${digits.slice(0, 3)}`;
+      } else {
+        cc = `+${digits.slice(0, 2)}`;
       }
       const suffix = trimmed.slice(-4);
       return `${cc} •••• ${suffix}`;

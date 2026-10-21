@@ -33,9 +33,6 @@ export function MessageListCard({ orgId, channels = [] }: MessageListCardProps) 
   const [cursorStack, setCursorStack] = useState<string[]>([]);
   const currentCursor = cursorStack.length > 0 ? cursorStack[cursorStack.length - 1] : undefined;
 
-  // Masking reveal set
-  const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set());
-
   // Detail inspection modal
   const [inspectMessageId, setInspectMessageId] = useState<string | null>(null);
 
@@ -85,18 +82,6 @@ export function MessageListCard({ orgId, channels = [] }: MessageListCardProps) 
 
   const handlePrevPage = () => {
     setCursorStack((prev) => prev.slice(0, -1));
-  };
-
-  const toggleReveal = (id: string) => {
-    setRevealedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
   };
 
   const clearFilters = () => {
@@ -263,7 +248,6 @@ export function MessageListCard({ orgId, channels = [] }: MessageListCardProps) 
                 </tr>
               ) : (
                 messages.map((msg) => {
-                  const isRevealed = revealedIds.has(msg.id);
                   const channelObj = channels.find((c) => c.id === msg.channelId);
                   const channelLabel = channelObj
                     ? channelObj.displayName
@@ -287,21 +271,12 @@ export function MessageListCard({ orgId, channels = [] }: MessageListCardProps) 
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-[11px] text-[var(--color-ink)]">
-                            {isRevealed
-                              ? msg.recipientAddress
-                              : maskRecipientAddress(msg.recipientAddress)}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => toggleReveal(msg.id)}
-                            className="text-[10px] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] underline"
-                            aria-label={`Toggle address visibility for message ${msg.id}`}
-                          >
-                            {isRevealed ? 'Hide' : 'Show'}
-                          </button>
-                        </div>
+                        <span
+                          className="font-mono text-[11px] text-[var(--color-ink)]"
+                          data-testid={`masked-recipient-${msg.id}`}
+                        >
+                          {maskRecipientAddress(msg.recipientAddress)}
+                        </span>
                       </td>
                       <td className="px-4 py-3">
                         <MessageStatusBadge status={msg.status} />

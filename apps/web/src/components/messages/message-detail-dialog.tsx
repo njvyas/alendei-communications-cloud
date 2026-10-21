@@ -68,7 +68,6 @@ export function MessageDetailDialog({
   channels = [],
 }: MessageDetailDialogProps) {
   const [isCopied, setIsCopied] = useState(false);
-  const [isAddressRevealed, setIsAddressRevealed] = useState(false);
   const [showPayload, setShowPayload] = useState(false);
 
   const { data, isLoading, error } = useQuery({
@@ -177,21 +176,12 @@ export function MessageDetailDialog({
                 <span className="block text-[11px] font-medium text-[var(--color-ink-muted)]">
                   Recipient Address
                 </span>
-                <div className="mt-1 flex items-center gap-2">
-                  <span className="font-mono text-xs text-[var(--color-ink)]">
-                    {isAddressRevealed
-                      ? message.recipientAddress
-                      : maskRecipientAddress(message.recipientAddress)}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setIsAddressRevealed((prev) => !prev)}
-                    className="text-[10px] text-[var(--color-accent)] hover:underline"
-                    aria-label="Toggle recipient address visibility"
-                  >
-                    {isAddressRevealed ? 'Hide' : 'Reveal'}
-                  </button>
-                </div>
+                <span
+                  className="mt-1 block font-mono text-xs text-[var(--color-ink)]"
+                  data-testid="detail-masked-recipient"
+                >
+                  {maskRecipientAddress(message.recipientAddress)}
+                </span>
               </div>
 
               <div>
