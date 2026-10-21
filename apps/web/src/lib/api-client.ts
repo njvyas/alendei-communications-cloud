@@ -12,11 +12,14 @@ import type {
   CreateOrganizationProviderAssignmentInput,
   EffectiveConsentResponse,
   EffectiveConsentState,
+  ProviderCircuitPolicy,
+  MessageAttemptResponse,
+  MessageAttemptStatus,
   MessageDetailResponse,
   MessageStatus,
+  MessageSummaryResponse,
   OrganizationProviderAssignment,
   PageInfo,
-  ProviderCircuitPolicy,
   ProviderCircuitState,
   ProviderFailureCategory,
   ProviderHealthClassification,
@@ -34,20 +37,37 @@ import type {
   TemplateResponse,
   UpdateOrganizationProviderAssignmentInput,
 } from '@acc/contracts';
-import { ASSIGNMENT_STATUS, SUPPRESSION_STATUSES } from '@acc/contracts';
+import {
+  ASSIGNMENT_STATUS,
+  MESSAGE_ATTEMPT_STATUSES,
+  MESSAGE_STATUSES,
+  SUPPRESSION_STATUSES,
+} from '@acc/contracts';
+import { maskRecipientAddress } from './address-masking';
 
 export type {
   AssignmentStatus,
+  ChannelCode,
   CreateOrganizationProviderAssignmentInput,
   EffectiveConsentState,
+  MessageAttemptResponse,
+  MessageAttemptStatus,
   MessageDetailResponse,
+  MessageStatus,
+  MessageSummaryResponse,
   OrganizationProviderAssignment,
   PageInfo,
   SuppressionResponse,
   SuppressionStatus,
   UpdateOrganizationProviderAssignmentInput,
 };
-export { ASSIGNMENT_STATUS, SUPPRESSION_STATUSES };
+export {
+  ASSIGNMENT_STATUS,
+  MESSAGE_ATTEMPT_STATUSES,
+  MESSAGE_STATUSES,
+  SUPPRESSION_STATUSES,
+  maskRecipientAddress,
+};
 
 /**
  * Browser-side API client for Alendei Communications Cloud.
@@ -2377,7 +2397,45 @@ export interface MessageDetailWithAttempts {
   readonly attempts: readonly MessageAttemptDetail[];
 }
 
+export interface ListMessagesParams {
+  readonly status?: MessageStatus;
+  readonly channelCode?: ChannelCode;
+  readonly workspaceId?: string;
+  readonly templateId?: string;
+  readonly providerId?: string;
+  readonly createdFrom?: string;
+  readonly createdTo?: string;
+  readonly limit?: number;
+  readonly cursor?: string;
+  readonly sort?: string;
+}
+
 export const messagesApi = {
+  async list(
+    params: ListMessagesParams = {},
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<MessageSummaryResponse>> {
+    const query = new URLSearchParams();
+    if (params.status) query.set('status', params.status);
+    if (params.channelCode) query.set('channelCode', params.channelCode);
+    if (params.workspaceId) query.set('workspaceId', params.workspaceId);
+    if (params.templateId) query.set('templateId', params.templateId);
+    if (params.providerId) query.set('providerId', params.providerId);
+    if (params.createdFrom) query.set('createdFrom', params.createdFrom);
+    if (params.createdTo) query.set('createdTo', params.createdTo);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.sort) query.set('sort', params.sort);
+
+    const queryString = query.toString();
+    const endpoint = queryString ? `/messages?${queryString}` : '/messages';
+
+    return apiFetch<ApiPagedResponse<MessageSummaryResponse>>(endpoint, {
+      method: 'GET',
+      signal,
+    });
+  },
+
   async send(
     params: SendMessageParams,
     idempotencyKey?: string,

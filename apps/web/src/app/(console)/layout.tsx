@@ -32,6 +32,7 @@ import ConsoleLoading from './loading';
  */
 const SECTIONS = [
   { href: '/', label: 'Overview' },
+  { href: '/messages', label: 'Messages' },
   { href: '/whatsapp', label: 'WhatsApp' },
   { href: '/templates', label: 'Templates' },
   { href: '/contacts', label: 'Contacts' },
@@ -201,6 +202,8 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
           <ul className="flex flex-wrap gap-1 md:flex-col">
             {SECTIONS.filter((section) => {
               switch (section.href) {
+                case '/messages':
+                  return canReadMessages;
                 case '/whatsapp':
                   return canReadMessages || canSendMessages;
                 case '/templates':
