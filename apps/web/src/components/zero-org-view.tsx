@@ -2,12 +2,12 @@
 
 import Link from 'next/link';
 import { authApi } from '@/lib/api-client';
-import { useCanReadOrganizations, useCanReadProviders, useSession } from '@/lib/session-store';
+import { useCanCreateOrganizations, useCanReadProviders, useSession } from '@/lib/session-store';
 import { Card, CardDescription, CardTitle } from '@/components/ui/card';
 
 export function ZeroOrgView() {
   const clearSession = useSession((state) => state.clearSession);
-  const canReadOrganizations = useCanReadOrganizations();
+  const canCreateOrganizations = useCanCreateOrganizations();
   const canReadProviders = useCanReadProviders();
 
   const handleSignOut = async () => {
@@ -21,14 +21,17 @@ export function ZeroOrgView() {
   return (
     <div className="mx-auto flex min-h-[60vh] max-w-md items-center px-4">
       <Card className="w-full">
-        <CardTitle>No Organization Access</CardTitle>
+        <CardTitle>
+          {canCreateOrganizations ? 'No Organizations' : 'No Organization Access'}
+        </CardTitle>
         <CardDescription>
-          Your account is successfully authenticated, but you do not hold active grants in any
-          organization. Tenant-scoped operations are not available.
+          {canCreateOrganizations
+            ? 'No organizations exist yet. Create the first organization to continue.'
+            : 'Your account is successfully authenticated, but you do not hold active grants in any organization. Tenant-scoped operations are not available.'}
         </CardDescription>
         <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap gap-2">
-            {canReadOrganizations && (
+            {canCreateOrganizations && (
               <Link
                 href="/organizations"
                 className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"

@@ -2,14 +2,18 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ApiError,
   organizationsApi,
   type ListOrganizationsParams,
   type OrganizationStatus,
 } from '@/lib/api-client';
-import { useCanCreateOrganizations, useCanReadOrganizations } from '@/lib/session-store';
+import {
+  refreshAuthorization,
+  useCanCreateOrganizations,
+  useCanReadOrganizations,
+} from '@/lib/session-store';
 import { StatusDot, type StatusTone } from '@/components/ui/status-dot';
 import { OrganizationCreateDialog } from '@/components/organizations/organization-create-dialog';
 
@@ -26,6 +30,7 @@ const SORT_OPTIONS = [
 ] as const;
 
 export default function OrganizationsPage() {
+  const queryClient = useQueryClient();
   const canReadOrganizations = useCanReadOrganizations();
   const canCreateOrganizations = useCanCreateOrganizations();
 
@@ -321,8 +326,10 @@ export default function OrganizationsPage() {
       <OrganizationCreateDialog
         isOpen={isCreateOpen}
         onClose={() => setIsCreateOpen(false)}
-        onSuccess={() => {
+        onSuccess={async () => {
           void refetch();
+          void queryClient.invalidateQueries({ queryKey: ['organizations'] });
+          await refreshAuthorization();
         }}
       />
     </div>

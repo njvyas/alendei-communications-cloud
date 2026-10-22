@@ -201,6 +201,18 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
         <nav aria-label="Sections" className="md:w-44 md:shrink-0">
           <ul className="flex flex-wrap gap-1 md:flex-col">
             {SECTIONS.filter((section) => {
+              if (status === 'zero_organizations') {
+                switch (section.href) {
+                  case '/organizations':
+                    return canReadOrganizations;
+                  case '/channels':
+                  case '/providers':
+                    return canReadProviders;
+                  default:
+                    return false;
+                }
+              }
+
               switch (section.href) {
                 case '/messages':
                   return canReadMessages;

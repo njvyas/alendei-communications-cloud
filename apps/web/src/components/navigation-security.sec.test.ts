@@ -234,6 +234,203 @@ describe('SEC-08: Console Navigation Security & Permission Gating (Production Co
   });
 
   // ---------------------------------------------------------------------------
+  // C.3a: Platform Administrator in zero_organizations state sees only authorized Organizations, Channels, Providers
+  // ---------------------------------------------------------------------------
+  it('SEC-08.C3a: platform administrator in zero_organizations state sees only permission-authorized Organizations, Channels, and Providers navigation entries', () => {
+    useSession.getState().setSession({
+      accessToken: 'token-platform-admin-zero-org',
+      user: {
+        userId: '01955b0a-7b3b-7411-9a4f-adminuser111',
+        actorType: 'user',
+        authMethod: 'session',
+        sessionId: 'session-admin',
+        authenticatedAt: '2026-09-23T00:00:00.000Z',
+        tenant: {
+          orgId: null,
+          workspaceId: null,
+          resellerId: null,
+          isPlatformAdmin: true,
+        },
+        authorizedOrganizationIds: [],
+        roles: [],
+        permissions: [],
+      },
+      authorization: {
+        actorType: 'user',
+        userId: '01955b0a-7b3b-7411-9a4f-adminuser111',
+        apiKeyId: null,
+        grants: [
+          {
+            roleId: 'role-providers',
+            roleKey: 'providers_manager',
+            scopeType: 'platform',
+            scopeId: null,
+            orgId: null,
+            permissions: ['providers.read'],
+          },
+        ],
+        organizationIds: [],
+        isPlatformAdmin: true,
+      },
+      selectedOrgId: null,
+    });
+
+    assert.equal(useSession.getState().status, 'zero_organizations');
+
+    // Navigating permitted /organizations route
+    const html = renderLayout('/organizations');
+
+    // 1. Sidebar is rendered
+    assert.ok(
+      html.includes('aria-label="Sections"'),
+      'Navigation sidebar must be rendered on permitted route',
+    );
+
+    // 2. Only permission-authorized entries are present
+    assert.ok(html.includes('href="/organizations"'), 'Organizations entry must be visible');
+    assert.ok(html.includes('href="/channels"'), 'Channels entry must be visible');
+    assert.ok(html.includes('href="/providers"'), 'Providers entry must be visible');
+
+    // 3. Destinations blocked by zero-org gate are strictly suppressed
+    assert.equal(html.includes('href="/"'), false, 'Overview link must NOT be visible');
+    assert.equal(html.includes('href="/users"'), false, 'Users link must NOT be visible');
+    assert.equal(html.includes('href="/roles"'), false, 'Roles link must NOT be visible');
+    assert.equal(html.includes('href="/audit-logs"'), false, 'Audit Logs link must NOT be visible');
+    assert.equal(html.includes('href="/workspaces"'), false, 'Workspaces link must NOT be visible');
+    assert.equal(html.includes('href="/teams"'), false, 'Teams link must NOT be visible');
+    assert.equal(html.includes('href="/messages"'), false, 'Messages link must NOT be visible');
+    assert.equal(html.includes('href="/whatsapp"'), false, 'WhatsApp link must NOT be visible');
+    assert.equal(html.includes('href="/templates"'), false, 'Templates link must NOT be visible');
+    assert.equal(html.includes('href="/contacts"'), false, 'Contacts link must NOT be visible');
+    assert.equal(
+      html.includes('href="/suppressions"'),
+      false,
+      'Suppressions link must NOT be visible',
+    );
+    assert.equal(html.includes('href="/api-keys"'), false, 'API Keys link must NOT be visible');
+
+    // 4. Direct navigation to blocked destination renders ZeroOrgView instead of target page
+    const blockedHtml = renderLayout('/users');
+    assert.equal(
+      blockedHtml.includes('aria-label="Sections"'),
+      false,
+      'Direct URL to /users must not render sidebar',
+    );
+    assert.ok(
+      blockedHtml.includes('No organizations exist yet'),
+      'Direct URL to /users must intercept with first-run ZeroOrgView',
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // C.3b: Users without organization-creation permission retain existing message and see no privileged action
+  // ---------------------------------------------------------------------------
+  it('SEC-08.C3b: users without organization-creation permission do not see the privileged first-run action and retain the appropriate existing message', () => {
+    useSession.getState().setSession({
+      accessToken: 'token-unprivileged-zero-org',
+      user: createMockUser([]),
+      authorization: {
+        actorType: 'user',
+        userId: '01955b0a-7b3b-7411-9a4f-testuser1111',
+        apiKeyId: null,
+        grants: [],
+        organizationIds: [],
+        isPlatformAdmin: false,
+      },
+      selectedOrgId: null,
+    });
+
+    assert.equal(useSession.getState().status, 'zero_organizations');
+
+    const html = renderLayout('/');
+
+    // 1. Retains existing title and guidance message
+    assert.ok(
+      html.includes('No Organization Access'),
+      'Must retain existing title "No Organization Access"',
+    );
+    assert.ok(
+      html.includes(
+        'Your account is successfully authenticated, but you do not hold active grants in any organization.',
+      ),
+      'Must retain existing description for unprivileged users',
+    );
+
+    // 2. Suppresses privileged first-run action and message
+    assert.equal(
+      html.includes('Manage Organizations'),
+      false,
+      'Must NOT display privileged Manage Organizations action',
+    );
+    assert.equal(
+      html.includes('No organizations exist yet'),
+      false,
+      'Must NOT display first-run guidance to unprivileged user',
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // C.3c: Platform administrators receive the new first-run guidance
+  // ---------------------------------------------------------------------------
+  it('SEC-08.C3c: platform administrators receive the new first-run guidance', () => {
+    useSession.getState().setSession({
+      accessToken: 'token-platform-admin-zero-org',
+      user: {
+        userId: '01955b0a-7b3b-7411-9a4f-adminuser111',
+        actorType: 'user',
+        authMethod: 'session',
+        sessionId: 'session-admin',
+        authenticatedAt: '2026-09-23T00:00:00.000Z',
+        tenant: {
+          orgId: null,
+          workspaceId: null,
+          resellerId: null,
+          isPlatformAdmin: true,
+        },
+        authorizedOrganizationIds: [],
+        roles: [],
+        permissions: [],
+      },
+      authorization: {
+        actorType: 'user',
+        userId: '01955b0a-7b3b-7411-9a4f-adminuser111',
+        apiKeyId: null,
+        grants: [],
+        organizationIds: [],
+        isPlatformAdmin: true,
+      },
+      selectedOrgId: null,
+    });
+
+    assert.equal(useSession.getState().status, 'zero_organizations');
+
+    const html = renderLayout('/');
+
+    // 1. Receives first-run guidance
+    assert.ok(
+      html.includes('No organizations exist yet. Create the first organization to continue.'),
+      'Must display first-run guidance message',
+    );
+    assert.ok(html.includes('No Organizations'), 'Must render No Organizations header');
+
+    // 2. Primary action is Manage Organizations link
+    assert.ok(html.includes('Manage Organizations'), 'Must display Manage Organizations button');
+    assert.ok(
+      html.includes('href="/organizations"'),
+      'Manage Organizations must link to /organizations',
+    );
+
+    // 3. Does not display standard unprivileged access denied text
+    assert.equal(
+      html.includes(
+        'Your account is successfully authenticated, but you do not hold active grants in any organization.',
+      ),
+      false,
+      'Must not treat platform administrator as user lacking grants',
+    );
+  });
+
+  // ---------------------------------------------------------------------------
   // C.4: Dynamic Permission Gating for Users Section
   // ---------------------------------------------------------------------------
   it('SEC-08.C4: Users navigation link is dynamically gated on users.read permission in ConsoleLayout', () => {

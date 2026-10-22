@@ -13,6 +13,7 @@ import {
   getActiveOrganizationGrants,
   getHeldOrganizationPermissions,
   hasPermission,
+  refreshAuthorization,
   useSession,
 } from './session-store';
 
@@ -787,6 +788,219 @@ describe('Session Store & Organization Context', () => {
       assert.equal(hasPermission('contacts.read'), false);
       assert.equal(getHeldOrganizationPermissions().size, 0);
       assert.deepEqual(getActiveOrganizationGrants(), []);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Refresh Authorization Tests (Requirement 3, 4, 5)
+  // ---------------------------------------------------------------------------
+  describe('refreshAuthorization', () => {
+    it('changes session from zero_organizations to ready when /auth/me returns newly created organization', async () => {
+      const NEW_ORG_ID = '01955b0a-7b3b-7411-9a4f-neworg11111';
+      const initialUser = createMockUser([]);
+      const initialAuth = createMockAuthorization([]);
+
+      useSession.getState().setSession({
+        accessToken: 'valid-test-token',
+        user: initialUser,
+        authorization: initialAuth,
+      });
+
+      assert.equal(useSession.getState().status, 'zero_organizations');
+      assert.equal(useSession.getState().selectedOrganizationId, null);
+
+      globalThis.fetch = async (input) => {
+        const url = String(input);
+        if (url.endsWith('/auth/me')) {
+          const updatedUser = createMockUser([NEW_ORG_ID]);
+          return new Response(JSON.stringify({ data: updatedUser }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.endsWith('/auth/me/authorization')) {
+          const updatedAuth = createMockAuthorization([NEW_ORG_ID]);
+          return new Response(JSON.stringify({ data: updatedAuth }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(
+          JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Not found' } }),
+          {
+            status: 404,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        );
+      };
+
+      const resultStatus = await refreshAuthorization();
+
+      assert.equal(resultStatus, 'ready');
+      const state = useSession.getState();
+      assert.equal(state.status, 'ready');
+      assert.equal(state.selectedOrganizationId, NEW_ORG_ID);
+      assert.equal(getSelectedOrganization(), NEW_ORG_ID);
+      assert.deepEqual(state.authorizedOrganizationIds, [NEW_ORG_ID]);
+    });
+
+    it('session remains in zero_organizations if /auth/me continues returning empty list regardless of create response', async () => {
+      const initialUser = createMockUser([]);
+      const initialAuth = createMockAuthorization([]);
+
+      useSession.getState().setSession({
+        accessToken: 'valid-test-token',
+        user: initialUser,
+        authorization: initialAuth,
+      });
+
+      assert.equal(useSession.getState().status, 'zero_organizations');
+
+      // Server still returns empty list
+      globalThis.fetch = async (input) => {
+        const url = String(input);
+        if (url.endsWith('/auth/me')) {
+          return new Response(JSON.stringify({ data: createMockUser([]) }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.endsWith('/auth/me/authorization')) {
+          return new Response(JSON.stringify({ data: createMockAuthorization([]) }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(null, { status: 404 });
+      };
+
+      const resultStatus = await refreshAuthorization();
+
+      assert.equal(resultStatus, 'zero_organizations');
+      const state = useSession.getState();
+      assert.equal(state.status, 'zero_organizations');
+      assert.equal(state.selectedOrganizationId, null);
+      assert.equal(getSelectedOrganization(), null);
+      assert.deepEqual(state.authorizedOrganizationIds, []);
+    });
+
+    it('deduplicates concurrent refreshAuthorization calls into a single network invocation', async () => {
+      const NEW_ORG_ID = '01955b0a-7b3b-7411-9a4f-concurrent-org';
+      useSession.getState().setSession({
+        accessToken: 'valid-test-token',
+        user: createMockUser([]),
+        authorization: createMockAuthorization([]),
+      });
+
+      let meCallCount = 0;
+      let authCallCount = 0;
+
+      globalThis.fetch = async (input) => {
+        const url = String(input);
+        if (url.endsWith('/auth/me')) {
+          meCallCount++;
+          return new Response(JSON.stringify({ data: createMockUser([NEW_ORG_ID]) }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.endsWith('/auth/me/authorization')) {
+          authCallCount++;
+          return new Response(JSON.stringify({ data: createMockAuthorization([NEW_ORG_ID]) }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(null, { status: 404 });
+      };
+
+      // Fire 3 calls concurrently
+      const [res1, res2, res3] = await Promise.all([
+        refreshAuthorization(),
+        refreshAuthorization(),
+        refreshAuthorization(),
+      ]);
+
+      assert.equal(res1, 'ready');
+      assert.equal(res2, 'ready');
+      assert.equal(res3, 'ready');
+      assert.equal(meCallCount, 1, 'Only one /auth/me call dispatched');
+      assert.equal(authCallCount, 1, 'Only one /auth/me/authorization call dispatched');
+    });
+
+    it('preserves valid active organization selection when multiple orgs exist after refresh', async () => {
+      const ORG_1 = '01955b0a-org-1';
+      const ORG_2 = '01955b0a-org-2';
+
+      useSession.getState().setSession({
+        accessToken: 'valid-test-token',
+        user: createMockUser([ORG_1]),
+        authorization: createMockAuthorization([ORG_1]),
+        selectedOrgId: ORG_1,
+      });
+
+      assert.equal(useSession.getState().status, 'ready');
+      assert.equal(useSession.getState().selectedOrganizationId, ORG_1);
+
+      globalThis.fetch = async (input) => {
+        const url = String(input);
+        if (url.endsWith('/auth/me')) {
+          return new Response(JSON.stringify({ data: createMockUser([ORG_1, ORG_2]) }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.endsWith('/auth/me/authorization')) {
+          return new Response(JSON.stringify({ data: createMockAuthorization([ORG_1, ORG_2]) }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(null, { status: 404 });
+      };
+
+      await refreshAuthorization();
+
+      assert.equal(useSession.getState().status, 'ready');
+      assert.equal(useSession.getState().selectedOrganizationId, ORG_1);
+      assert.equal(getSelectedOrganization(), ORG_1);
+    });
+
+    it('transitions to selecting_organization and clears selectedOrganizationId if selected org is no longer authorized', async () => {
+      const ORG_1 = '01955b0a-org-1';
+      const ORG_2 = '01955b0a-org-2';
+      const ORG_3 = '01955b0a-org-3';
+
+      useSession.getState().setSession({
+        accessToken: 'valid-test-token',
+        user: createMockUser([ORG_1]),
+        authorization: createMockAuthorization([ORG_1]),
+        selectedOrgId: ORG_1,
+      });
+
+      // ORG_1 was revoked, now user has ORG_2 and ORG_3
+      globalThis.fetch = async (input) => {
+        const url = String(input);
+        if (url.endsWith('/auth/me')) {
+          return new Response(JSON.stringify({ data: createMockUser([ORG_2, ORG_3]) }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.endsWith('/auth/me/authorization')) {
+          return new Response(JSON.stringify({ data: createMockAuthorization([ORG_2, ORG_3]) }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(null, { status: 404 });
+      };
+
+      await refreshAuthorization();
+
+      assert.equal(useSession.getState().status, 'selecting_organization');
+      assert.equal(useSession.getState().selectedOrganizationId, null);
+      assert.equal(getSelectedOrganization(), null);
     });
   });
 });

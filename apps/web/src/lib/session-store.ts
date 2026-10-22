@@ -13,7 +13,10 @@ import {
 } from '@acc/contracts';
 
 import {
+  ApiError,
   authApi,
+  getAccessToken,
+  getSessionEpoch,
   invalidateSessionEpoch,
   onAuthFailure,
   registerOrgValidator,
@@ -64,7 +67,10 @@ export interface SessionState {
   clearOrganization(): void;
   clearSession(): void;
   setStatus(status: AuthStatus, errorMessage?: string | null): void;
+  refreshAuthorization(): Promise<AuthStatus>;
 }
+
+let refreshAuthPromise: Promise<AuthStatus> | null = null;
 
 export const useSession = create<SessionState>((set, get) => ({
   status: 'idle',
@@ -182,6 +188,50 @@ export const useSession = create<SessionState>((set, get) => ({
 
   setStatus: (status: AuthStatus, errorMessage: string | null = null) => {
     set({ status, errorMessage });
+  },
+
+  refreshAuthorization: async () => {
+    if (refreshAuthPromise) {
+      return refreshAuthPromise;
+    }
+
+    const currentEpoch = getSessionEpoch();
+
+    refreshAuthPromise = (async () => {
+      try {
+        const currentToken = get().accessToken ?? getAccessToken();
+        if (!currentToken) {
+          return get().status;
+        }
+
+        const [meRes, authRes] = await Promise.all([authApi.me(), authApi.authorization()]);
+
+        if (getSessionEpoch() !== currentEpoch) {
+          return get().status;
+        }
+
+        const token = getAccessToken() ?? currentToken;
+
+        get().setSession({
+          accessToken: token,
+          user: meRes.data,
+          authorization: authRes.data,
+          selectedOrgId: get().selectedOrganizationId,
+        });
+
+        return get().status;
+      } catch (err) {
+        if (getSessionEpoch() === currentEpoch && err instanceof ApiError && err.status === 401) {
+          get().clearSession();
+          return 'unauthenticated';
+        }
+        return get().status;
+      } finally {
+        refreshAuthPromise = null;
+      }
+    })();
+
+    return refreshAuthPromise;
   },
 }));
 
@@ -650,6 +700,14 @@ export async function bootstrapSession(): Promise<AuthStatus> {
     store.clearSession();
     return 'unauthenticated';
   }
+}
+
+/**
+ * Refreshes authorization and tenant grants from the server (/auth/me and /auth/me/authorization).
+ * Transitions from 'zero_organizations' to 'ready' when authorized organizations become available.
+ */
+export async function refreshAuthorization(): Promise<AuthStatus> {
+  return useSession.getState().refreshAuthorization();
 }
 
 // Automatically clear the session when the API client determines authentication has terminated
