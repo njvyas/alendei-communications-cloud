@@ -12,11 +12,18 @@ import { StatusDot, type StatusTone } from '@/components/ui/status-dot';
  * only endpoint Phase 1 exposes.
  */
 export function PlatformStatus() {
+  const isDevelopment = process.env.NEXT_PUBLIC_APP_ENV === 'development';
+
   const { data, error, isPending, isError } = useQuery<HealthResponse>({
     queryKey: ['health'],
     queryFn: ({ signal }) => fetchHealth(signal),
     refetchInterval: 15_000,
+    enabled: isDevelopment,
   });
+
+  if (!isDevelopment) {
+    return null;
+  }
 
   if (isPending) {
     return (
@@ -31,9 +38,7 @@ export function PlatformStatus() {
     return (
       <Card>
         <CardTitle>Platform status</CardTitle>
-        <CardDescription>
-          The API is unreachable. Start it with <code>npm run dev -w @acc/api</code>.
-        </CardDescription>
+        <CardDescription>Platform status is currently unavailable.</CardDescription>
         <p className="mt-3 text-xs text-[var(--color-ink-muted)]">
           {error instanceof Error ? error.message : 'Unknown error'}
         </p>

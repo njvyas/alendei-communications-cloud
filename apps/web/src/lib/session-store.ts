@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import { create } from 'zustand';
 
 import {
@@ -453,12 +454,13 @@ export function getHeldOrganizationPermissions(): Set<string> {
  * React hook returning permissions held by the actor that cover the active organization scope.
  */
 export function useHeldOrganizationPermissions(): Set<string> {
-  return useSession((state) =>
-    resolveHeldOrganizationPermissions(
-      state.authorization,
-      state.selectedOrganizationId,
-      state.user?.tenant?.resellerId ?? null,
-    ),
+  const authorization = useSession((state) => state.authorization);
+  const selectedOrganizationId = useSession((state) => state.selectedOrganizationId);
+  const userResellerId = useSession((state) => state.user?.tenant?.resellerId ?? null);
+
+  return useMemo(
+    () => resolveHeldOrganizationPermissions(authorization, selectedOrganizationId, userResellerId),
+    [authorization, selectedOrganizationId, userResellerId],
   );
 }
 

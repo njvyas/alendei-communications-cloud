@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   apiFetch,
   authApi,
+  fetchHealth,
   getAccessToken,
   getSelectedOrganization,
   invalidateSessionEpoch,
@@ -1150,6 +1151,164 @@ describe('API Client Security Foundation', () => {
         'Session B must not receive auth failure notification after failed Session A logout',
       );
       unsub();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 17. Health Endpoint & Non-JSON Content-Type Protection
+  // ---------------------------------------------------------------------------
+  describe('17. Health Endpoint Verification & Error Protection', () => {
+    it('successfully parses and returns HealthResponse for HTTP 200 with application/json', async () => {
+      mockHandlers.push({
+        match: (url) => url.endsWith('/health/ready'),
+        handle: () =>
+          new Response(
+            JSON.stringify({
+              status: 'ok',
+              info: { database: { status: 'up' }, redis: { status: 'up' } },
+            }),
+            {
+              status: 200,
+              headers: {
+                'Content-Type': 'application/json',
+                'x-correlation-id': 'corr-health-200',
+              },
+            },
+          ),
+      });
+
+      const res = await fetchHealth();
+      assert.equal(res.status, 'ok');
+      assert.equal(res.info?.database?.status, 'up');
+      assert.equal(res.info?.redis?.status, 'up');
+    });
+
+    it('successfully parses and returns HealthResponse for HTTP 503 with application/json (Terminus degraded status)', async () => {
+      mockHandlers.push({
+        match: (url) => url.endsWith('/health/ready'),
+        handle: () =>
+          new Response(
+            JSON.stringify({
+              status: 'error',
+              info: { database: { status: 'up' } },
+              error: { redis: { status: 'down' } },
+            }),
+            {
+              status: 503,
+              headers: {
+                'Content-Type': 'application/json',
+                'x-correlation-id': 'corr-health-503',
+              },
+            },
+          ),
+      });
+
+      const res = await fetchHealth();
+      assert.equal(res.status, 'error');
+      assert.equal(res.info?.database?.status, 'up');
+      assert.equal(res.error?.redis?.status, 'down');
+    });
+
+    it('handles HTML 404 (e.g. Nginx proxy rejection) without leaking a SyntaxError', async () => {
+      mockHandlers.push({
+        match: (url) => url.endsWith('/health/ready'),
+        handle: () =>
+          new Response('<html><body>404 Not Found</body></html>', {
+            status: 404,
+            headers: {
+              'Content-Type': 'text/html; charset=utf-8',
+              'x-correlation-id': 'corr-html-404',
+            },
+          }),
+      });
+
+      await assert.rejects(
+        async () => {
+          await fetchHealth();
+        },
+        (err: unknown) => {
+          assert(err instanceof ApiError, `Expected ApiError, got: ${String(err)}`);
+          assert.equal(err.status, 404);
+          assert.equal(err.code, 'INVALID_HEALTH_RESPONSE');
+          assert.equal(err.correlationId, 'corr-html-404');
+          assert.equal(err.retryable, false);
+          assert.match(err.message, /unexpected content-type/i);
+          // Verify raw SyntaxError did NOT leak
+          assert.doesNotMatch(err.name, /SyntaxError/);
+          return true;
+        },
+      );
+    });
+
+    it('rejects response missing application/json content-type with typed ApiError', async () => {
+      mockHandlers.push({
+        match: (url) => url.endsWith('/health/ready'),
+        handle: () =>
+          new Response('Plain text response', {
+            status: 200,
+            headers: { 'Content-Type': 'text/plain', 'x-correlation-id': 'corr-plain-text' },
+          }),
+      });
+
+      await assert.rejects(
+        async () => {
+          await fetchHealth();
+        },
+        (err: unknown) => {
+          assert(err instanceof ApiError);
+          assert.equal(err.status, 200);
+          assert.equal(err.code, 'INVALID_HEALTH_RESPONSE');
+          assert.equal(err.correlationId, 'corr-plain-text');
+          return true;
+        },
+      );
+    });
+
+    it('rejects HTTP 500 JSON response with typed ApiError HEALTH_CHECK_FAILED', async () => {
+      mockHandlers.push({
+        match: (url) => url.endsWith('/health/ready'),
+        handle: () =>
+          new Response(JSON.stringify({ message: 'Internal Server Error' }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json', 'x-correlation-id': 'corr-health-500' },
+          }),
+      });
+
+      await assert.rejects(
+        async () => {
+          await fetchHealth();
+        },
+        (err: unknown) => {
+          assert(err instanceof ApiError);
+          assert.equal(err.status, 500);
+          assert.equal(err.code, 'HEALTH_CHECK_FAILED');
+          assert.equal(err.correlationId, 'corr-health-500');
+          return true;
+        },
+      );
+    });
+
+    it('rejects malformed JSON body with typed ApiError instead of leaking SyntaxError', async () => {
+      mockHandlers.push({
+        match: (url) => url.endsWith('/health/ready'),
+        handle: () =>
+          new Response('{"truncated": ', {
+            status: 200,
+            headers: { 'Content-Type': 'application/json', 'x-correlation-id': 'corr-bad-json' },
+          }),
+      });
+
+      await assert.rejects(
+        async () => {
+          await fetchHealth();
+        },
+        (err: unknown) => {
+          assert(err instanceof ApiError);
+          assert.equal(err.status, 200);
+          assert.equal(err.code, 'INVALID_HEALTH_RESPONSE');
+          return true;
+        },
+      );
     });
   });
 });

@@ -421,8 +421,40 @@ function toApiError(response: Response, payload: unknown): ApiError {
 export async function fetchHealth(signal?: AbortSignal): Promise<HealthResponse> {
   const root = getBaseUrl().replace(/\/api\/v\d+$/, '');
   const response = await fetch(`${root}/health/ready`, { signal, cache: 'no-store' });
-  const payload = (await response.json()) as HealthResponse;
-  return payload;
+
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) {
+    throw new ApiError(
+      response.status,
+      'INVALID_HEALTH_RESPONSE',
+      `Health endpoint returned unexpected content-type: ${contentType || 'none'} (status ${response.status})`,
+      response.headers.get('x-correlation-id') ?? 'unknown',
+      false,
+    );
+  }
+
+  if (!response.ok && response.status !== 503) {
+    throw new ApiError(
+      response.status,
+      'HEALTH_CHECK_FAILED',
+      `Health check failed with status ${response.status}`,
+      response.headers.get('x-correlation-id') ?? 'unknown',
+      false,
+    );
+  }
+
+  try {
+    const payload = (await response.json()) as HealthResponse;
+    return payload;
+  } catch (err) {
+    throw new ApiError(
+      response.status,
+      'INVALID_HEALTH_RESPONSE',
+      err instanceof Error ? err.message : 'Failed to parse health response as JSON',
+      response.headers.get('x-correlation-id') ?? 'unknown',
+      false,
+    );
+  }
 }
 
 export interface HealthResponse {
