@@ -388,6 +388,63 @@ describe('SimulatorAdapter — the seven submission-time behaviours, determinist
     expect(foreign.outcome === 'rejected' && foreign.failure.category).toBe('CONFIGURATION_ERROR');
   });
 
+  describe('channel and SMS metadata (Phase 4.2)', () => {
+    const DLT = {
+      entityId: '1201159123456789012',
+      templateId: '1207161234567890123',
+      headerId: 'ALENDE',
+    };
+
+    /** One submission through the executor, with the grant and submission given. */
+    async function send(
+      grant: Partial<AdmissionGrant>,
+      sub: Partial<ProviderSubmission>,
+    ): Promise<ProviderSubmissionResult> {
+      const timer = new VirtualTimer();
+      const { executor, admit } = rig(timer);
+      const settled = executor.execute(admit(grant), submission(sub), 'SUCCESS');
+      await timer.advance(1000);
+      return (await settled).result;
+    }
+    const category = (r: ProviderSubmissionResult) =>
+      r.outcome === 'rejected' && r.failure.category;
+
+    it('a submission labelled for another channel than the provider is CONFIGURATION_ERROR, never accepted', async () => {
+      // The pre-4.2 dispatcher labelled every submission whatsapp, whatever the provider served.
+      expect(category(await send({ channel: 'sms' }, { channel: 'whatsapp' }))).toBe(
+        'CONFIGURATION_ERROR',
+      );
+      expect(category(await send({ channel: 'whatsapp' }, { channel: 'sms' }))).toBe(
+        'CONFIGURATION_ERROR',
+      );
+    });
+
+    it('accepts an SMS submission with well-formed DLT metadata, and one without (a test-send)', async () => {
+      expect((await send({}, { sms: { dlt: DLT, maxSegments: 2 } })).outcome).toBe('accepted');
+      expect((await send({}, {})).outcome).toBe('accepted');
+      expect((await send({ channel: 'whatsapp' }, { channel: 'whatsapp' })).outcome).toBe(
+        'accepted',
+      );
+    });
+
+    it('malformed SMS metadata, or SMS metadata on another channel, is INVALID_REQUEST / SIM-400', async () => {
+      const cases: Partial<ProviderSubmission>[] = [
+        { sms: { dlt: { ...DLT, entityId: 'not-numeric' } } },
+        { sms: { dlt: { ...DLT, extra: 'x' } as never } },
+        { sms: { dlt: DLT, maxSegments: 0 } },
+        { sms: { dlt: DLT, maxSegments: 1.5 } },
+      ];
+      for (const sub of cases) {
+        const r = await send({}, sub);
+        expect(category(r)).toBe('INVALID_REQUEST');
+        expect(r.outcome === 'rejected' && r.failure.providerCode).toBe('SIM-400');
+      }
+      expect(
+        category(await send({ channel: 'whatsapp' }, { channel: 'whatsapp', sms: { dlt: DLT } })),
+      ).toBe('INVALID_REQUEST');
+    });
+  });
+
   it('health check is deterministic', async () => {
     await expect(new SimulatorAdapter(new VirtualTimer()).healthCheck()).resolves.toEqual({
       healthy: true,

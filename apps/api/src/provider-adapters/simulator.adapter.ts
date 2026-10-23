@@ -4,6 +4,7 @@ import {
   RETRYABLE_FAILURE_CATEGORIES,
   SIMULATOR_BEHAVIORS,
   SIMULATOR_HEALTH_BEHAVIORS,
+  validateDltMetadata,
   type ProviderAdapterCapabilities,
   type ProviderAdapterContext,
   type ProviderFailureCategory,
@@ -182,6 +183,35 @@ export class SimulatorAdapter extends GuardedProviderAdapter {
         'The simulator does not serve this channel',
         0,
       );
+    }
+    // A provider serves one channel: a submission labelled for another is ours to fix.
+    if (submission.channel !== context.channel) {
+      return this.reject(
+        submission,
+        'CONFIGURATION_ERROR',
+        null,
+        'The submission channel does not match the provider channel',
+        0,
+      );
+    }
+    // SMS metadata, when carried, must be well formed, and only SMS carries it.
+    // A test-send carries none; every dispatched SMS does (Phase 4.2).
+    if (submission.sms !== undefined) {
+      const dltCheck = validateDltMetadata(submission.sms.dlt);
+      const maxSegments = submission.sms.maxSegments;
+      if (
+        submission.channel !== 'sms' ||
+        !dltCheck.valid ||
+        (maxSegments !== undefined && (!Number.isInteger(maxSegments) || maxSegments <= 0))
+      ) {
+        return this.reject(
+          submission,
+          'INVALID_REQUEST',
+          'SIM-400',
+          'Simulated provider rejected malformed SMS metadata',
+          0,
+        );
+      }
     }
 
     switch (behavior) {
