@@ -951,7 +951,12 @@ describe('Phase 2.1 provider and channel registry', () => {
       ]);
       for (const f of fns) {
         expect(f.secdef).toBe(true);
-        expect(f.acl).toBe('{postgres=X/postgres,acc_app=X/postgres}');
+        if (f.proname === 'app_has_platform_permission') {
+          // Migration 0036 (BE-DISPATCH-01): acc_dispatch granted EXECUTE for fn_providers_state_guard
+          expect(f.acl).toBe('{postgres=X/postgres,acc_app=X/postgres,acc_dispatch=X/postgres}');
+        } else {
+          expect(f.acl).toBe('{postgres=X/postgres,acc_app=X/postgres}');
+        }
         expect(f.src).toContain("ur.scope_type = 'platform'");
         expect(f.src).toContain("u.status = 'active'");
         for (const forbidden of [
