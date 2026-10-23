@@ -1577,6 +1577,8 @@
             "type": "object"
           },
           "recipientAddress": {
+            "description": "Permanently masked recipient address (phone number or email). Never returns full unmasked numbers.",
+            "example": "+1 •••• 0199",
             "type": "string"
           },
           "status": {
@@ -1664,6 +1666,8 @@
             "type": "string"
           },
           "recipientAddress": {
+            "description": "Permanently masked recipient address (phone number or email). Never returns full unmasked numbers.",
+            "example": "+1 •••• 0199",
             "type": "string"
           },
           "status": {

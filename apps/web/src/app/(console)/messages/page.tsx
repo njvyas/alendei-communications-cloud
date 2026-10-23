@@ -66,7 +66,11 @@ export default function MessagesPage() {
         </Link>
       </div>
 
-      <MessageListCard orgId={selectedOrganizationId} channels={channelsData?.data ?? []} />
+      <MessageListCard
+        key={selectedOrganizationId}
+        orgId={selectedOrganizationId}
+        channels={channelsData?.data ?? []}
+      />
     </div>
   );
 }

@@ -1,18 +1,22 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import React from 'react';
+import ReactDOM from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
 
 import { MessageStatusBadge } from '@/components/whatsapp/message-status-badge';
 import { MessageDetailDialog } from './message-detail-dialog';
-import { MessageListCard } from './message-list-card';
+import { MessageListCard, type MessageListCardTestHandle } from './message-list-card';
 import { createAppQueryClient } from '../../lib/query-client';
 import { useSession } from '../../lib/session-store';
 import {
   ApiError,
+  messagesApi,
+  workspacesApi,
   type ChannelView,
   type EffectiveAuthorization,
+  type ListMessagesParams,
   type MessageDetailWithAttempts,
   type MessageSummaryResponse,
   type UserIdentity,
@@ -20,7 +24,139 @@ import {
 
 // Ensure React is globally available for JSX and SSR transforms
 (globalThis as unknown as { React: typeof React }).React = React;
+const originalUseSyncExternalStore = React.useSyncExternalStore;
 React.useSyncExternalStore = (_subscribe, getSnapshot) => getSnapshot();
+
+interface MockNode {
+  nodeType: number;
+  nodeName: string;
+  tagName: string;
+  style: Record<string, string>;
+  childNodes: MockNode[];
+  options: unknown[];
+  selectedIndex: number;
+  innerHTML: string;
+  textContent: string;
+  nodeValue?: string;
+  attributes: Record<string, string>;
+  addEventListener: () => void;
+  removeEventListener: () => void;
+  appendChild: (child: MockNode) => MockNode;
+  removeChild: (child: MockNode) => MockNode;
+  insertBefore: (child: MockNode) => MockNode;
+  setAttribute: (k: string, v: string) => void;
+  removeAttribute: (k: string) => void;
+  getAttribute: (k: string) => string | undefined;
+  ownerDocument?: unknown;
+}
+
+function renderNodeToString(node: MockNode): string {
+  if (node.nodeType === 3) {
+    return node.textContent || node.nodeValue || '';
+  }
+  const attrs = Object.entries(node.attributes || {})
+    .map(([k, v]) => ` ${k}="${v}"`)
+    .join('');
+  const children = (node.childNodes || []).map(renderNodeToString).join('');
+  return `<${node.tagName.toLowerCase()}${attrs}>${children}</${node.tagName.toLowerCase()}>`;
+}
+
+function setupDom() {
+  function createNode(tag = 'DIV'): MockNode {
+    const node: MockNode = {
+      nodeType: 1,
+      nodeName: tag,
+      tagName: tag,
+      style: {},
+      childNodes: [],
+      options: [],
+      selectedIndex: 0,
+      innerHTML: '',
+      textContent: '',
+      attributes: {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      appendChild: (child: MockNode) => {
+        node.childNodes.push(child);
+        return child;
+      },
+      removeChild: (child: MockNode) => {
+        const idx = node.childNodes.indexOf(child);
+        if (idx !== -1) node.childNodes.splice(idx, 1);
+        return child;
+      },
+      insertBefore: (child: MockNode) => {
+        node.childNodes.push(child);
+        return child;
+      },
+      setAttribute: (k: string, v: string) => {
+        node.attributes[k] = String(v);
+      },
+      removeAttribute: (k: string) => {
+        delete node.attributes[k];
+      },
+      getAttribute: (k: string) => node.attributes[k],
+    };
+    return node;
+  }
+
+  const target = createNode();
+  const doc = {
+    nodeType: 9,
+    nodeName: '#document',
+    documentElement: createNode('HTML'),
+    createElement: (tag: string) => createNode(tag),
+    createElementNS: (_: string, tag: string) => createNode(tag),
+    createTextNode: (text: string) => {
+      const textNode = createNode('#TEXT');
+      textNode.nodeType = 3;
+      textNode.textContent = text;
+      textNode.nodeValue = text;
+      return textNode;
+    },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    activeElement: null,
+    defaultView: undefined as unknown,
+  };
+  target.ownerDocument = doc;
+  class ElementMock {}
+  class HTMLIFrameElementMock extends ElementMock {}
+  doc.defaultView = {
+    Element: ElementMock,
+    HTMLIFrameElement: HTMLIFrameElementMock,
+    getComputedStyle: () => ({}),
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+  (globalThis as unknown as Record<string, unknown>).window = doc.defaultView;
+  (globalThis as unknown as Record<string, unknown>).document = doc;
+  (globalThis as unknown as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+
+  let caughtError: Error | null = null;
+  const root = ReactDOM.createRoot(target as unknown as Element, {
+    onUncaughtError: (err) => {
+      caughtError = err instanceof Error ? err : new Error(String(err));
+    },
+    onCaughtError: (err) => {
+      caughtError = err instanceof Error ? err : new Error(String(err));
+    },
+  });
+
+  return {
+    target,
+    root,
+    getError: () => caughtError,
+    unmount: () => {
+      try {
+        root.unmount();
+      } catch {
+        // ignore unmount errors in test environment
+      }
+    },
+    getHtml: () => renderNodeToString(target),
+  };
+}
 
 describe('SEC-MSG: Message Components Integration, Privacy & Behavior Tests', () => {
   const ORG_A = '01955b0a-7b3b-7411-9a4f-9e67d4f91111';
@@ -491,5 +627,197 @@ describe('SEC-MSG: Message Components Integration, Privacy & Behavior Tests', ()
     assert.ok(!htmlOrgB.includes(`data-testid="message-row-${MSG_ID}"`));
     // Org B query is not seeded, so it renders loading state
     assert.ok(htmlOrgB.includes('Loading messages…'));
+  });
+
+  it('11. MessageListCard resets cursor stack, filters, and renders Org B page 1 on same mounted component while on page 2 (F1)', async () => {
+    setupSessionWithGrants(ORG_A, ['messages.read']);
+    const queryClient: QueryClient = createAppQueryClient();
+
+    const mockSummaryPage2: MessageSummaryResponse = {
+      id: '01955b0a-7b3b-7411-9a4f-msg000000002',
+      orgId: ORG_A,
+      workspaceId: WORKSPACE_ID,
+      contactId: '01955b0a-7b3b-7411-9a4f-ct000000001',
+      channelId: CHANNEL_ID,
+      channelCode: 'whatsapp',
+      templateId: null,
+      status: 'failed',
+      recipientAddress: '+12025550199',
+      failureReason: 'Rate limit exceeded',
+      attemptCount: 1,
+      createdAt: '2026-10-21T12:05:00.000Z',
+      completedAt: '2026-10-21T12:05:02.000Z',
+    };
+
+    const mockSummaryOrgB: MessageSummaryResponse = {
+      id: '01955b0a-7b3b-7411-9a4f-msg000000003',
+      orgId: ORG_B,
+      workspaceId: WORKSPACE_ID,
+      contactId: '01955b0a-7b3b-7411-9a4f-ct000000002',
+      channelId: CHANNEL_ID,
+      channelCode: 'whatsapp',
+      templateId: null,
+      status: 'accepted',
+      recipientAddress: '+14155550188',
+      failureReason: null,
+      attemptCount: 1,
+      createdAt: '2026-10-21T12:30:00.000Z',
+      completedAt: '2026-10-21T12:30:02.000Z',
+    };
+
+    const originalList = messagesApi.list;
+    const originalWorkspacesList = workspacesApi.list;
+    workspacesApi.list = async () => ({
+      data: [
+        {
+          id: WORKSPACE_ID,
+          orgId: ORG_A,
+          name: 'Default Workspace',
+          slug: 'default',
+          status: 'active',
+          isDefault: true,
+          createdAt: '2026-10-15T10:00:00.000Z',
+          updatedAt: '2026-10-15T10:00:00.000Z',
+        },
+      ],
+      page: { hasMore: false, nextCursor: null, limit: 50 },
+    });
+
+    const listRequests: Array<{ orgId: string; params: ListMessagesParams }> = [];
+    messagesApi.list = async (params = {}, _signal) => {
+      const currentOrg = useSession.getState().selectedOrganizationId || '';
+      listRequests.push({ orgId: currentOrg, params: { ...params } });
+
+      if (currentOrg === ORG_A) {
+        if (params?.cursor === 'cur-a-page-2') {
+          return {
+            data: [mockSummaryPage2],
+            page: { hasMore: false, nextCursor: null, limit: 25 },
+          };
+        }
+        return {
+          data: [mockSummary],
+          page: { hasMore: true, nextCursor: 'cur-a-page-2', limit: 25 },
+        };
+      } else if (currentOrg === ORG_B) {
+        return {
+          data: [mockSummaryOrgB],
+          page: { hasMore: false, nextCursor: null, limit: 25 },
+        };
+      }
+      return { data: [], page: { hasMore: false, nextCursor: null, limit: 25 } };
+    };
+
+    const domHandle = setupDom();
+    const testHandle = { current: null as MessageListCardTestHandle | null };
+
+    // Restore real useSyncExternalStore for DOM mount so react-query and zustand listeners function
+    React.useSyncExternalStore = originalUseSyncExternalStore;
+
+    try {
+      // 1. Mount MessageListCard under ORG_A on page 1
+      await React.act(async () => {
+        domHandle.root.render(
+          React.createElement(
+            QueryClientProvider,
+            { client: queryClient },
+            React.createElement(MessageListCard, {
+              orgId: ORG_A,
+              channels: [mockChannel],
+              testHandleRef: testHandle,
+            }),
+          ),
+        );
+      });
+      await React.act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+
+      // 2. Advance to page 2 and apply a status filter while on ORG_A
+      await React.act(async () => {
+        testHandle.current?.setSelectedStatus('failed');
+        testHandle.current?.setCursorStack(['cur-a-page-2']);
+      });
+      await React.act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+
+      assert.deepEqual(testHandle.current?.getCursorStack(), ['cur-a-page-2']);
+      assert.equal(testHandle.current?.getSelectedStatus(), 'failed');
+
+      // 3. Switch active organization to ORG_B in session AND re-render the SAME mounted component
+      // (WITHOUT a changing key prop, updating the mounted instance with new props)
+      await React.act(async () => {
+        setupSessionWithGrants(ORG_B, ['messages.read']);
+      });
+      await React.act(async () => {
+        domHandle.root.render(
+          React.createElement(
+            QueryClientProvider,
+            { client: queryClient },
+            React.createElement(MessageListCard, {
+              orgId: ORG_B,
+              channels: [mockChannel],
+              testHandleRef: testHandle,
+            }),
+          ),
+        );
+      });
+      await React.act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+
+      // 4. Assert: requests dispatched for ORG_B
+      const orgBRequests = listRequests.filter((r) => r.orgId === ORG_B);
+      assert.ok(orgBRequests.length > 0, 'At least one request must be dispatched for Org B');
+
+      // Crucial F1 regression invariant: The very first request for the new organization
+      // MUST NOT contain Org A's cursor
+      const firstOrgBRequest = orgBRequests[0];
+      assert.ok(firstOrgBRequest, 'First Org B request must exist');
+      assert.equal(
+        firstOrgBRequest.params.cursor,
+        undefined,
+        'First request for Org B must not carry Org A cursor',
+      );
+
+      // In fact, all initial page requests for Org B must have cursor === undefined
+      for (const req of orgBRequests) {
+        assert.equal(
+          req.params.cursor,
+          undefined,
+          'Initial requests for Org B must not carry any cursor',
+        );
+      }
+
+      // Crucial F1 regression invariant: Filters must be reset to 'all' / undefined
+      assert.equal(
+        firstOrgBRequest.params.status,
+        undefined,
+        'Status filter must be reset to undefined on org switch (not retained as failed)',
+      );
+      assert.equal(testHandle.current?.getSelectedStatus(), 'all');
+      assert.deepEqual(testHandle.current?.getCursorStack(), []);
+
+      // 5. Assert: rendered output never displays old tenant data and displays Org B data
+      const html = domHandle.getHtml();
+      assert.ok(
+        html.includes(`data-testid="message-row-${mockSummaryOrgB.id}"`),
+        'Org B message row must be displayed',
+      );
+      assert.ok(
+        !html.includes(`data-testid="message-row-${MSG_ID}"`),
+        'Org A page 1 message row must NOT be displayed after switching to Org B',
+      );
+      assert.ok(
+        !html.includes(`data-testid="message-row-${mockSummaryPage2.id}"`),
+        'Org A page 2 message row must NOT be displayed after switching to Org B',
+      );
+    } finally {
+      messagesApi.list = originalList;
+      workspacesApi.list = originalWorkspacesList;
+      domHandle.unmount();
+      React.useSyncExternalStore = (_subscribe, getSnapshot) => getSnapshot();
+    }
   });
 });

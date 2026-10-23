@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   ApiError,
@@ -16,12 +16,22 @@ import { useCanReadMessages } from '@/lib/session-store';
 import { MessageStatusBadge } from '@/components/whatsapp/message-status-badge';
 import { MessageDetailDialog } from './message-detail-dialog';
 
+export interface MessageListCardTestHandle {
+  readonly setCursorStack: (stack: string[]) => void;
+  readonly setSelectedStatus: (status: string) => void;
+  readonly setSelectedChannelCode: (channel: string) => void;
+  readonly setSelectedWorkspaceId: (workspace: string) => void;
+  readonly getCursorStack: () => string[];
+  readonly getSelectedStatus: () => string;
+}
+
 export interface MessageListCardProps {
   readonly orgId: string;
   readonly channels?: readonly ChannelView[];
+  readonly testHandleRef?: React.MutableRefObject<MessageListCardTestHandle | null>;
 }
 
-export function MessageListCard({ orgId, channels = [] }: MessageListCardProps) {
+export function MessageListCard({ orgId, channels = [], testHandleRef }: MessageListCardProps) {
   const canReadMessages = useCanReadMessages();
 
   // Filters
@@ -31,10 +41,52 @@ export function MessageListCard({ orgId, channels = [] }: MessageListCardProps) 
 
   // Keyset cursor pagination history stack
   const [cursorStack, setCursorStack] = useState<string[]>([]);
-  const currentCursor = cursorStack.length > 0 ? cursorStack[cursorStack.length - 1] : undefined;
 
   // Detail inspection modal
   const [inspectMessageId, setInspectMessageId] = useState<string | null>(null);
+
+  // State adjustment during render when orgId changes (React recommended pattern)
+  // Ensures that queries triggered on the render where orgId switches never carry
+  // stale cursor or filters from the prior tenant, even if the component is not remounted.
+  const [prevOrgId, setPrevOrgId] = useState(orgId);
+  if (orgId !== prevOrgId) {
+    setPrevOrgId(orgId);
+    setCursorStack([]);
+    setInspectMessageId(null);
+    setSelectedStatus('all');
+    setSelectedChannelCode('all');
+    setSelectedWorkspaceId('all');
+  }
+
+  // Clear tenant-specific transient state and pagination when organization context changes (F1 / D3 pattern)
+  useEffect(() => {
+    setCursorStack([]);
+    setInspectMessageId(null);
+    setSelectedStatus('all');
+    setSelectedChannelCode('all');
+    setSelectedWorkspaceId('all');
+  }, [orgId]);
+
+  if (testHandleRef) {
+    testHandleRef.current = {
+      setCursorStack,
+      setSelectedStatus,
+      setSelectedChannelCode,
+      setSelectedWorkspaceId,
+      getCursorStack: () => (orgId !== prevOrgId ? [] : cursorStack),
+      getSelectedStatus: () => (orgId !== prevOrgId ? 'all' : selectedStatus),
+    };
+  }
+
+  const effectiveCursor =
+    orgId !== prevOrgId
+      ? undefined
+      : cursorStack.length > 0
+        ? cursorStack[cursorStack.length - 1]
+        : undefined;
+  const effectiveStatus = orgId !== prevOrgId ? 'all' : selectedStatus;
+  const effectiveChannelCode = orgId !== prevOrgId ? 'all' : selectedChannelCode;
+  const effectiveWorkspaceId = orgId !== prevOrgId ? 'all' : selectedWorkspaceId;
 
   // Fetch workspaces for filter dropdown
   const { data: workspacesData } = useQuery({
@@ -46,10 +98,10 @@ export function MessageListCard({ orgId, channels = [] }: MessageListCardProps) 
   const workspaces = workspacesData?.data ?? [];
 
   const queryParams = {
-    status: selectedStatus === 'all' ? undefined : (selectedStatus as MessageStatus),
-    channelCode: selectedChannelCode === 'all' ? undefined : (selectedChannelCode as ChannelCode),
-    workspaceId: selectedWorkspaceId === 'all' ? undefined : selectedWorkspaceId,
-    cursor: currentCursor,
+    status: effectiveStatus === 'all' ? undefined : (effectiveStatus as MessageStatus),
+    channelCode: effectiveChannelCode === 'all' ? undefined : (effectiveChannelCode as ChannelCode),
+    workspaceId: effectiveWorkspaceId === 'all' ? undefined : effectiveWorkspaceId,
+    cursor: effectiveCursor,
     limit: 25,
   };
 

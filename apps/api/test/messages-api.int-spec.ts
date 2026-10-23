@@ -648,6 +648,12 @@ describe('Messages API Suite (Phase 3.3)', () => {
     }, 60_000);
 
     afterAll(async () => {
+      await h.admin
+        .delete(schema.messageAttempts)
+        .where(eq(schema.messageAttempts.orgId, tenantC.orgId));
+      await h.admin
+        .delete(schema.organizationProviderAssignments)
+        .where(eq(schema.organizationProviderAssignments.orgId, tenantC.orgId));
       await h.admin.delete(schema.messages).where(eq(schema.messages.orgId, tenantC.orgId));
       await h.admin.delete(schema.contacts).where(eq(schema.contacts.orgId, tenantC.orgId));
       await destroyTenant(h.admin, tenantC);
@@ -783,6 +789,189 @@ describe('Messages API Suite (Phase 3.3)', () => {
       }
       problems.push(...validator.check('GET', url('/messages'), await list('', noReadToken)));
       expect(problems).toEqual([]);
+    });
+
+    it('8. enforces permanent recipient masking on both list and detail endpoints (F2)', async () => {
+      // 1. List endpoint: every row has permanently masked recipientAddress
+      const res = await list().expect(200);
+      for (const item of res.body.data) {
+        expect(item.recipientAddress).toMatch(/^\+[0-9]+ •••• [0-9]{4}$/);
+      }
+      const rawDump = JSON.stringify(res.body);
+      for (let i = 0; i < 4; i++) {
+        expect(rawDump).not.toContain(`+120255577${10 + i}`);
+      }
+
+      // 2. Detail endpoint: GET /messages/:id permanently masks recipientAddress
+      const detailRes = await request(h.app.getHttpServer())
+        .get(url(`/messages/${seeded[0]}`))
+        .set('Authorization', `Bearer ${tokenC}`)
+        .expect(200);
+      expect(detailRes.body.data.recipientAddress).toBe('+1 •••• 7710');
+      expect(JSON.stringify(detailRes.body)).not.toContain('+12025557710');
+
+      // 3. Tenant-scoped access: tenant A cannot view tenant C message
+      const crossTenantRes = await request(h.app.getHttpServer())
+        .get(url(`/messages/${seeded[0]}`))
+        .set('Authorization', `Bearer ${userAToken}`)
+        .set('X-Acc-Organization', tenantA.orgId);
+      expect(crossTenantRes.status).toBe(404);
+
+      // 4. Detailed context-aware sanitization test:
+      // Seed a rich message testing: recipient in payload, recipient in failure reason, no-plus equivalent,
+      // unrelated phone/business number, URL, queue name, and complete serialized-response checks.
+      const richMsgId = uuidv7();
+      const richContactId = uuidv7();
+      const rawPhone = '+12025559988';
+      const noPlusPhone = '12025559988';
+      const unrelatedBusinessPhone = '+18005551234';
+      const plainUrl = 'https://example.com/callback?id=123';
+      const queueName = 'queue://sms-outbound-priority';
+
+      await h.admin.insert(schema.contacts).values({
+        id: richContactId,
+        orgId: tenantC.orgId,
+        workspaceId: tenantC.workspaceId,
+        displayName: 'Rich Test Contact',
+      });
+
+      await h.admin.insert(schema.messages).values({
+        id: richMsgId,
+        orgId: tenantC.orgId,
+        workspaceId: tenantC.workspaceId,
+        contactId: richContactId,
+        channelId,
+        status: 'failed',
+        payload: {
+          recipient: rawPhone,
+          noPlus: noPlusPhone,
+          supportPhone: unrelatedBusinessPhone,
+          webhookUrl: plainUrl,
+          queue: queueName,
+          text: `Alert sent to ${rawPhone}`,
+        },
+        recipientAddress: rawPhone,
+        failureReason: `Failed to deliver to ${rawPhone}: provider timeout`,
+        correlationId: uuidv7(),
+        createdAt: new Date(),
+      });
+
+      await h.admin
+        .insert(schema.organizationProviderAssignments)
+        .values({
+          orgId: tenantC.orgId,
+          channelId,
+          providerId,
+          priority: 1,
+          enabled: true,
+        })
+        .onConflictDoNothing();
+
+      await h.admin.insert(schema.messageAttempts).values({
+        id: uuidv7(),
+        messageId: richMsgId,
+        orgId: tenantC.orgId,
+        attemptNumber: 1,
+        providerId,
+        channelId,
+        fencingEpoch: 1,
+        claimToken: uuidv7(),
+        status: 'failed',
+        failureReason: `Upstream rejected ${noPlusPhone}`,
+        latencyMs: 150,
+      });
+
+      const richDetailRes = await request(h.app.getHttpServer())
+        .get(url(`/messages/${richMsgId}`))
+        .set('Authorization', `Bearer ${tokenC}`)
+        .expect(200);
+
+      const richData = richDetailRes.body.data;
+      // Masked recipient address
+      expect(richData.recipientAddress).toBe('+1 •••• 9988');
+      // Recipient in payload masked
+      expect(richData.payload.recipient).toBe('+1 •••• 9988');
+      expect(richData.payload.noPlus).toBe('+1 •••• 9988');
+      // Recipient in failure reasons masked
+      expect(richData.failureReason).toBe('Failed to deliver to +1 •••• 9988: provider timeout');
+      expect(richData.attempts[0].failureReason).toBe('Upstream rejected +1 •••• 9988');
+      // Strictly preserved unrelated fields
+      expect(richData.payload.supportPhone).toBe(unrelatedBusinessPhone);
+      expect(richData.payload.webhookUrl).toBe(plainUrl);
+      expect(richData.payload.queue).toBe(queueName);
+
+      // Complete serialized response check: ZERO raw numbers, but preserved fields present
+      const richDump = JSON.stringify(richDetailRes.body);
+      expect(richDump).not.toContain(rawPhone);
+      expect(richDump).not.toContain(noPlusPhone);
+      expect(richDump).toContain(unrelatedBusinessPhone);
+      expect(richDump).toContain(plainUrl);
+      expect(richDump).toContain(queueName);
+
+      // 5. Email recipient and already-masked tests
+      const emailMsgId = uuidv7();
+      const emailContactId = uuidv7();
+      await h.admin.insert(schema.contacts).values({
+        id: emailContactId,
+        orgId: tenantC.orgId,
+        workspaceId: tenantC.workspaceId,
+        displayName: 'Email Test Contact',
+      });
+
+      await h.admin.insert(schema.messages).values({
+        id: emailMsgId,
+        orgId: tenantC.orgId,
+        workspaceId: tenantC.workspaceId,
+        contactId: emailContactId,
+        channelId: smsChannelId,
+        status: 'accepted',
+        payload: { to: 'customer@acme-corp.com', support: 'support@acme-corp.com' },
+        recipientAddress: 'customer@acme-corp.com',
+        failureReason: null,
+        correlationId: uuidv7(),
+        createdAt: new Date(),
+      });
+
+      const emailDetailRes = await request(h.app.getHttpServer())
+        .get(url(`/messages/${emailMsgId}`))
+        .set('Authorization', `Bearer ${tokenC}`)
+        .expect(200);
+
+      expect(emailDetailRes.body.data.recipientAddress).toBe('c••••r@acme-corp.com');
+      expect(emailDetailRes.body.data.payload.to).toBe('c••••r@acme-corp.com');
+      expect(emailDetailRes.body.data.payload.support).toBe('support@acme-corp.com');
+      expect(JSON.stringify(emailDetailRes.body)).not.toContain('customer@acme-corp.com');
+
+      // 6. Already-masked recipient
+      const alreadyMaskedMsgId = uuidv7();
+      const maskedContactId = uuidv7();
+      await h.admin.insert(schema.contacts).values({
+        id: maskedContactId,
+        orgId: tenantC.orgId,
+        workspaceId: tenantC.workspaceId,
+        displayName: 'Masked Test Contact',
+      });
+
+      await h.admin.insert(schema.messages).values({
+        id: alreadyMaskedMsgId,
+        orgId: tenantC.orgId,
+        workspaceId: tenantC.workspaceId,
+        contactId: maskedContactId,
+        channelId: smsChannelId,
+        status: 'accepted',
+        payload: {},
+        recipientAddress: '+1 •••• 9999',
+        failureReason: null,
+        correlationId: uuidv7(),
+        createdAt: new Date(),
+      });
+
+      const alreadyMaskedRes = await request(h.app.getHttpServer())
+        .get(url(`/messages/${alreadyMaskedMsgId}`))
+        .set('Authorization', `Bearer ${tokenC}`)
+        .expect(200);
+
+      expect(alreadyMaskedRes.body.data.recipientAddress).toBe('+1 •••• 9999');
     });
   });
 });

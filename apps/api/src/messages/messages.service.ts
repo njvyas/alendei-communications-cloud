@@ -10,6 +10,9 @@ import {
   validateSmsPayloadShape,
   validateSmsTemplateBody,
   validateSmsTemplateVariables,
+  maskRecipientAddress,
+  sanitizeRecipientContent,
+  sanitizeRecipientData,
   type AuthPrincipal,
   type MessageDetailResponse,
   type MessageStatus,
@@ -658,9 +661,12 @@ export class MessagesService {
         channelId: row.channelId,
         templateId: row.templateId,
         status: row.status,
-        recipientAddress: row.recipientAddress,
-        payload: row.payload as Record<string, unknown>,
-        failureReason: row.failureReason,
+        recipientAddress: maskRecipientAddress(row.recipientAddress),
+        payload: sanitizeRecipientData(
+          (row.payload as Record<string, unknown>) ?? {},
+          row.recipientAddress,
+        ),
+        failureReason: sanitizeRecipientContent(row.failureReason, row.recipientAddress) || null,
         createdAt: row.createdAt.toISOString(),
         completedAt: row.completedAt ? row.completedAt.toISOString() : null,
         attempts: attempts.map((a) => ({
@@ -668,7 +674,7 @@ export class MessagesService {
           attemptNumber: a.attemptNumber,
           providerId: a.providerId,
           status: a.status,
-          failureReason: a.failureReason,
+          failureReason: sanitizeRecipientContent(a.failureReason, row.recipientAddress) || null,
           latencyMs: a.latencyMs,
           completedAt: a.completedAt ? a.completedAt.toISOString() : null,
         })),
@@ -745,6 +751,8 @@ export class MessagesService {
     return {
       items: items.map((row) => ({
         ...row,
+        recipientAddress: maskRecipientAddress(row.recipientAddress),
+        failureReason: sanitizeRecipientContent(row.failureReason, row.recipientAddress) || null,
         createdAt: row.createdAt.toISOString(),
         completedAt: row.completedAt ? row.completedAt.toISOString() : null,
       })),

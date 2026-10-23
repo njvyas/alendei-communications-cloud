@@ -572,7 +572,12 @@ export class MessageSummarySchema {
   @ApiProperty({ enum: CHANNEL_CODES }) channelCode!: string;
   @ApiProperty(nullableUuid) templateId!: string | null;
   @ApiProperty({ enum: MESSAGE_STATUSES }) status!: string;
-  @ApiProperty() recipientAddress!: string;
+  @ApiProperty({
+    description:
+      'Permanently masked recipient address (phone number or email). Never returns full unmasked numbers.',
+    example: '+1 •••• 0199',
+  })
+  recipientAddress!: string;
   @ApiProperty(nullableString) failureReason!: string | null;
   @ApiProperty({ type: 'integer', minimum: 0 }) attemptCount!: number;
   @ApiProperty(timestamp) createdAt!: string;
@@ -599,7 +604,12 @@ export class MessageDetailSchema {
   @ApiProperty(uuid) channelId!: string;
   @ApiProperty(nullableUuid) templateId!: string | null;
   @ApiProperty({ enum: MESSAGE_STATUSES }) status!: string;
-  @ApiProperty() recipientAddress!: string;
+  @ApiProperty({
+    description:
+      'Permanently masked recipient address (phone number or email). Never returns full unmasked numbers.',
+    example: '+1 •••• 0199',
+  })
+  recipientAddress!: string;
   @ApiProperty({ type: 'object', additionalProperties: true })
   payload!: Record<string, unknown>;
   @ApiProperty(nullableString) failureReason!: string | null;
