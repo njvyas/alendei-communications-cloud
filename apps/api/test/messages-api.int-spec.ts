@@ -648,8 +648,12 @@ describe('Messages API Suite (Phase 3.3)', () => {
     }, 60_000);
 
     afterAll(async () => {
-      await h.admin.delete(schema.messageAttempts).where(eq(schema.messageAttempts.orgId, tenantC.orgId));
-      await h.admin.delete(schema.organizationProviderAssignments).where(eq(schema.organizationProviderAssignments.orgId, tenantC.orgId));
+      await h.admin
+        .delete(schema.messageAttempts)
+        .where(eq(schema.messageAttempts.orgId, tenantC.orgId));
+      await h.admin
+        .delete(schema.organizationProviderAssignments)
+        .where(eq(schema.organizationProviderAssignments.orgId, tenantC.orgId));
       await h.admin.delete(schema.messages).where(eq(schema.messages.orgId, tenantC.orgId));
       await h.admin.delete(schema.contacts).where(eq(schema.contacts.orgId, tenantC.orgId));
       await destroyTenant(h.admin, tenantC);

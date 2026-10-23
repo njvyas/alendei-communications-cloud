@@ -330,10 +330,7 @@ export function sanitizeRecipientContent(
  * 2. Does NOT blindly redact arbitrary fields named 'to', 'phone', 'destination', or 'recipient'.
  * 3. Preserves URLs, queue names, business contact numbers, and unrelated message content intact.
  */
-export function sanitizeRecipientData<T>(
-  data: T,
-  rawRecipient: string | null | undefined,
-): T {
+export function sanitizeRecipientData<T>(data: T, rawRecipient: string | null | undefined): T {
   if (data === null || data === undefined) return data;
   if (typeof data === 'string') {
     return sanitizeRecipientContent(data, rawRecipient) as unknown as T;

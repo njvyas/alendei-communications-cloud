@@ -126,10 +126,16 @@ describe('Contracts — Recipient Masking & Context-Aware Sanitization Tests', (
 
       // Plain URLs without recipient must remain completely untouched
       assert.equal(sanitized.webhookUrl, 'https://company.internal/webhooks/sms-delivery');
-      assert.equal(sanitized.trackingUrl, 'https://orders.acme.com/track?ref=ORD-1234&channel=whatsapp');
+      assert.equal(
+        sanitized.trackingUrl,
+        'https://orders.acme.com/track?ref=ORD-1234&channel=whatsapp',
+      );
 
       // URLs containing recipient must preserve structure and only mask the recipient digits
-      assert.equal(sanitized.userLookupUrl, 'https://api.crm.internal/v1/contacts/+1 •••• 0199/profile');
+      assert.equal(
+        sanitized.userLookupUrl,
+        'https://api.crm.internal/v1/contacts/+1 •••• 0199/profile',
+      );
       assert.equal(sanitized.encodedUrl, 'https://api.crm.internal/v1/search?q=+1 •••• 0199');
     });
 
@@ -193,11 +199,20 @@ describe('Contracts — Recipient Masking & Context-Aware Sanitization Tests', (
       const serialized = JSON.stringify(mockResponse);
 
       // Assert ZERO occurrence of raw recipient in any form
-      assert.ok(!serialized.includes('+12025550199'), 'Serialized response must NOT contain +12025550199');
-      assert.ok(!serialized.includes('12025550199'), 'Serialized response must NOT contain 12025550199');
+      assert.ok(
+        !serialized.includes('+12025550199'),
+        'Serialized response must NOT contain +12025550199',
+      );
+      assert.ok(
+        !serialized.includes('12025550199'),
+        'Serialized response must NOT contain 12025550199',
+      );
 
       // Assert presence of masked recipient
-      assert.ok(serialized.includes('+1 •••• 0199'), 'Serialized response must contain masked recipient');
+      assert.ok(
+        serialized.includes('+1 •••• 0199'),
+        'Serialized response must contain masked recipient',
+      );
 
       // Assert complete preservation of unrelated fields
       assert.ok(serialized.includes('+18005551234'), 'Business line must remain intact');

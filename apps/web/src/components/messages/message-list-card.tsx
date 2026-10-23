@@ -99,8 +99,7 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
 
   const queryParams = {
     status: effectiveStatus === 'all' ? undefined : (effectiveStatus as MessageStatus),
-    channelCode:
-      effectiveChannelCode === 'all' ? undefined : (effectiveChannelCode as ChannelCode),
+    channelCode: effectiveChannelCode === 'all' ? undefined : (effectiveChannelCode as ChannelCode),
     workspaceId: effectiveWorkspaceId === 'all' ? undefined : effectiveWorkspaceId,
     cursor: effectiveCursor,
     limit: 25,
