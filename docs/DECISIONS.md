@@ -2167,6 +2167,33 @@ The container, its database `acc_tmp_schemacmp_2a11b19bad16` and the evidence pa
   - `meta/0035_snapshot.json` is schema-identical to `0034`'s; only its `id` and `prevId` differ.
 - **Deployment order.** Apply `0035` before deploying the Batch 2 API. Without the function, tenant calls to `GET /channels` fail with `500`; platform calls are unaffected.
 
+## 1y. BE-DISPATCH-01: Provider circuit-breaker state guard and dispatch permissions resolution: 23-Oct-2026
+
+### 1y.1 Problem and Root Cause
+In Phase 3.4 fallback and circuit-breaker handling, when `acc_dispatch` attempted to update provider observation columns (`circuit_state`, `circuit_generation`, `circuit_changed_at`, `health_state`, `health_changed_at`), the `BEFORE UPDATE` trigger `fn_providers_state_guard()` invoked `app_has_platform_permission('providers.manage')`.
+Because migration `0019` granted EXECUTE on `app_has_platform_permission` only to `acc_app` (and not `acc_dispatch`), PostgreSQL threw SQLSTATE 42501 `insufficient_privilege`, aborting the settlement transaction. This left in-flight messages un-settled, causing lease expiration and crash recovery (`dispatcher.recoverExpiredLeases()`) to transition messages erroneously to `outcome_unknown`.
+
+### 1y.2 Remediation (PR #3 and Migration 0036) — CLOSED
+- **PR #3:** https://github.com/njvyas/alendei-communications-cloud/pull/3 (merged at `886faa21e7103fdbe658112281a38d26b0e51e28`).
+- **Migration `0036_dispatch_provider_state_guard.sql`:**
+  1. Granted `EXECUTE ON FUNCTION app_has_platform_permission(text) TO acc_dispatch`.
+  2. Hardened `fn_providers_state_guard()` with nested conditional evaluation: the administrative column distinctness check is evaluated first; `app_has_platform_permission('providers.manage')` is evaluated only if administrative columns are actually modified.
+- **Verification Suites:**
+  - `fallback-fencing-concurrency.int-spec.ts`: Scenario 11 verified provider circuit tripping (`closed` -> `open`) without 42501 rollback, successful fallback to secondary provider, and subsequent in-memory circuit skips.
+  - `phase3_2-assignments-principal.sec-spec.ts`: verified `acc_dispatch` can transition circuit and health state on assigned providers when administrative columns are unchanged, while invalid circuit transitions and invalid generation steps remain strictly rejected.
+
+### 1y.3 Documentation Alignment (PR #4) — CLOSED
+- **PR #4:** https://github.com/njvyas/alendei-communications-cloud/pull/4 (merged at `5a556cbcf0279afa04440131f9dd1e7c17c5dcf8`).
+- Updated stale 36-migration expectations to 37 migrations and verified SHA-256 proof hash (`37|dc08b3f0bf5bfc870f8bc442f132c5f3`) across `RELEASE.md` and `docs/qa/INTERNAL_QA_DEPLOYMENT.md`.
+
+### 1y.4 Sim 500 Acceptance Verification — PASS / CLOSED
+- **Status:** **Closed — acceptance evidence recorded** (23-Oct-2026).
+- **Execution:** Run in an isolated disposable database clone (`acc_clone_3e2f28607884`) via `scripts/with-db-clone.mjs` running merged `develop` code and migration `0036`. Executed as a one-off acceptance run archived under `scratch/sim500-acceptance.int-spec.ts` (not a committed, repeatable test in the test suite).
+- **Scenario 1 (Default Policy: `min_samples=5`):** 10 messages enqueued for a provider consistently returning HTTP 500. Exactly five physical provider attempts occurred (messages 1–4 failed with HTTP 500 `PROVIDER_ERROR` and settled cleanly; message 5 attempted provider, failed, and tripped circuit from `closed` to `open`, generation 0 -> 1, health offline under `acc_dispatch` without SQLSTATE 42501 errors or transaction rollbacks). The remaining five messages (6–10) evaluated the open circuit, admission was refused in-memory (`circuit_refused`), and messages settled cleanly as `failed` (`NO_ELIGIBLE_PROVIDER`) without provider attempts. Exactly 0 messages in `outcome_unknown`.
+- **Scenario 2 (Configured Policy: `min_samples=10`):** All 10 messages executed physical attempts against HTTP 500 provider. All 10 failed (`PROVIDER_ERROR`). Attempt 10 tripped circuit to `open`. All 10 settled cleanly as `failed`. Exactly 0 messages in `outcome_unknown`.
+- **Crash Recovery:** `dispatcher.recoverExpiredLeases()` returned 0 (no abandoned or unrecovered leases).
+- **Cleanup:** Clone database `acc_clone_3e2f28607884` dropped `WITH (FORCE)`; template database row count and fingerprint verified unchanged.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.
