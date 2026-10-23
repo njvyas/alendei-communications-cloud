@@ -11,6 +11,7 @@
  * later signal (webhook or status poll, Phase 3).
  */
 import type { ChannelCode } from './providers';
+import type { SmsDltMetadata } from './sms';
 
 /**
  * The normalized failure taxonomy (`PROVIDER_ADAPTER.md` §2). Every adapter maps
@@ -72,6 +73,22 @@ export interface ProviderSubmission {
   /** A synthetic recipient in Phase 2; never a real contact. */
   readonly recipient: string;
   readonly content: { readonly text: string };
+  /**
+   * SMS regulatory metadata (Phase 4.2). Present on every SMS message the
+   * dispatcher submits; absent on a provider test-send, which carries no
+   * template. `content.text` is then the rendered approved template.
+   */
+  readonly sms?: ProviderSmsSubmission;
+}
+
+/**
+ * What an SMS submission carries besides its text: the DLT metadata bound to the
+ * approved template (copied, never taken from the client) and the segment
+ * ceiling the send path enforced, when the client lowered it.
+ */
+export interface ProviderSmsSubmission {
+  readonly dlt: SmsDltMetadata;
+  readonly maxSegments?: number;
 }
 
 /**

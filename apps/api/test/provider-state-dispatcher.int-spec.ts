@@ -26,6 +26,7 @@ describe('ProviderStateStore Dispatcher Execution (HIGH-6 & MEDIUM-7)', () => {
   let store: ProviderStateStore;
   let executor: ProviderSubmissionExecutor;
   let channelId: string;
+  let channelCode = 'sms';
   let providerId: string;
   let tenant: TenantFixture | undefined;
 
@@ -38,6 +39,7 @@ describe('ProviderStateStore Dispatcher Execution (HIGH-6 & MEDIUM-7)', () => {
     const channels = await h.admin.select().from(schema.channels);
     if (channels.length > 0) {
       channelId = channels[0]!.id;
+      channelCode = channels[0]!.code;
     } else {
       const [c] = await h.admin
         .insert(schema.channels)
@@ -201,6 +203,8 @@ describe('ProviderStateStore Dispatcher Execution (HIGH-6 & MEDIUM-7)', () => {
     const settled = await executor.execute(
       admission.admission,
       {
+        // The provider's own channel: the simulator refuses a mismatched submission (Phase 4.2).
+        channel: channelCode,
         to: '+1234567890',
         type: 'text',
         content: { text: 'Test' },

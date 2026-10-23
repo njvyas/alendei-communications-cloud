@@ -9,6 +9,7 @@ import { uuidv7 } from 'uuidv7';
 import { DISPATCH_POOL } from '../../database/database.tokens';
 import { ProviderSubmissionExecutor } from '../../provider-adapters/submission-executor';
 import { ProviderStateStore } from '../../providers/provider-state.store';
+import { mapMessageForSubmission, resolveChannelCode } from './submission-mapping';
 
 export interface DispatchClaim {
   readonly messageId: string;
@@ -198,29 +199,34 @@ export class DispatcherService {
            WHERE id = $1`,
           [claim.messageId],
         );
-        await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
-          claim.messageId,
-        ]);
+        // The event first: acc_dispatch may write it only while its claim row exists.
         await client.query(
           `INSERT INTO message_events (id, org_id, message_id, event_type, payload)
            VALUES ($1, $2, $3, 'message.failed', '{"reason":"Organization is closed"}')`,
           [uuidv7(), claim.orgId, claim.messageId],
         );
+        await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
+          claim.messageId,
+        ]);
         await client.query('COMMIT');
         return { messageId: claim.messageId, outcome: 'failed', error: 'Organization closed' };
       }
 
-      // Read message payload and details
+      // Read message payload and details, with the channel code of its channel
+      // (Phase 4.2: the channel is the message's, never assumed).
       const msgResult = await client.query<{
         id: string;
         channel_id: string;
+        channel_code: string | null;
         recipient_address: string;
         payload: Record<string, unknown>;
         correlation_id: string;
       }>(
-        `SELECT id, channel_id, recipient_address, payload, correlation_id
-         FROM messages
-         WHERE id = $1`,
+        `SELECT m.id, m.channel_id, c.code AS channel_code, m.recipient_address, m.payload,
+                m.correlation_id
+         FROM messages m
+         LEFT JOIN channels c ON c.id = m.channel_id
+         WHERE m.id = $1`,
         [claim.messageId],
       );
       const msgRows = msgResult.rows;
@@ -231,6 +237,40 @@ export class DispatcherService {
       }
 
       const message = msgRows[0];
+
+      // Map the stored payload for the provider before any attempt exists: a
+      // message that cannot be submitted fails here, with nothing to roll back.
+      const channelCode = resolveChannelCode(message.channel_code);
+      const mapping = channelCode
+        ? mapMessageForSubmission(channelCode, message.payload)
+        : ({
+            ok: false,
+            reason: `CHANNEL_UNSUPPORTED: ${message.channel_code ?? 'unknown'}`,
+          } as const);
+
+      if (!channelCode || !mapping.ok) {
+        const reason = mapping.ok ? 'CHANNEL_UNSUPPORTED' : mapping.reason;
+        await client.query(
+          `UPDATE messages
+           SET status = 'failed',
+               failure_reason = $1,
+               completed_at = now(),
+               updated_at = now()
+           WHERE id = $2`,
+          [reason, claim.messageId],
+        );
+        // The event first: acc_dispatch may write it only while its claim row exists.
+        await client.query(
+          `INSERT INTO message_events (id, org_id, message_id, event_type, payload)
+           VALUES ($1, $2, $3, 'message.failed', $4)`,
+          [uuidv7(), claim.orgId, claim.messageId, JSON.stringify({ reason, attempts: 0 })],
+        );
+        await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
+          claim.messageId,
+        ]);
+        await client.query('COMMIT');
+        return { messageId: claim.messageId, outcome: 'failed', error: reason };
+      }
 
       // Read active provider assignments ordered by priority, excluding already-attempted providers (P3-D03, P3-D14, P3-D15)
       const assignmentsResult = await client.query<{
@@ -270,9 +310,7 @@ export class DispatcherService {
            WHERE id = $2`,
           [reason, claim.messageId],
         );
-        await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
-          claim.messageId,
-        ]);
+        // The event first: acc_dispatch may write it only while its claim row exists.
         await client.query(
           `INSERT INTO message_events (id, org_id, message_id, event_type, payload)
            VALUES ($1, $2, $3, 'message.failed', $4)`,
@@ -283,6 +321,9 @@ export class DispatcherService {
             JSON.stringify({ reason, attempts: priorAttemptCount }),
           ],
         );
+        await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
+          claim.messageId,
+        ]);
         await client.query('COMMIT');
         return { messageId: claim.messageId, outcome: 'failed', error: reason };
       }
@@ -423,20 +464,15 @@ export class DispatcherService {
       // -----------------------------------------------------------------------
       // Step 2: Submission Execution (Outside DB Transaction)
       // -----------------------------------------------------------------------
-      const payloadObj =
-        typeof message.payload === 'object' && message.payload !== null
-          ? (message.payload as Record<string, unknown>)
-          : {};
-      const text = 'text' in payloadObj ? String(payloadObj.text) : JSON.stringify(message.payload);
-
       const settled = await this.executor.execute(
         admission.admission,
         {
           submissionId: claim.messageId,
           correlationId: message.correlation_id,
-          channel: 'whatsapp',
+          channel: channelCode,
           recipient: message.recipient_address,
-          content: { text },
+          content: mapping.content,
+          ...(mapping.sms ? { sms: mapping.sms } : {}),
         },
         simulatorBehavior,
       );
