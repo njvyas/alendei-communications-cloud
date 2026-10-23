@@ -253,6 +253,13 @@
       "when": 1792540800000,
       "tag": "0035_tenant_channel_catalogue",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1792627200000,
+      "tag": "0036_dispatch_provider_state_guard",
+      "breakpoints": true
     }
   ]
 }
