@@ -3,4 +3,8 @@
  * by default to protect personal data in internal operator interfaces.
  * Re-exports canonical contract implementation from @acc/contracts (F2).
  */
-export { maskRecipientAddress } from '@acc/contracts';
+export {
+  maskRecipientAddress,
+  sanitizeRecipientContent,
+  sanitizeRecipientData,
+} from '@acc/contracts';

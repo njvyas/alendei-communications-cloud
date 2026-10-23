@@ -11,6 +11,8 @@ import {
   validateSmsTemplateBody,
   validateSmsTemplateVariables,
   maskRecipientAddress,
+  sanitizeRecipientContent,
+  sanitizeRecipientData,
   type AuthPrincipal,
   type MessageDetailResponse,
   type MessageStatus,
@@ -61,52 +63,6 @@ function messageNotFound(messageId: string): AppException {
     message: 'Message not found',
     logContext: { messageId },
   });
-}
-
-function sanitizeFailureReason(
-  reason: string | null | undefined,
-  rawAddress: string,
-): string | null {
-  if (!reason) return null;
-  if (!rawAddress) return reason;
-  const masked = maskRecipientAddress(rawAddress);
-  return reason.includes(rawAddress) ? reason.replaceAll(rawAddress, masked) : reason;
-}
-
-function sanitizeMessagePayload(
-  payload: Record<string, unknown> | null | undefined,
-  rawAddress: string,
-): Record<string, unknown> {
-  if (!payload || typeof payload !== 'object') return {};
-  const masked = maskRecipientAddress(rawAddress);
-
-  function sanitizeValue(val: unknown): unknown {
-    if (typeof val === 'string') {
-      if (val === rawAddress) return masked;
-      if (rawAddress && val.includes(rawAddress)) return val.replaceAll(rawAddress, masked);
-      return val;
-    }
-    if (Array.isArray(val)) {
-      return val.map(sanitizeValue);
-    }
-    if (val !== null && typeof val === 'object') {
-      const res: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(val)) {
-        if (
-          (k === 'recipient' || k === 'phone' || k === 'to' || k === 'destination') &&
-          typeof v === 'string'
-        ) {
-          res[k] = maskRecipientAddress(v);
-        } else {
-          res[k] = sanitizeValue(v);
-        }
-      }
-      return res;
-    }
-    return val;
-  }
-
-  return sanitizeValue(payload) as Record<string, unknown>;
 }
 
 @Injectable()
@@ -706,11 +662,11 @@ export class MessagesService {
         templateId: row.templateId,
         status: row.status,
         recipientAddress: maskRecipientAddress(row.recipientAddress),
-        payload: sanitizeMessagePayload(
-          row.payload as Record<string, unknown>,
+        payload: sanitizeRecipientData(
+          (row.payload as Record<string, unknown>) ?? {},
           row.recipientAddress,
         ),
-        failureReason: sanitizeFailureReason(row.failureReason, row.recipientAddress),
+        failureReason: sanitizeRecipientContent(row.failureReason, row.recipientAddress) || null,
         createdAt: row.createdAt.toISOString(),
         completedAt: row.completedAt ? row.completedAt.toISOString() : null,
         attempts: attempts.map((a) => ({
@@ -718,7 +674,7 @@ export class MessagesService {
           attemptNumber: a.attemptNumber,
           providerId: a.providerId,
           status: a.status,
-          failureReason: sanitizeFailureReason(a.failureReason, row.recipientAddress),
+          failureReason: sanitizeRecipientContent(a.failureReason, row.recipientAddress) || null,
           latencyMs: a.latencyMs,
           completedAt: a.completedAt ? a.completedAt.toISOString() : null,
         })),
@@ -796,7 +752,7 @@ export class MessagesService {
       items: items.map((row) => ({
         ...row,
         recipientAddress: maskRecipientAddress(row.recipientAddress),
-        failureReason: sanitizeFailureReason(row.failureReason, row.recipientAddress),
+        failureReason: sanitizeRecipientContent(row.failureReason, row.recipientAddress) || null,
         createdAt: row.createdAt.toISOString(),
         completedAt: row.completedAt ? row.completedAt.toISOString() : null,
       })),

@@ -587,9 +587,9 @@ test.describe('FE-3: Dispatched Messages Console Journey', () => {
     await expect(table.getByTestId('message-row-msg-a1-page2-01')).toBeVisible();
     await expect(prevBtn).toBeEnabled();
 
-    // 8b. Capture subsequent requests for Org A2 to verify cursor and headers
+    // 8b. Capture ALL subsequent requests for Org A2 to verify cursor and headers
     let capturedOrgHeader: string | null = null;
-    let orgA2MessagesCursor: string | null = 'UNSET';
+    const orgA2MessagesCursors: (string | null)[] = [];
     page.on('request', (req) => {
       const h = req.headers()['x-acc-organization'];
       if (h) {
@@ -597,7 +597,7 @@ test.describe('FE-3: Dispatched Messages Console Journey', () => {
       }
       const u = new URL(req.url());
       if (u.pathname.endsWith('/messages') && h === ORG_A2_ID) {
-        orgA2MessagesCursor = u.searchParams.get('cursor');
+        orgA2MessagesCursors.push(u.searchParams.get('cursor'));
       }
     });
 
@@ -605,10 +605,13 @@ test.describe('FE-3: Dispatched Messages Console Journey', () => {
     await page.locator('#org-select').selectOption(ORG_A2_ID);
     await expect(page.locator('#org-select')).toHaveValue(ORG_A2_ID);
 
-    // 8d. Verify requests sent to backend carry new tenant header and NO cursor parameter
+    // 8d. Verify requests sent to backend carry new tenant header and EVERY Org A2 request has NO cursor parameter
     await expect(table.getByTestId('message-row-msg-a2-01')).toBeVisible({ timeout: 5000 });
     expect(capturedOrgHeader).toBe(ORG_A2_ID);
-    expect(orgA2MessagesCursor).toBeNull();
+    expect(orgA2MessagesCursors.length).toBeGreaterThanOrEqual(1);
+    for (const cursor of orgA2MessagesCursors) {
+      expect(cursor).toBeNull();
+    }
 
     // 8e. Verify Org A2's 3 rows appear on Page 1
     await expect(table.getByTestId('message-row-msg-a2-01')).toBeVisible();
