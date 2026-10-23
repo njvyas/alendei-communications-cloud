@@ -1572,7 +1572,7 @@ Enable/disable of an assignment already in that state is a no-op `200` and write
   "id": "uuid", "orgId": "uuid", "workspaceId": "uuid", "contactId": "uuid", "channelId": "uuid",
   "templateId": "uuid | null",
   "status": "queued",           // queued | routing | submitting | accepted | failed | outcome_unknown
-  "recipientAddress": "+12025550201",
+  "recipientAddress": "+1 •••• 0201", // permanently masked by API boundary (never full number)
   "payload": { },
   "failureReason": "string | null",   // e.g. NO_ELIGIBLE_PROVIDER
   "createdAt": "ISO-8601",
@@ -1592,6 +1592,7 @@ Enable/disable of an assignment already in that state is a no-op `200` and write
 - `providerId` is an id only: tenant users hold no `providers.read`, so the console cannot and must not resolve provider names for them.
 - `accepted` means the provider accepted the submission, not delivery (no receipts exist).
 - **The list returns no payload and no per-attempt detail** — open `GET /messages/:id` for those. There is **no recipient filter**: query strings are written to the request log, and a recipient address is personal data.
+- **Privacy & Recipient Masking (F2):** The API permanently masks recipient addresses in both list and detail responses (`recipientAddress` is returned as `+1 •••• 0201` or `u••••r@example.com`). Full unmasked recipient numbers are never returned in ordinary responses, and nested failure reasons and payloads are sanitized to prevent alternate exposure paths. No reveal control or unmasking endpoint exists.
 
 ```jsonc
 // messageSummary — one row of GET /messages (exhaustive)
@@ -1600,7 +1601,7 @@ Enable/disable of an assignment already in that state is a no-op `200` and write
   "channelId": "uuid", "channelCode": "whatsapp",
   "templateId": "uuid | null",
   "status": "failed",
-  "recipientAddress": "+12025550201",
+  "recipientAddress": "+1 •••• 0201", // permanently masked by API boundary
   "failureReason": "NO_ELIGIBLE_PROVIDER",
   "attemptCount": 1,
   "createdAt": "ISO-8601", "completedAt": "ISO-8601 | null"

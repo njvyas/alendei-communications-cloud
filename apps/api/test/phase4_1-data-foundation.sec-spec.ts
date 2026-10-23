@@ -366,7 +366,7 @@ describe('Phase 4.1 Data & Regulatory Foundation Security Suite (Gate F.1, ADR-0
         .set('Authorization', `Bearer ${userAToken}`)
         .set('X-Acc-Organization', tenantA.orgId);
       expect(getRes.status).toBe(200);
-      expect(getRes.body.data.recipientAddress).toBe('+12025550198');
+      expect(getRes.body.data.recipientAddress).toBe('+1 •••• 0198');
     });
 
     it('rejects RCS recipient without leading + with 400 PHONE_MISSING_COUNTRY_CODE', async () => {
@@ -419,7 +419,7 @@ describe('Phase 4.1 Data & Regulatory Foundation Security Suite (Gate F.1, ADR-0
         .set('Authorization', `Bearer ${userAToken}`)
         .set('X-Acc-Organization', tenantA.orgId);
       expect(getRes.status).toBe(200);
-      expect(getRes.body.data.recipientAddress).toBe('+919876543210');
+      expect(getRes.body.data.recipientAddress).toBe('+91 •••• 3210');
     });
 
     it('rejects SMS recipient without leading + with 400 PHONE_MISSING_COUNTRY_CODE', async () => {

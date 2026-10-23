@@ -784,5 +784,32 @@ describe('Messages API Suite (Phase 3.3)', () => {
       problems.push(...validator.check('GET', url('/messages'), await list('', noReadToken)));
       expect(problems).toEqual([]);
     });
+
+    it('8. enforces permanent recipient masking on both list and detail endpoints (F2)', async () => {
+      // 1. List endpoint: every row has permanently masked recipientAddress
+      const res = await list().expect(200);
+      for (const item of res.body.data) {
+        expect(item.recipientAddress).toMatch(/^\+[0-9]+ •••• [0-9]{4}$/);
+      }
+      const rawDump = JSON.stringify(res.body);
+      for (let i = 0; i < 4; i++) {
+        expect(rawDump).not.toContain(`+120255577${10 + i}`);
+      }
+
+      // 2. Detail endpoint: GET /messages/:id permanently masks recipientAddress
+      const detailRes = await request(h.app.getHttpServer())
+        .get(url(`/messages/${seeded[0]}`))
+        .set('Authorization', `Bearer ${tokenC}`)
+        .expect(200);
+      expect(detailRes.body.data.recipientAddress).toBe('+1 •••• 7710');
+      expect(JSON.stringify(detailRes.body)).not.toContain('+12025557710');
+
+      // 3. Tenant-scoped access: tenant A cannot view tenant C message
+      const crossTenantRes = await request(h.app.getHttpServer())
+        .get(url(`/messages/${seeded[0]}`))
+        .set('Authorization', `Bearer ${userAToken}`)
+        .set('X-Acc-Organization', tenantA.orgId);
+      expect(crossTenantRes.status).toBe(404);
+    });
   });
 });

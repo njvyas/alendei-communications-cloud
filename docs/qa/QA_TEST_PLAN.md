@@ -93,8 +93,7 @@ Environment and accounts: `INTERNAL_QA_DEPLOYMENT.md` (§7 personas, §8 data). 
 | QA-E-05 | qa-org-a-admin | Send to the suppressed number (C-10) | Refused (`RECIPIENT_SUPPRESSED`) | | S1 | screenshot |
 | QA-E-06 | qa-platform-admin | Temporarily disable Org B's assignment (API), Org B admin sends | Refused (`NO_ACTIVE_PROVIDER_ASSIGNMENT`); re-enable afterwards | | S2 | screenshot + API |
 | QA-E-07 | qa-org-b-admin | "Inspect Existing Message by UUID" with E-01's ID | Same final state and attempts shown | | S2 | screenshot |
-| QA-E-08 | qa-org-b-admin | Send twice quickly to a new number `+12025550299` | Both accepted; no error (concurrent first send) | | S2 | screenshots |
-| QA-E-09 | — | Browse a list/history of sent messages | **DEFERRED** — no list exists; lookup by message ID only | | — | — |
+| QA-E-09 | qa-org-a-admin / qa-org-b-admin; `/messages` | Browse list/history of dispatched messages (`/messages`); apply channel/status filters, pagination, inspection modal, and switch organizations | Message List Console renders with filters, keyset pagination, permanent recipient masking, attempt detail inspection, and tenant-scoped query isolation | **FAIL / BLOCKED** — Blocker 1: zero-message QA database baseline under strict read-only/no-send preflight guardrail; Blocker 2: org-switch cursor defect (F1) and missing API-boundary recipient masking (F2) | S2 | FE-3 acceptance report (2026-10-23) |
 | QA-E-10 | — | Delivery receipts (delivered/read) | **DEFERRED** — simulator submission outcomes only; `PROVIDER_ACCEPTED` is not delivery | | — | — |
 
 ## F. Fallback and retry behavior

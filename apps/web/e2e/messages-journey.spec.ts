@@ -4,13 +4,18 @@ import { assertNoTokensInStorage, loginViaUi, TEST_CREDENTIALS } from './helpers
 /**
  * FE-3: Dispatched Messages Console Browser Journey (E2E)
  *
+ * NOTE: API responses in this journey are synthetically mocked via Playwright's `page.route()`.
+ * This validates client-side UI behavior, rendering, routing, filtering, pagination, and tenant-switching
+ * isolation under deterministic conditions. It is NOT real-browser verification against a live backend API
+ * or persistent database.
+ *
  * Verifies:
  * 1. Authentication and organization selection.
  * 2. Navigation to /messages.
  * 3. Default recipient address masking (+1 •••• 0199) and strict absence of reveal controls.
  * 4. Status filter interaction and pagination traversal.
  * 5. Detail inspection modal with attempt history and recipient masking.
- * 6. Organization switching and cross-tenant isolation enforcement.
+ * 6. Organization switching, cross-tenant isolation enforcement, and cursor reset (F1 regression).
  *
  * Runs against an isolated test stack using synthetic tenant fixtures.
  */
@@ -368,7 +373,22 @@ test.describe('FE-3: Dispatched Messages Console Journey', () => {
         }
 
         if (orgHeader === options.orgA2Id) {
-          // Distinct Org A2 message partition
+          const cursor = url.searchParams.get('cursor');
+          if (cursor) {
+            // Defect regression check (F1): Switching to Org A2 must NOT carry over Org A1 cursor!
+            return route.fulfill({
+              status: 400,
+              contentType: 'application/json',
+              body: JSON.stringify({
+                error: {
+                  code: 'INVALID_CURSOR',
+                  message: 'Cursor is invalid for organization partition',
+                },
+              }),
+            });
+          }
+
+          // Distinct Org A2 message partition (3 rows on Page 1)
           return route.fulfill({
             status: 200,
             contentType: 'application/json',
@@ -383,11 +403,41 @@ test.describe('FE-3: Dispatched Messages Console Journey', () => {
                   channelCode: 'whatsapp',
                   templateId: null,
                   status: 'accepted',
-                  recipientAddress: '+14155550188',
+                  recipientAddress: '+1 •••• 0188',
                   failureReason: null,
                   attemptCount: 1,
                   createdAt: '2026-10-21T09:00:00.000Z',
                   completedAt: '2026-10-21T09:00:02.000Z',
+                },
+                {
+                  id: 'msg-a2-02',
+                  orgId: options.orgA2Id,
+                  workspaceId: 'ws-prod-02',
+                  contactId: 'ct-beta-02',
+                  channelId: 'ch-sms-01',
+                  channelCode: 'sms',
+                  templateId: null,
+                  status: 'accepted',
+                  recipientAddress: '+1 •••• 0189',
+                  failureReason: null,
+                  attemptCount: 1,
+                  createdAt: '2026-10-21T08:45:00.000Z',
+                  completedAt: '2026-10-21T08:45:03.000Z',
+                },
+                {
+                  id: 'msg-a2-03',
+                  orgId: options.orgA2Id,
+                  workspaceId: 'ws-prod-02',
+                  contactId: 'ct-beta-03',
+                  channelId: 'ch-wa-01',
+                  channelCode: 'whatsapp',
+                  templateId: null,
+                  status: 'failed',
+                  recipientAddress: '+1 •••• 0190',
+                  failureReason: 'UNSUBSCRIBED_RECIPIENT',
+                  attemptCount: 1,
+                  createdAt: '2026-10-21T08:30:00.000Z',
+                  completedAt: '2026-10-21T08:30:02.000Z',
                 },
               ],
               page: { hasMore: false, nextCursor: null, limit: 25 },
@@ -530,28 +580,54 @@ test.describe('FE-3: Dispatched Messages Console Journey', () => {
     await dialog.getByRole('button', { name: 'Close' }).click();
     await expect(dialog).not.toBeVisible();
 
-    // Step 8: Switch organization and verify cross-tenant data isolation
+    // Step 8: F1 regression check — Navigate to Page 2 in Org A, switch to Org B,
+    // and verify the Org B request contains no Org A cursor.
+    // 8a. Navigate to Page 2 in Org A1
+    await nextBtn.click();
+    await expect(table.getByTestId('message-row-msg-a1-page2-01')).toBeVisible();
+    await expect(prevBtn).toBeEnabled();
+
+    // 8b. Capture subsequent requests for Org A2 to verify cursor and headers
     let capturedOrgHeader: string | null = null;
+    let orgA2MessagesCursor: string | null = 'UNSET';
     page.on('request', (req) => {
       const h = req.headers()['x-acc-organization'];
       if (h) {
         capturedOrgHeader = h;
       }
+      const u = new URL(req.url());
+      if (u.pathname.endsWith('/messages') && h === ORG_A2_ID) {
+        orgA2MessagesCursor = u.searchParams.get('cursor');
+      }
     });
 
-    // Switch to Org A2 via header switcher
+    // 8c. Switch to Org A2 via header switcher
     await page.locator('#org-select').selectOption(ORG_A2_ID);
     await expect(page.locator('#org-select')).toHaveValue(ORG_A2_ID);
 
-    // Verify requests sent to backend carry new tenant header
+    // 8d. Verify requests sent to backend carry new tenant header and NO cursor parameter
     await expect(table.getByTestId('message-row-msg-a2-01')).toBeVisible({ timeout: 5000 });
     expect(capturedOrgHeader).toBe(ORG_A2_ID);
+    expect(orgA2MessagesCursor).toBeNull();
 
-    // Verify Org A1 data is completely absent from Org A2 console view
+    // 8e. Verify Org A2's 3 rows appear on Page 1
+    await expect(table.getByTestId('message-row-msg-a2-01')).toBeVisible();
+    await expect(table.getByTestId('message-row-msg-a2-02')).toBeVisible();
+    await expect(table.getByTestId('message-row-msg-a2-03')).toBeVisible();
+    await expect(table.getByTestId('masked-recipient-msg-a2-01')).toHaveText('+1 •••• 0188');
+    await expect(table.getByTestId('masked-recipient-msg-a2-02')).toHaveText('+1 •••• 0189');
+    await expect(table.getByTestId('masked-recipient-msg-a2-03')).toHaveText('+1 •••• 0190');
+
+    // 8f. Verify pagination and filters remain correct on Page 1 of Org A2
+    await expect(prevBtn).toBeDisabled();
+    await expect(nextBtn).toBeDisabled();
+    await expect(page.locator('#filter-status')).toHaveValue('all');
+
+    // 8g. Verify Org A1 data (page 1 and page 2) is completely absent from Org A2 console view
     await expect(table.getByTestId('message-row-msg-a1-01')).toHaveCount(0);
     await expect(table.getByTestId('message-row-msg-a1-02')).toHaveCount(0);
     await expect(table.getByTestId('message-row-msg-a1-03')).toHaveCount(0);
-    await expect(table.getByTestId('masked-recipient-msg-a2-01')).toHaveText('+1 •••• 0188');
+    await expect(table.getByTestId('message-row-msg-a1-page2-01')).toHaveCount(0);
 
     // Final security storage sweep
     await assertNoTokensInStorage(page);

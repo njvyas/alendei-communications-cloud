@@ -492,4 +492,95 @@ describe('SEC-MSG: Message Components Integration, Privacy & Behavior Tests', ()
     // Org B query is not seeded, so it renders loading state
     assert.ok(htmlOrgB.includes('Loading messages…'));
   });
+
+  it('11. MessageListCard resets cursor stack, filters, and renders Org B page 1 without stale Org A data on org switch (F1)', () => {
+    setupSessionWithGrants(ORG_A, ['messages.read']);
+    const queryClient: QueryClient = createAppQueryClient();
+
+    const mockSummaryOrgB: MessageSummaryResponse = {
+      id: '01955b0a-7b3b-7411-9a4f-msg000000002',
+      orgId: ORG_B,
+      workspaceId: WORKSPACE_ID,
+      contactId: '01955b0a-7b3b-7411-9a4f-ct000000002',
+      channelId: CHANNEL_ID,
+      channelCode: 'whatsapp',
+      templateId: null,
+      status: 'accepted',
+      recipientAddress: '+14155550188',
+      failureReason: null,
+      attemptCount: 1,
+      createdAt: '2026-10-21T12:30:00.000Z',
+      completedAt: '2026-10-21T12:30:02.000Z',
+    };
+
+    // 1. Seed Org A page 1 with nextCursor
+    queryClient.setQueryData(
+      [
+        'messages',
+        'list',
+        ORG_A,
+        {
+          status: undefined,
+          channelCode: undefined,
+          workspaceId: undefined,
+          cursor: undefined,
+          limit: 25,
+        },
+      ],
+      {
+        data: [mockSummary],
+        page: { hasMore: true, nextCursor: 'cur-a-page-2', limit: 25 },
+      },
+    );
+
+    // 2. Seed Org B page 1 (cursor: undefined)
+    queryClient.setQueryData(
+      [
+        'messages',
+        'list',
+        ORG_B,
+        {
+          status: undefined,
+          channelCode: undefined,
+          workspaceId: undefined,
+          cursor: undefined,
+          limit: 25,
+        },
+      ],
+      {
+        data: [mockSummaryOrgB],
+        page: { hasMore: false, nextCursor: null, limit: 25 },
+      },
+    );
+
+    // Render Org A
+    const htmlOrgA = renderWithQueryClient(
+      React.createElement(MessageListCard, {
+        key: ORG_A,
+        orgId: ORG_A,
+        channels: [mockChannel],
+      }),
+      queryClient,
+    );
+    assert.ok(htmlOrgA.includes(`data-testid="message-row-${MSG_ID}"`));
+    assert.ok(!htmlOrgA.includes(`data-testid="message-row-${mockSummaryOrgB.id}"`));
+
+    // Switch to Org B
+    setupSessionWithGrants(ORG_B, ['messages.read']);
+    const htmlOrgB = renderWithQueryClient(
+      React.createElement(MessageListCard, {
+        key: ORG_B,
+        orgId: ORG_B,
+        channels: [mockChannel],
+      }),
+      queryClient,
+    );
+
+    // Assert Org B renders page 1 with Org B data
+    assert.ok(htmlOrgB.includes(`data-testid="message-row-${mockSummaryOrgB.id}"`));
+    // Assert Org B does NOT contain stale Org A data
+    assert.ok(!htmlOrgB.includes(`data-testid="message-row-${MSG_ID}"`));
+    // Assert Previous button is disabled on page 1 of Org B
+    assert.ok(htmlOrgB.includes('disabled=""') && htmlOrgB.includes('Previous'));
+  });
 });

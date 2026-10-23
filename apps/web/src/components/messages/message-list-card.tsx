@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   ApiError,
@@ -35,6 +35,15 @@ export function MessageListCard({ orgId, channels = [] }: MessageListCardProps) 
 
   // Detail inspection modal
   const [inspectMessageId, setInspectMessageId] = useState<string | null>(null);
+
+  // Clear tenant-specific transient state and pagination when organization context changes (F1 / D3 pattern)
+  useEffect(() => {
+    setCursorStack([]);
+    setInspectMessageId(null);
+    setSelectedStatus('all');
+    setSelectedChannelCode('all');
+    setSelectedWorkspaceId('all');
+  }, [orgId]);
 
   // Fetch workspaces for filter dropdown
   const { data: workspacesData } = useQuery({
