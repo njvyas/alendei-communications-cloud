@@ -87,7 +87,7 @@ Never run `docker compose … config` where the output is shared: it prints reso
 ## 6. Build and fresh installation
 
 1. Build both images from the baseline commit (`RELEASE.md` §5.1), with `NEXT_PUBLIC_API_BASE_URL=https://acc-qa.<internal domain>/api/v1`. Record both image IDs.
-2. Run `RELEASE.md` §5.2 steps 1–7 exactly: data services, `migrate`, history proof (`36|093bfe92208baf0ff073f6b154c00c68`), `roles`, `seed`, `bootstrap`, start `api` and `web`.
+2. Run `RELEASE.md` §5.2 steps 1–7 exactly: data services, `migrate`, history proof (`37|dc08b3f0bf5bfc870f8bc442f132c5f3`), `roles`, `seed`, `bootstrap`, start `api` and `web`.
 3. Confirm in `$C logs api`: `Database principals verified RLS-bound: acc_app, acc_auth, acc_dispatch` and `message dispatch started`.
 
 ## 7. QA accounts and the five-scope RBAC setup
