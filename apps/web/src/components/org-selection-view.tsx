@@ -4,7 +4,7 @@ import { useContext, useState } from 'react';
 import { QueryClientContext, useQuery } from '@tanstack/react-query';
 
 import { authApi, organizationsApi, type OrganizationView } from '../lib/api-client';
-import { useSession } from '../lib/session-store';
+import { useCanReadOrganizations, useSession } from '../lib/session-store';
 import { Card, CardDescription, CardTitle } from './ui/card';
 
 export function OrgSelectionView() {
@@ -16,11 +16,13 @@ export function OrgSelectionView() {
 }
 
 function OrgSelectionViewWithQuery() {
+  const canReadOrganizations = useCanReadOrganizations();
   const { data, isLoading } = useQuery({
     queryKey: ['organizations', 'lookup'],
     queryFn: ({ signal }) => organizationsApi.listAll({}, signal),
     staleTime: 60_000,
     retry: false,
+    enabled: canReadOrganizations,
   });
 
   const orgMap = new Map<string, OrganizationView>();
@@ -109,7 +111,7 @@ function OrgSelectionForm({
                 const org = orgMap?.get(id);
                 const label = org ? `${org.name} (${org.slug})` : id;
                 return (
-                  <option key={id} value={id}>
+                  <option key={id} value={id} title={id}>
                     {label}
                   </option>
                 );

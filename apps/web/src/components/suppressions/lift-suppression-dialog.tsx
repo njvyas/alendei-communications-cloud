@@ -1,15 +1,21 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { AccessibleDialog } from '@/components/ui/dialog';
 import { ActionFeedback, type ActionFeedbackMessage } from '@/components/ui/action-feedback';
-import { suppressionsApi, type ChannelView, type SuppressionResponse } from '@/lib/api-client';
+import {
+  ApiError,
+  suppressionsApi,
+  type ChannelView,
+  type SuppressionResponse,
+} from '@/lib/api-client';
 import { humanizeApiError } from '@/lib/error-mapping';
 
 export interface LiftSuppressionDialogProps {
   readonly isOpen: boolean;
   readonly onClose: () => void;
   readonly onSuccess: (suppression: SuppressionResponse) => void;
+  readonly onConflict?: (suppression: SuppressionResponse, error: ApiError) => void;
   readonly suppression: SuppressionResponse | null;
   readonly channels?: readonly ChannelView[];
 }
@@ -18,12 +24,25 @@ export function LiftSuppressionDialog({
   isOpen,
   onClose,
   onSuccess,
+  onConflict,
   suppression,
   channels = [],
 }: LiftSuppressionDialogProps) {
   const [reason, setReason] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<ActionFeedbackMessage | null>(null);
+
+  const resetForm = useCallback(() => {
+    setReason('');
+    setFeedback(null);
+    setIsSubmitting(false);
+  }, []);
+
+  const handleClose = useCallback(() => {
+    if (isSubmitting) return;
+    resetForm();
+    onClose();
+  }, [isSubmitting, resetForm, onClose]);
 
   if (!suppression) return null;
 
@@ -32,18 +51,6 @@ export function LiftSuppressionDialog({
       channels.find((c) => c.id === suppression.channelId)?.code ??
       suppression.channelId)
     : 'All Channels (Organization-wide)';
-
-  const resetForm = () => {
-    setReason('');
-    setFeedback(null);
-    setIsSubmitting(false);
-  };
-
-  const handleClose = () => {
-    if (isSubmitting) return;
-    resetForm();
-    onClose();
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -78,6 +85,13 @@ export function LiftSuppressionDialog({
       onSuccess(response.data);
       onClose();
     } catch (err: unknown) {
+      if (err instanceof ApiError && err.code === 'SUPPRESSION_LIFECYCLE_CONFLICT') {
+        resetForm();
+        onConflict?.(suppression, err);
+        onClose();
+        return;
+      }
+
       const humanized = humanizeApiError(
         err,
         'Failed to Lift Suppression',

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { AccessibleDialog } from '@/components/ui/dialog';
 import { ActionFeedback, type ActionFeedbackMessage } from '@/components/ui/action-feedback';
 import { suppressionsApi, type ChannelView, type SuppressionResponse } from '@/lib/api-client';
@@ -30,19 +30,19 @@ export function CreateSuppressionDialog({
   const isEmailChannel =
     selectedChannel?.code === 'email' || (!selectedChannel && rawAddress.includes('@'));
 
-  const resetForm = () => {
+  const resetForm = useCallback(() => {
     setChannelId('');
     setRawAddress('');
     setReason('');
     setFeedback(null);
     setIsSubmitting(false);
-  };
+  }, []);
 
-  const handleClose = () => {
+  const handleClose = useCallback(() => {
     if (isSubmitting) return;
     resetForm();
     onClose();
-  };
+  }, [isSubmitting, resetForm, onClose]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

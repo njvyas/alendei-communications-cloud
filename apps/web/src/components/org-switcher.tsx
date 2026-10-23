@@ -6,7 +6,7 @@ import { QueryClientContext, useQuery } from '@tanstack/react-query';
 
 import { organizationsApi, type OrganizationView } from '../lib/api-client';
 import { clearAuthenticatedQueryCache } from '../lib/query-client';
-import { useSession } from '../lib/session-store';
+import { useCanReadOrganizations, useSession } from '../lib/session-store';
 
 /**
  * Scoped collection routes where viewing a specific resource ID
@@ -50,11 +50,13 @@ export function OrgSwitcher() {
 }
 
 function OrgSwitcherWithQuery() {
+  const canReadOrganizations = useCanReadOrganizations();
   const { data } = useQuery({
     queryKey: ['organizations', 'lookup'],
     queryFn: ({ signal }) => organizationsApi.listAll({}, signal),
     staleTime: 60_000,
     retry: false,
+    enabled: canReadOrganizations,
   });
 
   const orgMap = new Map<string, OrganizationView>();
@@ -83,7 +85,10 @@ function OrgSwitcherBase({ orgMap }: { orgMap?: Map<string, OrganizationView> })
     const org = orgId ? orgMap?.get(orgId) : undefined;
     const label = org ? `${org.name} (${org.slug})` : orgId;
     return (
-      <div className="flex items-center gap-1.5 rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2.5 py-1 text-xs font-mono text-[var(--color-ink-muted)]">
+      <div
+        className="flex items-center gap-1.5 rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2.5 py-1 text-xs font-mono text-[var(--color-ink-muted)]"
+        title={org ? `${org.name} (${org.slug})` : `Organization ID: ${orgId}`}
+      >
         <span className="font-sans text-[var(--color-ink)]">Org:</span>
         <span className="truncate max-w-[160px] sm:max-w-none">{label}</span>
       </div>
@@ -121,7 +126,7 @@ function OrgSwitcherBase({ orgMap }: { orgMap?: Map<string, OrganizationView> })
           const org = orgMap?.get(id);
           const label = org ? `${org.name} (${org.slug})` : id;
           return (
-            <option key={id} value={id}>
+            <option key={id} value={id} title={id}>
               {label}
             </option>
           );

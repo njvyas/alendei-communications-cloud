@@ -53,7 +53,11 @@ export default function SuppressionsPage() {
         </p>
       </div>
 
-      <SuppressionListCard orgId={selectedOrganizationId} channels={channelsData?.data ?? []} />
+      <SuppressionListCard
+        key={selectedOrganizationId}
+        orgId={selectedOrganizationId}
+        channels={channelsData?.data ?? []}
+      />
     </div>
   );
 }

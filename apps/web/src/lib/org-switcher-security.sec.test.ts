@@ -650,5 +650,71 @@ describe('SEC-05: Organization Switcher Context Synchronization & Route Scoping'
         organizationsApi.list = origList;
       }
     });
+
+    it('does NOT query organizationsApi.listAll when user lacks organizations.read (SEC-D4)', async () => {
+      // User has only suppressions.read, NOT organizations.read
+      setupSession(ORG_A, [ORG_A]);
+      useSession.getState().setSession({
+        accessToken: 'test-token',
+        user: {
+          userId: 'test-user-ro',
+          actorType: 'user',
+          authMethod: 'session',
+          sessionId: 'sess-ro',
+          authenticatedAt: new Date().toISOString(),
+          tenant: { orgId: ORG_A, workspaceId: null, resellerId: null, isPlatformAdmin: false },
+          authorizedOrganizationIds: [ORG_A],
+          roles: [],
+          permissions: [],
+        },
+        authorization: {
+          actorType: 'user',
+          userId: 'test-user-ro',
+          apiKeyId: null,
+          organizationIds: [ORG_A],
+          grants: [
+            {
+              roleId: 'role-ro',
+              roleKey: 'suppression_reader',
+              scopeType: 'organization',
+              scopeId: ORG_A,
+              orgId: ORG_A,
+              permissions: ['suppressions.read'],
+            },
+          ],
+          isPlatformAdmin: false,
+        },
+        selectedOrgId: ORG_A,
+      });
+
+      let listAllCalled = false;
+      const origListAll = organizationsApi.listAll;
+      organizationsApi.listAll = async () => {
+        listAllCalled = true;
+        throw new Error('403 Forbidden - listAll should not be called');
+      };
+
+      try {
+        const client = createAppQueryClient();
+        const html = renderWithQueryClient(
+          React.createElement(OrgSwitcher),
+          client,
+          '/suppressions',
+        );
+
+        // Query must NOT have been called
+        assert.equal(
+          listAllCalled,
+          false,
+          'organizationsApi.listAll must not be invoked when user lacks organizations.read',
+        );
+
+        // Header renders intentional styled fallback with tooltip without breaking layout
+        assert.ok(html.includes(ORG_A));
+        assert.ok(html.includes(`title="Organization ID: ${ORG_A}"`));
+      } finally {
+        organizationsApi.listAll = origListAll;
+      }
+    });
   });
 });

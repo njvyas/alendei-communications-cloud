@@ -269,6 +269,18 @@ test.describe('FE-2: Suppression Management Console Journey', () => {
         const body = request.postDataJSON() as { reason: string };
         const found = inMemorySuppressions.find((s) => s.id === suppId);
         if (found) {
+          if (found.status === 'cleared') {
+            return route.fulfill({
+              status: 409,
+              contentType: 'application/json',
+              body: JSON.stringify({
+                error: {
+                  code: 'SUPPRESSION_LIFECYCLE_CONFLICT',
+                  message: 'Suppression is already cleared and cannot be lifted again.',
+                },
+              }),
+            });
+          }
           found.status = 'cleared';
           found.clearedAt = new Date().toISOString();
           found.clearedReason = body.reason;
@@ -414,8 +426,16 @@ test.describe('FE-2: Suppression Management Console Journey', () => {
 
     // Select WhatsApp channel scope
     await page.locator('#create-suppression-channel').selectOption(CH_WA_ID);
-    await page.locator('#create-suppression-address').fill(uniquePhone);
-    await page.locator('#create-suppression-reason').fill(suppressionReason);
+    // Type address and reason character-by-character to exercise keystroke focus stability (D1)
+    await page.locator('#create-suppression-address').click();
+    await page.locator('#create-suppression-address').pressSequentially(uniquePhone, { delay: 5 });
+    await expect(page.locator('#create-suppression-address')).toHaveValue(uniquePhone);
+
+    await page.locator('#create-suppression-reason').click();
+    await page
+      .locator('#create-suppression-reason')
+      .pressSequentially(suppressionReason, { delay: 5 });
+    await expect(page.locator('#create-suppression-reason')).toHaveValue(suppressionReason);
 
     await page.getByRole('button', { name: 'Add Suppression', exact: true }).click();
 
@@ -454,7 +474,11 @@ test.describe('FE-2: Suppression Management Console Journey', () => {
     await expect(liftDialog.getByText('Important Confirmation')).toBeVisible();
 
     const liftReason = 'Customer requested opt-in reactivation via verified support ticket #4402';
-    await liftDialog.locator('#lift-suppression-reason').fill(liftReason);
+    await liftDialog.locator('#lift-suppression-reason').click();
+    await liftDialog
+      .locator('#lift-suppression-reason')
+      .pressSequentially(liftReason, { delay: 5 });
+    await expect(liftDialog.locator('#lift-suppression-reason')).toHaveValue(liftReason);
     await liftDialog.getByRole('button', { name: 'Confirm Lift' }).click();
 
     // 13. Confirm dialog closes and success banner appears
@@ -478,8 +502,8 @@ test.describe('FE-2: Suppression Management Console Journey', () => {
     const existingPhone = `+1555${Math.floor(1000000 + Math.random() * 9000000)}`;
 
     await setupSyntheticSuppressionRoutes(page, {
-      // User holds suppressions.read, but NOT suppressions.manage
-      permissionsOrgA1: ['suppressions.read', 'channels.read', 'organizations.read'],
+      // User holds suppressions.read and channels.read, but NOT organizations.read or suppressions.manage (D4)
+      permissionsOrgA1: ['suppressions.read', 'channels.read'],
       initialSuppressions: [
         {
           id: 'supp-ro-01',
@@ -501,6 +525,12 @@ test.describe('FE-2: Suppression Management Console Journey', () => {
     await loginViaUi(page, TEST_CREDENTIALS.multiOrg.email, TEST_CREDENTIALS.multiOrg.password);
     await page.locator('#organization-select').selectOption(ORG_A1_ID);
     await page.getByRole('button', { name: 'Enter Console' }).click();
+
+    // Verify shell header displays intentional styled fallback with tooltip for read-only user lacking organizations.read (D4)
+    await expect(page.locator('#org-select')).toBeVisible({ timeout: 10_000 });
+    const selectedOption = page.locator('#org-select option:checked');
+    await expect(selectedOption).toHaveValue(ORG_A1_ID);
+    await expect(selectedOption).toHaveAttribute('title', ORG_A1_ID);
 
     // 2. Navigate to Suppressions
     await page.getByRole('link', { name: 'Suppressions' }).click();
@@ -613,15 +643,91 @@ test.describe('FE-2: Suppression Management Console Journey', () => {
     await expect(page.locator('table tbody tr', { hasText: phoneOrgA1 })).toBeVisible();
     await expect(page.locator('table tbody tr', { hasText: phoneOrgA2 })).not.toBeVisible();
 
+    // Create a new suppression in Org A1 to generate a success banner
+    await page.getByRole('button', { name: '+ Add Suppression' }).click();
+    const tempPhone = `+1555${Math.floor(1000000 + Math.random() * 9000000)}`;
+    await page.locator('#create-suppression-address').fill(tempPhone);
+    await page.locator('#create-suppression-reason').fill('Tenant banner test');
+    await page.getByRole('button', { name: 'Add Suppression', exact: true }).click();
+    await expect(page.getByText('Suppression Added', { exact: true })).toBeVisible();
+
     // 4. Switch to Org A2 via header dropdown
     await page.locator('#org-select').selectOption(ORG_A2_ID);
     await expect(page.locator('#org-select')).toHaveValue(ORG_A2_ID);
 
-    // 5. Navigate to /suppressions in Org A2 context
-    await page.getByRole('link', { name: 'Suppressions' }).click();
+    // 5. Verify the tenant-specific feedback banner from Org A1 is immediately cleared (D3)
+    await expect(page.getByText('Suppression Added', { exact: true })).not.toBeVisible();
 
     // 6. Confirm Org A2 suppression is present, Org A1 suppression is NOT present
     await expect(page.locator('table tbody tr', { hasText: phoneOrgA2 })).toBeVisible();
     await expect(page.locator('table tbody tr', { hasText: phoneOrgA1 })).not.toBeVisible();
+  });
+
+  // ---------------------------------------------------------------------------
+  // E2E-SUPP-05: Stale Lift Lifecycle Conflict Handling (D2)
+  // ---------------------------------------------------------------------------
+  test('E2E-SUPP-05: Stale lift conflict closes modal, displays clear notice, and refreshes list', async ({
+    page,
+  }) => {
+    const conflictPhone = '+15559990001';
+    const initialRecord: SyntheticSuppression = {
+      id: 'supp-conflict-01',
+      orgId: ORG_A1_ID,
+      channelId: CH_WA_ID,
+      rawAddress: conflictPhone,
+      normalizedAddress: conflictPhone,
+      reason: 'Concurrent test suppression',
+      status: 'active',
+      clearedAt: null,
+      clearedReason: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await setupSyntheticSuppressionRoutes(page, {
+      initialSuppressions: [initialRecord],
+    });
+
+    // 1. Authenticate and select organization
+    await loginViaUi(page, TEST_CREDENTIALS.multiOrg.email, TEST_CREDENTIALS.multiOrg.password);
+    await page.locator('#organization-select').selectOption(ORG_A1_ID);
+    await page.getByRole('button', { name: 'Enter Console' }).click();
+
+    // 2. Navigate to /suppressions
+    await page.getByRole('link', { name: 'Suppressions' }).click();
+    await page.waitForURL((url) => url.pathname === '/suppressions');
+
+    // 3. Find the suppression row and click Lift
+    const row = page.locator('table tbody tr', { hasText: conflictPhone });
+    await expect(row).toBeVisible();
+    await expect(row.getByText('Active')).toBeVisible();
+
+    const liftBtn = row.getByRole('button', { name: 'Lift' });
+    await liftBtn.click();
+
+    const liftDialog = page.getByRole('dialog');
+    await expect(liftDialog.getByRole('heading', { name: 'Lift Suppression' })).toBeVisible();
+
+    // 4. Concurrently mark the record as cleared in the backend store before clicking Confirm Lift
+    initialRecord.status = 'cleared';
+    initialRecord.clearedAt = new Date().toISOString();
+    initialRecord.clearedReason = 'Cleared by concurrent session';
+
+    // 5. Fill reason and submit lift
+    await liftDialog.locator('#lift-suppression-reason').fill('Trying to lift stale record');
+    await liftDialog.getByRole('button', { name: 'Confirm Lift' }).click();
+
+    // 6. Confirm dialog is dismissed (D2)
+    await expect(liftDialog).not.toBeVisible();
+
+    // 7. Confirm informative conflict notice is displayed on the card (D2)
+    await expect(page.getByText('Suppression Already Cleared')).toBeVisible();
+    await expect(
+      page.getByText('was already lifted by another session and is no longer active'),
+    ).toBeVisible();
+
+    // 8. Confirm table refetched and row reflects Cleared status with Lift button removed (D2)
+    await expect(row.getByText('Cleared')).toBeVisible();
+    await expect(row.getByRole('button', { name: 'Lift' })).not.toBeVisible();
   });
 });

@@ -120,9 +120,14 @@ Created by the testers themselves as part of `QA_TEST_PLAN.md` (sections C–F),
 - Templates: 3 per organization (`qa_welcome`, `qa_otp`, `qa_promo`), moved through draft → pending → approved / rejected with the simulated approval.
 - Messages: sent from the WhatsApp console; nothing leaves the host.
 
-### 8a. API steps (no console screen, or one not yet accepted in QA)
+### 8a. Suppressions and API steps
 
-Suppressions (QA-C-10) have no console screen. Provider assignments (QA-D-08, E-06, F-02–F-05) have a console panel on `/organizations/[id]`, implemented in Batch 1 but not yet exercised and accepted in QA; until it is accepted, these steps use the API. A tester or operator calls the API with their own session token:
+**Suppressions** (QA-C-10) is fully available in the console:
+- **Route:** `/suppressions`
+- **Permissions required:** `suppressions.read` (viewing catalogue-enriched list and record details), `suppressions.manage` (adding and lifting suppressions).
+- **Supported workflows:** Catalogue-enriched list, filtering by status (`active` / `cleared`) and channel, adding manual suppressions (E.164 phone or RFC 5322 email), inspecting full immutable record details, lifting active suppressions with mandatory justification reason.
+
+**Provider assignments** (QA-D-08, E-06, F-02–F-05) have a console panel on `/organizations/[id]`, implemented in Batch 1 but not yet exercised and accepted in QA; until it is accepted, these steps use the API. In addition, suppressions can optionally be created via API by calling with an organization admin session token:
 
 ```bash
 API=https://acc-qa.<internal domain>/api/v1

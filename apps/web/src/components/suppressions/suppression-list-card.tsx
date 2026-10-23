@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   suppressionsApi,
@@ -40,6 +40,17 @@ export function SuppressionListCard({ orgId, channels = [] }: SuppressionListCar
 
   // Global action feedback
   const [feedback, setFeedback] = useState<ActionFeedbackMessage | null>(null);
+
+  // Clear tenant-specific transient state and banners when organization context changes (D3)
+  useEffect(() => {
+    setFeedback(null);
+    setDetailTarget(null);
+    setLiftTarget(null);
+    setIsCreateOpen(false);
+    setCursorStack([]);
+    setSelectedChannelId('all');
+    setSelectedStatus('all');
+  }, [orgId]);
 
   const queryParams = {
     status: selectedStatus === 'all' ? undefined : (selectedStatus as SuppressionStatus),
@@ -88,6 +99,16 @@ export function SuppressionListCard({ orgId, channels = [] }: SuppressionListCar
       type: 'success',
       title: 'Suppression Lifted',
       message: `Suppression lifted for ${lifted.rawAddress}. Future dispatches to this address are enabled.`,
+    });
+    void refetch();
+  };
+
+  const handleLiftConflict = (suppression: SuppressionResponse) => {
+    setLiftTarget(null);
+    setFeedback({
+      type: 'info',
+      title: 'Suppression Already Cleared',
+      message: `This suppression for ${suppression.rawAddress} was already lifted by another session and is no longer active.`,
     });
     void refetch();
   };
@@ -374,6 +395,7 @@ export function SuppressionListCard({ orgId, channels = [] }: SuppressionListCar
         isOpen={Boolean(liftTarget)}
         onClose={() => setLiftTarget(null)}
         onSuccess={handleLiftSuccess}
+        onConflict={handleLiftConflict}
         suppression={liftTarget}
         channels={channels}
       />
