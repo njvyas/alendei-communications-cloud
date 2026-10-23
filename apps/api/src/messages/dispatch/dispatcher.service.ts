@@ -199,14 +199,15 @@ export class DispatcherService {
            WHERE id = $1`,
           [claim.messageId],
         );
-        await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
-          claim.messageId,
-        ]);
+        // The event first: acc_dispatch may write it only while its claim row exists.
         await client.query(
           `INSERT INTO message_events (id, org_id, message_id, event_type, payload)
            VALUES ($1, $2, $3, 'message.failed', '{"reason":"Organization is closed"}')`,
           [uuidv7(), claim.orgId, claim.messageId],
         );
+        await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
+          claim.messageId,
+        ]);
         await client.query('COMMIT');
         return { messageId: claim.messageId, outcome: 'failed', error: 'Organization closed' };
       }
@@ -309,9 +310,7 @@ export class DispatcherService {
            WHERE id = $2`,
           [reason, claim.messageId],
         );
-        await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
-          claim.messageId,
-        ]);
+        // The event first: acc_dispatch may write it only while its claim row exists.
         await client.query(
           `INSERT INTO message_events (id, org_id, message_id, event_type, payload)
            VALUES ($1, $2, $3, 'message.failed', $4)`,
@@ -322,6 +321,9 @@ export class DispatcherService {
             JSON.stringify({ reason, attempts: priorAttemptCount }),
           ],
         );
+        await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
+          claim.messageId,
+        ]);
         await client.query('COMMIT');
         return { messageId: claim.messageId, outcome: 'failed', error: reason };
       }
