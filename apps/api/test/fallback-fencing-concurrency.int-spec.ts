@@ -741,4 +741,114 @@ describe('Phase 3.4 Fallback, Resilience & Fencing Concurrency Integration Suite
       expect(queue).toBeUndefined();
     });
   });
+
+  describe('11. BE-DISPATCH-01: Provider Circuit Tripping & Transition Settlement', () => {
+    it('repeated failures trip provider circuit to open, settles without 42501 rollback, and falls back to secondary', async () => {
+      const tenant = await createTestTenant('fb-circ-trip');
+      const p1 = await createProvider('p-trip-1', 'closed', '500');
+      const p2 = await createProvider('p-trip-2', 'closed'); // secondary succeeds
+      await assignProvider(tenant, p1, 1);
+      await assignProvider(tenant, p2, 2);
+
+      // Verify initial provider state in DB
+      const [p1Initial] = await h.admin
+        .select()
+        .from(schema.providers)
+        .where(eq(schema.providers.id, p1));
+      expect(p1Initial!.circuitState).toBe('closed');
+      expect(Number(p1Initial!.circuitGeneration)).toBe(0);
+      expect(p1Initial!.healthState).toBe('healthy');
+
+      // 4 initial messages: each attempts p1 (fails with 500) -> requeued -> attempts p2 (succeeds)
+      for (let i = 1; i <= 4; i++) {
+        const msgId = await seedMessage(tenant);
+
+        // Attempt on p1
+        const [claim1] = await dispatcher.claimBatch(1);
+        expect(claim1).toBeDefined();
+        expect(claim1!.messageId).toBe(msgId);
+        const res1 = await dispatcher.processClaim(claim1!);
+        expect(res1.outcome).toBe('failed');
+        expect(res1.error).toContain('PROVIDER_ERROR');
+
+        // Fallback attempt on p2
+        const [claim2] = await dispatcher.claimBatch(1);
+        expect(claim2).toBeDefined();
+        expect(claim2!.messageId).toBe(msgId);
+        const res2 = await dispatcher.processClaim(claim2!);
+        expect(res2.outcome).toBe('accepted');
+
+        // Circuit should still be closed (minSamples = 5)
+        const [p1Mid] = await h.admin
+          .select()
+          .from(schema.providers)
+          .where(eq(schema.providers.id, p1));
+        expect(p1Mid!.circuitState).toBe('closed');
+        expect(Number(p1Mid!.circuitGeneration)).toBe(0);
+      }
+
+      // 5th message: 5th failure on p1 trips the circuit (closed -> open, generation 0 -> 1, health -> offline)
+      const msgId5 = await seedMessage(tenant);
+
+      const [claim5_1] = await dispatcher.claimBatch(1);
+      expect(claim5_1).toBeDefined();
+      expect(claim5_1!.messageId).toBe(msgId5);
+
+      const res5_1 = await dispatcher.processClaim(claim5_1!);
+      // Verification: settlement did NOT roll back with SQLSTATE 42501 (outcome is failed, NOT unknown)
+      expect(res5_1.outcome).toBe('failed');
+      expect(res5_1.error).toContain('PROVIDER_ERROR');
+
+      // Verify provider state in DB transitioned properly under acc_dispatch
+      const [p1Tripped] = await h.admin
+        .select()
+        .from(schema.providers)
+        .where(eq(schema.providers.id, p1));
+      expect(p1Tripped!.circuitState).toBe('open');
+      expect(Number(p1Tripped!.circuitGeneration)).toBe(1);
+      expect(p1Tripped!.circuitChangedAt).not.toBeNull();
+      expect(p1Tripped!.healthState).toBe('offline');
+
+      // Verify message 5 is NOT stuck in submitting or outcome_unknown
+      const [msg5Mid] = await h.admin
+        .select()
+        .from(schema.messages)
+        .where(eq(schema.messages.id, msgId5));
+      expect(msg5Mid!.status).toBe('queued');
+      expect(msg5Mid!.currentAttemptId).toBeNull();
+
+      // Message 5 fallback to p2 succeeds
+      const [claim5_2] = await dispatcher.claimBatch(1);
+      expect(claim5_2).toBeDefined();
+      expect(claim5_2!.messageId).toBe(msgId5);
+
+      const res5_2 = await dispatcher.processClaim(claim5_2!);
+      expect(res5_2.outcome).toBe('accepted');
+
+      const [msg5Final] = await h.admin
+        .select()
+        .from(schema.messages)
+        .where(eq(schema.messages.id, msgId5));
+      expect(msg5Final!.status).toBe('accepted');
+
+      // Subsequent message 6: skips open circuit p1 in-memory without attempt, dispatches directly to p2
+      const msgId6 = await seedMessage(tenant);
+
+      const [claim6] = await dispatcher.claimBatch(1);
+      expect(claim6).toBeDefined();
+      expect(claim6!.messageId).toBe(msgId6);
+
+      const res6 = await dispatcher.processClaim(claim6!);
+      expect(res6.outcome).toBe('accepted');
+
+      // Verify attempts on message 6: only 1 attempt, directly on p2
+      const attempts6 = await h.admin
+        .select()
+        .from(schema.messageAttempts)
+        .where(eq(schema.messageAttempts.messageId, msgId6));
+      expect(attempts6).toHaveLength(1);
+      expect(attempts6[0]!.providerId).toBe(p2);
+      expect(attempts6[0]!.status).toBe('accepted');
+    });
+  });
 });

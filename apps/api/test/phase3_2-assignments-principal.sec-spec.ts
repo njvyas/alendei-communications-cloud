@@ -43,6 +43,7 @@ import {
   type Harness,
   type TenantFixture,
 } from './auth-harness';
+import { DISPATCH_POOL } from '../src/database/database.tokens';
 import { CredentialService } from '../src/iam/credential.service';
 
 const url = (p: string) => `/${PREFIX}${p}`;
@@ -285,13 +286,14 @@ describe('Phase 3.2 Assignments & Principal Scopes Security Suite', () => {
   afterAll(async () => {
     try {
       await h.clearRateLimits();
-      // Remove assignments
-      await h.admin.execute(sql`DELETE FROM message_attempts`).catch(() => {});
-      await h.admin.execute(sql`DELETE FROM organization_provider_assignments`);
-
-      // Remove created providers
       const pIds = [providerSms1?.id, providerSms2?.id, providerEmail1?.id].filter(Boolean);
       if (pIds.length > 0) {
+        // Remove assignments created for test providers
+        await h.admin
+          .delete(schema.organizationProviderAssignments)
+          .where(inArray(schema.organizationProviderAssignments.providerId, pIds));
+
+        // Remove created providers
         await h.admin.delete(schema.providers).where(inArray(schema.providers.id, pIds));
       }
 
@@ -894,9 +896,55 @@ describe('Phase 3.2 Assignments & Principal Scopes Security Suite', () => {
 
   describe('5. acc_dispatch Database Principal Isolation Proofs', () => {
     let client: PoolClient;
+    let dispatchPool: Pool;
 
     beforeAll(async () => {
       client = await adminPool.connect();
+      dispatchPool = h.app.get(DISPATCH_POOL);
+
+      // Ensure tenantA has assignments for providerSms1 and providerSms2
+      const existing1 = await h.admin
+        .select({ id: schema.organizationProviderAssignments.id })
+        .from(schema.organizationProviderAssignments)
+        .where(
+          and(
+            eq(schema.organizationProviderAssignments.orgId, tenantA.orgId),
+            eq(schema.organizationProviderAssignments.providerId, providerSms1.id),
+          ),
+        );
+      if (existing1.length === 0) {
+        await h.admin.insert(schema.organizationProviderAssignments).values({
+          orgId: tenantA.orgId,
+          providerId: providerSms1.id,
+          channelId: channelSmsId,
+          priority: 1,
+          status: 'active',
+        });
+      } else {
+        await h.admin
+          .update(schema.organizationProviderAssignments)
+          .set({ status: 'active' })
+          .where(eq(schema.organizationProviderAssignments.id, existing1[0].id));
+      }
+
+      const existing2 = await h.admin
+        .select({ id: schema.organizationProviderAssignments.id })
+        .from(schema.organizationProviderAssignments)
+        .where(
+          and(
+            eq(schema.organizationProviderAssignments.orgId, tenantA.orgId),
+            eq(schema.organizationProviderAssignments.providerId, providerSms2.id),
+          ),
+        );
+      if (existing2.length === 0) {
+        await h.admin.insert(schema.organizationProviderAssignments).values({
+          orgId: tenantA.orgId,
+          providerId: providerSms2.id,
+          channelId: channelSmsId,
+          priority: 2,
+          status: 'disabled',
+        });
+      }
     });
 
     afterAll(async () => {
@@ -927,6 +975,37 @@ describe('Phase 3.2 Assignments & Principal Scopes Security Suite', () => {
       } catch (err) {
         await client.query('ROLLBACK').catch(() => undefined);
         throw err;
+      }
+    };
+
+    const withDirectDispatchSession = async <T>(
+      orgId: string,
+      messageId: string,
+      claimToken: string,
+      fn: (dClient: PoolClient) => Promise<T>,
+    ): Promise<T> => {
+      const dClient = await dispatchPool.connect();
+      try {
+        await dClient.query('BEGIN');
+        try {
+          await dClient.query('SELECT set_config($1, $2, true)', ['app.current_org_id', orgId]);
+          await dClient.query('SELECT set_config($1, $2, true)', [
+            'app.dispatch_message_id',
+            messageId,
+          ]);
+          await dClient.query('SELECT set_config($1, $2, true)', [
+            'app.dispatch_claim_token',
+            claimToken,
+          ]);
+          const res = await fn(dClient);
+          await dClient.query('ROLLBACK');
+          return res;
+        } catch (err) {
+          await dClient.query('ROLLBACK').catch(() => undefined);
+          throw err;
+        }
+      } finally {
+        dClient.release();
       }
     };
 
@@ -1016,6 +1095,82 @@ describe('Phase 3.2 Assignments & Principal Scopes Security Suite', () => {
         expect(caught).toBeDefined();
         expect(caught!.message).toMatch(/permission denied for/);
       });
+    });
+
+    it('BE-DISPATCH-01: acc_dispatch can transition circuit and health state on assigned provider when administrative fields are unchanged', async () => {
+      const messageId = uuidv7();
+      const claimToken = uuidv7();
+
+      // Reset circuit state to closed, generation 0
+      await h.admin
+        .update(schema.providers)
+        .set({ circuitState: 'closed', circuitGeneration: 0, circuitChangedAt: null })
+        .where(eq(schema.providers.id, providerSms1.id));
+
+      await withDirectDispatchSession(tenantA.orgId, messageId, claimToken, async (dClient) => {
+        const updateRes = await dClient.query(
+          `UPDATE providers 
+           SET circuit_state = 'open',
+               circuit_generation = 1,
+               circuit_changed_at = now(),
+               health_state = 'offline',
+               health_changed_at = now()
+           WHERE id = $1
+           RETURNING id, circuit_state, circuit_generation, health_state`,
+          [providerSms1.id],
+        );
+        expect(updateRes.rowCount).toBe(1);
+        expect(updateRes.rows[0].circuit_state).toBe('open');
+        expect(Number(updateRes.rows[0].circuit_generation)).toBe(1);
+        expect(updateRes.rows[0].health_state).toBe('offline');
+      });
+    });
+
+    it('BE-DISPATCH-01: fn_providers_state_guard rejects invalid circuit transitions and invalid generation changes', async () => {
+      const messageId = uuidv7();
+      const claimToken = uuidv7();
+
+      // Reset circuit state to closed, generation 0
+      await h.admin
+        .update(schema.providers)
+        .set({ circuitState: 'closed', circuitGeneration: 0, circuitChangedAt: null })
+        .where(eq(schema.providers.id, providerSms1.id));
+
+      // 1. Illegal transition: closed -> half_open
+      await expect(
+        withDirectDispatchSession(tenantA.orgId, messageId, claimToken, async (dClient) => {
+          await dClient.query(
+            `UPDATE providers 
+             SET circuit_state = 'half_open', circuit_generation = 1, circuit_changed_at = now()
+             WHERE id = $1`,
+            [providerSms1.id],
+          );
+        }),
+      ).rejects.toThrow(/illegal circuit transition closed -> half_open/);
+
+      // 2. Generation jump: 0 -> 2
+      await expect(
+        withDirectDispatchSession(tenantA.orgId, messageId, claimToken, async (dClient) => {
+          await dClient.query(
+            `UPDATE providers 
+             SET circuit_state = 'open', circuit_generation = 2, circuit_changed_at = now()
+             WHERE id = $1`,
+            [providerSms1.id],
+          );
+        }),
+      ).rejects.toThrow(/a circuit transition advances the generation by exactly one/);
+
+      // 3. Generation change without transition
+      await expect(
+        withDirectDispatchSession(tenantA.orgId, messageId, claimToken, async (dClient) => {
+          await dClient.query(
+            `UPDATE providers 
+             SET circuit_generation = 1
+             WHERE id = $1`,
+            [providerSms1.id],
+          );
+        }),
+      ).rejects.toThrow(/the circuit generation changes only with a circuit transition/);
     });
 
     it('can select static channels and organization status', async () => {
