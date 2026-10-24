@@ -2207,6 +2207,21 @@ Because migration `0019` granted EXECUTE on `app_has_platform_permission` only t
 - Dispatch (`mapMessageForSubmission`): a non-dispatchable channel maps to `CHANNEL_UNSUPPORTED: <channel>` and settles through the existing claim-time terminal path — `message.failed` event before the queue delete, zero attempts, no adapter call.
 - No migration.
 
+## 1za. Phase 4.3 G-2: suppression and consent re-checked at dispatch (migration 0037): 24-Oct-2026
+
+### 1za.1 Decision
+- **Status:** project owner approved approach B, 24-Oct-2026. Implemented for review; migration `0037` is **not applied** to shared QA or production, and its deployment needs separate authorization. Gate F.3 remains **not accepted**; Gate F.2 acceptance remains **pending**.
+- The send path refuses a suppressed or consent-revoked recipient, but a queued message — or one requeued for same-channel fallback — can wait while either changes. The dispatcher therefore re-checks both on **every claim**, fallback re-claims included, before any provider is selected.
+- **Approach B (chosen):** one narrow `SECURITY DEFINER` function, `app_dispatch_recipient_block()`, with `EXECUTE` for `acc_dispatch` only. `acc_dispatch` receives **no** grant on `suppressions` or `consent_events`. Approach A (column grants plus claim-scoped policies on both tables) was rejected: it exposes rows to the dispatch role and adds policy surface.
+
+### 1za.2 Implementation
+- Migration `0037_dispatch_recipient_recheck.sql`: the function, `REVOKE ALL … FROM PUBLIC`, `GRANT EXECUTE … TO acc_dispatch`. No table, policy or index change. Rollback: `DROP FUNCTION app_dispatch_recipient_block()`, only after the dispatcher change is reverted.
+- The function takes no arguments and answers only for the message in the caller's dispatch context while its claim is live (same claim check as the `messages_dispatch_*` policies, migration 0033). Without a live claim it raises `insufficient_privilege` rather than answer, so a missing claim never reads as "not blocked". It returns `NULL`, `RECIPIENT_SUPPRESSED` or `CONSENT_REVOKED` — never rows, reasons or history.
+- Rules are the send path's, in its order: (1) an active suppression in the message's organization for its normalized address, on its channel or organization-wide; (2) the latest consent-event group for the message's organization, channel and contact contains a revoke. The latest group is taken at millisecond precision, matching the send path's JavaScript `Date` comparison.
+- Dispatcher (`DispatcherService.processClaim`): after the organization-status and channel/content checks, before provider selection. A blocked message settles `failed` with the code as `failure_reason` through the existing claim-time terminal path — `message.failed` (`{ reason, attempts }`) before the queue delete, no new attempt, no adapter call. No new status, error code or OpenAPI change.
+- **Residual exposure (inference):** a suppression or revoke committed while a submission is already in flight is not caught; the window is bounded by the 3-second submission timeout.
+- Tests: `phase4_3-g2-recipient-recheck.sec-spec.ts` (privileges, claim and lease validation, tenant isolation, rules), `phase4_3-g2-dispatch-recheck.int-spec.ts` (post-queue changes, fallback re-claim, send/dispatch parity).
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

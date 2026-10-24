@@ -542,6 +542,12 @@ Evidence summary (17-Oct-2026, current working tree):
 - The provider test-send diagnostic (`POST /providers/{id}/test-send`) is a **separate, simulator-only** platform capability: it persists no message and is not a message send path.
 - No migration. Tests: `submission-mapping.spec.ts`, `phase4_3-channel-gating.int-spec.ts`, `phase4_3-channel-gating.sec-spec.ts`.
 
+**Phase 4.3 — G-2 dispatch-time recipient re-check: implementation record.** Status: **IMPLEMENTED for review (not merged); migration `0037` not applied to shared QA or production; Gate F.3 NOT ACCEPTED.** Owner-approved approach B, 24-Oct-2026 (`DECISIONS.md` §1za):
+
+- The dispatcher re-checks suppression and consent on every claim, fallback re-claims included, through `app_dispatch_recipient_block()` (migration `0037`, `EXECUTE` for `acc_dispatch` only, no table grants). A blocked message settles `failed` with `RECIPIENT_SUPPRESSED` or `CONSENT_REVOKED`, with no new attempt and no adapter call.
+- Deploying `0037` moves the QA migration history from 37 to 38 entries; `RELEASE.md` and `docs/qa/INTERNAL_QA_DEPLOYMENT.md` history-proof values are updated with that deployment, not before.
+- Tests: `phase4_3-g2-recipient-recheck.sec-spec.ts`, `phase4_3-g2-dispatch-recheck.int-spec.ts`.
+
 ## 8. Phase 5 — Provider/channel failover
 
 **Amended by ADR-014 (06-Oct-2026):** basic provider-to-provider fallback within one channel is delivered by **Phase 3**, not here. Phase 5 retains cross-channel fallback and the remaining fallback-engine scope below; the boundary is in ADR-014 §8 (D30): Phase 3 builds same-channel provider-to-provider fallback driven by submission outcomes (no delivery in Phase 3); delivery-outcome wait windows, `fallback_policies`/`fallback_steps` and cross-channel chains stay here. Phase 3's termination rule is open (D14). Routing weights, routing-policy CRUD and canary stay outside Phase 3 (ADR-014 F18).

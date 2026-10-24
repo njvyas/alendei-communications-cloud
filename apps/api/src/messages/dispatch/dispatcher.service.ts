@@ -278,6 +278,48 @@ export class DispatcherService {
         return { messageId: claim.messageId, outcome: 'failed', error: reason };
       }
 
+      // Re-check suppression and consent at dispatch (Phase 4.3 G-2, migration
+      // 0037): either may have changed since the send path checked them. Runs
+      // on every claim, fallback re-claims included, before any provider is
+      // selected. The function answers only for this live claim, with a code.
+      const blockResult = await client.query<{ block: string | null }>(
+        `SELECT app_dispatch_recipient_block() AS block`,
+      );
+      const block = blockResult.rows[0]?.block ?? null;
+
+      if (block) {
+        const priorAttemptsResult = await client.query<{ count: string }>(
+          `SELECT count(*)::text AS count FROM message_attempts WHERE message_id = $1`,
+          [claim.messageId],
+        );
+        const priorAttemptCount = parseInt(priorAttemptsResult.rows[0]?.count ?? '0', 10);
+        await client.query(
+          `UPDATE messages
+           SET status = 'failed',
+               failure_reason = $1,
+               completed_at = now(),
+               updated_at = now()
+           WHERE id = $2`,
+          [block, claim.messageId],
+        );
+        // The event first: acc_dispatch may write it only while its claim row exists.
+        await client.query(
+          `INSERT INTO message_events (id, org_id, message_id, event_type, payload)
+           VALUES ($1, $2, $3, 'message.failed', $4)`,
+          [
+            uuidv7(),
+            claim.orgId,
+            claim.messageId,
+            JSON.stringify({ reason: block, attempts: priorAttemptCount }),
+          ],
+        );
+        await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
+          claim.messageId,
+        ]);
+        await client.query('COMMIT');
+        return { messageId: claim.messageId, outcome: 'failed', error: block };
+      }
+
       // Read active provider assignments ordered by priority, excluding already-attempted providers (P3-D03, P3-D14, P3-D15)
       const assignmentsResult = await client.query<{
         id: string;
