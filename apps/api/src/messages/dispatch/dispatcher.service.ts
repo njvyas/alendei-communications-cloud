@@ -4,10 +4,11 @@ import {
   RCS_MESSAGE_TYPES_CAPABILITY,
   rcsProviderSupports,
   type AuthPrincipal,
+  type RcsMessageType,
   type SimulatorBehavior,
 } from '@acc/contracts';
 import { drizzle } from 'drizzle-orm/node-postgres';
-import { Pool } from 'pg';
+import { Pool, type PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { uuidv7 } from 'uuidv7';
 
@@ -340,20 +341,12 @@ export class DispatcherService {
       let candidates = assignments;
       if (mapping.rcs) {
         const messageType = mapping.rcs.messageType;
-        const declaredResult = await client.query<{ provider_id: string; value: unknown }>(
-          `SELECT provider_id, value FROM provider_capabilities
-           WHERE capability_key = $1 AND provider_id = ANY($2::uuid[])`,
-          [RCS_MESSAGE_TYPES_CAPABILITY, assignments.map((a) => a.provider_id)],
+        const eligible = await this.rcsEligibleProviders(
+          client,
+          assignments.map((a) => a.provider_id),
+          messageType,
         );
-        const declared = new Map(declaredResult.rows.map((r) => [r.provider_id, r.value]));
-        candidates = assignments.filter((a) =>
-          rcsProviderSupports(
-            declared.has(a.provider_id)
-              ? { [RCS_MESSAGE_TYPES_CAPABILITY]: declared.get(a.provider_id) }
-              : {},
-            messageType,
-          ),
-        );
+        candidates = assignments.filter((a) => eligible.has(a.provider_id));
 
         if (candidates.length === 0) {
           const priorAttemptsResult = await client.query<{ count: string }>(
@@ -736,8 +729,8 @@ export class DispatcherService {
 
       if (isFallbackEligible) {
         // Check if there are remaining active candidates for this message
-        const remainingResult = await client.query<{ count: string }>(
-          `SELECT count(*)::text AS count
+        const remainingResult = await client.query<{ provider_id: string }>(
+          `SELECT opa.provider_id
            FROM organization_provider_assignments opa
            WHERE opa.org_id = $1 AND opa.channel_id = $2 AND opa.status = 'active'
              AND opa.provider_id NOT IN (
@@ -745,7 +738,12 @@ export class DispatcherService {
              )`,
           [claim.orgId, message.channel_id, claim.messageId],
         );
-        const remainingCount = parseInt(remainingResult.rows[0]?.count ?? '0', 10);
+        const remainingIds = remainingResult.rows.map((r) => r.provider_id);
+        // RCS: only providers the next claim would actually try count (Phase 4.2),
+        // so a message is not requeued just to be refused by its own next claim.
+        const remainingCount = mapping.rcs
+          ? (await this.rcsEligibleProviders(client, remainingIds, mapping.rcs.messageType)).size
+          : remainingIds.length;
 
         if (remainingCount > 0) {
           // Re-queue message for fallback: submitting -> queued
@@ -851,6 +849,34 @@ export class DispatcherService {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * The providers among `providerIds` that carry an RCS message of `messageType`
+   * by their declared `rcs_message_types` (no declaration: every type). One rule
+   * for both claim-time candidate selection and settlement-time fallback, so a
+   * message is never requeued for a provider the next claim would skip.
+   */
+  private async rcsEligibleProviders(
+    client: PoolClient,
+    providerIds: readonly string[],
+    messageType: RcsMessageType,
+  ): Promise<Set<string>> {
+    if (providerIds.length === 0) return new Set();
+    const declaredResult = await client.query<{ provider_id: string; value: unknown }>(
+      `SELECT provider_id, value FROM provider_capabilities
+       WHERE capability_key = $1 AND provider_id = ANY($2::uuid[])`,
+      [RCS_MESSAGE_TYPES_CAPABILITY, providerIds],
+    );
+    const declared = new Map(declaredResult.rows.map((r) => [r.provider_id, r.value]));
+    return new Set(
+      providerIds.filter((id) =>
+        rcsProviderSupports(
+          declared.has(id) ? { [RCS_MESSAGE_TYPES_CAPABILITY]: declared.get(id) } : {},
+          messageType,
+        ),
+      ),
+    );
   }
 
   /**

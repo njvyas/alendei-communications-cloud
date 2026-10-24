@@ -455,22 +455,87 @@ describe('Phase 4.2 Batch 2: RCS simulator dispatch, content eligibility and sam
       for (const c of seen) expect(c.submission.rcs).toEqual(CARD);
     });
 
-    it('fallback that reaches only an ineligible secondary ends NO_ELIGIBLE_PROVIDER, the first attempt kept', async () => {
+    it('a failing primary whose only remaining providers cannot carry the type settles NO_ELIGIBLE_PROVIDER at once — no requeue, no second claim', async () => {
       const t = await sendTenant('rcs-fb-inel');
       const primary = await provider(rcsChannelId, 'inel-500', { behavior: '500' });
       const textOnly = await provider(rcsChannelId, 'inel-text', { rcsTypes: ['text'] });
+      const badDecl = await provider(rcsChannelId, 'inel-bad', { rcsTypes: ['carousel'] });
       await assign(t.tenant.orgId, rcsChannelId, primary, 1);
       await assign(t.tenant.orgId, rcsChannelId, textOnly, 2);
+      await assign(t.tenant.orgId, rcsChannelId, badDecl, 3);
 
       const id = await sendRcs(t, '+12025550196', MEDIA);
-      expect((await dispatchOnce(id)).error).toContain('PROVIDER_ERROR');
-      expect(await dispatchOnce(id)).toEqual({
+      const outcome = await dispatchOnce(id);
+      expect(outcome).toEqual({
         messageId: id,
+        attemptId: expect.any(String),
         outcome: 'failed',
         error: 'NO_ELIGIBLE_PROVIDER',
       });
+
+      // Exactly one provider call and one attempt: the primary's, kept as failed.
       expect(calls().map((c) => c.context.providerId)).toEqual([primary]);
+      const attempts = await attemptsOf(id);
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]).toMatchObject({
+        id: outcome.attemptId,
+        providerId: primary,
+        status: 'failed',
+      });
+      expect(attempts[0]!.failureReason).toContain('PROVIDER_ERROR');
+
+      // No fallback requeue: the only message.queued event is the original enqueue.
+      const queuedEvents = await h.admin
+        .select({ payload: schema.messageEvents.payload })
+        .from(schema.messageEvents)
+        .where(
+          and(
+            eq(schema.messageEvents.messageId, id),
+            eq(schema.messageEvents.eventType, 'message.queued'),
+          ),
+        );
+      expect(queuedEvents).toHaveLength(1);
+      expect((queuedEvents[0]!.payload as { reason?: string }).reason).not.toBe('fallback');
+
+      // The terminal event is tied to that attempt; no claim lingers, nothing to recover.
+      const [terminal] = await h.admin
+        .select({ attemptId: schema.messageEvents.attemptId })
+        .from(schema.messageEvents)
+        .where(
+          and(
+            eq(schema.messageEvents.messageId, id),
+            eq(schema.messageEvents.eventType, 'message.failed'),
+          ),
+        );
+      expect(terminal!.attemptId).toBe(outcome.attemptId);
+      const [queueRow] = await h.admin
+        .select()
+        .from(schema.messageDispatchQueue)
+        .where(eq(schema.messageDispatchQueue.messageId, id));
+      expect(queueRow).toBeUndefined();
+      expect((await messageRow(id)).status).not.toBe('outcome_unknown');
       await expectNoEligible(id, 1);
+    });
+
+    it('a failing primary with an eligible provider remaining still requeues for fallback', async () => {
+      const t = await sendTenant('rcs-fb-elig');
+      const primary = await provider(rcsChannelId, 'elig-500', { behavior: '500' });
+      const textOnly = await provider(rcsChannelId, 'elig-text', { rcsTypes: ['text'] });
+      const mediaOk = await provider(rcsChannelId, 'elig-media', { rcsTypes: ['media'] });
+      await assign(t.tenant.orgId, rcsChannelId, primary, 1);
+      await assign(t.tenant.orgId, rcsChannelId, textOnly, 2);
+      await assign(t.tenant.orgId, rcsChannelId, mediaOk, 3);
+
+      const id = await sendRcs(t, '+12025550198', MEDIA);
+      const first = await dispatchOnce(id);
+      expect(first.error).toContain('PROVIDER_ERROR');
+      expect((await messageRow(id)).status).toBe('queued');
+      expect((await dispatchOnce(id)).outcome).toBe('accepted');
+      expect(calls().map((c) => c.context.providerId)).toEqual([primary, mediaOk]);
+      expect((await attemptsOf(id)).map((a) => [a.providerId, a.status])).toEqual([
+        [primary, 'failed'],
+        [mediaOk, 'accepted'],
+      ]);
     });
 
     it('the fifth primary failure opens its circuit without a state-guard error; every message settles on the secondary', async () => {
