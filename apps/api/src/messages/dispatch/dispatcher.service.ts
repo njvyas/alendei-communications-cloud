@@ -165,6 +165,33 @@ export class DispatcherService {
         claim.orgId,
       ]);
 
+      // BE-DISPATCH-02: claimBatch also takes expired leases, so a claim can land
+      // on a message whose earlier worker vanished mid-submission, before lease
+      // recovery reaches it. That submission may have reached the provider:
+      // settle it OUTCOME_UNKNOWN, exactly as recovery would, and never submit
+      // it again — to another provider or, by the org-status paths, at all.
+      const stateResult = await client.query<{
+        status: string;
+        current_attempt_id: string | null;
+      }>(`SELECT status, current_attempt_id FROM messages WHERE id = $1`, [claim.messageId]);
+      if (stateResult.rows[0]?.status === 'submitting') {
+        const reason = await this.settleAbandonedSubmission(
+          client,
+          claim.orgId,
+          claim.messageId,
+          stateResult.rows[0].current_attempt_id,
+        );
+        await client.query('COMMIT');
+        return {
+          messageId: claim.messageId,
+          ...(stateResult.rows[0].current_attempt_id
+            ? { attemptId: stateResult.rows[0].current_attempt_id }
+            : {}),
+          outcome: 'unknown',
+          error: reason,
+        };
+      }
+
       // Check organization lifecycle status
       const orgResult = await client.query<{ status: string }>(
         `SELECT status FROM organizations WHERE id = $1`,
@@ -880,6 +907,59 @@ export class DispatcherService {
   }
 
   /**
+   * Settles a message whose submission was abandoned mid-flight (its worker's
+   * lease ran out while it was `submitting`): the attempt and the message become
+   * OUTCOME_UNKNOWN, terminal and never resubmitted (P3-D11, ADR-014 D16), and
+   * the queue row is deleted. The caller holds a live claim on the queue row
+   * and has set the dispatch context; the event is written before the delete.
+   */
+  private async settleAbandonedSubmission(
+    client: PoolClient,
+    orgId: string,
+    messageId: string,
+    attemptId: string | null,
+  ): Promise<string> {
+    const reason = 'Dispatch lease expired during external submission (outcome_unknown)';
+
+    if (attemptId) {
+      await client.query(
+        `UPDATE message_attempts
+         SET status = 'outcome_unknown',
+             failure_reason = $1,
+             completed_at = now()
+         WHERE id = $2`,
+        [reason, attemptId],
+      );
+    }
+
+    await client.query(
+      `UPDATE messages
+       SET status = 'outcome_unknown',
+           failure_reason = $1,
+           completed_at = now(),
+           updated_at = now()
+       WHERE id = $2`,
+      [reason, messageId],
+    );
+
+    await client.query(
+      `INSERT INTO message_events (id, org_id, message_id, attempt_id, event_type, payload)
+       VALUES ($1, $2, $3, $4, 'message.outcome_unknown', $5)`,
+      [
+        uuidv7(),
+        orgId,
+        messageId,
+        attemptId,
+        JSON.stringify({ outcome: 'outcome_unknown', reason }),
+      ],
+    );
+
+    // Delete from queue (non-retryable)
+    await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [messageId]);
+    return reason;
+  }
+
+  /**
    * Recovers expired leases (P3-D11 / ADR-014 D18).
    * Attempts that expired during 'submitting' status cannot be safely retried
    * and must be terminalized as OUTCOME_UNKNOWN (terminal, non-retryable).
@@ -932,46 +1012,12 @@ export class DispatcherService {
         const msgRows = msgResult.rows;
 
         if (msgRows[0]?.status === 'submitting') {
-          // Terminalize attempt and message as OUTCOME_UNKNOWN (P3-D11)
-          const reason = 'Dispatch lease expired during external submission (outcome_unknown)';
-
-          if (msgRows[0].current_attempt_id) {
-            await client.query(
-              `UPDATE message_attempts
-               SET status = 'outcome_unknown',
-                   failure_reason = $1,
-                   completed_at = now()
-               WHERE id = $2`,
-              [reason, msgRows[0].current_attempt_id],
-            );
-          }
-
-          await client.query(
-            `UPDATE messages
-             SET status = 'outcome_unknown',
-                 failure_reason = $1,
-                 completed_at = now(),
-                 updated_at = now()
-             WHERE id = $2`,
-            [reason, row.message_id],
-          );
-
-          await client.query(
-            `INSERT INTO message_events (id, org_id, message_id, attempt_id, event_type, payload)
-             VALUES ($1, $2, $3, $4, 'message.outcome_unknown', $5)`,
-            [
-              uuidv7(),
-              row.org_id,
-              row.message_id,
-              msgRows[0].current_attempt_id,
-              JSON.stringify({ outcome: 'outcome_unknown', reason }),
-            ],
-          );
-
-          // Delete from queue (non-retryable)
-          await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
+          await this.settleAbandonedSubmission(
+            client,
+            row.org_id,
             row.message_id,
-          ]);
+            msgRows[0].current_attempt_id,
+          );
         } else {
           // Message was not submitting (e.g. queued/routing): release claim for redelivery
           await client.query(
