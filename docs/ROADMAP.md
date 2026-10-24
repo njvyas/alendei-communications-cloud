@@ -542,11 +542,16 @@ Evidence summary (17-Oct-2026, current working tree):
 - The provider test-send diagnostic (`POST /providers/{id}/test-send`) is a **separate, simulator-only** platform capability: it persists no message and is not a message send path.
 - No migration. Tests: `submission-mapping.spec.ts`, `phase4_3-channel-gating.int-spec.ts`, `phase4_3-channel-gating.sec-spec.ts`.
 
-**Phase 4.3 — G-2 dispatch-time recipient re-check: implementation record.** Status: **IMPLEMENTED for review (not merged); migration `0037` not applied to shared QA or production; Gate F.3 NOT ACCEPTED.** Owner-approved approach B, 24-Oct-2026 (`DECISIONS.md` §1za):
+**Phase 4.3 — G-2 dispatch-time recipient re-check: implementation record.** Status: **IMPLEMENTED and merged to `develop` (PR #12, commit `ce18f4d`); migration `0037` not applied to shared QA or production; Gate F.3 NOT ACCEPTED.** Owner-approved approach B, 24-Oct-2026 (`DECISIONS.md` §1za):
 
 - The dispatcher re-checks suppression and consent on every claim, fallback re-claims included, through `app_dispatch_recipient_block()` (migration `0037`, `EXECUTE` for `acc_dispatch` only, no table grants). A blocked message settles `failed` with `RECIPIENT_SUPPRESSED` or `CONSENT_REVOKED`, with no new attempt and no adapter call.
-- QA last recorded `Migrate: 36 verified` at `9cf5872` (23-Oct-2026), so it has neither `0036` nor `0037`; deploying this takes its migration history from 36 to 38 entries. The documented `37|…` proof in `RELEASE.md` and `docs/qa/INTERNAL_QA_DEPLOYMENT.md` has not been observed on QA; the 38-entry value is computed on a disposable clone and recorded with that deployment, not before.
+- QA last recorded `Migrate: 36 verified` at `9cf5872` (23-Oct-2026), so it has neither `0036` nor `0037`; deploying this takes its migration history from 36 to 38 entries (`38|04b0fac738f24476e76b88a84fd04850`).
 - Tests: `phase4_3-g2-recipient-recheck.sec-spec.ts`, `phase4_3-g2-dispatch-recheck.int-spec.ts`.
+
+**Remediation BE-DISPATCH-02 (Expired Submission Claim Settlement):** Status: **Closed — merged to `develop` (PR #14, commit `554dea3`)** (24-Oct-2026).
+- *Defect:* `claimBatch` claims expired leases, so a worker claim could land on a message whose lease expired while still in `submitting` status before `recoverExpiredLeases()` swept it. `processClaim` previously excluded the attempted provider and attempted to submit to the next assigned provider (causing a duplicate submission on fallback), or failed `NO_ELIGIBLE_PROVIDER` leaving the attempt row in `submitting` status.
+- *Remediation:* `processClaim` detects if the claimed message has an active attempt in `submitting` status whose lease expired, and immediately settles it `OUTCOME_UNKNOWN` via shared `settleAbandonedSubmission()`, matching the sweeper's settlement semantics, before executing organization-status checks or provider selection. Duplicate submissions are prevented and no attempts are left in `submitting` status. No migration.
+- *Verification:* Verified via `apps/api/test/be-dispatch-02-expired-submission.int-spec.ts` (6/6 tests passing in disposable clone database; commit `554dea3`).
 
 ## 8. Phase 5 — Provider/channel failover
 
