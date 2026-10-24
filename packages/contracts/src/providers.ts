@@ -9,6 +9,24 @@
 export const CHANNEL_CODES = ['whatsapp', 'rcs', 'sms', 'email', 'voice'] as const;
 export type ChannelCode = (typeof CHANNEL_CODES)[number];
 
+/**
+ * The channels a message may be sent and dispatched on (Phase 4.3, Gate F.3,
+ * owner decision 24-Oct-2026). `email` and `voice` are catalogued but have no
+ * authorized send path (`DECISIONS.md` §1z): the send path refuses them with
+ * `CHANNEL_NOT_SUPPORTED`, and the dispatcher fails closed on any stored
+ * message for them, so neither reaches an adapter.
+ */
+export const DISPATCHABLE_CHANNEL_CODES = [
+  'whatsapp',
+  'rcs',
+  'sms',
+] as const satisfies readonly ChannelCode[];
+export type DispatchableChannelCode = (typeof DISPATCHABLE_CHANNEL_CODES)[number];
+
+export function isDispatchableChannel(code: string): code is DispatchableChannelCode {
+  return (DISPATCHABLE_CHANNEL_CODES as readonly string[]).includes(code);
+}
+
 export const CHANNEL_STATUSES = ['active', 'disabled'] as const;
 export type ChannelStatus = (typeof CHANNEL_STATUSES)[number];
 

@@ -237,6 +237,13 @@ export const ERROR_CODES = {
   RCS_PAYLOAD_INVALID: 'RCS_PAYLOAD_INVALID',
   RCS_UNSAFE_ACTION_URL: 'RCS_UNSAFE_ACTION_URL',
 
+  // --- End-to-End Multi-Channel Dispatch (Phase 4.3, Gate F.3) ---------------
+  /**
+   * `422`: the channel exists and is active but has no authorized send path
+   * (`email`, `voice`; owner decision 24-Oct-2026). Nothing is stored.
+   */
+  CHANNEL_NOT_SUPPORTED: 'CHANNEL_NOT_SUPPORTED',
+
   // --- Generic -------------------------------------------------------------
 
   VALIDATION_FAILED: 'VALIDATION_FAILED',

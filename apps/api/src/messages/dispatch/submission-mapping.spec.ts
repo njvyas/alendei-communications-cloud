@@ -1,4 +1,4 @@
-import { CHANNEL_CODES } from '@acc/contracts';
+import { CHANNEL_CODES, DISPATCHABLE_CHANNEL_CODES } from '@acc/contracts';
 
 import { mapMessageForSubmission, resolveChannelCode } from './submission-mapping';
 
@@ -36,6 +36,26 @@ describe('mapMessageForSubmission — non-SMS channels keep the Phase 3 mapping'
   it('whatsapp ignores a dlt field: only SMS carries SMS metadata', () => {
     const mapped = mapMessageForSubmission('whatsapp', { text: 'Hi', dlt: DLT });
     expect(mapped).toEqual({ ok: true, content: { text: 'Hi' } });
+  });
+});
+
+describe('mapMessageForSubmission — channels with no send path fail closed (Phase 4.3)', () => {
+  it.each(['email', 'voice'] as const)('%s: refused, whatever the payload holds', (channel) => {
+    for (const payload of [{ text: 'Hello' }, { subject: 'Hi', body: 'x' }, {}, null]) {
+      expect(mapMessageForSubmission(channel, payload)).toEqual({
+        ok: false,
+        reason: `CHANNEL_UNSUPPORTED: ${channel}`,
+      });
+    }
+  });
+
+  it('only whatsapp, rcs and sms are dispatchable; every other catalogued channel is refused', () => {
+    expect([...DISPATCHABLE_CHANNEL_CODES].sort()).toEqual(['rcs', 'sms', 'whatsapp']);
+    const refused = CHANNEL_CODES.filter((code) => {
+      const mapped = mapMessageForSubmission(code, {});
+      return !mapped.ok && mapped.reason.startsWith('CHANNEL_UNSUPPORTED');
+    });
+    expect(refused).toEqual(['email', 'voice']);
   });
 });
 

@@ -534,6 +534,14 @@ Evidence summary (17-Oct-2026, current working tree):
   - run `40002661592` at `fa9a5ed`;
   - run `40053914870` at `eca81d0`, all five jobs successful — integration 198/198, security 1,589/1,589, database 222/222, `@acc/api` unit 702/702, dependency audit with 0 high.
 
+**Phase 4.3 — F.3-1 channel gating: implementation record.** Status: **IMPLEMENTED (PR #10); Gate F.3 NOT ACCEPTED.** Owner decision G-1, 24-Oct-2026 (`DECISIONS.md` §1z):
+
+- Sending a message on `email` or `voice` is **unsupported** and fails closed:
+  - the send path refuses it with `422 CHANNEL_NOT_SUPPORTED`, after authorization and the channel lookup, storing nothing;
+  - the dispatcher settles any already-queued email or voice message `failed` (`CHANNEL_UNSUPPORTED: <channel>`) with its event before the queue delete, no attempt and no adapter call.
+- The provider test-send diagnostic (`POST /providers/{id}/test-send`) is a **separate, simulator-only** platform capability: it persists no message and is not a message send path.
+- No migration. Tests: `submission-mapping.spec.ts`, `phase4_3-channel-gating.int-spec.ts`, `phase4_3-channel-gating.sec-spec.ts`.
+
 ## 8. Phase 5 — Provider/channel failover
 
 **Amended by ADR-014 (06-Oct-2026):** basic provider-to-provider fallback within one channel is delivered by **Phase 3**, not here. Phase 5 retains cross-channel fallback and the remaining fallback-engine scope below; the boundary is in ADR-014 §8 (D30): Phase 3 builds same-channel provider-to-provider fallback driven by submission outcomes (no delivery in Phase 3); delivery-outcome wait windows, `fallback_policies`/`fallback_steps` and cross-channel chains stay here. Phase 3's termination rule is open (D14). Routing weights, routing-policy CRUD and canary stay outside Phase 3 (ADR-014 F18).
