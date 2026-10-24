@@ -5,6 +5,8 @@ import {
   PERMISSIONS,
   PROVIDER_ADAPTER_KEYS,
   PROVIDER_CAPABILITY_FORBIDDEN_KEY_FRAGMENTS,
+  RCS_MESSAGE_TYPES_CAPABILITY,
+  validateRcsMessageTypesCapability,
   PROVIDER_CAPABILITY_LIMITS,
   PROVIDER_TRANSITIONS,
   type AuditAction,
@@ -655,6 +657,13 @@ function normalizeCapabilities(input: readonly ProviderCapabilityDto[]): Provide
         rule: 'SECRET_KEY_FORBIDDEN',
         message: 'capabilities are non-secret; credential material is never stored here',
       });
+    }
+    // A standard key is validated by its own rule (Phase 4.2); others stay free-form.
+    if (capability.key === RCS_MESSAGE_TYPES_CAPABILITY) {
+      const check = validateRcsMessageTypesCapability(capability.value);
+      if (!check.valid) {
+        issues.push({ field, rule: 'INVALID_VALUE', message: check.errors.join('; ') });
+      }
     }
     const serialized = JSON.stringify(capability.value);
     if (

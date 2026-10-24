@@ -11,6 +11,7 @@
  * later signal (webhook or status poll, Phase 3).
  */
 import type { ChannelCode } from './providers';
+import type { RcsBasicPayload } from './rcs';
 import type { SmsDltMetadata } from './sms';
 
 /**
@@ -79,6 +80,13 @@ export interface ProviderSubmission {
    * template. `content.text` is then the rendered approved template.
    */
   readonly sms?: ProviderSmsSubmission;
+  /**
+   * The validated RCS payload (Phase 4.2, ADR-016 D-4): text, media or a single
+   * rich card, with its suggestions, exactly as the send path accepted it.
+   * Present on every RCS message the dispatcher submits; `content.text` is then
+   * its plain-text rendering.
+   */
+  readonly rcs?: RcsBasicPayload;
 }
 
 /**

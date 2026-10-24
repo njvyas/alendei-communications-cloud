@@ -402,3 +402,48 @@ export function validateRcsPayload(payload: unknown): {
 
   return { valid: errors.length === 0, errors };
 }
+
+/**
+ * Provider capability declaring which RCS message types a provider carries
+ * (Phase 4.2). Its value is a non-empty list of distinct `RCS_MESSAGE_TYPES`.
+ */
+export const RCS_MESSAGE_TYPES_CAPABILITY = 'rcs_message_types';
+
+/** Validates a `rcs_message_types` capability value as it is saved. */
+export function validateRcsMessageTypesCapability(value: unknown): {
+  readonly valid: boolean;
+  readonly errors: readonly string[];
+} {
+  if (!Array.isArray(value) || value.length === 0) {
+    return { valid: false, errors: ['rcs_message_types must be a non-empty array'] };
+  }
+  const errors: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== 'string' || !(RCS_MESSAGE_TYPES as readonly string[]).includes(entry)) {
+      errors.push(
+        `rcs_message_types entry ${JSON.stringify(entry)} is not one of ${RCS_MESSAGE_TYPES.join(', ')}`,
+      );
+    } else if (seen.has(entry)) {
+      errors.push(`rcs_message_types lists '${entry}' more than once`);
+    } else {
+      seen.add(entry);
+    }
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+/**
+ * Whether a provider with these capabilities carries an RCS message of `type`.
+ * No declaration means every type (providers configured before Phase 4.2 keep
+ * working); a declaration is enforced, and one that is not valid carries nothing.
+ */
+export function rcsProviderSupports(
+  capabilities: Readonly<Record<string, unknown>> | undefined,
+  type: RcsMessageType,
+): boolean {
+  const declared = capabilities?.[RCS_MESSAGE_TYPES_CAPABILITY];
+  if (declared === undefined) return true;
+  if (!validateRcsMessageTypesCapability(declared).valid) return false;
+  return (declared as readonly string[]).includes(type);
+}

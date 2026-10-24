@@ -709,6 +709,49 @@ describe('Phase 2.1 provider and channel registry', () => {
       expect(await counts()).toEqual(before);
     });
 
+    it('rcs_message_types (Phase 4.2): a valid declaration is saved, any other value is refused and nothing changes; authority is unchanged', async () => {
+      const p = await createProvider();
+      const put = (token: string, capabilities: unknown) =>
+        call('put', token, `/providers/${p.id}/capabilities`).send({ capabilities });
+
+      const valid = [
+        { key: 'max_segments', value: 10 },
+        { key: 'rcs_message_types', value: ['text', 'rich_card'] },
+      ];
+      const saved = await put(tokens.platform!, valid).expect(200);
+      expect(saved.body.data.capabilities).toEqual(valid);
+
+      for (const value of [
+        [],
+        ['carousel'],
+        ['text', 'text'],
+        ['TEXT'],
+        'text',
+        { text: true },
+        [1],
+      ]) {
+        const r = await put(tokens.platform!, [{ key: 'rcs_message_types', value }]).expect(400);
+        expect(r.body.error.code).toBe('VALIDATION_FAILED');
+        expect(r.body.error.details.issues).toEqual([
+          expect.objectContaining({ field: 'capabilities.0', rule: 'INVALID_VALUE' }),
+        ]);
+      }
+      // A null value never reaches the key's rule: the request DTO refuses it first.
+      const nullValue = await put(tokens.platform!, [{ key: 'rcs_message_types', value: null }]);
+      expect(nullValue.status).toBe(400);
+      expect(nullValue.body.error.code).toBe('VALIDATION_FAILED');
+      const after = await call('get', tokens.platform!, `/providers/${p.id}`).expect(200);
+      expect(after.body.data.capabilities).toEqual(valid);
+
+      // Other keys stay free-form.
+      await put(tokens.platform!, [
+        { key: 'rcs_brand_label', value: { anything: [1, 'two'] } },
+      ]).expect(200);
+
+      // Only a platform providers.manage holder may set it, as before.
+      await put(tokens.orgAdmin!, [{ key: 'rcs_message_types', value: ['text'] }]).expect(403);
+    });
+
     it('there is no provider deletion', async () => {
       const p = await createProvider();
       await call('delete', tokens.platform!, `/providers/${p.id}`).expect(404);

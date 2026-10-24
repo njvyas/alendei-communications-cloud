@@ -1,8 +1,10 @@
 import {
   CHANNEL_CODES,
   validateDltMetadata,
+  validateRcsPayload,
   type ChannelCode,
   type ProviderSmsSubmission,
+  type RcsBasicPayload,
   type SmsDltMetadata,
 } from '@acc/contracts';
 
@@ -21,6 +23,7 @@ export type SubmissionMapping =
       readonly ok: true;
       readonly content: { readonly text: string };
       readonly sms?: ProviderSmsSubmission;
+      readonly rcs?: RcsBasicPayload;
     }
   | { readonly ok: false; readonly reason: string };
 
@@ -34,6 +37,8 @@ export function mapMessageForSubmission(channel: ChannelCode, payload: unknown):
     typeof payload === 'object' && payload !== null && !Array.isArray(payload)
       ? (payload as Record<string, unknown>)
       : {};
+
+  if (channel === 'rcs') return mapRcs(payload);
 
   if (channel !== 'sms') {
     // Unchanged from Phase 3: `text` when present, otherwise the payload itself.
@@ -75,4 +80,30 @@ export function mapMessageForSubmission(channel: ChannelCode, payload: unknown):
     content: { text },
     sms: { dlt, ...(maxSegments !== undefined ? { maxSegments } : {}) },
   };
+}
+
+/**
+ * RCS (Phase 4.2): the stored payload, re-validated under ADR-016 D-4/D-5, goes
+ * to the provider whole; `content.text` is its plain-text rendering — the text
+ * of a text message, a rich card's title and description, nothing for media.
+ */
+function mapRcs(payload: unknown): SubmissionMapping {
+  const check = validateRcsPayload(payload);
+  if (!check.valid) {
+    return {
+      ok: false,
+      reason: `RCS_PAYLOAD_INVALID: stored RCS payload is not valid (${check.errors.join('; ')})`,
+    };
+  }
+  // A copy: what is submitted cannot be changed through the row it came from.
+  const rcs = structuredClone(payload) as RcsBasicPayload;
+  let text = '';
+  if (rcs.messageType === 'text') {
+    text = rcs.text ?? '';
+  } else if (rcs.messageType === 'rich_card') {
+    text = [rcs.card?.title, rcs.card?.description]
+      .filter((part): part is string => typeof part === 'string' && part.length > 0)
+      .join('\n');
+  }
+  return { ok: true, content: { text }, rcs };
 }

@@ -443,6 +443,61 @@ describe('SimulatorAdapter — the seven submission-time behaviours, determinist
         category(await send({ channel: 'whatsapp' }, { channel: 'whatsapp', sms: { dlt: DLT } })),
       ).toBe('INVALID_REQUEST');
     });
+
+    describe('RCS content', () => {
+      const rcsGrant = { channel: 'rcs' as const };
+      const text = { messageType: 'text', text: 'Hello RCS' } as const;
+      const card = {
+        messageType: 'rich_card',
+        card: {
+          title: 'Offer',
+          suggestions: [
+            {
+              type: 'action_open_url',
+              text: 'Open',
+              postbackData: 'o',
+              url: 'https://example.com',
+            },
+          ],
+        },
+      } as const;
+      const media = { messageType: 'media', media: { url: 'https://example.com/a.png' } } as const;
+
+      it('accepts each RCS type on an RCS provider without a declaration', async () => {
+        for (const rcs of [text, media, card]) {
+          expect((await send(rcsGrant, { channel: 'rcs', rcs })).outcome).toBe('accepted');
+        }
+      });
+
+      it('malformed RCS content, or RCS content on another channel, is INVALID_REQUEST / SIM-400', async () => {
+        const unsafe = {
+          messageType: 'text',
+          text: 'x',
+          suggestions: [
+            { type: 'action_open_url', text: 'Open', postbackData: 'o', url: 'javascript:x' },
+          ],
+        };
+        for (const rcs of [{ messageType: 'text', text: '' }, unsafe, { messageType: 'nope' }]) {
+          const r = await send(rcsGrant, { channel: 'rcs', rcs: rcs as never });
+          expect(category(r)).toBe('INVALID_REQUEST');
+          expect(r.outcome === 'rejected' && r.failure.providerCode).toBe('SIM-400');
+        }
+        expect(category(await send({}, { rcs: text }))).toBe('INVALID_REQUEST');
+      });
+
+      it('a type the provider declares it does not carry is UNSUPPORTED_CONTENT / SIM-415, never accepted', async () => {
+        const declared = {
+          ...rcsGrant,
+          capabilities: { rcs_message_types: ['text'] },
+        };
+        expect((await send(declared, { channel: 'rcs', rcs: text })).outcome).toBe('accepted');
+        for (const rcs of [media, card]) {
+          const r = await send(declared, { channel: 'rcs', rcs });
+          expect(category(r)).toBe('UNSUPPORTED_CONTENT');
+          expect(r.outcome === 'rejected' && r.failure.providerCode).toBe('SIM-415');
+        }
+      });
+    });
   });
 
   it('health check is deterministic', async () => {

@@ -4,7 +4,9 @@ import {
   RETRYABLE_FAILURE_CATEGORIES,
   SIMULATOR_BEHAVIORS,
   SIMULATOR_HEALTH_BEHAVIORS,
+  rcsProviderSupports,
   validateDltMetadata,
+  validateRcsPayload,
   type ProviderAdapterCapabilities,
   type ProviderAdapterContext,
   type ProviderFailureCategory,
@@ -209,6 +211,28 @@ export class SimulatorAdapter extends GuardedProviderAdapter {
           'INVALID_REQUEST',
           'SIM-400',
           'Simulated provider rejected malformed SMS metadata',
+          0,
+        );
+      }
+    }
+    // RCS content, when carried, must be well formed (ADR-016 D-4/D-5), and only
+    // RCS carries it. A provider never accepts a type its own declaration excludes.
+    if (submission.rcs !== undefined) {
+      if (submission.channel !== 'rcs' || !validateRcsPayload(submission.rcs).valid) {
+        return this.reject(
+          submission,
+          'INVALID_REQUEST',
+          'SIM-400',
+          'Simulated provider rejected malformed RCS content',
+          0,
+        );
+      }
+      if (!rcsProviderSupports(context.capabilities, submission.rcs.messageType)) {
+        return this.reject(
+          submission,
+          'UNSUPPORTED_CONTENT',
+          'SIM-415',
+          'Simulated provider does not carry this RCS message type',
           0,
         );
       }
