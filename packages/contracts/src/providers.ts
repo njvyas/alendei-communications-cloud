@@ -12,7 +12,7 @@ export type ChannelCode = (typeof CHANNEL_CODES)[number];
 /**
  * The channels a message may be sent and dispatched on (Phase 4.3, Gate F.3,
  * owner decision 24-Oct-2026). `email` and `voice` are catalogued but have no
- * authorized send path (`DECISIONS.md` §1w.10): the send path refuses them with
+ * authorized send path (`DECISIONS.md` §1z): the send path refuses them with
  * `CHANNEL_NOT_SUPPORTED`, and the dispatcher fails closed on any stored
  * message for them, so neither reaches an adapter.
  */

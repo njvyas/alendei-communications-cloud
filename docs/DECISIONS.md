@@ -2194,6 +2194,19 @@ Because migration `0019` granted EXECUTE on `app_has_platform_permission` only t
 - **Crash Recovery:** `dispatcher.recoverExpiredLeases()` returned 0 (no abandoned or unrecovered leases).
 - **Cleanup:** Clone database `acc_clone_3e2f28607884` dropped `WITH (FORCE)`; template database row count and fingerprint verified unchanged.
 
+## 1z. Phase 4.3 F.3-1: email and voice message sending unsupported, fail closed: 24-Oct-2026
+
+### 1z.1 Decision
+- **Status:** project owner decision G-1, 24-Oct-2026. Implemented in PR #10. Gate F.3 remains **not accepted**; Gate F.2 acceptance remains **pending**.
+- `email` and `voice` are catalogued channels (ADR-013 F-2) with no authorized message send path (§1w.10). Sending a message on either is **unsupported** and fails closed. No feature flag enables delivery.
+- The provider test-send diagnostic (`POST /providers/{id}/test-send`, Phase 2.2) remains a **separate, simulator-only** platform capability: it submits a synthetic payload through the provider's adapter (the simulator is the only adapter), persists no message and is not a message send path. It is not affected by this decision.
+
+### 1z.2 Implementation
+- `@acc/contracts`: `DISPATCHABLE_CHANNEL_CODES` (`whatsapp`, `rcs`, `sms`), `isDispatchableChannel`, and error code `CHANNEL_NOT_SUPPORTED` (422; additive OpenAPI error-enum value).
+- Send path (`MessagesService.sendMessage`): after authorization and the channel lookup (unknown or disabled channel stays `404`), a non-dispatchable channel is refused `422 CHANNEL_NOT_SUPPORTED` before anything is read or stored; the refused request leaves no idempotency record, so a retry with the same key is refused alike.
+- Dispatch (`mapMessageForSubmission`): a non-dispatchable channel maps to `CHANNEL_UNSUPPORTED: <channel>` and settles through the existing claim-time terminal path — `message.failed` event before the queue delete, zero attempts, no adapter call.
+- No migration.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.
