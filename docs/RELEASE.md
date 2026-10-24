@@ -90,8 +90,8 @@ Set `ACC_VERSION=$VERSION` in `deploy/release.env`. The console image is built p
 | Step | Command | Pass criterion |
 |---|---|---|
 | 1. Data services | `$C up -d --wait postgres redis` | both healthy |
-| 2. Schema | `$C run --rm migrate` | `Applied 37 migration(s) after 0 verified` and `Roles were not changed` |
-| 3. History proof | `$C exec -T postgres psql -U postgres -d acc -Atc "SELECT count(*), md5(string_agg(hash \|\| ':' \|\| created_at, ',' ORDER BY id)) FROM drizzle.__drizzle_migrations"` | `37\|dc08b3f0bf5bfc870f8bc442f132c5f3` — exactly the committed migrations `0000`–`0036` |
+| 2. Schema | `$C run --rm migrate` | `Applied 38 migration(s) after 0 verified` and `Roles were not changed` |
+| 3. History proof | `$C exec -T postgres psql -U postgres -d acc -Atc "SELECT count(*), md5(string_agg(hash \|\| ':' \|\| created_at, ',' ORDER BY id)) FROM drizzle.__drizzle_migrations"` | `38\|04b0fac738f24476e76b88a84fd04850` — exactly the committed migrations `0000`–`0037` |
 | 4. Role logins | `$C run --rm roles` | `Roles reconciled … acc_app, acc_auth, acc_relay, acc_dispatch` |
 | 5. Seed | `$C run --rm seed` | completes (idempotent) |
 | 6. First operator | `$C run --rm bootstrap` | `Platform administrator created` (a re-run: `Already bootstrapped`) |

@@ -2,7 +2,7 @@
 
 Purpose: a dedicated, internal-only ACC environment in which the QA team validates the current implementation and records functional, security and usability findings (`QA_TEST_PLAN.md`, `USABILITY_FEEDBACK_TEMPLATE.md`). It is **not** the external MVP and not production. It uses a fresh database; the shared development database is never reused, copied or reset.
 
-Baseline: commit `f4d3cb3ed3a97e24aaa888071929aa4ea4d515e3` on `develop`, CI run 39645113250 green (all five jobs). Deploy only that commit, or a later one with its own green CI run.
+Baseline: commit `554dea370e84fd6b25589d9cb63309eaec03c636` on `develop`, CI run 40067932448 green (all five jobs). Deploy only that commit, or a later one with its own green CI run.
 
 Artifacts reused unchanged: `deploy/api.Dockerfile`, `deploy/web.Dockerfile`, `deploy/compose.release.yml`, `deploy/release.env.example`. The general procedure is `docs/RELEASE.md`; this runbook fixes the QA-specific values and adds the QA account, data and verification steps.
 
@@ -87,7 +87,7 @@ Never run `docker compose … config` where the output is shared: it prints reso
 ## 6. Build and fresh installation
 
 1. Build both images from the baseline commit (`RELEASE.md` §5.1), with `NEXT_PUBLIC_API_BASE_URL=https://acc-qa.<internal domain>/api/v1`. Record both image IDs.
-2. Run `RELEASE.md` §5.2 steps 1–7 exactly: data services, `migrate`, history proof (`37|dc08b3f0bf5bfc870f8bc442f132c5f3`), `roles`, `seed`, `bootstrap`, start `api` and `web`.
+2. Run `RELEASE.md` §5.2 steps 1–7 exactly: data services, `migrate`, history proof (`38|04b0fac738f24476e76b88a84fd04850`), `roles`, `seed`, `bootstrap`, start `api` and `web`.
 3. Confirm in `$C logs api`: `Database principals verified RLS-bound: acc_app, acc_auth, acc_dispatch` and `message dispatch started`.
 
 ## 7. QA accounts and the five-scope RBAC setup
@@ -199,7 +199,7 @@ Organization, provider and assignment IDs are shown in the console URLs and deta
 | 1 | Baseline | deployed commit = CI-green commit; image IDs recorded |
 | 2 | Exposure | only 443 internal/VPN and restricted 22 inbound; `docker ps` shows only the two loopback ports |
 | 3 | TLS | `https://acc-qa.<internal domain>/login` loads with a trusted certificate; `/metrics` returns 404 through the proxy |
-| 4 | Fresh install | migrate 36, history proof exact, roles, seed, bootstrap (re-run reports *Already bootstrapped*) |
+| 4 | Fresh install | migrate 38, history proof exact (`38|04b0fac738f24476e76b88a84fd04850`), roles, seed, bootstrap (re-run reports *Already bootstrapped*) |
 | 5 | Startup controls | principals verified line; a deliberately invalid dispatch credential (`RELEASE.md` §9.2) refuses start |
 | 6 | Health | `/health/ready` ok from the host |
 | 7 | Accounts | every persona in §7 that is supported is created, activated and can sign in |

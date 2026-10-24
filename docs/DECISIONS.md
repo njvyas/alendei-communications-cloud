@@ -2210,7 +2210,7 @@ Because migration `0019` granted EXECUTE on `app_has_platform_permission` only t
 ## 1za. Phase 4.3 G-2: suppression and consent re-checked at dispatch (migration 0037): 24-Oct-2026
 
 ### 1za.1 Decision
-- **Status:** project owner approved approach B, 24-Oct-2026. Implemented for review; migration `0037` is **not applied** to shared QA or production, and its deployment needs separate authorization. Gate F.3 remains **not accepted**; Gate F.2 acceptance remains **pending**.
+- **Status:** project owner approved approach B, 24-Oct-2026. Merged to `develop` via PR #12 (commit `ce18f4d`); migration `0037` verified in disposable database clones and **not applied** to shared QA or production, and its deployment needs separate authorization. Gate F.3 remains **not accepted**; Gate F.2 acceptance remains **pending**.
 - The send path refuses a suppressed or consent-revoked recipient, but a queued message — or one requeued for same-channel fallback — can wait while either changes. The dispatcher therefore re-checks both on **every claim**, fallback re-claims included, before any provider is selected.
 - **Approach B (chosen):** one narrow `SECURITY DEFINER` function, `app_dispatch_recipient_block()`, with `EXECUTE` for `acc_dispatch` only. `acc_dispatch` receives **no** grant on `suppressions` or `consent_events`. Approach A (column grants plus claim-scoped policies on both tables) was rejected: it exposes rows to the dispatch role and adds policy surface.
 
@@ -2221,6 +2221,29 @@ Because migration `0019` granted EXECUTE on `app_has_platform_permission` only t
 - Dispatcher (`DispatcherService.processClaim`): after the organization-status and channel/content checks, before provider selection. A blocked message settles `failed` with the code as `failure_reason` through the existing claim-time terminal path — `message.failed` (`{ reason, attempts }`) before the queue delete, no new attempt, no adapter call. No new status, error code or OpenAPI change.
 - **Residual exposure (inference):** a suppression or revoke committed while a submission is already in flight is not caught; the window is bounded by the 3-second submission timeout.
 - Tests: `phase4_3-g2-recipient-recheck.sec-spec.ts` (privileges, claim and lease validation, tenant isolation, rules), `phase4_3-g2-dispatch-recheck.int-spec.ts` (post-queue changes, fallback re-claim, send/dispatch parity).
+
+## 1zb. Remediation BE-DISPATCH-02: expired submission claim settled OUTCOME_UNKNOWN, never resubmitted (PR #14): 24-Oct-2026
+
+### 1zb.1 Defect
+- `claimBatch` claims expired leases, so a worker claim could land on a message whose lease expired while still in `submitting` status (e.g. during an uncompleted provider call or worker crash) before `recoverExpiredLeases()` swept it.
+- `processClaim` previously excluded the attempted provider and attempted to submit to the next assigned provider (causing a duplicate submission on fallback), or, if no other provider was assigned, marked the message failed `NO_ELIGIBLE_PROVIDER` while leaving the attempt row in `submitting` status.
+
+### 1zb.2 Remediation
+- Merged to `develop` via PR #14 (commit `554dea370e84fd6b25589d9cb63309eaec03c636`, 24-Oct-2026).
+- `processClaim` detects if the claimed message has an active attempt in `submitting` status whose lease expired (`attempt.status === 'submitting' && leaseExpired`).
+- It settles such a message immediately to `OUTCOME_UNKNOWN` via shared `settleAbandonedSubmission()`, matching the sweeper's settlement semantics, before executing organization-status checks or provider selection.
+- No second provider submission is attempted; no attempt is left orphaned in `submitting` status.
+- No migration required.
+
+### 1zb.3 Verification
+- Verified via `apps/api/test/be-dispatch-02-expired-submission.int-spec.ts` (6/6 passing in disposable clone database; commit `554dea3`):
+  1. Duplicate submission blocked: with secondary provider assigned, settles `OUTCOME_UNKNOWN` without submitting to secondary.
+  2. Single provider: settles `OUTCOME_UNKNOWN` instead of `NO_ELIGIBLE_PROVIDER` with dangling attempt.
+  3. Parity: claim-path settlement matches sweeper's `settleAbandonedSubmission()`.
+  4. Suspended organization: in-flight expired submission settles `OUTCOME_UNKNOWN`, not held.
+  5. Closed organization: in-flight expired submission settles `OUTCOME_UNKNOWN`, not failed.
+  6. Control: unstarted expired lease correctly dispatched once.
+- Verified in CI run `40067932448` (all 5 jobs passing) and local disposable clone verification.
 
 ## 3. Risks explicitly accepted by design (not oversights)
 
