@@ -52,6 +52,10 @@ describe('Dispatch worker in the booted application (B1, ADR-014 D18)', () => {
   beforeAll(async () => {
     h = await startHarness();
     credentials = h.app.get(CredentialService);
+    // Listen once for the suite. Unlistened, supertest opens and closes a
+    // listener per request, and concurrent polls (the two-instance case) can
+    // reach one another just closed: ECONNRESET.
+    await new Promise<void>((resolve) => h.app.getHttpServer().listen(0, resolve));
 
     const [channel] = await h.admin
       .select({ id: schema.channels.id })
