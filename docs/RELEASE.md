@@ -117,9 +117,11 @@ It refuses (exit 1, `user activation refused: <reason>`) unless the operator is 
 ## 6. Upgrade
 
 1. Build and record new images (§5.1) from a green commit.
-2. Back up: `$C exec -T postgres pg_dump -U postgres -d acc -Fc > acc-<date>-pre-<version>.dump`, copied off-host.
-3. Set `ACC_VERSION=<new>`; `$C run --rm migrate` — refuses before applying anything if the recorded history does not match the committed files.
-4. `$C up -d --wait api web`; re-run §9.
+2. Back up: `$C exec -T postgres pg_dump -U postgres -d acc -Fc > acc-<date>-pre-<version>.dump`, copied off-host. Confirm the dump restores (§7) before continuing; without a tested restore there is no rollback after a migration.
+3. Record the current history with the §5.2 history query, before changing anything. Do not assume the entry count from earlier records or documentation; the recorded count decides how many migrations the release will apply.
+4. Set `ACC_VERSION=<new>`; `$C run --rm migrate` — refuses before applying anything if the recorded history does not match the committed files.
+5. **Mandatory history proof.** Before starting `api` or `web`, run the §5.2 history query again and compare it with the expected proof for the release commit (for the current 38-migration baseline, `0000`–`0037`: `38|04b0fac738f24476e76b88a84fd04850`). Record the actual result in the upgrade record. If the count or the hash differs, **stop**: do not start the new application; investigate, or restore the pre-upgrade dump (§7). A proof computed on a disposable database clone shows what the committed migrations produce; it is not evidence of the target database's state.
+6. `$C up -d --wait api web`; re-run §9.
 
 ## 7. Rollback and recovery
 
