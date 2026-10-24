@@ -221,6 +221,10 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
     const DISPATCH_FENCING_0034 = new Set(['app_dispatch_claim_token', 'claim_token']);
     const phase34Fallback = migrations.find((m) => m.n.startsWith('0034_'));
     expect(phase34Fallback).toBeDefined();
+    // Phase 4.3 G-2 (migration 0037): app_dispatch_recipient_block() checks the live claim through claim_token fencing and app_dispatch_claim_token().
+    const DISPATCH_FENCING_0037 = new Set(['app_dispatch_claim_token', 'claim_token']);
+    const phase43Recheck = migrations.find((m) => m.n.startsWith('0037_'));
+    expect(phase43Recheck).toBeDefined();
     expect(
       phase2.flatMap((m) =>
         [...m.sql.matchAll(/\w*(?:credential|secret|passw|api_?key|token)\w*/gi)]
@@ -230,6 +234,7 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
           .filter((x) => !(m === phase32Assignments && DISPATCH_FENCING_0032.has(x[0])))
           .filter((x) => !(m === phase33Dispatch && DISPATCH_FENCING_0033.has(x[0])))
           .filter((x) => !(m === phase34Fallback && DISPATCH_FENCING_0034.has(x[0])))
+          .filter((x) => !(m === phase43Recheck && DISPATCH_FENCING_0037.has(x[0])))
           .map((x) => `${m.n}: ${x[0]}`),
       ),
     ).toEqual([]);
