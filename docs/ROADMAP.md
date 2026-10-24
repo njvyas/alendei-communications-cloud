@@ -545,7 +545,7 @@ Evidence summary (17-Oct-2026, current working tree):
 **Phase 4.3 — G-2 dispatch-time recipient re-check: implementation record.** Status: **IMPLEMENTED for review (not merged); migration `0037` not applied to shared QA or production; Gate F.3 NOT ACCEPTED.** Owner-approved approach B, 24-Oct-2026 (`DECISIONS.md` §1za):
 
 - The dispatcher re-checks suppression and consent on every claim, fallback re-claims included, through `app_dispatch_recipient_block()` (migration `0037`, `EXECUTE` for `acc_dispatch` only, no table grants). A blocked message settles `failed` with `RECIPIENT_SUPPRESSED` or `CONSENT_REVOKED`, with no new attempt and no adapter call.
-- Deploying `0037` moves the QA migration history from 37 to 38 entries; `RELEASE.md` and `docs/qa/INTERNAL_QA_DEPLOYMENT.md` history-proof values are updated with that deployment, not before.
+- QA last recorded `Migrate: 36 verified` at `9cf5872` (23-Oct-2026), so it has neither `0036` nor `0037`; deploying this takes its migration history from 36 to 38 entries. The documented `37|…` proof in `RELEASE.md` and `docs/qa/INTERNAL_QA_DEPLOYMENT.md` has not been observed on QA; the 38-entry value is computed on a disposable clone and recorded with that deployment, not before.
 - Tests: `phase4_3-g2-recipient-recheck.sec-spec.ts`, `phase4_3-g2-dispatch-recheck.int-spec.ts`.
 
 ## 8. Phase 5 — Provider/channel failover
