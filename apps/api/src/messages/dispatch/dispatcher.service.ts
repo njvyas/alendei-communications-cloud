@@ -1,6 +1,11 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ORG_LIFECYCLE_LOCK_CLASS, schema } from '@acc/db';
-import { type AuthPrincipal, type SimulatorBehavior } from '@acc/contracts';
+import {
+  RCS_MESSAGE_TYPES_CAPABILITY,
+  rcsProviderSupports,
+  type AuthPrincipal,
+  type SimulatorBehavior,
+} from '@acc/contracts';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
@@ -328,12 +333,72 @@ export class DispatcherService {
         return { messageId: claim.messageId, outcome: 'failed', error: reason };
       }
 
+      // RCS content eligibility (Phase 4.2): drop providers whose declared
+      // rcs_message_types exclude this message's type. Done before circuit
+      // admission, so an ineligible provider never takes an admission or a
+      // half-open probe slot. No declaration means every type.
+      let candidates = assignments;
+      if (mapping.rcs) {
+        const messageType = mapping.rcs.messageType;
+        const declaredResult = await client.query<{ provider_id: string; value: unknown }>(
+          `SELECT provider_id, value FROM provider_capabilities
+           WHERE capability_key = $1 AND provider_id = ANY($2::uuid[])`,
+          [RCS_MESSAGE_TYPES_CAPABILITY, assignments.map((a) => a.provider_id)],
+        );
+        const declared = new Map(declaredResult.rows.map((r) => [r.provider_id, r.value]));
+        candidates = assignments.filter((a) =>
+          rcsProviderSupports(
+            declared.has(a.provider_id)
+              ? { [RCS_MESSAGE_TYPES_CAPABILITY]: declared.get(a.provider_id) }
+              : {},
+            messageType,
+          ),
+        );
+
+        if (candidates.length === 0) {
+          const priorAttemptsResult = await client.query<{ count: string }>(
+            `SELECT count(*)::text AS count FROM message_attempts WHERE message_id = $1`,
+            [claim.messageId],
+          );
+          const priorAttemptCount = parseInt(priorAttemptsResult.rows[0]?.count ?? '0', 10);
+          await client.query(
+            `UPDATE messages
+             SET status = 'failed',
+                 failure_reason = 'NO_ELIGIBLE_PROVIDER',
+                 completed_at = now(),
+                 updated_at = now()
+             WHERE id = $1`,
+            [claim.messageId],
+          );
+          // The event first: acc_dispatch may write it only while its claim row exists.
+          await client.query(
+            `INSERT INTO message_events (id, org_id, message_id, event_type, payload)
+             VALUES ($1, $2, $3, 'message.failed', $4)`,
+            [
+              uuidv7(),
+              claim.orgId,
+              claim.messageId,
+              JSON.stringify({
+                reason: 'NO_ELIGIBLE_PROVIDER',
+                attempts: priorAttemptCount,
+                details: `No assigned RCS provider carries message type ${messageType}`,
+              }),
+            ],
+          );
+          await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
+            claim.messageId,
+          ]);
+          await client.query('COMMIT');
+          return { messageId: claim.messageId, outcome: 'failed', error: 'NO_ELIGIBLE_PROVIDER' };
+        }
+      }
+
       // Candidate iteration: try candidates in priority order, skipping circuit-refused providers (P3-D13, P3-D14)
       const dbTx = drizzle(client, { schema });
       let selectedProviderId: string | null = null;
       let admission: Awaited<ReturnType<typeof this.providerStateStore.admit>> | null = null;
 
-      for (const candidate of assignments) {
+      for (const candidate of candidates) {
         try {
           const candidateAdmission = await this.providerStateStore.admit(
             dbTx as never,
@@ -473,6 +538,7 @@ export class DispatcherService {
           recipient: message.recipient_address,
           content: mapping.content,
           ...(mapping.sms ? { sms: mapping.sms } : {}),
+          ...(mapping.rcs ? { rcs: mapping.rcs } : {}),
         },
         simulatorBehavior,
       );
