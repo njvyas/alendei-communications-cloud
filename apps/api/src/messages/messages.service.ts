@@ -4,6 +4,7 @@ import {
   PERMISSIONS,
   SMS_CONSTRAINTS,
   calculateSmsSegments,
+  isDispatchableChannel,
   renderTemplate,
   validateDltMetadata,
   validateRcsPayload,
@@ -127,6 +128,16 @@ export class MessagesService {
         );
         const channel = channelResult.rows[0];
         if (!channel || channel.status !== 'active') throw channelNotFound(dto.channelCode);
+        // Fail closed (Phase 4.3, owner decision 24-Oct-2026): a catalogued channel
+        // with no authorized send path is refused before anything is read or stored.
+        if (!isDispatchableChannel(channel.code)) {
+          throw new AppException({
+            status: HttpStatus.UNPROCESSABLE_ENTITY,
+            code: ERROR_CODES.CHANNEL_NOT_SUPPORTED,
+            message: `Channel '${channel.code}' does not support sending messages`,
+            logContext: { channelCode: channel.code },
+          });
+        }
 
         // Determine workspace
         let workspaceId = dto.workspaceId;

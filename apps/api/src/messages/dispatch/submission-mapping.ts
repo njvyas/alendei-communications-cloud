@@ -1,5 +1,6 @@
 import {
   CHANNEL_CODES,
+  isDispatchableChannel,
   validateDltMetadata,
   validateRcsPayload,
   type ChannelCode,
@@ -38,9 +39,16 @@ export function mapMessageForSubmission(channel: ChannelCode, payload: unknown):
       ? (payload as Record<string, unknown>)
       : {};
 
+  // Fail closed (Phase 4.3): a message on a channel with no authorized send path
+  // — one stored before the send path refused it, or written outside the API —
+  // never reaches an adapter.
+  if (!isDispatchableChannel(channel)) {
+    return { ok: false, reason: `CHANNEL_UNSUPPORTED: ${channel}` };
+  }
+
   if (channel === 'rcs') return mapRcs(payload);
 
-  if (channel !== 'sms') {
+  if (channel === 'whatsapp') {
     // Unchanged from Phase 3: `text` when present, otherwise the payload itself.
     const text = 'text' in payloadObj ? String(payloadObj.text) : JSON.stringify(payload);
     return { ok: true, content: { text } };
