@@ -178,7 +178,7 @@ Organization, provider and assignment IDs are shown in the console URLs and deta
 
 ## 11. Cleanup and rollback
 
-- Upgrade to a newer commit: `RELEASE.md` §6 (backup → `migrate` → start). Roll back the application by setting the previous `ACC_VERSION` (no migration in between) or restoring the pre-upgrade dump.
+- Upgrade to a newer commit: `RELEASE.md` §6 (backup and tested restore → record history → `migrate` → history proof → start); sequence and records in `QA_RELEASE_PREPARATION.md`. Roll back the application by setting the previous `ACC_VERSION` (no migration in between) or restoring the pre-upgrade dump.
 - Stop the environment, keeping data: `$C down`.
 - Destroy the environment and its data: `$C down -v` — **irreversible; requires explicit approval**. Afterwards delete `deploy/release.env` and the dumps securely, and revoke any operator SSH access granted for QA.
 
