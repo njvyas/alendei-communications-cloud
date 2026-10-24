@@ -390,7 +390,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 
 ## 6. Phase 3 — WhatsApp
 
-**Status: Phase 3 is formally CLOSED (Gates E.1–E.5 APPROVED; commit `2c6f529` and CI remediation commits `6572820`, `423d122`; GitHub Actions run `38880983348` passed). Phase 4 (SMS + RCS) is NOT STARTED and NOT AUTHORIZED.** Frozen: WhatsApp first; `SimulatorAdapter` only; no real credentials or vendor calls; **provider-to-provider fallback on the same channel is Phase 3 scope** (no delivery-outcome fallback; triggers and termination are open decisions D13/D14); no cross-channel fallback; PostgreSQL is the correctness boundary with polling, recovery and durable invocation fencing, Redis advisory only; a dedicated dispatch principal `acc_dispatch` with token-bound per-message RLS; Phase 1C idempotency reused; Phase 2 CircuitAdmission authoritative; no Kafka/outbox, no WebSocket execution, no campaigns, journeys or billing; **no delivery or webhook processing**; routing weights, routing-policy CRUD, optimization, canary and advanced routing strategy stay out of Phase 3. Increment-level decisions still open are listed in ADR-014 §15. Where the bullets below conflict with ADR-014, ADR-014 governs.
+**Status: Phase 3 is formally CLOSED (Gates E.1–E.5 APPROVED; commit `2c6f529` and CI remediation commits `6572820`, `423d122`; GitHub Actions run `38880983348` passed). At Phase 3 closure, Phase 4 (SMS + RCS) was not started; its current status is in §7.** Frozen: WhatsApp first; `SimulatorAdapter` only; no real credentials or vendor calls; **provider-to-provider fallback on the same channel is Phase 3 scope** (no delivery-outcome fallback; triggers and termination are open decisions D13/D14); no cross-channel fallback; PostgreSQL is the correctness boundary with polling, recovery and durable invocation fencing, Redis advisory only; a dedicated dispatch principal `acc_dispatch` with token-bound per-message RLS; Phase 1C idempotency reused; Phase 2 CircuitAdmission authoritative; no Kafka/outbox, no WebSocket execution, no campaigns, journeys or billing; **no delivery or webhook processing**; routing weights, routing-policy CRUD, optimization, canary and advanced routing strategy stay out of Phase 3. Increment-level decisions still open are listed in ADR-014 §15. Where the bullets below conflict with ADR-014, ADR-014 governs.
 
 
 - **Objectives**: first real channel's routing/eligibility path built end-to-end (still against the simulator, unless/until explicit separate authorization is given to connect a real provider).
@@ -481,7 +481,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 
 ## 7. Phase 4 — SMS + RCS
 
-**Status: Phase 4.1 (Gate F.1) APPROVED by project owner decision, 17-Oct-2026 (ADR-016, `DECISIONS.md` §1w). Phase 4.2 (Gate F.2) and Phase 4.3 (Gate F.3) are NOT STARTED and NOT AUTHORIZED. No migration `0035`+ may be written or applied until migration tooling (G) and history recovery (E) are resolved (`DECISIONS.md` §1w.10).**
+**Status: Phase 4.1 (Gate F.1) APPROVED by project owner decision, 17-Oct-2026 (ADR-016, `DECISIONS.md` §1w). Phase 4.2 (Gate F.2) is IMPLEMENTED and merged to `develop` (Batches 1 and 2, 23–24-Oct-2026, below); Gate F.2 acceptance is PENDING owner review and is not approved. Phase 4.3 (Gate F.3) is IN PROGRESS by owner-authorized batches only (24-Oct-2026: F.3-1 email/voice channel gating; F.3-2/F.3-3 SMS/RCS regression and isolation tests); Gate F.3 is NOT ACCEPTED.** The 17-Oct-2026 migration prerequisite (`DECISIONS.md` §1w.10) is superseded: migration tooling (G) is resolved and history recovery (E) is closed for development (§1x.1); migration `0035` was approved on 21-Oct-2026 (§1x.3) and `0036` was merged with BE-DISPATCH-01 (§1y). Phase 4.2 added no migration.
 - **Provider integrations**: simulator-only; no real credentials, vendor endpoints or external network calls.
 - **Delivery scope**: outbound submission outcomes only; webhooks, handset DLRs and delivery-status progression deferred.
 - **SMS DLT**: bound to the approved SMS template in `templates.variables` (`{ names, dlt }`; legacy arrays still read); a payload may restate it but never supply or override it; no migration.
@@ -495,8 +495,8 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 | Increment | Scope | Deliverables | Status |
 |---|---|---|---|
 | **4.1** | Data & Regulatory Foundation (Gate F.1, ADR-016) | Typed SMS/RCS contracts, GSM-7/UCS-2 segmentation, DLT validation and template binding, template-content binding, RCS rich cards and safe URLs, canonical E.164 normalization, suppression alignment | ✅ APPROVED — Gate F.1, 17-Oct-2026 |
-| **4.2** | Provider Adapters & Eligibility (Gate F.2) | SMS/RCS simulator adapters, channel capability registration, provider assignments | ⛔ NOT STARTED / NOT AUTHORIZED |
-| **4.3** | End-to-End Multi-Channel Dispatch & Verification (Gate F.3) | End-to-end multi-channel dispatch, settlement, and full regression verification | ⛔ NOT STARTED / NOT AUTHORIZED |
+| **4.2** | Provider Adapters & Eligibility (Gate F.2) | SMS/RCS simulator adapters, channel capability registration, provider assignments | 🟡 IMPLEMENTED — merged to `develop` (PR #6, PR #7); Gate F.2 acceptance PENDING |
+| **4.3** | End-to-End Multi-Channel Dispatch & Verification (Gate F.3) | End-to-end multi-channel dispatch, settlement, and full regression verification | 🟡 IN PROGRESS — owner-authorized batches only (24-Oct-2026); Gate F.3 NOT ACCEPTED |
 
 **Gate F.1 — Phase 4.1 Data & Regulatory Foundation acceptance.** Status: **APPROVED** (project owner decision, 17-Oct-2026; D-7 approved and voice E.164 acknowledged the same day). The authoritative record is `DECISIONS.md` §1w:
 - validation rules: §1w.2–§1w.5;
@@ -512,6 +512,27 @@ Evidence summary (17-Oct-2026, current working tree):
 - Integration 153/153 and security 1544/1544, each on both a shared-data `acc` clone and a clean committed-migration clone.
 - typecheck, lint, `format:check`, `openapi:check`, `npm run build` and `git diff --check` all pass.
 - No change under `packages/db`.
+
+**Phase 4.2 — Provider Adapters & Eligibility: implementation record.** Status: **IMPLEMENTED and merged to `develop`; Gate F.2 acceptance PENDING.** Merging is not gate acceptance: Gate F.2 needs a separate owner decision.
+
+- **Batch 1 — SMS dispatch** (PR #6, merge `fa9a5ed`, 23-Oct-2026; commits `244f985`, `5f08dfa`):
+  - The dispatcher resolves the channel from the claimed message instead of assuming WhatsApp.
+  - SMS submissions carry the server-rendered approved template and its bound DLT metadata (`ProviderSubmission.sms`).
+  - The simulator rejects a submission whose channel differs from the provider's.
+  - The organization-closed and no-active-assignment terminal paths now write their `message.failed` event before releasing the queue claim, as the dispatch RLS policy requires.
+- **Batch 2 — RCS dispatch** (PR #7, merge `eca81d0`, 24-Oct-2026; commits `75d55df`, `44246c6`):
+  - RCS submissions carry the validated ADR-016 payload whole (`ProviderSubmission.rcs`).
+  - Stored RCS payloads are re-validated before any attempt.
+  - The provider capability `rcs_message_types` is validated when saved and enforced at dispatch (owner decisions, 23-Oct-2026):
+    - an absent declaration means every type;
+    - incompatible providers are skipped before circuit admission;
+    - with no eligible provider the message settles `NO_ELIGIBLE_PROVIDER` without an attempt;
+    - unsupported content is refused at dispatch, with no submission-API or OpenAPI change.
+  - Fallback stays within the channel and counts only eligible providers.
+- **Scope kept:** simulator-only providers; same-channel provider-to-provider fallback only (cross-channel fallback remains Phase 5); outbound submission outcomes only; no migration.
+- **Evidence:** post-merge CI on `develop`:
+  - run `40002661592` at `fa9a5ed`;
+  - run `40053914870` at `eca81d0`, all five jobs successful — integration 198/198, security 1,589/1,589, database 222/222, `@acc/api` unit 702/702, dependency audit with 0 high.
 
 ## 8. Phase 5 — Provider/channel failover
 
