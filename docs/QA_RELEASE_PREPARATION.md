@@ -47,11 +47,11 @@ Evidence labels: **Observed** (verifiable in GitHub, CI or the repository); **Ag
 
 | # | Item | Automated evidence (Observed) | QA-host evidence | Owner direction (§5a) | Status |
 |---|---|---|---|---|---|
-| F.2-1 | SMS dispatch: approved template and bound DLT; simulator refuses a channel mismatch | PR #6 (CI `40002661592`); PR #11 | QA-K-01 – K-05 (simulator; synthetic DLT IDs test format only) | X-1: approved for QA simulator testing | Blocked: SMS simulator providers not yet created |
-| F.2-2 | RCS dispatch: payload re-validation; `rcs_message_types` enforced | PR #7 (CI `40053914870`); PR #11 | QA-K-06 – K-09 | X-2: approved for QA simulator testing | Blocked: RCS simulator providers not yet created |
+| F.2-1 | SMS dispatch: approved template and bound DLT; simulator refuses a channel mismatch | PR #6 (CI `40002661592`); PR #11 | Agent-run 26-Oct-2026 (§5b): QA-K-01, K-02, K-03, K-05 PASS; K-04 documentation mismatch, corrected, observed behaviour meets the corrected expectation. Synthetic DLT IDs test format only | X-1: approved for QA simulator testing | Agent-run PASS; owner review pending. **Not** evidence of DLT registration or regulatory compliance |
+| F.2-2 | RCS dispatch: payload re-validation; `rcs_message_types` enforced | PR #7 (CI `40053914870`); PR #11 | Agent-run 26-Oct-2026 (§5b): QA-K-06, K-07, K-08 PASS | X-2: approved for QA simulator testing | Agent-run PASS; owner review pending |
 | F.2-3 | Provider assignments panel | API suites above | QA-D-08. Agent-run 24–26-Oct: the operator used the panel to add, disable, enable and re-prioritize assignments (audit log); no screenshots | — | Console screenshots outstanding |
-| F.2-4 | Same-channel fallback over eligible providers | PR #7; PR #11 | WhatsApp: Agent-run 26-Oct-2026 QA-F-01 – F-05 PASS (`whatsapp/`, `fallback-f02-f04/`). SMS/RCS: QA-K-05, K-09 | X-3: approved for QA simulator testing | WhatsApp agent-run PASS; SMS/RCS blocked as F.2-1/2 |
-| F.3-1 | Email and voice sends refused (`422 CHANNEL_NOT_SUPPORTED`) | PR #10 | QA-K-10, K-11 | T-1: approved in principle | Blocked: QA-lead confirmation |
+| F.2-4 | Same-channel fallback over eligible providers | PR #7; PR #11 | WhatsApp: Agent-run 26-Oct-2026 QA-F-01 – F-05 PASS (`whatsapp/`, `fallback-f02-f04/`). SMS/RCS: Agent-run 26-Oct-2026 QA-K-05, K-09 PASS (same channel only; eligible providers only, K-08) | X-3: approved for QA simulator testing | Agent-run PASS (WhatsApp, SMS, RCS); owner review pending |
+| F.3-1 | Email and voice sends refused (`422 CHANNEL_NOT_SUPPORTED`) | PR #10 | QA-K-10, K-11 | T-1: approved in principle | Blocked: named and dated QA-lead confirmation not recorded (requested 26-Oct-2026); not run |
 | F.3-2/3 | SMS/RCS worker, fencing, recovery, idempotency, isolation | PR #11 | Not practical on the host | X-4: automated-only exception approved in principle | Exception; residual risk: live-host concurrency **not verified** |
 | F.3-4 | G-2 recipient re-check at dispatch (migration `0037`) | PR #12: 11 security and 8 integration tests; mutation checks; CI `40066676777` | No supported way to hold a queued message on QA | X-5: automated-only exception approved in principle | Exception; residual risk: the live race window between queueing and claim is not exercised |
 | F.3-5 | BE-DISPATCH-02: no resubmission after an expired submission lease | PR #14: 6 tests (5 fail on the pre-fix code); 40/40 repeated runs under load; CI `40066664676` | Planned operator-window variant (QA-I-01 with `QA Sim Timeout` p1, `QA Sim OK` p2). It cannot force the claim-before-recovery path | X-6: approved to plan an operator window | Blocked: operator window not agreed |
@@ -79,6 +79,27 @@ Recorded from the project owner's direction of 26-Oct-2026. These directions do 
 | D5 | Deferred | The workstation copy is not approved storage |
 | Console checklist | Proceed | Named testers, screenshots, at least three usability testers |
 | P3-D22/P3-D24 | Open | No real WhatsApp provider integration authorized |
+
+### 5b. Phase B results: SMS, RCS and fallback (26-Oct-2026)
+
+**Agent-run** (executed by Claude Code; not independent verification) on `2026.10.24-441a29a`, 06:35–06:40 UTC. Organization *QA Org A2*, persona `qa-org-a2-admin`, through the API, simulator providers only, synthetic recipients `+1 202 555 03xx`. Evidence: `~/acc-evidence/2026-10-26-qa-acceptance/phase-b/` on the operator workstation, listed in `MANIFEST.sha256` (manifest SHA-256 `33c763d59bd49632e0dc7b45bdcb74054b36b2e371b89cd8c223379616ebc1bd`); not copied into Git.
+
+| Test | Result | Evidence file |
+|---|---|---|
+| QA-K-01 SMS template send (server-rendered text, template DLT stored) | PASS | `01-run-k01-k07-k09.txt`, `02-run-k01-recheck-k04.txt` |
+| QA-K-02 SMS without template refused | PASS | `01-…` |
+| QA-K-03 text override and missing variable refused; nothing stored | PASS | `01-…` |
+| QA-K-04 invalid DLT never approved | **Documentation mismatch, corrected.** The previous expected result (refusal at approval) did not match. Observed: refused at creation (`400 VALIDATION_FAILED`, `dlt.entityId`); approval without DLT refused (`422 SMS_DLT_METADATA_REQUIRED`). Meets the corrected expectation | `02-…` |
+| QA-K-05 SMS fallback, SMS providers only | PASS | `01-…` |
+| QA-K-06 RCS text send | PASS | `01-…` |
+| QA-K-07 unsafe URL and unknown field refused; nothing stored | PASS | `01-…` |
+| QA-K-08 `rcs_message_types` restriction (no attempt) | PASS | `03-…`, `04-run-k08.txt`, `04-k08-logs-events.txt` |
+| QA-K-09 RCS fallback, RCS providers only | PASS | `01-…` |
+| QA-K-10, K-11 email/voice refusal (T-1) | **BLOCKED**: QA-lead confirmation | — |
+
+- **Record counts:** Org A2's messages went from 24 to 30, exactly the six accepted or failed test sends; no refusal stored a record. The queue is empty, and no API error-level log was recorded from 06:30 UTC.
+- **Configuration:** before and after states, with the operator's audit trail, are in `00-config-before.txt`, `00-audit-setup.txt` and `05-config-after.txt`. An operator slip (two WhatsApp assignments enabled at 06:32) was reversed by the operator at 06:39. Final Org A2 state: SMS `QA SMS 500` p1, `QA SMS OK` p2; RCS `QA RCS 500` p1, `QA RCS OK` p2, `QA RCS Text Only` p3 disabled; WhatsApp `QA Sim 500` p1, `QA Sim OK` p2, others disabled.
+- **Synthetic DLT limitation:** the DLT identifiers are fabricated numeric strings. They show format validation only, not DLT registration or TRAI compliance.
 
 ## 6. Upgrade sequence
 
