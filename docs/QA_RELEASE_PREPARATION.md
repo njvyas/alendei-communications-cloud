@@ -60,6 +60,8 @@ Evidence labels: **Observed** (verifiable in GitHub, CI or the repository); **Ag
 | F.3-8 | Full regression on the release commit | CI `40067932448` (`554dea3`); docs-only since | Agent-run API checks (sign-in, isolation, WhatsApp C/E/F, masking). Console sections A–J outstanding | Console checklist: proceed | Partial |
 | F.3-9 | Deployment controls: exposure, TLS, startup checks, accounts, secrets, backup | — | Agent-run 24-Oct-2026: loopback-only ports, startup principal check, dispatch-credential refusal, health, restart, 0 secret values in logs. TLS, D2 and D5 items open | D1/D2 routed; D5 deferred | Partial; depends on D1, D2, D5 |
 
+Findings from QA testing, with their development issues and dispositions, are tracked in `qa/QA_FINDINGS_REGISTER.md`.
+
 ### 5a. Owner decision record (26-Oct-2026)
 
 Recorded from the project owner's direction of 26-Oct-2026. These directions do not replace infrastructure-owner, QA-lead or other designated approvals.
