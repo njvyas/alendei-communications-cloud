@@ -2184,7 +2184,7 @@ Because migration `0019` granted EXECUTE on `app_has_platform_permission` only t
 
 ### 1y.3 Documentation Alignment (PR #4) — CLOSED
 - **PR #4:** https://github.com/njvyas/alendei-communications-cloud/pull/4 (merged at `5a556cbcf0279afa04440131f9dd1e7c17c5dcf8`).
-- Updated stale 36-migration expectations to 37 migrations and verified SHA-256 proof hash (`37|dc08b3f0bf5bfc870f8bc442f132c5f3`) across `RELEASE.md` and `docs/qa/INTERNAL_QA_DEPLOYMENT.md`.
+- Updated stale 36-migration expectations to 37 migrations and the migration-history proof (`37|dc08b3f0bf5bfc870f8bc442f132c5f3`) across `RELEASE.md` and `docs/qa/INTERNAL_QA_DEPLOYMENT.md`. *Correction (26-Oct-2026):* the proof is `count|md5(…)` over the recorded history (`RELEASE.md` §5.2), not a SHA-256 hash; this value was computed on a disposable clone, never verified on QA, and is superseded by `38|04b0fac738f24476e76b88a84fd04850` (verified on QA on 24-Oct-2026, `QA_RELEASE_PREPARATION.md` §1).
 
 ### 1y.4 Sim 500 Acceptance Verification — PASS / CLOSED
 - **Status:** **Closed — acceptance evidence recorded** (23-Oct-2026).

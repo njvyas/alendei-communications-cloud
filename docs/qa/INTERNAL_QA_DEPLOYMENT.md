@@ -2,7 +2,7 @@
 
 Purpose: a dedicated, internal-only ACC environment in which the QA team validates the current implementation and records functional, security and usability findings (`QA_TEST_PLAN.md`, `USABILITY_FEEDBACK_TEMPLATE.md`). It is **not** the external MVP and not production. It uses a fresh database; the shared development database is never reused, copied or reset.
 
-Baseline: commit `554dea370e84fd6b25589d9cb63309eaec03c636` on `develop`, CI run 40067932448 green (all five jobs). Deploy only that commit, or a later one with its own green CI run.
+Baseline: commit `554dea370e84fd6b25589d9cb63309eaec03c636` on `develop`, CI run 40067932448 green (all five jobs). Deploy only that commit, or a later one with its own green CI run. QA currently runs `2026.10.24-441a29a` (commit `441a29a`, same application code; deployed 24-Oct-2026, `QA_RELEASE_PREPARATION.md` §1).
 
 Artifacts reused unchanged: `deploy/api.Dockerfile`, `deploy/web.Dockerfile`, `deploy/compose.release.yml`, `deploy/release.env.example`. The general procedure is `docs/RELEASE.md`; this runbook fixes the QA-specific values and adds the QA account, data and verification steps.
 
@@ -29,6 +29,8 @@ C="docker compose -f deploy/compose.release.yml --env-file deploy/release.env"
 | Access | SSH restricted to named operators; the repository checked out at the baseline commit |
 
 ## 3. DNS, HTTPS and reverse proxy
+
+**QA Round 1 interim (D1, pending infrastructure-owner approval):** QA is reached over HTTPS by IP address, without a DNS name, with a certificate from a private QA root CA that each QA browser must trust. Where this runbook shows `acc-qa.<internal domain>`, substitute the approved QA address; live values are kept outside Git. Moving to a DNS name requires rebuilding the console image (`QA_RELEASE_PREPARATION.md` §2).
 
 1. Internal DNS name, e.g. `acc-qa.<internal domain>`, resolving only on the internal network.
 2. Certificate from the internal CA (or the organization's certificate service) trusted by QA browsers.
@@ -92,6 +94,8 @@ Never run `docker compose … config` where the output is shared: it prints reso
 
 ## 7. QA accounts and the five-scope RBAC setup
 
+*QA Org A* (`qa-org-a`) is **closed** and must not be used. QA Round 1 uses *QA Org A2* (`qa-org-a2`), *QA Org B2* (`qa-org-b2`) and *QA Org C* (`qa-org-c`, organization-lifecycle tests); personas are named after their organization (`qa-org-a2-admin`, `qa-org-b2-admin`, …), as in `QA_TEST_PLAN.md`.
+
 All accounts are created through the console or API as described, then activated by the operator (`RELEASE.md` §5a). Passwords are generated per person and handed over out of band. Use one account per tester per persona; never share accounts.
 
 | Scope | Persona | How it is created | Notes |
@@ -99,10 +103,10 @@ All accounts are created through the console or API as described, then activated
 | PLATFORM | `qa-platform-admin` (`alendei_super_admin`) | `bootstrap` (the operator) | Creates organizations, appoints org admins, manages providers |
 | PLATFORM | `qa-platform-support` (`alendei_support`, read-only) | operator: `POST /users` with a platform initial role is **not** supported by `activate-user` (platform grants are refused) | **Limited:** a second platform persona can only be created by the bootstrap path or an owner-run step; treat platform-support tests as deferred unless approved |
 | RESELLER | `qa-reseller-admin` (`reseller_admin` on *Alendei Direct*) | platform admin: create user with reseller-scope initial role | **Limited:** `activate-user` refuses users holding reseller grants (tenant users only), so this persona cannot be activated in this release. Reseller-scope tests are **deferred** (decision D4). There is also no API to create a second reseller |
-| ORGANIZATION | `qa-org-a-admin`, `qa-org-b-admin` (`org_admin`) | platform admin creates *QA Org A* and *QA Org B*, then each admin with initial role `org_admin` | Then `activate-user` |
-| WORKSPACE | `qa-org-a-ws-manager` (`workspace_manager` at workspace scope) | org A admin creates workspace *QA WS 2* and the user | `activate-user` |
-| TEAM | `qa-org-a-team-reader` (`read_only` at team scope), `qa-org-a-agent` (`agent` at team scope) | org A admin creates team *QA Team 1* in *QA WS 2* and the users | `activate-user` |
-| ORGANIZATION | `qa-org-a-reader` (`read_only` at organization scope) | org A admin | `activate-user` |
+| ORGANIZATION | `qa-org-a2-admin`, `qa-org-b2-admin` (`org_admin`) | platform admin creates *QA Org A2* and *QA Org B2*, then each admin with initial role `org_admin` | Then `activate-user` (both active since 24-Oct-2026) |
+| WORKSPACE | `qa-org-a2-ws-manager` (`workspace_manager` at workspace scope) | org A2 admin creates workspace *QA WS 2* and the user | `activate-user` |
+| TEAM | `qa-org-a2-team-reader` (`read_only` at team scope), `qa-org-a2-agent` (`agent` at team scope) | org A2 admin creates team *QA Team 1* in *QA WS 2* and the users | `activate-user` |
+| ORGANIZATION | `qa-org-a2-reader` (`read_only` at organization scope) | org A2 admin | `activate-user` |
 
 Activation example (operator, on the host):
 
@@ -115,7 +119,8 @@ read -rs PW; printf '%s\n' "$PW" | $C run --rm -T activate-user \
 
 Created by the testers themselves as part of `QA_TEST_PLAN.md` (sections C–F), so creation is tested too. Reference set:
 
-- Providers (platform admin): WhatsApp simulator providers `QA Sim OK` (no capability), `QA Sim 500` (`simulator_behavior: 500`), `QA Sim Timeout` (`TIMEOUT`), `QA Sim 429` (`429`); enabled. Assignments: Org A → `QA Sim 500` priority 1, `QA Sim OK` priority 2; Org B → `QA Sim OK`.
+- Providers (platform admin): WhatsApp simulator providers `QA Sim OK` (no capability), `QA Sim 500` (`simulator_behavior: 500`), `QA Sim Timeout` (`TIMEOUT`), `QA Sim 429` (`429`); enabled. Assignments: Org A2 → `QA Sim 500` priority 1, `QA Sim OK` priority 2; Org B2 → `QA Sim OK`. Assignments cannot be deleted and priorities are unique per organization and channel even when disabled, so tests that need other providers add them at unused priorities and leave them disabled afterwards (26-Oct-2026 state: Org A2 also has `QA Sim Timeout` p3 and `QA Sim 429` p11, both disabled).
+- SMS and RCS simulator providers and the synthetic-DLT SMS template: `QA_TEST_PLAN.md` section K prerequisites (owner direction 26-Oct-2026; synthetic DLT IDs test format only).
 - Contacts: 10 per organization, names `QA Contact NN`, phones `+1202555 01NN`, consent recorded for half of them.
 - Templates: 3 per organization (`qa_welcome`, `qa_otp`, `qa_promo`), moved through draft → pending → approved / rejected with the simulated approval.
 - Messages: sent from the WhatsApp console; nothing leaves the host.
@@ -186,11 +191,11 @@ Organization, provider and assignment IDs are shown in the console URLs and deta
 
 | # | Decision | Recommendation |
 |---|---|---|
-| D1 | Host, internal DNS name, certificate source, VPN/IP ranges, operator SSH access | owner/infra to provide |
-| D2 | Named QA platform operator (bootstrap email) | one named person |
+| D1 | Host, internal DNS name, certificate source, VPN/IP ranges, operator SSH access | owner/infra to provide. **26-Oct-2026:** IP-only interim routed for infrastructure-owner approval; not closed |
+| D2 | Named QA platform operator (bootstrap email) | one named person. **26-Oct-2026:** routed for recording in the access register; not closed |
 | D3 | Sign-in rate limit for a QA team behind one egress address | keep the default first; if 429s block testing, raise `RATE_LIMIT_AUTH_MAX` for this environment only (configuration, no code) |
 | D4 | Reseller and second platform personas cannot be activated in this release (`activate-user` is tenant-only) | accept as deferred for QA round 1, or approve a bounded change to admit them |
-| D5 | Backup destination and retention for QA dumps | an internal location, kept for the QA phase |
+| D5 | Backup destination and retention for QA dumps | an internal location, kept for the QA phase. **26-Oct-2026:** deferred; the workstation copy is not approved storage |
 
 ## 13. Internal deployment acceptance checklist
 
@@ -198,12 +203,12 @@ Organization, provider and assignment IDs are shown in the console URLs and deta
 |---|---|---|
 | 1 | Baseline | deployed commit = CI-green commit; image IDs recorded |
 | 2 | Exposure | only 443 internal/VPN and restricted 22 inbound; `docker ps` shows only the two loopback ports |
-| 3 | TLS | `https://acc-qa.<internal domain>/login` loads with a trusted certificate; `/metrics` returns 404 through the proxy |
-| 4 | Fresh install | migrate 38, history proof exact (`38|04b0fac738f24476e76b88a84fd04850`), roles, seed, bootstrap (re-run reports *Already bootstrapped*) |
+| 3 | TLS | The approved QA address (DNS name, or IP address under the D1 interim) serves `/login` with a certificate trusted by QA browsers (private QA root CA installed); `/metrics` returns 404 through the proxy |
+| 4 | Database | **Fresh install:** migrate 38, history proof exact (`38|04b0fac738f24476e76b88a84fd04850`), roles, seed, bootstrap (re-run reports *Already bootstrapped*). **Upgrade:** live history recorded before `migrate`; only the missing migrations applied; proof exact afterwards; no seed or bootstrap (`RELEASE.md` §6) |
 | 5 | Startup controls | principals verified line; a deliberately invalid dispatch credential (`RELEASE.md` §9.2) refuses start |
 | 6 | Health | `/health/ready` ok from the host |
 | 7 | Accounts | every persona in §7 that is supported is created, activated and can sign in |
-| 8 | Smoke | Org A admin sends a message that reaches `PROVIDER_ACCEPTED`; Org B admin gets 404 for it |
+| 8 | Smoke | Org A2 admin sends a message that reaches `PROVIDER_ACCEPTED`; Org B2 admin gets 404 for it |
 | 9 | Restart | §10 restart check passes |
 | 10 | Secrets | `$C logs` contains none of the values in `release.env` (operator check with a local script; never paste values) |
 | 11 | Backup | first dump taken and restorable |
