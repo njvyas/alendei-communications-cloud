@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ApiError, contactsApi, workspacesApi, type ListContactsParams } from '@/lib/api-client';
 import { useCanManageContacts, useCanReadContacts, useSession } from '@/lib/session-store';
@@ -11,6 +11,12 @@ import {
   shouldShowCreatedContactNotice,
   type CreatedContactRecord,
 } from '@/components/contacts/contact-created-notice';
+import {
+  EMPTY_PAGER,
+  cursorStackFor,
+  resolveActiveWorkspaceId,
+  type ContactsPager,
+} from '@/components/contacts/workspace-selection';
 import type { ContactResponse } from '@acc/contracts';
 
 export default function ContactsPage() {
@@ -18,35 +24,51 @@ export default function ContactsPage() {
   const canManageContacts = useCanManageContacts();
   const selectedOrganizationId = useSession((state) => state.selectedOrganizationId);
 
-  // Workspaces list query
-  const { data: workspacesData, isLoading: isWorkspacesLoading } = useQuery({
-    queryKey: ['workspaces', 'list', { limit: 50 }],
+  // Workspaces of the active organization only (keyed by it, like MessageListCard)
+  const {
+    data: workspacesData,
+    isLoading: isWorkspacesLoading,
+    isSuccess: areWorkspacesLoaded,
+  } = useQuery({
+    queryKey: ['workspaces', 'list', selectedOrganizationId, { limit: 50 }],
     queryFn: ({ signal }) => workspacesApi.list({ limit: 50 }, signal),
-    enabled: canReadContacts,
+    enabled: Boolean(canReadContacts && selectedOrganizationId),
   });
 
   const workspaces = workspacesData?.data ?? [];
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>('');
 
-  // Automatically select first active workspace when loaded
-  useEffect(() => {
-    if (!selectedWorkspaceId && workspaces.length > 0) {
-      setSelectedWorkspaceId(workspaces[0]!.id);
-    }
-  }, [selectedWorkspaceId, workspaces]);
-
-  // Keyset cursor pagination history stack
-  const [cursorStack, setCursorStack] = useState<string[]>([]);
-  const currentCursor = cursorStack.length > 0 ? cursorStack[cursorStack.length - 1] : undefined;
+  // Keyset cursor pagination history, bound to the workspace it was built for
+  const [pager, setPager] = useState<ContactsPager>(EMPTY_PAGER);
 
   // Dialog states
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [consentTargetContact, setConsentTargetContact] = useState<ContactResponse | null>(null);
   const [createdRecord, setCreatedRecord] = useState<CreatedContactRecord | null>(null);
 
+  // State adjustment during render when the organization changes (React recommended
+  // pattern, as in MessageListCard): no render under the new organization may use the
+  // previous organization's workspace, page or created-contact notice.
+  const [prevOrganizationId, setPrevOrganizationId] = useState(selectedOrganizationId);
+  const organizationChanged = selectedOrganizationId !== prevOrganizationId;
+  if (organizationChanged) {
+    setPrevOrganizationId(selectedOrganizationId);
+    setSelectedWorkspaceId('');
+    setPager(EMPTY_PAGER);
+    setCreatedRecord(null);
+  }
+
+  // Only a workspace fetched for the active organization is ever used ('' = none).
+  const activeWorkspaceId = resolveActiveWorkspaceId(
+    organizationChanged ? '' : selectedWorkspaceId,
+    workspaces,
+  );
+  const cursorStack = cursorStackFor(pager, activeWorkspaceId);
+  const currentCursor = cursorStack.length > 0 ? cursorStack[cursorStack.length - 1] : undefined;
+
   const handleWorkspaceChange = (newWsId: string) => {
     setSelectedWorkspaceId(newWsId);
-    setCursorStack([]);
+    setPager(EMPTY_PAGER);
     setCreatedRecord(null);
   };
 
@@ -56,19 +78,23 @@ export default function ContactsPage() {
   };
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
-    queryKey: ['contacts', 'list', selectedWorkspaceId, queryParams],
-    queryFn: ({ signal }) => contactsApi.list(selectedWorkspaceId, queryParams, signal),
-    enabled: Boolean(canReadContacts && selectedWorkspaceId),
+    // Workspace stays the third key element: creation invalidates ['contacts', 'list', workspaceId].
+    queryKey: ['contacts', 'list', activeWorkspaceId, selectedOrganizationId, queryParams],
+    queryFn: ({ signal }) => contactsApi.list(activeWorkspaceId, queryParams, signal),
+    enabled: Boolean(canReadContacts && selectedOrganizationId && activeWorkspaceId),
   });
 
   const handleNextPage = () => {
     if (data?.page.nextCursor) {
-      setCursorStack((prev) => [...prev, data.page.nextCursor!]);
+      setPager({
+        workspaceId: activeWorkspaceId,
+        cursorStack: [...cursorStack, data.page.nextCursor],
+      });
     }
   };
 
   const handlePrevPage = () => {
-    setCursorStack((prev) => prev.slice(0, -1));
+    setPager({ workspaceId: activeWorkspaceId, cursorStack: cursorStack.slice(0, -1) });
   };
 
   if (!canReadContacts) {
@@ -101,7 +127,7 @@ export default function ContactsPage() {
           </p>
         </div>
 
-        {canManageContacts && selectedWorkspaceId && (
+        {canManageContacts && activeWorkspaceId && (
           <button
             type="button"
             onClick={() => setIsCreateOpen(true)}
@@ -124,7 +150,7 @@ export default function ContactsPage() {
           </label>
           <select
             id="select-workspace"
-            value={selectedWorkspaceId}
+            value={activeWorkspaceId}
             onChange={(e) => handleWorkspaceChange(e.target.value)}
             disabled={isWorkspacesLoading || workspaces.length === 0}
             className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] px-2.5 py-1 text-xs text-[var(--color-ink)]"
@@ -144,7 +170,7 @@ export default function ContactsPage() {
         <button
           type="button"
           onClick={() => refetch()}
-          disabled={isFetching || !selectedWorkspaceId}
+          disabled={isFetching || !activeWorkspaceId}
           className="rounded-md border border-[var(--color-border-subtle)] px-2.5 py-1 text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-raised)]"
         >
           {isFetching ? 'Refreshing…' : 'Refresh'}
@@ -152,11 +178,7 @@ export default function ContactsPage() {
       </div>
 
       {/* Created-contact notice (QAF-019) */}
-      {shouldShowCreatedContactNotice(
-        createdRecord,
-        selectedOrganizationId,
-        selectedWorkspaceId,
-      ) && (
+      {shouldShowCreatedContactNotice(createdRecord, selectedOrganizationId, activeWorkspaceId) && (
         <ContactCreatedNotice
           contact={createdRecord.contact}
           canManageContacts={canManageContacts}
@@ -178,7 +200,7 @@ export default function ContactsPage() {
       )}
 
       {/* No workspaces warning */}
-      {!isWorkspacesLoading && workspaces.length === 0 && (
+      {areWorkspacesLoaded && workspaces.length === 0 && (
         <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-8 text-center shadow-xs">
           <p className="text-xs text-[var(--color-ink-muted)]">
             No workspaces exist in this organization. Contacts are workspace-scoped under Model B.
@@ -188,7 +210,7 @@ export default function ContactsPage() {
       )}
 
       {/* Contacts Table */}
-      {selectedWorkspaceId && (
+      {activeWorkspaceId && (
         <div className="overflow-hidden rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] shadow-xs">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs" data-testid="contacts-table">
@@ -288,7 +310,7 @@ export default function ContactsPage() {
       <ContactCreateDialog
         open={isCreateOpen}
         onOpenChange={setIsCreateOpen}
-        workspaceId={selectedWorkspaceId}
+        workspaceId={activeWorkspaceId}
         onCreated={(contact) =>
           setCreatedRecord({ contact, organizationId: selectedOrganizationId })
         }
