@@ -48,7 +48,7 @@ The single list of findings from ACC QA testing. Each finding is traced to its e
 | Dependency | Required before | Status |
 |---|---|---|
 | QA-lead confirmation for T-1 | QA-K-10, QA-K-11 | Resolved 26-Oct-2026 by an AI-agent acting-QA-lead decision, **not** a human sign-off (`QA_RELEASE_PREPARATION.md` §5c). K-10 and K-11 PASS at API level |
-| Database-table no-storage check for QA-K-10 and K-11 | Completing the T-1 evidence | **PENDING**: needs operator SSH access |
+| Database-table no-storage check for QA-K-10 and K-11 | Completing the T-1 evidence | **VERIFIED (Agent-run, 26-Oct-2026 09:04 UTC)**: no email or voice rows in any organization; no rows created in the test window (`t1/02-db-check.txt`). The T-1 authorization remains an AI-agent decision, not a human QA-lead sign-off |
 | Agreed operator window | X-6, QA-I-01 – I-03 | Not agreed |
 | Named testers, screenshots, usability feedback from at least three testers | Console sections A–J | Not arranged |
 | D1, D2 records and approvals | F.3-9 | Routed for approval; not closed |
