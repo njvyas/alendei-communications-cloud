@@ -3,14 +3,20 @@
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ApiError, contactsApi, workspacesApi, type ListContactsParams } from '@/lib/api-client';
-import { useCanManageContacts, useCanReadContacts } from '@/lib/session-store';
+import { useCanManageContacts, useCanReadContacts, useSession } from '@/lib/session-store';
 import { ContactCreateDialog } from '@/components/contacts/contact-create-dialog';
 import { ContactConsentDialog } from '@/components/contacts/contact-consent-dialog';
+import {
+  ContactCreatedNotice,
+  shouldShowCreatedContactNotice,
+  type CreatedContactRecord,
+} from '@/components/contacts/contact-created-notice';
 import type { ContactResponse } from '@acc/contracts';
 
 export default function ContactsPage() {
   const canReadContacts = useCanReadContacts();
   const canManageContacts = useCanManageContacts();
+  const selectedOrganizationId = useSession((state) => state.selectedOrganizationId);
 
   // Workspaces list query
   const { data: workspacesData, isLoading: isWorkspacesLoading } = useQuery({
@@ -36,10 +42,12 @@ export default function ContactsPage() {
   // Dialog states
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [consentTargetContact, setConsentTargetContact] = useState<ContactResponse | null>(null);
+  const [createdRecord, setCreatedRecord] = useState<CreatedContactRecord | null>(null);
 
   const handleWorkspaceChange = (newWsId: string) => {
     setSelectedWorkspaceId(newWsId);
     setCursorStack([]);
+    setCreatedRecord(null);
   };
 
   const queryParams: ListContactsParams = {
@@ -142,6 +150,20 @@ export default function ContactsPage() {
           {isFetching ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
+
+      {/* Created-contact notice (QAF-019) */}
+      {shouldShowCreatedContactNotice(
+        createdRecord,
+        selectedOrganizationId,
+        selectedWorkspaceId,
+      ) && (
+        <ContactCreatedNotice
+          contact={createdRecord.contact}
+          canManageContacts={canManageContacts}
+          onManageConsent={setConsentTargetContact}
+          onDismiss={() => setCreatedRecord(null)}
+        />
+      )}
 
       {/* Error state */}
       {error && (
@@ -267,6 +289,9 @@ export default function ContactsPage() {
         open={isCreateOpen}
         onOpenChange={setIsCreateOpen}
         workspaceId={selectedWorkspaceId}
+        onCreated={(contact) =>
+          setCreatedRecord({ contact, organizationId: selectedOrganizationId })
+        }
       />
 
       <ContactConsentDialog
