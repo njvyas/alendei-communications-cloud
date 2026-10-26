@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ORG_LIFECYCLE_LOCK_CLASS, schema } from '@acc/db';
 import {
+  ERROR_CODES,
   RCS_MESSAGE_TYPES_CAPABILITY,
   rcsProviderSupports,
   type AuthPrincipal,
@@ -12,6 +13,7 @@ import { Pool, type PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { uuidv7 } from 'uuidv7';
 
+import { AppException } from '../../common/errors/app.exception';
 import { DISPATCH_POOL } from '../../database/database.tokens';
 import { ProviderSubmissionExecutor } from '../../provider-adapters/submission-executor';
 import { ProviderStateStore } from '../../providers/provider-state.store';
@@ -36,6 +38,28 @@ function failureLogEntry(
     error: error instanceof Error ? error.message : String(error),
     ...(typeof code === 'string' && SQLSTATE.test(code) ? { code } : {}),
   };
+}
+
+/**
+ * Admission refused because the provider is not `active` (disabled or draining):
+ * `ProviderStateStore.admit` raises PROVIDER_LIFECYCLE_CONFLICT for exactly this,
+ * before the circuit is consulted. An eligibility outcome, not a fault (issue #20).
+ */
+function isProviderLifecycleRefusal(error: unknown): error is AppException {
+  return error instanceof AppException && error.code === ERROR_CODES.PROVIDER_LIFECYCLE_CONFLICT;
+}
+
+/**
+ * The `message.failed` details when no candidate was admitted, from the observed
+ * outcomes (issue #20). Without a lifecycle refusal the existing wording is kept.
+ */
+function noEligibleProviderDetails(outcomes: {
+  readonly lifecycle: number;
+  readonly other: number;
+}): string {
+  if (outcomes.lifecycle === 0) return 'All assigned provider circuits refused admission';
+  if (outcomes.other === 0) return 'No assigned provider is active (disabled or draining)';
+  return 'No assigned provider was admitted: some are not active (disabled or draining), the others were refused admission';
 }
 
 export interface DispatchClaim {
@@ -476,10 +500,12 @@ export class DispatcherService {
         }
       }
 
-      // Candidate iteration: try candidates in priority order, skipping circuit-refused providers (P3-D13, P3-D14)
+      // Candidate iteration: try candidates in priority order, skipping providers that are
+      // not active or whose circuit refuses admission (P3-D13, P3-D14; issue #20)
       const dbTx = drizzle(client, { schema });
       let selectedProviderId: string | null = null;
       let admission: Awaited<ReturnType<typeof this.providerStateStore.admit>> | null = null;
+      const refusals = { lifecycle: 0, other: 0 };
 
       for (const candidate of candidates) {
         try {
@@ -493,22 +519,32 @@ export class DispatcherService {
             admission = candidateAdmission;
             break;
           }
+          refusals.other++;
           this.logger.warn({
             msg: 'Provider circuit refused admission; trying next candidate',
             providerId: candidate.provider_id,
             state: candidateAdmission.state,
           });
         } catch (admitErr) {
+          if (isProviderLifecycleRefusal(admitErr)) {
+            refusals.lifecycle++;
+            this.logger.warn({
+              msg: 'Provider is not active (disabled or draining); trying next candidate',
+              providerId: candidate.provider_id,
+              status: admitErr.details?.status,
+            });
+            continue;
+          }
+          refusals.other++;
           this.logger.error({
-            msg: 'Error checking circuit admission for provider',
+            ...failureLogEntry('Error checking circuit admission for provider', admitErr),
             providerId: candidate.provider_id,
-            error: String(admitErr),
           });
         }
       }
 
       if (!selectedProviderId || !admission) {
-        // Every candidate skipped because circuit admission refused (P3-D14)
+        // No candidate admitted: not active, circuit-refused or admission failed (P3-D14; issue #20)
         await client.query(
           `UPDATE messages
            SET status = 'failed',
@@ -527,7 +563,7 @@ export class DispatcherService {
             claim.messageId,
             JSON.stringify({
               reason: 'NO_ELIGIBLE_PROVIDER',
-              details: 'All assigned provider circuits refused admission',
+              details: noEligibleProviderDetails(refusals),
             }),
           ],
         );
