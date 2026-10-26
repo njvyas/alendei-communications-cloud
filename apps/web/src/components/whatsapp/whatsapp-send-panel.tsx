@@ -2,8 +2,10 @@
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ApiError, messagesApi, templatesApi, workspacesApi } from '@/lib/api-client';
-import { useCanSendMessages } from '@/lib/session-store';
+import { ApiError, channelsApi, messagesApi, templatesApi, workspacesApi } from '@/lib/api-client';
+import { useCanSendMessages, useSession } from '@/lib/session-store';
+import { resolveActiveWorkspaceId } from '@/components/contacts/workspace-selection';
+import { approvedWhatsAppTemplates, findWhatsAppChannelId } from './whatsapp-templates';
 
 interface WhatsAppSendPanelProps {
   onMessageDispatched: (messageId: string) => void;
@@ -15,6 +17,7 @@ export function WhatsAppSendPanel({
   activeMessageId: _activeMessageId,
 }: WhatsAppSendPanelProps) {
   const canSendMessages = useCanSendMessages();
+  const selectedOrganizationId = useSession((state) => state.selectedOrganizationId);
 
   // State
   const [workspaceId, setWorkspaceId] = useState('');
@@ -28,24 +31,63 @@ export function WhatsAppSendPanel({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [manualMessageId, setManualMessageId] = useState('');
 
-  // Fetch workspaces
+  // State adjustment during render when the organization changes (React recommended
+  // pattern, as in MessageListCard and the contacts page): no render under the new
+  // organization may use the previous organization's workspace, template or variables.
+  const [prevOrganizationId, setPrevOrganizationId] = useState(selectedOrganizationId);
+  const organizationChanged = selectedOrganizationId !== prevOrganizationId;
+  if (organizationChanged) {
+    setPrevOrganizationId(selectedOrganizationId);
+    setWorkspaceId('');
+    setSelectedTemplateId('');
+    setTemplateVariables({});
+    setErrorMessage(null);
+  }
+  const effectiveWorkspaceId = organizationChanged ? '' : workspaceId;
+  const effectiveTemplateId = organizationChanged ? '' : selectedTemplateId;
+  const effectiveVariables = organizationChanged ? {} : templateVariables;
+
+  // Workspaces of the active organization only
   const { data: workspacesData, isLoading: isWorkspacesLoading } = useQuery({
-    queryKey: ['workspaces', 'list', { limit: 50 }],
+    queryKey: ['workspaces', 'list', selectedOrganizationId, { limit: 50 }],
     queryFn: ({ signal }) => workspacesApi.list({ limit: 50 }, signal),
+    enabled: Boolean(selectedOrganizationId),
   });
 
   const workspaces = workspacesData?.data ?? [];
-  const activeWorkspaceId = workspaceId || (workspaces.length > 0 ? workspaces[0]!.id : '');
+  const activeWorkspaceId = resolveActiveWorkspaceId(effectiveWorkspaceId, workspaces);
 
-  // Fetch approved templates
+  // Channel catalogue (same organization-scoped query as the messages and suppressions pages)
+  const { data: channelsData, isLoading: isChannelsLoading } = useQuery({
+    queryKey: ['channels', 'list', selectedOrganizationId],
+    queryFn: ({ signal }) => channelsApi.list({ limit: 50, tenantScoped: true }, signal),
+    enabled: Boolean(selectedOrganizationId),
+  });
+  const whatsappChannelId = findWhatsAppChannelId(channelsData?.data ?? []);
+
+  // Approved WhatsApp templates only (QAF-018, #28); requested once the channel is known
   const { data: templatesData, isLoading: isTemplatesLoading } = useQuery({
-    queryKey: ['templates', 'list', { approvalStatus: 'approved' }],
-    queryFn: ({ signal }) => templatesApi.list({ approvalStatus: 'approved', limit: 50 }, signal),
+    queryKey: [
+      'templates',
+      'list',
+      selectedOrganizationId,
+      { channelId: whatsappChannelId, approvalStatus: 'approved' },
+    ],
+    queryFn: ({ signal }) =>
+      templatesApi.list(
+        { channelId: whatsappChannelId, approvalStatus: 'approved', limit: 50 },
+        signal,
+      ),
+    enabled: Boolean(selectedOrganizationId && whatsappChannelId),
   });
 
-  const approvedTemplates = templatesData?.data ?? [];
+  const approvedTemplates = approvedWhatsAppTemplates(templatesData?.data ?? [], whatsappChannelId);
   const activeTemplate =
-    approvedTemplates.find((t) => t.id === selectedTemplateId) ?? approvedTemplates[0];
+    approvedTemplates.find((t) => t.id === effectiveTemplateId) ?? approvedTemplates[0];
+  // Template-mode states, in order: loading → channel unavailable → none approved → selector.
+  const isLoadingTemplates = isChannelsLoading || isTemplatesLoading;
+  const isWhatsAppChannelMissing =
+    Boolean(selectedOrganizationId) && !isChannelsLoading && !whatsappChannelId;
 
   const handleTemplateChange = (tplId: string) => {
     setSelectedTemplateId(tplId);
@@ -89,7 +131,7 @@ export function WhatsAppSendPanel({
       payload = {
         templateId: activeTemplate.id,
         templateName: activeTemplate.name,
-        variables: templateVariables,
+        variables: effectiveVariables,
       };
     } else {
       payload = {
@@ -236,7 +278,24 @@ export function WhatsAppSendPanel({
                 >
                   Select Approved Template
                 </label>
-                {approvedTemplates.length === 0 ? (
+                {isLoadingTemplates ? (
+                  <p
+                    className="mt-1 text-xs text-[var(--color-ink-muted)]"
+                    role="status"
+                    data-testid="whatsapp-templates-loading"
+                  >
+                    Loading approved templates…
+                  </p>
+                ) : isWhatsAppChannelMissing ? (
+                  <p
+                    className="mt-1 text-xs text-amber-400"
+                    role="status"
+                    data-testid="whatsapp-channel-unavailable"
+                  >
+                    The WhatsApp channel could not be loaded, so no approved templates can be
+                    offered. Custom text sending is still available.
+                  </p>
+                ) : approvedTemplates.length === 0 ? (
                   <p className="mt-1 text-xs text-amber-400">
                     No approved templates found. Please create a template and use{' '}
                     <em>Simulate Approval</em> in the Templates section.
@@ -284,7 +343,7 @@ export function WhatsAppSendPanel({
                             <input
                               id={`var-${v}`}
                               type="text"
-                              value={templateVariables[v] ?? ''}
+                              value={effectiveVariables[v] ?? ''}
                               onChange={(e) => handleVariableChange(v, e.target.value)}
                               disabled={isSubmitting}
                               placeholder={`Value for ${v}`}

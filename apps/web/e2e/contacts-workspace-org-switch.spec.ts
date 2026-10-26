@@ -271,7 +271,8 @@ test.describe('Contacts: workspace selection across organization switches', () =
     await expect(workspaceSelect).toHaveValue(WS_A1);
     await workspaceSelect.selectOption(WS_A2);
     await expect(table.locator('tbody tr')).toHaveCount(25);
-    await page.getByRole('button', { name: 'Next' }).click();
+    // Exact match: under `next dev` the "Open Next.js Dev Tools" button also contains "Next".
+    await page.getByRole('button', { name: 'Next', exact: true }).click();
     await expect(table.locator('tbody tr')).toHaveCount(3);
     await expect(previous).toBeEnabled();
 
