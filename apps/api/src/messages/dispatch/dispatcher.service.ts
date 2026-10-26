@@ -17,6 +17,27 @@ import { ProviderSubmissionExecutor } from '../../provider-adapters/submission-e
 import { ProviderStateStore } from '../../providers/provider-state.store';
 import { mapMessageForSubmission, resolveChannelCode } from './submission-mapping';
 
+/** A PostgreSQL SQLSTATE: five digits or upper-case letters (for example 42501). */
+const SQLSTATE = /^[0-9A-Z]{5}$/;
+
+/**
+ * A dispatch failure as a structured, safe log entry (issue #22): the message
+ * and, when the error carries one, its SQLSTATE. Never the error object, stack,
+ * SQL, parameters or detail. `logger.error('msg', error)` loses the error under
+ * nestjs-pino, which treats the extra argument as a format value.
+ */
+function failureLogEntry(
+  msg: string,
+  error: unknown,
+): { msg: string; error: string; code?: string } {
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return {
+    msg,
+    error: error instanceof Error ? error.message : String(error),
+    ...(typeof code === 'string' && SQLSTATE.test(code) ? { code } : {}),
+  };
+}
+
 export interface DispatchClaim {
   readonly messageId: string;
   readonly orgId: string;
@@ -106,7 +127,7 @@ export class DispatcherService {
       return claims;
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
-      this.logger.error('Failed to claim messages from queue', error);
+      this.logger.error(failureLogEntry('Failed to claim messages from queue', error));
       throw error;
     } finally {
       client.release();
@@ -908,7 +929,7 @@ export class DispatcherService {
       };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
-      this.logger.error('Failed to process dispatch claim', error);
+      this.logger.error(failureLogEntry('Failed to process dispatch claim', error));
       return {
         messageId: claim.messageId,
         attemptId,
@@ -1079,7 +1100,7 @@ export class DispatcherService {
       return recovered;
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
-      this.logger.error('Failed to recover expired leases', error);
+      this.logger.error(failureLogEntry('Failed to recover expired leases', error));
       throw error;
     } finally {
       client.release();
