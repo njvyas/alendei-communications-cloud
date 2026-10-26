@@ -29,6 +29,7 @@ export default function ContactsPage() {
     data: workspacesData,
     isLoading: isWorkspacesLoading,
     isSuccess: areWorkspacesLoaded,
+    error: workspacesError,
   } = useQuery({
     queryKey: ['workspaces', 'list', selectedOrganizationId, { limit: 50 }],
     queryFn: ({ signal }) => workspacesApi.list({ limit: 50 }, signal),
@@ -56,6 +57,9 @@ export default function ContactsPage() {
     setSelectedWorkspaceId('');
     setPager(EMPTY_PAGER);
     setCreatedRecord(null);
+    // The create form belongs to the previous organization's workspace: close it
+    // (the dialog is also remounted per organization below, clearing its fields).
+    setIsCreateOpen(false);
   }
 
   // Only a workspace fetched for the active organization is ever used ('' = none).
@@ -199,6 +203,19 @@ export default function ContactsPage() {
         </div>
       )}
 
+      {/* Workspaces failed to load: distinct from an organization with no workspaces */}
+      {workspacesError && (
+        <div
+          className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-4 text-xs text-rose-400"
+          role="alert"
+          data-testid="workspaces-load-error"
+        >
+          {workspacesError instanceof ApiError
+            ? `Failed to load workspaces (${workspacesError.code}): ${workspacesError.message}`
+            : 'Failed to load workspaces. Check your connection and reload the page to try again.'}
+        </div>
+      )}
+
       {/* No workspaces warning */}
       {areWorkspacesLoaded && workspaces.length === 0 && (
         <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-8 text-center shadow-xs">
@@ -308,6 +325,7 @@ export default function ContactsPage() {
 
       {/* Dialogs */}
       <ContactCreateDialog
+        key={selectedOrganizationId ?? 'no-organization'}
         open={isCreateOpen}
         onOpenChange={setIsCreateOpen}
         workspaceId={activeWorkspaceId}

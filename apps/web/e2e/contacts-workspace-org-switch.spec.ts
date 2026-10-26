@@ -16,6 +16,10 @@ test.describe('Contacts: workspace selection across organization switches', () =
   const ORG_A = '01955b0a-7b3b-7411-9a4f-9e67d4f9a000';
   const ORG_B = '01955b0a-7b3b-7411-9a4f-9e67d4f9b000';
   const ORG_C = '01955b0a-7b3b-7411-9a4f-9e67d4f9c000';
+  // Workspaces request fails: HTTP 500 (ORG_D) or a network failure (ORG_E).
+  const ORG_D = '01955b0a-7b3b-7411-9a4f-9e67d4f9d000';
+  const ORG_E = '01955b0a-7b3b-7411-9a4f-9e67d4f9e000';
+  const ALL_ORGS = [ORG_A, ORG_B, ORG_C, ORG_D, ORG_E];
   const WS_A1 = '01955b0a-7b3b-7411-9a4f-9e67d4f9a001';
   const WS_A2 = '01955b0a-7b3b-7411-9a4f-9e67d4f9a002';
   const WS_B1 = '01955b0a-7b3b-7411-9a4f-9e67d4f9b001';
@@ -24,6 +28,7 @@ test.describe('Contacts: workspace selection across organization switches', () =
   const ORG_A_WORKSPACES = new Set([WS_A1, WS_A2]);
 
   type ContactsRequest = { org: string | undefined; workspaceId: string; cursor: string | null };
+  type CreateRequest = { org: string | undefined; workspaceId: string; firstName?: string };
 
   const json = (body: unknown, status = 200) => ({
     status,
@@ -62,7 +67,11 @@ test.describe('Contacts: workspace selection across organization switches', () =
     [ORG_C]: [],
   };
 
-  async function setupSyntheticApiRoutes(page: Page, contactsRequests: ContactsRequest[]) {
+  async function setupSyntheticApiRoutes(
+    page: Page,
+    contactsRequests: ContactsRequest[],
+    createRequests: CreateRequest[] = [],
+  ) {
     await page.route('**/api/v1/**', async (route) => {
       const request = route.request();
       const url = new URL(request.url());
@@ -91,7 +100,7 @@ test.describe('Contacts: workspace selection across organization switches', () =
               sessionId: 'sess-synth-01',
               authenticatedAt: new Date().toISOString(),
               tenant: { orgId: null, workspaceId: null, resellerId: null, isPlatformAdmin: false },
-              authorizedOrganizationIds: [ORG_A, ORG_B, ORG_C],
+              authorizedOrganizationIds: ALL_ORGS,
               roles: [],
               permissions: [],
             },
@@ -109,8 +118,8 @@ test.describe('Contacts: workspace selection across organization switches', () =
               userId: 'usr-synthetic-01',
               apiKeyId: null,
               isPlatformAdmin: false,
-              organizationIds: [ORG_A, ORG_B, ORG_C],
-              grants: [ORG_A, ORG_B, ORG_C].map((orgId, i) => ({
+              organizationIds: ALL_ORGS,
+              grants: ALL_ORGS.map((orgId, i) => ({
                 roleId: `role-org-admin-${i}`,
                 roleKey: 'org_admin',
                 scopeType: 'organization',
@@ -134,6 +143,8 @@ test.describe('Contacts: workspace selection across organization switches', () =
               [ORG_A, 'Org A'],
               [ORG_B, 'Org B'],
               [ORG_C, 'Org C'],
+              [ORG_D, 'Org D'],
+              [ORG_E, 'Org E'],
             ].map(([id, name]) => ({
               id,
               name,
@@ -145,6 +156,17 @@ test.describe('Contacts: workspace selection across organization switches', () =
             page: { limit: 50, hasMore: false, nextCursor: null },
           }),
         );
+      }
+      if (pathname.endsWith('/workspaces') && method === 'GET' && org === ORG_D) {
+        return route.fulfill(
+          json(
+            { error: { code: 'INTERNAL_ERROR', message: 'Simulated failure', retryable: false } },
+            500,
+          ),
+        );
+      }
+      if (pathname.endsWith('/workspaces') && method === 'GET' && org === ORG_E) {
+        return route.abort('failed');
       }
       if (pathname.endsWith('/workspaces') && method === 'GET') {
         return route.fulfill(
@@ -201,15 +223,19 @@ test.describe('Contacts: workspace selection across organization switches', () =
           }),
         );
       }
-      if (pathname.endsWith(`/workspaces/${WS_A2}/contacts`) && method === 'POST') {
+      const createMatch = pathname.match(/\/workspaces\/([^/]+)\/contacts$/);
+      if (createMatch && method === 'POST') {
+        const workspaceId = createMatch[1]!;
+        const body = request.postDataJSON() as { firstName?: string; lastName?: string };
+        createRequests.push({ org, workspaceId, firstName: body.firstName });
         return route.fulfill(
           json(
             {
               data: {
                 id: NEW_CONTACT_ID,
-                workspaceId: WS_A2,
-                firstName: 'Alice',
-                lastName: 'Tester',
+                workspaceId,
+                firstName: body.firstName ?? null,
+                lastName: body.lastName ?? null,
                 metadata: {},
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
@@ -289,5 +315,74 @@ test.describe('Contacts: workspace selection across organization switches', () =
     for (const r of contactsRequests) {
       expect(r).toEqual({ org: ORG_A, workspaceId: WS_A1, cursor: null });
     }
+  });
+
+  async function enterConsoleAt(page: Page, orgId: string) {
+    await loginViaUi(page, 'workspace-sync@example.test', 'synthetic-password-not-used');
+    await expect(page.getByText('Select Organization')).toBeVisible({ timeout: 10_000 });
+    await page.locator('#organization-select').selectOption(orgId);
+    await page.getByRole('button', { name: 'Enter Console' }).click();
+    await expect(page.locator('#org-select')).toHaveValue(orgId);
+    await page.getByRole('link', { name: 'Contacts' }).click();
+    await page.waitForURL((u) => u.pathname.startsWith('/contacts'));
+  }
+
+  test('CWS-02: a failed workspaces request is reported, not shown as "no workspaces"', async ({
+    page,
+  }) => {
+    const contactsRequests: ContactsRequest[] = [];
+    await setupSyntheticApiRoutes(page, contactsRequests);
+    await enterConsoleAt(page, ORG_D);
+
+    // HTTP 500
+    const loadError = page.getByTestId('workspaces-load-error');
+    await expect(loadError).toBeVisible();
+    await expect(loadError).toContainText('Failed to load workspaces (INTERNAL_ERROR)');
+    await expect(page.getByText('No workspaces exist in this organization.')).toHaveCount(0);
+    await expect(page.getByTestId('contacts-table')).toHaveCount(0);
+    await expect(page.getByTestId('create-contact-btn')).toHaveCount(0);
+
+    // Network failure
+    await page.locator('#org-select').selectOption(ORG_E);
+    await expect(loadError).toBeVisible();
+    await expect(loadError).toContainText('Failed to load workspaces');
+    await expect(page.getByText('No workspaces exist in this organization.')).toHaveCount(0);
+
+    // A successful empty response is still the "no workspaces" message, without an error.
+    await page.locator('#org-select').selectOption(ORG_C);
+    await expect(page.getByText('No workspaces exist in this organization.')).toBeVisible();
+    await expect(loadError).toHaveCount(0);
+
+    await page.waitForTimeout(1000);
+    expect(contactsRequests).toEqual([]);
+  });
+
+  test('CWS-03: switching organization closes and clears an open create-contact form', async ({
+    page,
+  }) => {
+    const contactsRequests: ContactsRequest[] = [];
+    const createRequests: CreateRequest[] = [];
+    await setupSyntheticApiRoutes(page, contactsRequests, createRequests);
+    await enterConsoleAt(page, ORG_A);
+
+    await page.getByTestId('create-contact-btn').click();
+    const dialogHeading = page.getByRole('heading', { name: 'Create Workspace Contact' });
+    await expect(dialogHeading).toBeVisible();
+    await page.locator('#contact-first-name').fill('Stale');
+
+    // The header switcher stays reachable by keyboard while the form is open.
+    await page.locator('#org-select').selectOption(ORG_B, { force: true });
+    await expect(page.locator('#org-select')).toHaveValue(ORG_B);
+    await expect(dialogHeading).toHaveCount(0);
+
+    // A new form in Org B starts empty and creates in Org B's workspace.
+    await expect(page.locator('#select-workspace')).toHaveValue(WS_B1);
+    await page.getByTestId('create-contact-btn').click();
+    await expect(page.locator('#contact-first-name')).toHaveValue('');
+    await page.locator('#contact-first-name').fill('Bravo');
+    await page.getByRole('dialog').getByRole('button', { name: 'Create Contact' }).click();
+    await expect(page.getByTestId('contact-created-notice')).toContainText('Bravo');
+
+    expect(createRequests).toEqual([{ org: ORG_B, workspaceId: WS_B1, firstName: 'Bravo' }]);
   });
 });
