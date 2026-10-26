@@ -106,7 +106,7 @@ describe('QAF-019: created contact is surfaced after creation', () => {
       phone: '+12025550190',
       whatsappChannelId: CHANNEL_ID,
       initialConsent: true,
-      idempotencyKey: 'idem-qaf019-1',
+      idempotencyKey: crypto.randomUUID(),
     });
 
     assert.equal(created.id, CONTACT_ID);
@@ -126,7 +126,7 @@ describe('QAF-019: created contact is surfaced after creation', () => {
       firstName: 'QA',
       whatsappChannelId: CHANNEL_ID,
       initialConsent: true,
-      idempotencyKey: 'idem-qaf019-2',
+      idempotencyKey: crypto.randomUUID(),
     });
 
     assert.equal(created.id, CONTACT_ID);
@@ -139,7 +139,7 @@ describe('QAF-019: created contact is surfaced after creation', () => {
         workspaceId: WORKSPACE_2,
         firstName: 'QA',
         initialConsent: false,
-        idempotencyKey: 'idem-qaf019-3',
+        idempotencyKey: crypto.randomUUID(),
       }),
     );
   });
