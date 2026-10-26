@@ -10,6 +10,8 @@ Environment and accounts: `INTERNAL_QA_DEPLOYMENT.md` (§7 personas, §8 data). 
 
 **Organizations and personas (26-Oct-2026).** *QA Org A* (`qa-org-a`) is **closed** (a terminal state) and must not be used. This plan uses *QA Org A2* (`qa-org-a2`) and *QA Org B2* (`qa-org-b2`), created by the platform operator on 24-Oct-2026, and a new *QA Org C* (`qa-org-c`) for organization-lifecycle and assignment-administration tests that must not disturb A2 or B2. Personas follow the organizations: `qa-org-a2-admin`, `qa-org-a2-ws-manager`, `qa-org-a2-team-reader`, `qa-org-a2-agent`, `qa-org-a2-reader`, `qa-org-b2-admin`. `qa-platform-admin` is the single bootstrap platform administrator (`INTERNAL_QA_DEPLOYMENT.md` §7). Rows already marked **PASS** keep the names used when they were run.
 
+**Findings.** Record every defect, concern or plan mismatch in `QA_FINDINGS_REGISTER.md`, with severity, reproduction steps, expected and actual behaviour, evidence and disposition.
+
 **Evidence provenance.** Mark each result as tester-run, operator-run or **Agent-run** (executed by Claude Code; `QA_RELEASE_PREPARATION.md` §5). An Agent-run API result does not replace a console test or its screenshot.
 
 **Evidence conventions:** screenshot of the final screen including the URL bar; for API tests the status line and response body (redact tokens); message/correlation IDs; `$C logs api` excerpt (operator) where noted.
