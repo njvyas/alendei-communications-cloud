@@ -57,7 +57,7 @@ Evidence labels: **Observed** (verifiable in GitHub, CI or the repository); **Ag
 | F.3-5 | BE-DISPATCH-02: no resubmission after an expired submission lease | PR #14: 6 tests (5 fail on the pre-fix code); 40/40 repeated runs under load; CI `40066664676` | Planned operator-window variant (QA-I-01 with `QA Sim Timeout` p1, `QA Sim OK` p2). It cannot force the claim-before-recovery path | X-6: approved to plan an operator window | Blocked: operator window not agreed |
 | F.3-6 | BE-DISPATCH-01 circuit fix (migration `0036`) | Merged suites | Agent-run 26-Oct-2026: `QA Sim 500` circuit closed → open → half_open → open with no privilege errors (`whatsapp/evidence-run3.txt`, `fallback-f02-f04/`). QA-F-07 scenario not run | X-7: **deferred** | Open. To close: run QA-F-07 under a recorded policy-change decision and operator authorization, or record an explicit exception |
 | F.3-7 | Migration history after upgrade | Disposable-clone proof `38\|04b0fac738f24476e76b88a84fd04850` | Agent-run 24-Oct-2026: before `36\|093bfe92…`, after `38\|04b0fac7…` | — | Agent-run PASS; owner review pending |
-| F.3-8 | Full regression on the release commit | CI `40067932448` (`554dea3`); docs-only since | Agent-run API checks (sign-in, isolation, WhatsApp C/E/F, masking). Console sections A–J outstanding | Console checklist: proceed | Partial |
+| F.3-8 | Full regression on the release commit | CI `40067932448` (`554dea3`); docs-only since | Agent-run API checks (sign-in, isolation, WhatsApp C/E/F, masking) and, on 26-Oct-2026, Agent-run console automation of 38 plan rows (§5d). Platform-admin, other-persona and operator rows, I-01 – I-03 and usability (J) outstanding | Console checklist: proceed | Partial |
 | F.3-9 | Deployment controls: exposure, TLS, startup checks, accounts, secrets, backup | — | Agent-run 24-Oct-2026: loopback-only ports, startup principal check, dispatch-credential refusal, health, restart, 0 secret values in logs. TLS, D2 and D5 items open | D1/D2 routed; D5 deferred | Partial; depends on D1, D2, D5 |
 
 Findings from QA testing, with their development issues and dispositions, are tracked in `qa/QA_FINDINGS_REGISTER.md`.
@@ -119,6 +119,41 @@ Recorded from the project owner's direction of 26-Oct-2026. These directions do 
 | No record stored | API level: organization-scoped message list 30 before and 30 after; email 0 → 0; voice 0 → 0. **Database check: VERIFIED (Agent-run, 26-Oct-2026 09:04 UTC)**: read-only database check: Org A2 total 30 (unchanged); Org A2 email/voice 0/0; email/voice across all organizations 0; `messages` and `message_events` rows created in the test window (08:52:30–08:53:30 UTC) 0; dispatch queue 0 | `t1/01-run-k10-k11.txt`, `t1/02-db-check.txt` |
 
 Authorization record: `t1/00-decision-record.md`. Evidence location as §5b; the manifest was regenerated after this run (manifest SHA-256 `d70c8ffb1682b4192e80623dc3372d3d0cd3332b532b2dbe85abb2f945c3ffe4`, 44 files). The hash quoted in §5b identifies the earlier file set. After the database check the manifest was regenerated again; its hash, as reported by the agent, is `15b9ccac…021277a` (45 files). This record does not independently verify the evidence file or its checksum.
+
+### 5d. Console checks by browser automation (26-Oct-2026)
+
+- **Who ran them:** **Agent-run** by Claude Code, assigned QA lead and test executor, using headless Chromium (Playwright) against the QA console. This is not independent verification, and it is not human testing. Gemini is assigned as independent reviewer.
+- **Release, personas and data:** `2026.10.24-441a29a`; `qa-org-a2-admin` and `qa-org-b2-admin` only; synthetic data.
+- **Credentials:** read from owner-filled mode-600 files and never logged. An API key secret used for H-07 was held in memory and a temporary mode-600 file only, then deleted.
+- **TLS:** the browser skipped CA trust (private QA CA); the server key was pinned before each run.
+- **Evidence:** `console/` in the evidence package (`MANIFEST.sha256`); per-row results are in the `QA_TEST_PLAN.md` Actual column.
+
+| Result | Plan rows |
+|---|---|
+| PASS | A-02, A-03, A-04, A-11, A-12, B-05, B-06, B-10, B-14, C-01 – C-06, C-08, C-10, D-09, E-01 – E-05, E-07, E-08, E-09 (masking, filters, pagination, detail), F-01 (console), G-01 – G-04, G-06, H-01, H-02, H-07, H-08, H-09 |
+| BLOCKED | E-09 organization switch: no multi-organization persona available to the agent |
+| Not run (needs another role) | Platform administrator: A-01, A-13, B-01 – B-04, B-13, D-01 – D-08, E-06. Other personas: B-07 – B-09, B-11, B-12, C-07, G-05, H-04, H-05. Operator: A-05 – A-10, I-01 – I-05 |
+| Not run (human only) | Section J usability (at least three testers) |
+| New findings | QAF-018 (#28), QAF-019 (`QA_FINDINGS_REGISTER.md`) |
+
+### 5e. Operator-supervised session procedure (draft; requires an agreed window)
+
+Covers X-6 and QA-I-01 – I-03. Nothing here is authorized until the project owner agrees a window and an authorized QA operator is present. The host commands use `$C` as in `qa/INTERNAL_QA_DEPLOYMENT.md`.
+
+1. **Baseline (Claude, read-only):** image tag, health, Org A2/B2 assignments, circuit states, queue (0), message counts.
+2. **X-6:**
+   - **Set-up (operator, console, Org A2 WhatsApp):** `QA Sim 500` priority 1 → 10, then disable; `QA Sim Timeout` priority 3 → 1, enable; `QA Sim OK` p2 active.
+   - **Run:** Claude sends one message. Within about 1–2 s (before the 3 s submission timeout) the operator runs `$C kill api`, then `$C up -d --wait api`.
+   - **Expected:** `outcome_unknown` after lease recovery; exactly one attempt (`QA Sim Timeout`); `QA Sim OK` never called; queue 0.
+   - **Limitation:** this variant does **not** force the claim-before-recovery path that BE-DISPATCH-02 fixed. A graceful `stop` could let the submission finish, so the owner must confirm that `kill` (SIGKILL) is acceptable on QA.
+   - **Restore:** Timeout disabled, priority back to 3; Sim 500 priority back to 1, enabled.
+3. **I-01:** Claude sends from Org B2; the operator runs `$C stop api && $C up -d --wait api`. Expected: `Shutdown complete`, healthy, the message in a final state, queue 0.
+4. **I-02:** `$C restart web` with a signed-in console session; the console works after reload.
+5. **I-03:** `$C stop redis`; readiness reports Redis down; `$C start redis`; readiness ok.
+6. **Stop and recovery:**
+   - If the API is not healthy within 2 minutes: `$C up -d --wait api web` and collect the logs.
+   - A message non-final for more than 2 minutes after restart is a **FAIL**. Never edit the database.
+   - On any deviation, restore the assignments and record it.
 
 ## 6. Upgrade sequence
 
