@@ -11,7 +11,7 @@ The single list of findings from ACC QA testing. Each finding is traced to its e
   - *Known limitation*: accepted current behaviour with a recorded decision path.
 - **Evidence provenance:** labels as in `QA_RELEASE_PREPARATION.md` §5.
   - *Observed*: GitHub, CI or the repository.
-  - *Agent-run*: executed by Claude Code. Not independent verification. The evidence package is kept outside Git and listed in `MANIFEST.sha256` (manifest SHA-256 `33c763d5…ebc1bd`).
+  - *Agent-run*: executed by Claude Code. Not independent verification. The evidence package is kept outside Git and listed in `MANIFEST.sha256`. The manifest hash for each file set is quoted in `QA_RELEASE_PREPARATION.md` §5b and §5c.
 - **Severity** uses the scale in `QA_TEST_PLAN.md`. Values marked *proposed* are not owner-approved; *—* means the evidence does not support assigning one.
 - **Status:** a finding stays **Open** until its disposition is done and verified. Recording a finding does not close it.
 - **Public repository:** no recipient data, credentials, addresses or evidence contents appear here.
@@ -47,7 +47,8 @@ The single list of findings from ACC QA testing. Each finding is traced to its e
 
 | Dependency | Required before | Status |
 |---|---|---|
-| Named, dated QA-lead confirmation for T-1 | QA-K-10, QA-K-11 | Requested 26-Oct-2026; not recorded |
+| QA-lead confirmation for T-1 | QA-K-10, QA-K-11 | Resolved 26-Oct-2026 by an AI-agent acting-QA-lead decision, **not** a human sign-off (`QA_RELEASE_PREPARATION.md` §5c). K-10 and K-11 PASS at API level |
+| Database-table no-storage check for QA-K-10 and K-11 | Completing the T-1 evidence | **PENDING**: needs operator SSH access |
 | Agreed operator window | X-6, QA-I-01 – I-03 | Not agreed |
 | Named testers, screenshots, usability feedback from at least three testers | Console sections A–J | Not arranged |
 | D1, D2 records and approvals | F.3-9 | Routed for approval; not closed |
