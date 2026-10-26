@@ -174,3 +174,4 @@ Automated equivalents run against disposable clones: `apps/api/test/org-admin-on
 - Reseller administrators cannot appoint organization administrators (§2).
 - `APP_ENV=production` cannot start until a secrets-manager backend exists (§1b).
 - One host, one API instance, no high availability; images are not slimmed or digest-pinned.
+- WhatsApp template sends are not provider-ready. The send path checks only that the template exists, belongs to the organization, matches the channel and is approved; it does not render the template or validate its variables, and stores the payload unchanged. `ProviderSubmission` has no structured template identity or variables, and the WhatsApp mapping serializes a payload without `text` as JSON text (`submission-mapping.ts`). Template use in sends is unresolved (P3-D22/P3-D24); a structured template contract is required before any real WhatsApp provider is integrated (`ROADMAP.md`, Phase 4.3 known limitation).

@@ -87,7 +87,7 @@ Environment and accounts: `INTERNAL_QA_DEPLOYMENT.md` (§7 personas, §8 data). 
 | ID | Role / prerequisites | Steps | Expected result | Actual | Sev. if fail | Evidence |
 |---|---|---|---|---|---|---|
 | QA-E-01 | qa-org-b-admin; Org B → `QA Sim OK` | `/whatsapp` → recipient `+12025550201`, custom text → "Send WhatsApp Message" | Settlement monitor appears; status reaches `PROVIDER_ACCEPTED` within a few seconds; one attempt row | | S1 | screenshot incl. message ID |
-| QA-E-02 | qa-org-b-admin | Send using approved template `qa_welcome` with its variable | Accepted; the rendered text uses the variable | | S2 | screenshot |
+| QA-E-02 | qa-org-b-admin | Send using approved template `qa_welcome` with its variable | Accepted; the message records the `templateId` and stores the supplied variables unchanged in its payload. **WhatsApp template use in sends is UNRESOLVED (P3-D22/P3-D24):** the server does not render WhatsApp templates or validate their variables, and the provider submission has no structured template fields, so the dispatcher passes the payload as JSON text (`RELEASE.md` §11). A PASS here is **not** evidence of provider-ready template dispatch | | S2 | screenshot of the message detail (template ID and payload) |
 | QA-E-03 | qa-org-b-admin | Try to send with a draft or rejected template | Refused before sending (`TEMPLATE_NOT_APPROVED`) | | S2 | screenshot |
 | QA-E-04 | qa-org-a-admin | Send to the contact whose consent was revoked (C-04) | Refused (`CONSENT_REVOKED`) | | S1 | screenshot |
 | QA-E-05 | qa-org-a-admin | Send to the suppressed number (C-10) | Refused (`RECIPIENT_SUPPRESSED`) | | S1 | screenshot |
