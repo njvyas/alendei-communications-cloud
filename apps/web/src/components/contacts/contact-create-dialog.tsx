@@ -2,15 +2,71 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import type { ContactResponse } from '@acc/contracts';
 import { ApiError, channelsApi, contactsApi } from '@/lib/api-client';
 
 interface ContactCreateDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   workspaceId: string;
+  /** Called with the created contact after every step succeeded (QAF-019). */
+  onCreated?: (contact: ContactResponse) => void;
 }
 
-export function ContactCreateDialog({ open, onOpenChange, workspaceId }: ContactCreateDialogProps) {
+export interface CreateContactInput {
+  readonly workspaceId: string;
+  readonly firstName?: string;
+  readonly lastName?: string;
+  readonly phone?: string;
+  readonly whatsappChannelId?: string;
+  readonly initialConsent: boolean;
+  readonly idempotencyKey: string;
+}
+
+/**
+ * Creates the contact, then its WhatsApp identity and initial consent when a
+ * phone number is given, and returns the created contact.
+ */
+export async function createContactWithIdentity(
+  input: CreateContactInput,
+): Promise<ContactResponse> {
+  // 1. Create the base contact record
+  const contactRes = await contactsApi.create(
+    input.workspaceId,
+    { firstName: input.firstName, lastName: input.lastName },
+    input.idempotencyKey,
+  );
+  const contactId = contactRes.data.id;
+
+  // 2. Attach WhatsApp phone identity if provided
+  if (input.phone && input.whatsappChannelId) {
+    await contactsApi.createIdentity(contactId, {
+      channelId: input.whatsappChannelId,
+      rawAddress: input.phone,
+      isPrimary: true,
+    });
+
+    // 3. Record initial consent if opted in
+    if (input.initialConsent) {
+      await contactsApi.createConsentEvent(contactId, {
+        channelId: input.whatsappChannelId,
+        consentType: 'transactional',
+        event: 'grant',
+        occurredAt: new Date().toISOString(),
+        source: 'console_user_creation',
+      });
+    }
+  }
+
+  return contactRes.data;
+}
+
+export function ContactCreateDialog({
+  open,
+  onOpenChange,
+  workspaceId,
+  onCreated,
+}: ContactCreateDialogProps) {
   const queryClient = useQueryClient();
 
   const [firstName, setFirstName] = useState('');
@@ -65,39 +121,18 @@ export function ContactCreateDialog({ open, onOpenChange, workspaceId }: Contact
 
     setIsSubmitting(true);
     try {
-      // 1. Create the base contact record
-      const contactRes = await contactsApi.create(
+      const created = await createContactWithIdentity({
         workspaceId,
-        {
-          firstName: trimmedFirst || undefined,
-          lastName: trimmedLast || undefined,
-        },
+        firstName: trimmedFirst || undefined,
+        lastName: trimmedLast || undefined,
+        phone: trimmedPhone || undefined,
+        whatsappChannelId: whatsappChannel?.id,
+        initialConsent,
         idempotencyKey,
-      );
-
-      const contactId = contactRes.data.id;
-
-      // 2. Attach WhatsApp phone identity if provided
-      if (trimmedPhone && whatsappChannel) {
-        await contactsApi.createIdentity(contactId, {
-          channelId: whatsappChannel.id,
-          rawAddress: trimmedPhone,
-          isPrimary: true,
-        });
-
-        // 3. Record initial consent if opted in
-        if (initialConsent) {
-          await contactsApi.createConsentEvent(contactId, {
-            channelId: whatsappChannel.id,
-            consentType: 'transactional',
-            event: 'grant',
-            occurredAt: new Date().toISOString(),
-            source: 'console_user_creation',
-          });
-        }
-      }
+      });
 
       await queryClient.invalidateQueries({ queryKey: ['contacts', 'list', workspaceId] });
+      onCreated?.(created);
       handleClose();
     } catch (err) {
       if (err instanceof ApiError) {
