@@ -48,3 +48,10 @@ cafcd436c17cb2945301de8b03b4b246f0e554d6:apps/web/src/lib/audit-logs-security.se
 a0ef7b7b8555369d0e1b35a2b55b45ed350294b3:packages/db/src/test/backstop-definitions.int-spec.ts:generic-api-key:21
 a0ef7b7b8555369d0e1b35a2b55b45ed350294b3:packages/db/src/test/backstop-definitions.int-spec.ts:generic-api-key:23
 a0ef7b7b8555369d0e1b35a2b55b45ed350294b3:packages/db/src/test/backstop-definitions.int-spec.ts:generic-api-key:43
+
+# QAF-019 contact-created-notice test Idempotency-Key fixtures (`idem-qaf019-2`,
+# `idem-qaf019-3`). Audited 26-Oct-2026 (CI run 40314630301): synthetic request
+# keys passed to a mocked fetch; absent from every .env file and CI
+# configuration; replaced by crypto.randomUUID() in 650c235.
+c2d3e7a6acc43d401f174092a7bb64405c4044d0:apps/web/src/components/contacts/contact-created-notice.test.ts:generic-api-key:129
+c2d3e7a6acc43d401f174092a7bb64405c4044d0:apps/web/src/components/contacts/contact-created-notice.test.ts:generic-api-key:142
