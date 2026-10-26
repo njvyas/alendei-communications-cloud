@@ -174,7 +174,9 @@ test.describe('QAF-019: created contact notice', () => {
     await setupSyntheticApiRoutes(page);
     await loginViaUi(page, 'qaf019-admin@example.test', 'synthetic-password-not-used');
 
-    await page.goto('/contacts');
+    // Client-side navigation keeps the in-memory session (a full page load would not).
+    await page.getByRole('link', { name: 'Contacts' }).click();
+    await page.waitForURL((url) => url.pathname.startsWith('/contacts'));
     await expect(page.getByRole('heading', { name: 'Contacts & Consent' })).toBeVisible();
     await expect(page.getByTestId('contacts-table').locator('tbody tr')).toHaveCount(25);
 
