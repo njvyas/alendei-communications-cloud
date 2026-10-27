@@ -12,7 +12,7 @@ import {
   type ProviderStatus,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 
 import { AppException } from '../common/errors/app.exception';
 import { cooldownUntil, type CircuitSnapshot } from './provider-state-machine';
@@ -216,6 +216,18 @@ export async function channelCodeOf(tx: Transaction, channelId: string): Promise
   return channel!.code;
 }
 
+/**
+ * A capability value exactly as stored. Drizzle's `jsonb` column decodes the
+ * driver's already-decoded value a second time, so a string that is itself
+ * JSON (`"500"`, `"true"`, `"[1]"`) would read back as a number, boolean or
+ * array. Reading the JSON text and parsing it once returns what was saved.
+ */
+export function capabilityValue() {
+  return sql<unknown>`${schema.providerCapabilities.value}::text`.mapWith((text: string): unknown =>
+    JSON.parse(text),
+  );
+}
+
 export async function readCapabilities(
   tx: Transaction,
   providerId: string,
@@ -223,7 +235,7 @@ export async function readCapabilities(
   const rows = await tx
     .select({
       key: schema.providerCapabilities.capabilityKey,
-      value: schema.providerCapabilities.value,
+      value: capabilityValue(),
     })
     .from(schema.providerCapabilities)
     .where(eq(schema.providerCapabilities.providerId, providerId))
