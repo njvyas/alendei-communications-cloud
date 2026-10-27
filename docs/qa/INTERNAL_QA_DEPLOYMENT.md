@@ -179,7 +179,9 @@ Organization, provider and assignment IDs are shown in the console URLs and deta
 
 - Data is synthetic. Take a dump before each QA round and before any upgrade: `$C exec -T postgres pg_dump -U postgres -d acc -Fc > acc-qa-<date>.dump` (store off-host; mode 600).
 - Restart check (part of acceptance): `$C stop api && $C up -d --wait api` — log ends `Shutdown complete`, API healthy again, queued messages are dispatched, the queue is empty afterwards.
-- Recovery: restore a dump into a fresh volume (`RELEASE.md` §7). Recovery point = last dump.
+- Recovery and restore drill (QA-I-04; full procedure in `RELEASE.md` §7):
+  - *Existing QA cluster* (scratch database drill): application roles already exist cluster-wide; set `DUMP_FILE="/secure/path/to/backup.dump"`, prepare a repeatable scratch database (`$C exec -T postgres psql -U postgres -d postgres -c "DROP DATABASE IF EXISTS acc_scratch WITH (FORCE); CREATE DATABASE acc_scratch;"`), restore the dump (`$C exec -T postgres pg_restore -U postgres -d acc_scratch < "$DUMP_FILE"`), and verify row counts match. Clean up afterwards with `$C exec -T postgres psql -U postgres -d postgres -c "DROP DATABASE IF EXISTS acc_scratch WITH (FORCE);"`. Note: this verifies dump integrity, but does not exercise role pre-creation because `pg_roles` is shared across all databases in the cluster.
+  - *Fresh cluster or new volume* (disaster recovery): `pg_dump` does not export cluster-global roles. The four application roles (`acc_app`, `acc_auth`, `acc_relay`, `acc_dispatch`) must be pre-created with `NOLOGIN` before `pg_restore` to prevent missing-role errors on RLS policies (reported finding `QAF-007`). Follow `RELEASE.md` §7; run `$C run --rm roles` afterwards if application services must start.
 
 ## 11. Cleanup and rollback
 

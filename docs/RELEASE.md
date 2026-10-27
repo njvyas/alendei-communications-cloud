@@ -126,10 +126,29 @@ It refuses (exit 1, `user activation refused: <reason>`) unless the operator is 
 ## 7. Rollback and recovery
 
 - **Application only**: set `ACC_VERSION` back to the previous recorded tag; `$C up -d --wait api web`. Safe whenever no migration ran in between.
-- **After a migration**: migrations are forward-only. Stop `api` and `web`, restore the pre-upgrade dump (`$C exec -T postgres pg_restore -U postgres -d acc --clean --if-exists < <dump>`), start the previous version. Data written after the backup is lost — the point of no return; take the dump immediately before migrating.
+- **After a migration**: migrations are forward-only. Stop `api` and `web`. Set `DUMP_FILE="/secure/path/to/backup.dump"` to the pre-upgrade backup taken in §6, restore it (`$C exec -T postgres pg_restore -U postgres -d acc --clean --if-exists < "$DUMP_FILE"`), and start the previous version. Data written after the backup is lost — the point of no return; take the dump immediately before migrating.
 - **Crash or host restart**: containers restart (`unless-stopped`). A message left mid-submission is settled by lease recovery within ~30 s as `outcome_unknown` and never resubmitted; queued messages are dispatched on the next poll.
 - **Redis loss**: rate-limit counters and short-lived WebSocket tickets only; all business state is in PostgreSQL.
-- **Database loss**: restore the latest dump; the recovery point is the backup interval.
+- **Database loss or fresh-cluster recovery**: restore the latest dump; the recovery point is the backup interval. Set `DUMP_FILE="/secure/path/to/backup.dump"` to the actual backup path before running commands. Distinguish between an existing cluster and a fresh cluster:
+  - *Restoring over an existing database cluster* (e.g. rollback on the same host): roles already exist in `pg_roles`. Stop `api` and `web`, then run:
+    ```bash
+    $C exec -T postgres pg_restore -U postgres -d acc --clean --if-exists < "$DUMP_FILE"
+    ```
+  - *Restoring into a fresh cluster or volume* (disaster recovery or new host): `pg_dump` exports database objects, not cluster-global roles (`pg_roles`). Restoring with `--exit-on-error` fails at the first RLS policy or grant with `role "acc_auth" does not exist` (reported finding QAF-007). Pre-create the four application roles as `NOLOGIN` before restore:
+    ```bash
+    $C exec -T postgres psql -U postgres -d postgres -c "DO \$\$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'acc_app') THEN CREATE ROLE acc_app NOLOGIN; END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'acc_auth') THEN CREATE ROLE acc_auth NOLOGIN; END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'acc_relay') THEN CREATE ROLE acc_relay NOLOGIN; END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'acc_dispatch') THEN CREATE ROLE acc_dispatch NOLOGIN; END IF;
+    END \$\$;"
+    $C exec -T postgres pg_restore -U postgres -d acc --exit-on-error < "$DUMP_FILE"
+    ```
+    Pre-creating `NOLOGIN` roles satisfies object ownership, RLS policies, and grants. A successful restore recreates database objects and data, but does not prove the application is operational. To return application services to operation:
+    1. Reconcile role credentials: `$C run --rm roles` (§5.2 step 4). This grants `LOGIN` and configures passwords cluster-wide from `release.env`.
+    2. Start the application: `$C up -d --wait api web`.
+    3. Verify operational readiness: confirm `$C logs api` shows `Database principals verified RLS-bound: acc_app, acc_auth, acc_dispatch` and `message dispatch started`, and verify `/health/ready` (§9 step 1).
 
 ## 8. Shutdown
 
