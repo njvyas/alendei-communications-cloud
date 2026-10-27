@@ -214,6 +214,26 @@ export const SIMULATOR_BEHAVIORS = [
 ] as const;
 export type SimulatorBehavior = (typeof SIMULATOR_BEHAVIORS)[number];
 
+/**
+ * Provider capability selecting the simulator's behaviour (ADR-014 D19). Its
+ * value is exactly one of `SIMULATOR_BEHAVIORS`.
+ */
+export const SIMULATOR_BEHAVIOR_CAPABILITY = 'simulator_behavior';
+
+/** Validates a `simulator_behavior` capability value as it is saved (QAF-003, #21). */
+export function validateSimulatorBehaviorCapability(value: unknown): {
+  readonly valid: boolean;
+  readonly errors: readonly string[];
+} {
+  if (typeof value === 'string' && (SIMULATOR_BEHAVIORS as readonly string[]).includes(value)) {
+    return { valid: true, errors: [] };
+  }
+  return {
+    valid: false,
+    errors: [`simulator_behavior must be one of ${SIMULATOR_BEHAVIORS.join(', ')}`],
+  };
+}
+
 /** Fixed platform defaults (ADR-013 F-6): no per-provider timing administration in Phase 2. */
 export const PROVIDER_SUBMISSION_DEFAULTS = {
   /** The submission timeout every executor enforces. */

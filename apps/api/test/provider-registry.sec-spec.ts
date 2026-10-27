@@ -18,6 +18,7 @@ import {
   ERROR_CODES,
   PLATFORM_ROLE_KEYS,
   PROVIDER_CAPABILITY_LIMITS,
+  SIMULATOR_BEHAVIORS,
 } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
@@ -824,6 +825,62 @@ describe('Phase 2.1 provider and channel registry', () => {
 
       // Only a platform providers.manage holder may set it, as before.
       await put(tokens.orgAdmin!, [{ key: 'rcs_message_types', value: ['text'] }]).expect(403);
+    });
+
+    it('simulator_behavior (QAF-003, #21): every supported behaviour is saved, any other value is refused and nothing changes', async () => {
+      const p = await createProvider();
+      const put = (token: string, capabilities: unknown) =>
+        call('put', token, `/providers/${p.id}/capabilities`).send({ capabilities });
+
+      // Each behaviour, "500" and "429" included, is saved and read back as the
+      // string it is, so re-saving what was read (as the console does) passes the rule.
+      for (const behavior of SIMULATOR_BEHAVIORS) {
+        const set = [{ key: 'simulator_behavior', value: behavior }];
+        const saved = await put(tokens.platform!, set).expect(200);
+        expect(saved.body.data.capabilities).toEqual(set);
+        const read = await call('get', tokens.platform!, `/providers/${p.id}`).expect(200);
+        expect(read.body.data.capabilities).toEqual(set);
+        await put(tokens.platform!, read.body.data.capabilities).expect(200);
+      }
+      const valid = [
+        { key: 'max_segments', value: 10 },
+        { key: 'simulator_behavior', value: 'SUCCESS' },
+      ];
+      await put(tokens.platform!, valid).expect(200);
+
+      // No numeric aliases: 500 and 429 are numbers, not the behaviours "500" and "429".
+      for (const value of [
+        '',
+        'FAIL',
+        'success',
+        ' SUCCESS',
+        ['SUCCESS'],
+        { a: 1 },
+        500,
+        429,
+        true,
+      ]) {
+        const r = await put(tokens.platform!, [
+          { key: 'max_segments', value: 10 },
+          { key: 'simulator_behavior', value },
+        ]).expect(400);
+        expect(r.body.error.code).toBe('VALIDATION_FAILED');
+        expect(r.body.error.details.issues).toEqual([
+          expect.objectContaining({ field: 'capabilities.1', rule: 'INVALID_VALUE' }),
+        ]);
+      }
+      // A null value never reaches the key's rule: the request DTO refuses it first.
+      const nullValue = await put(tokens.platform!, [{ key: 'simulator_behavior', value: null }]);
+      expect(nullValue.status).toBe(400);
+      expect(nullValue.body.error.code).toBe('VALIDATION_FAILED');
+      const after = await call('get', tokens.platform!, `/providers/${p.id}`).expect(200);
+      expect(after.body.data.capabilities).toEqual(valid);
+
+      // Other keys stay free-form.
+      await put(tokens.platform!, [{ key: 'simulator_note', value: '' }]).expect(200);
+
+      // Only a platform providers.manage holder may set it, as before.
+      await put(tokens.orgAdmin!, [{ key: 'simulator_behavior', value: 'SUCCESS' }]).expect(403);
     });
 
     it('there is no provider deletion', async () => {
