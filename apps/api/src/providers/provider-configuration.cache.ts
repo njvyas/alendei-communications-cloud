@@ -16,7 +16,7 @@ import {
   type ReloadOutcome,
 } from './configuration-snapshot-cache';
 import { PROVIDER_CLOCK, type ProviderClock } from './provider-clock';
-import { circuitPolicyOf } from './provider-views';
+import { capabilityValue, circuitPolicyOf } from './provider-views';
 
 /** The advisory configuration snapshot (`PROVIDER_ADAPTER.md` §3a.1). Never health or circuit state. */
 export interface ProviderConfigurationSnapshot {
@@ -145,7 +145,7 @@ async function loadSnapshot(tx: Transaction): Promise<ProviderConfigurationSnaps
     .select({
       providerId: schema.providerCapabilities.providerId,
       key: schema.providerCapabilities.capabilityKey,
-      value: schema.providerCapabilities.value,
+      value: capabilityValue(),
     })
     .from(schema.providerCapabilities);
   const [policy] = await tx.select().from(schema.providerCircuitPolicy);

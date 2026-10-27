@@ -26,6 +26,7 @@ import request from 'supertest';
 import { uuidv7 } from 'uuidv7';
 
 import { CredentialService } from '../src/iam/credential.service';
+import { ProviderConfigurationCache } from '../src/providers/provider-configuration.cache';
 import {
   PASSWORD,
   PREFIX,
@@ -556,6 +557,79 @@ describe('Phase 2.1 provider and channel registry', () => {
       const audits = await auditFor(p.id, AUDIT_ACTIONS.PROVIDER_CAPABILITIES_REPLACED);
       expect(audits).toHaveLength(2);
       expect(audits[1]).toMatchObject({ after: { capabilities: [] } });
+    });
+
+    it('returns each capability value exactly as saved: a string that looks like JSON stays a string (capability read path)', async () => {
+      const p = await createProvider();
+      // Sorted by key, as the API returns a set.
+      const set = [
+        { key: 'a_string_500', value: '500' },
+        { key: 'b_string_429', value: '429' },
+        { key: 'c_string_word', value: 'SUCCESS' },
+        { key: 'd_string_empty', value: '' },
+        { key: 'e_string_true', value: 'true' },
+        { key: 'f_string_null', value: 'null' },
+        { key: 'g_string_array', value: '[1,2]' },
+        { key: 'h_string_object', value: '{"a":1}' },
+        { key: 'i_string_quoted', value: '"x"' },
+        { key: 'j_string_spaced', value: ' 7 ' },
+        { key: 'k_number', value: 500 },
+        { key: 'l_true', value: true },
+        { key: 'm_false', value: false },
+        { key: 'n_array', value: ['500', 1, true] },
+        { key: 'o_object', value: { code: '500', nested: { flag: 'true' } } },
+      ];
+      const jsonType = (v: unknown) =>
+        Array.isArray(v) ? 'array' : typeof v === 'object' ? 'object' : typeof v;
+      const capabilitiesPath = `/providers/${p.id}/capabilities`;
+      const replaced = () => auditFor(p.id, AUDIT_ACTIONS.PROVIDER_CAPABILITIES_REPLACED);
+
+      const saved = await call('put', tokens.platform!, capabilitiesPath)
+        .send({ capabilities: set })
+        .expect(200);
+      expect(saved.body.data.capabilities).toEqual(set);
+
+      // Written correctly: PostgreSQL holds each value with its own JSON type.
+      const stored = (
+        await h.admin.execute<{ key: string; type: string; text: string }>(
+          sql`SELECT capability_key AS key, jsonb_typeof(value) AS type, value::text AS text
+              FROM provider_capabilities WHERE provider_id = ${p.id} ORDER BY capability_key`,
+        )
+      ).rows;
+      expect(stored).toEqual(
+        set.map((c) => ({ key: c.key, type: jsonType(c.value), text: expect.any(String) })),
+      );
+      expect(stored.map((r) => JSON.parse(r.text) as unknown)).toEqual(set.map((c) => c.value));
+
+      // Read back unchanged: the detail view and the configuration snapshot.
+      const read = await call('get', tokens.platform!, `/providers/${p.id}`).expect(200);
+      expect(read.body.data.capabilities).toEqual(set);
+      const cache = h.app.get(ProviderConfigurationCache);
+      cache.invalidateLocal('test');
+      const snapshot = await h.admin.transaction((tx) => cache.read(tx as never));
+      expect(snapshot.providers.find((x) => x.id === p.id)!.capabilities).toEqual(
+        Object.fromEntries(set.map((c) => [c.key, c.value])),
+      );
+
+      // Re-saving what was read is a no-op: no write, no audit.
+      expect(await replaced()).toHaveLength(1);
+      await call('put', tokens.platform!, capabilitiesPath)
+        .send({ capabilities: read.body.data.capabilities })
+        .expect(200);
+      expect(await replaced()).toHaveLength(1);
+
+      // A string becoming the number it spells is a real change, saved and audited
+      // with the exact before-state.
+      const changed = await call('put', tokens.platform!, capabilitiesPath)
+        .send({ capabilities: [{ key: 'a_string_500', value: 500 }] })
+        .expect(200);
+      expect(changed.body.data.capabilities).toEqual([{ key: 'a_string_500', value: 500 }]);
+      const audits = await replaced();
+      expect(audits).toHaveLength(2);
+      expect(audits[1]).toMatchObject({
+        before: { capabilities: set },
+        after: { capabilities: [{ key: 'a_string_500', value: 500 }] },
+      });
     });
 
     it('walks the exact status-transition matrix; each legal step is audited, each illegal one is 409 and changes nothing', async () => {
