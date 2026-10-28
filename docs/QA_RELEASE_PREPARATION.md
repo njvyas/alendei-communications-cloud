@@ -8,6 +8,7 @@ Prepared 24-Oct-2026 from the repository, CI and existing deployment records; up
 - **Candidate:** a `develop` commit at or after `554dea370e84fd6b25589d9cb63309eaec03c636` with its own green CI run (`554dea3`: run `40067932448`, all five jobs). It adds migrations `0036` and `0037` and all of Phase 4.2 and 4.3 to date.
 - **Hold:** this document authorizes nothing. Deploying to QA, applying migrations to the QA database and accessing the QA host each need a separate owner authorization. Gate F.2 acceptance is **pending** and Gate F.3 is **not accepted**.
 - **Recorded QA state (Agent-run, 24-Oct-2026):** the owner-authorized upgrade deployed `2026.10.24-441a29a` (commit `441a29a`; application code identical to `554dea3`) at 08:11:30 UTC. The live history was read first (`36|093bfe92208baf0ff073f6b154c00c68`, equal to the committed `0000`–`0035`); `migrate` applied `0036` and `0037`; the proof after was `38|04b0fac738f24476e76b88a84fd04850`. Later `develop` commits up to `6735f72` are documentation only. Re-read the live state before any further upgrade (§6 step 3).
+- **QA host outage (Agent-run, 28-Oct-2026):** after an unplanned outage of the QA host between 27-Oct and 28-Oct-2026, the same release `2026.10.24-441a29a` was observed running, with the migration proof unchanged. The outage cause is not known; see §5f. This is not QA acceptance.
 
 ## 2. D1 — access and TLS
 
@@ -206,6 +207,55 @@ Covers X-6 and QA-I-01 – I-03. It runs only after the project owner approves t
 - If the API is not healthy within 2 minutes: `$C up -d --wait api web`, then collect the logs.
 - On any deviation, stop, restore the assignments and record it.
 - No simulator configuration change, assignment change or SIGKILL happens before owner approval.
+
+### 5f. QA host outage and recovery (27–28-Oct-2026)
+
+**Agent-run** (executed by Claude Code; not independent verification), read-only, on 28-Oct-2026 between 04:38 and 04:52 UTC. Evidence packages on the operator workstation, outside Git: `~/acc-evidence/2026-10-28-qa-recovery-preflight/` (manifest SHA-256 `3be402b82aba03d91d4b9bd253af4b8e2dfa181ec1acced97ccb6af0c6341286`) and `~/acc-evidence/2026-10-28-qa-api-log-inspection/` (manifest SHA-256 `d680870270c28275c17a1c2ad631d71887c8fd2b26039c4eb07c730f81eabab6`). Each statement below is marked as an *observation* (seen in command output saved in those packages), an *inference* or a *hypothesis*. The cause of the outage is **not known**.
+
+**Timeline (UTC)**
+
+| Time | Event | Basis |
+|---|---|---|
+| 27-Oct 05:19:42 | Last API container log entry before the outage | Observation: container log, forward read |
+| 27-Oct 05:19:58 | Last host journal entry of the previous boot; no shutdown record in `last -x` | Observation |
+| Between 27-Oct 05:19:58 and 28-Oct 04:35:05 | The host stopped at a time that was not recorded. The missing shutdown record and the PostgreSQL recovery below support an unclean stop; they do not establish when it happened | Inference |
+| 28-Oct 04:35:05 | Host boot (first journal entry) | Observation |
+| 28-Oct 04:35:12 | All four containers start (`restart: unless-stopped`); 0 container restarts | Observation: `docker inspect` |
+| 28-Oct 04:35:14.60–14.68 | PostgreSQL: "database system was not properly shut down; automatic recovery in progress"; redo `0/28A4480`–`0/28A4550`; end-of-recovery checkpoint complete; ready to accept connections | Observation: PostgreSQL container log |
+| 28-Oct 04:35:21.70 | API: `Database principals verified RLS-bound: acc_app, acc_auth, acc_dispatch`, `message dispatch started`, `Nest application successfully started` | Observation: API container log, bounded tail read (see *Log reading*) |
+
+PostgreSQL also logged "last known up at 2026-10-26 11:49:55 UTC". *Interpretation:* this is the time of the last checkpoint record before the stop, not a measured outage time; it is not used in the timeline.
+
+**State observed after recovery (28-Oct, 04:42–04:43 UTC, on the host)**
+
+- **Containers:** all four `running (healthy)`; api and web run image tag `2026.10.24-441a29a` with revision label `441a29ad…`. That the image IDs equal those deployed on 24-Oct is *agent-reported* from the agent's 24-Oct session record; the evidence packages do not contain that comparison.
+- **Readiness:** loopback `/health/ready` returned 200 with `"status":"ok"` (PostgreSQL up, Redis `PONG`); the loopback console `/login` returned 200.
+- **Migration proof:** `38|04b0fac738f24476e76b88a84fd04850`, equal to the 24-Oct proof (§1, §6 step 5).
+- **Dispatch state** (read-only queries): queue 0; no message `queued` or `submitting`; no attempt in `submitting`.
+- **Roles:** the four `acc_*` roles can log in; none is superuser or bypasses RLS.
+- **API severity since boot:** 0 error-level entries and 2 warning-level entries, both the agent's own unauthenticated probe requests (`GET /api/v1/health/ready` and `GET /api/v1/auth/me`).
+
+**Log reading after the outage**
+
+- *Observations:*
+  - The API container logs through Docker's `json-file` driver with no configured size or rotation options. No `/etc/docker/daemon.json` and no logrotate rule for Docker were found, and the inspections did not identify any rotated segments. The log file itself (size, permissions, content) could not be read: `sudo` required a password that was not available to the agent.
+  - Forward reads (full, or `--since`) stop silently at 27-Oct 05:19:42 and return no post-boot entries.
+  - Backward reads (`--tail` up to 277 entries at 04:51 UTC) return the post-boot range starting at 04:35:21.70, including the startup lines in the timeline. Larger tails return only pre-outage entries.
+- *Hypothesis (not verified):* the unclean stop left a partial record at the end of the pre-outage log data, and the Docker log reader stops there. The cause of the discontinuity remains **unexplained**.
+- *Consequence for later checks:* until this is resolved, post-outage log checks on this container must use a bounded `--tail`; `--since` under-reports.
+
+**Agent actions on the host (disclosure)**
+
+- A stderr redirect in an agent command **unintentionally created** an empty file `/tmp/.no` (0 bytes) on the QA host at 28-Oct 04:50:51 UTC. It remains on the host pending a separate owner decision.
+- One read-only query named a column that does not exist (`suppressions.lifted_at`). It is the only PostgreSQL `ERROR` logged since boot (04:42:54 UTC) and changed nothing.
+
+**Remaining constraints**
+
+- **Disk:** `/` is 86% used with 5.1 GB free; Docker reports 9.7 GB of reclaimable images and 12.5 GB of build cache. No clean-up has been done; it needs owner authorization.
+- **Backups:** the newest dump on the host is from 24-Oct (before `441a29a`) and predates the 26-Oct test activity. Approved storage is undecided (D5 deferred, §4).
+- **Pending, unchanged by the recovery:** QA-I-04, the D5 fresh-cluster restore drill, QAF-007 (#23), QAF-008 and the operator session (§5e). Functional QA results recorded before 27-Oct were not re-run.
+
+**This record documents the recovery of the QA environment only. It is not QA acceptance:** Gate F.2 and Gate F.3 remain **NOT ACCEPTED**, and no finding, decision or test result changes because of it.
 
 ## 6. Upgrade sequence
 
