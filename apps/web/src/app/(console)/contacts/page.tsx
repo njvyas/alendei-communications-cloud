@@ -13,6 +13,7 @@ import {
 } from '@/components/contacts/contact-created-notice';
 import {
   EMPTY_PAGER,
+  contactsListParams,
   cursorStackFor,
   resolveActiveWorkspaceId,
   type ContactsPager,
@@ -76,10 +77,8 @@ export default function ContactsPage() {
     setCreatedRecord(null);
   };
 
-  const queryParams: ListContactsParams = {
-    cursor: currentCursor,
-    limit: 25,
-  };
+  // Newest first, so a contact just created is at the top of the first page (#30).
+  const queryParams: ListContactsParams = contactsListParams(currentCursor);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     // Workspace stays the third key element: creation invalidates ['contacts', 'list', workspaceId].
@@ -235,7 +234,13 @@ export default function ContactsPage() {
                 <tr className="border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] text-[var(--color-ink-muted)]">
                   <th className="px-4 py-3 font-medium">Contact Name</th>
                   <th className="px-4 py-3 font-medium">Contact ID</th>
-                  <th className="px-4 py-3 font-medium">Created Date</th>
+                  <th
+                    className="px-4 py-3 font-medium"
+                    aria-sort="descending"
+                    data-testid="contacts-created-header"
+                  >
+                    Created Date <span className="font-normal">(newest first)</span>
+                  </th>
                   <th className="px-4 py-3 font-medium text-right">Actions</th>
                 </tr>
               </thead>
@@ -329,9 +334,11 @@ export default function ContactsPage() {
         open={isCreateOpen}
         onOpenChange={setIsCreateOpen}
         workspaceId={activeWorkspaceId}
-        onCreated={(contact) =>
-          setCreatedRecord({ contact, organizationId: selectedOrganizationId })
-        }
+        onCreated={(contact) => {
+          setCreatedRecord({ contact, organizationId: selectedOrganizationId });
+          // Back to the first page, where the newest contact is listed (#30).
+          setPager(EMPTY_PAGER);
+        }}
       />
 
       <ContactConsentDialog

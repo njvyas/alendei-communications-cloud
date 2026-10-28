@@ -1,7 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { EMPTY_PAGER, cursorStackFor, resolveActiveWorkspaceId } from './workspace-selection';
+import {
+  CONTACTS_PAGE_SIZE,
+  CONTACTS_SORT,
+  EMPTY_PAGER,
+  contactsListParams,
+  cursorStackFor,
+  resolveActiveWorkspaceId,
+} from './workspace-selection';
 
 // Contacts page workspace selection must follow the active organization: a
 // workspace id kept from a previous organization is never queried.
@@ -35,5 +42,26 @@ describe('Contacts workspace selection and pagination', () => {
     assert.deepEqual(cursorStackFor(pager, ORG_B_WS_1), []);
     assert.deepEqual(cursorStackFor(pager, ''), []);
     assert.deepEqual(cursorStackFor(EMPTY_PAGER, ORG_A_WS_1), []);
+  });
+});
+
+// #30 (QAF-019): the list is requested newest first, so a contact just created
+// is at the top of the first page.
+describe('Contacts list order (#30)', () => {
+  it('1. requests the first page newest first at the fixed page size', () => {
+    assert.deepEqual(contactsListParams(undefined), {
+      cursor: undefined,
+      limit: 25,
+      sort: '-createdAt',
+    });
+  });
+
+  it('2. keeps the same order and size when following a cursor', () => {
+    assert.deepEqual(contactsListParams('c2'), { cursor: 'c2', limit: 25, sort: '-createdAt' });
+  });
+
+  it('3. uses the descending form of the contract sort field', () => {
+    assert.equal(CONTACTS_SORT, '-createdAt');
+    assert.equal(CONTACTS_PAGE_SIZE, 25);
   });
 });

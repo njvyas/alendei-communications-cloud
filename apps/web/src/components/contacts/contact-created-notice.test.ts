@@ -16,7 +16,7 @@ import { useSession } from '../../lib/session-store';
 (globalThis as unknown as { React: typeof React }).React = React;
 
 // QAF-019 (#30): after "Create Contact" the console must surface the created
-// contact; the list is oldest first, so it is usually not on the first page.
+// contact; the list is newest first (#30), so it is at the top of page 1.
 describe('QAF-019: created contact is surfaced after creation', () => {
   const ORG_A = '01955b0a-7b3b-7411-9a4f-9e67d4f91111';
   const ORG_B = '01955b0a-7b3b-7411-9a4f-9e67d4f9bbbb';

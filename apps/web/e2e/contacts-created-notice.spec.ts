@@ -134,7 +134,7 @@ test.describe('QAF-019: created contact notice', () => {
         );
       }
       if (pathname.endsWith(`/workspaces/${WORKSPACE_ID}/contacts`) && method === 'GET') {
-        // Oldest first and a full first page: the new contact is never on it.
+        // A full first page that never includes the new contact (this mock ignores sort).
         return route.fulfill(
           json({ data: olderContacts, page: { limit: 25, hasMore: true, nextCursor: 'c2' } }),
         );
