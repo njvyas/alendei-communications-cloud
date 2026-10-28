@@ -39,9 +39,9 @@ interface ContactCreatedNoticeProps {
 }
 
 /**
- * Shown after a successful "Create Contact" (QAF-019). The list is ordered
- * oldest first and has no search, so the new contact is usually not on the
- * first page; this keeps it reachable without paging.
+ * Shown after a successful "Create Contact" (QAF-019). The list is newest
+ * first and the page returns to page 1 after creation (#30), so the contact is
+ * at the top of the list; the notice also names it and keeps it actionable.
  */
 export function ContactCreatedNotice({
   contact,
@@ -64,7 +64,7 @@ export function ContactCreatedNotice({
           <code className="font-mono text-[11px] text-[var(--color-ink-muted)]">{contact.id}</code>
         </p>
         <p className="text-[var(--color-ink-muted)]">
-          The list is ordered oldest first, so the new contact may appear on a later page.
+          Contacts are listed newest first; the new contact is at the top of the first page.
         </p>
       </div>
       <div className="flex gap-2">

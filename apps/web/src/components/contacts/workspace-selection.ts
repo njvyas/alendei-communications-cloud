@@ -31,6 +31,25 @@ export interface ContactsPager {
 
 export const EMPTY_PAGER: ContactsPager = { workspaceId: '', cursorStack: [] };
 
+/** Contacts per page. */
+export const CONTACTS_PAGE_SIZE = 25;
+
+/**
+ * Newest first (#30, QAF-019), so a contact just created is at the top of the
+ * first page. An existing sort of the list contract (`-createdAt`, keyed on the
+ * time-ordered id); the API default stays oldest first for other clients.
+ */
+export const CONTACTS_SORT = '-createdAt';
+
+/** The list request for one page: always newest first, at the fixed page size. */
+export function contactsListParams(cursor: string | undefined): {
+  readonly cursor: string | undefined;
+  readonly limit: number;
+  readonly sort: string;
+} {
+  return { cursor, limit: CONTACTS_PAGE_SIZE, sort: CONTACTS_SORT };
+}
+
 /** A pager built for another workspace starts again at the first page. */
 export function cursorStackFor(pager: ContactsPager, workspaceId: string): readonly string[] {
   return pager.workspaceId === workspaceId ? pager.cursorStack : [];
