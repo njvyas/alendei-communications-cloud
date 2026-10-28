@@ -146,3 +146,174 @@ describe('DispatcherService failure logging (issue #22)', () => {
     }
   });
 });
+
+describe('DispatcherService provider lifecycle exclusion before admission (Issue #20)', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  function makeDispatcherWithCandidates(
+    candidates: {
+      id: string;
+      provider_id: string;
+      priority: number;
+      provider_status: 'active' | 'disabled' | 'draining';
+    }[],
+    options?: {
+      admitted?: boolean;
+    },
+  ) {
+    const admitMock = jest.fn(async () => ({
+      admitted: (options?.admitted ?? true) as true,
+      state: 'closed' as const,
+      channel: 'whatsapp' as const,
+      capabilities: {},
+      ticket: 'ticket-1',
+      timeoutMs: 5000,
+      admission: {} as never,
+    }));
+    const stateStore = {
+      admit: admitMock,
+      recordSubmission: jest.fn(),
+    } as unknown as ProviderStateStore;
+
+    const executor = {
+      execute: jest.fn(async () => ({
+        result: { outcome: 'accepted' as const, latencyMs: 50, externalId: 'ext-1' },
+      })),
+    } as unknown as ProviderSubmissionExecutor;
+
+    const queries: { sql: string; params?: unknown[] }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string, params?: unknown[]) => {
+        queries.push({ sql, params });
+        if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK')
+          return { rows: [], rowCount: 0 };
+        if (sql.includes('set_config')) return { rows: [{ set_config: '' }], rowCount: 1 };
+        if (sql.includes('FROM message_dispatch_queue')) {
+          return {
+            rows: [{ claim_token: claim.claimToken, dispatch_epoch: claim.dispatchEpoch }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes('SELECT status, current_attempt_id FROM messages')) {
+          return { rows: [{ status: 'queued', current_attempt_id: null }], rowCount: 1 };
+        }
+        if (sql.includes('FROM organizations')) {
+          return { rows: [{ status: 'active' }], rowCount: 1 };
+        }
+        if (sql.includes('FROM messages m')) {
+          return {
+            rows: [
+              {
+                id: claim.messageId,
+                org_id: claim.orgId,
+                channel_id: 'chan-1',
+                status: 'queued',
+                payload: { text: 'hello' },
+                recipient_address: '+12025550199',
+                contact_id: 'contact-1',
+                channel_code: 'whatsapp',
+              },
+            ],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes('app_dispatch_recipient_block'))
+          return { rows: [{ block: null }], rowCount: 1 };
+        if (sql.includes('FROM organization_provider_assignments opa')) {
+          return { rows: candidates, rowCount: candidates.length };
+        }
+        if (sql.includes('max(attempt_number)')) return { rows: [{ max_num: 0 }], rowCount: 1 };
+        if (sql.includes('SELECT count(*)::text AS count FROM message_attempts')) {
+          return { rows: [{ count: '0' }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 1 };
+      }),
+      release: jest.fn(),
+    };
+
+    const pool = { connect: jest.fn(async () => client as unknown as PoolClient) };
+    const service = new DispatcherService(pool as unknown as Pool, stateStore, executor);
+
+    const warnSpy = jest
+      .spyOn((service as unknown as { logger: { warn: (m: unknown) => void } }).logger, 'warn')
+      .mockImplementation(() => undefined);
+    const errorSpy = jest
+      .spyOn((service as unknown as { logger: { error: (m: unknown) => void } }).logger, 'error')
+      .mockImplementation(() => undefined);
+
+    return { service, client, stateStore, admitMock, executor, queries, warnSpy, errorSpy };
+  }
+
+  it('excludes disabled provider before circuit admission and admits the next active provider', async () => {
+    const candidates = [
+      { id: 'opa-1', provider_id: 'p-disabled', priority: 1, provider_status: 'disabled' as const },
+      { id: 'opa-2', provider_id: 'p-active', priority: 2, provider_status: 'active' as const },
+    ];
+    const { service, admitMock, warnSpy, errorSpy } = makeDispatcherWithCandidates(candidates);
+
+    const result = await service.processClaim(claim);
+
+    expect(result.outcome).toBe('accepted');
+    expect(admitMock).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), 'p-disabled');
+    expect(admitMock).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'p-active');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        msg: expect.stringContaining('not active'),
+        providerId: 'p-disabled',
+        status: 'disabled',
+      }),
+    );
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('excludes draining provider before circuit admission and admits the next active provider', async () => {
+    const candidates = [
+      { id: 'opa-1', provider_id: 'p-draining', priority: 1, provider_status: 'draining' as const },
+      { id: 'opa-2', provider_id: 'p-active', priority: 2, provider_status: 'active' as const },
+    ];
+    const { service, admitMock, warnSpy, errorSpy } = makeDispatcherWithCandidates(candidates);
+
+    const result = await service.processClaim(claim);
+
+    expect(result.outcome).toBe('accepted');
+    expect(admitMock).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), 'p-draining');
+    expect(admitMock).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'p-active');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        msg: expect.stringContaining('not active'),
+        providerId: 'p-draining',
+        status: 'draining',
+      }),
+    );
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('when all assigned providers are disabled or draining, never calls circuit admission and fails NO_ELIGIBLE_PROVIDER', async () => {
+    const candidates = [
+      { id: 'opa-1', provider_id: 'p-disabled', priority: 1, provider_status: 'disabled' as const },
+      { id: 'opa-2', provider_id: 'p-draining', priority: 2, provider_status: 'draining' as const },
+    ];
+    const { service, admitMock, queries, warnSpy, errorSpy } =
+      makeDispatcherWithCandidates(candidates);
+
+    const result = await service.processClaim(claim);
+
+    expect(result).toEqual({
+      messageId: claim.messageId,
+      attemptId: undefined,
+      outcome: 'circuit_refused',
+      error: 'NO_ELIGIBLE_PROVIDER',
+    });
+    expect(admitMock).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    const eventInsert = queries.find((q) => q.sql.includes('INSERT INTO message_events'));
+    expect(eventInsert).toBeDefined();
+    const payload = JSON.parse(eventInsert!.params![3] as string);
+    expect(payload).toEqual({
+      reason: 'NO_ELIGIBLE_PROVIDER',
+      details: 'No assigned provider is active (disabled or draining)',
+    });
+  });
+});
