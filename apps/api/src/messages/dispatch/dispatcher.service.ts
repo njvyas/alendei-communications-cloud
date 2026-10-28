@@ -5,6 +5,7 @@ import {
   RCS_MESSAGE_TYPES_CAPABILITY,
   rcsProviderSupports,
   type AuthPrincipal,
+  type ProviderStatus,
   type RcsMessageType,
   type SimulatorBehavior,
 } from '@acc/contracts';
@@ -397,9 +398,11 @@ export class DispatcherService {
         id: string;
         provider_id: string;
         priority: number;
+        provider_status: ProviderStatus;
       }>(
-        `SELECT opa.id, opa.provider_id, opa.priority
+        `SELECT opa.id, opa.provider_id, opa.priority, p.status AS provider_status
          FROM organization_provider_assignments opa
+         JOIN providers p ON p.id = opa.provider_id
          WHERE opa.org_id = $1 AND opa.channel_id = $2 AND opa.status = 'active'
            AND opa.provider_id NOT IN (
              SELECT ma.provider_id FROM message_attempts ma WHERE ma.message_id = $3
@@ -508,6 +511,17 @@ export class DispatcherService {
       const refusals = { lifecycle: 0, other: 0 };
 
       for (const candidate of candidates) {
+        // Lifecycle exclusion before circuit admission (ROUTING_ENGINE.md §5, PROVIDER_ADAPTER.md §6f/§6h; issue #20)
+        if (candidate.provider_status !== 'active') {
+          refusals.lifecycle++;
+          this.logger.warn({
+            msg: 'Provider is not active (disabled or draining); trying next candidate',
+            providerId: candidate.provider_id,
+            status: candidate.provider_status,
+          });
+          continue;
+        }
+
         try {
           const candidateAdmission = await this.providerStateStore.admit(
             dbTx as never,

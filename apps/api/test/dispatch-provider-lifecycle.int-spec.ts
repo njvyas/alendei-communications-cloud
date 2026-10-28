@@ -22,6 +22,7 @@ import { uuidv7 } from 'uuidv7';
 import { DISPATCH_POOL } from '../src/database/database.tokens';
 import { CredentialService } from '../src/iam/credential.service';
 import { DispatcherService } from '../src/messages/dispatch/dispatcher.service';
+import { ProviderStateStore } from '../src/providers/provider-state.store';
 import {
   createTenant,
   destroyTenant,
@@ -55,6 +56,7 @@ describe('Issue #20: dispatcher provider lifecycle diagnostics', () => {
   const providers: string[] = [];
   let warned: jest.SpyInstance;
   let errored: jest.SpyInstance;
+  let admitSpy: jest.SpyInstance;
 
   beforeAll(async () => {
     h = await startHarness();
@@ -74,6 +76,7 @@ describe('Issue #20: dispatcher provider lifecycle diagnostics', () => {
       .logger;
     warned = jest.spyOn(logger, 'warn');
     errored = jest.spyOn(logger, 'error');
+    admitSpy = jest.spyOn(ProviderStateStore.prototype, 'admit');
   });
 
   afterEach(async () => {
@@ -270,6 +273,8 @@ describe('Issue #20: dispatcher provider lifecycle diagnostics', () => {
       { msg: LIFECYCLE_WARN, providerId: disabled, status: 'disabled' },
     ]);
     expect(errored).not.toHaveBeenCalled();
+    expect(admitSpy).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), disabled);
+    expect(admitSpy).toHaveBeenCalledWith(expect.anything(), expect.anything(), active);
   });
 
   it('2. fails NO_ELIGIBLE_PROVIDER with no attempt when the only provider is disabled', async () => {
@@ -288,6 +293,7 @@ describe('Issue #20: dispatcher provider lifecycle diagnostics', () => {
       { msg: LIFECYCLE_WARN, providerId: disabled, status: 'disabled' },
     ]);
     expect(errored).not.toHaveBeenCalled();
+    expect(admitSpy).not.toHaveBeenCalled();
   });
 
   it('3. treats a draining provider the same way', async () => {
@@ -305,6 +311,7 @@ describe('Issue #20: dispatcher provider lifecycle diagnostics', () => {
       { msg: LIFECYCLE_WARN, providerId: draining, status: 'draining' },
     ]);
     expect(errored).not.toHaveBeenCalled();
+    expect(admitSpy).not.toHaveBeenCalled();
   });
 
   it('4. keeps the existing details when every circuit refuses admission', async () => {
@@ -323,6 +330,7 @@ describe('Issue #20: dispatcher provider lifecycle diagnostics', () => {
     ]);
     expect(entries(warned, LIFECYCLE_WARN)).toHaveLength(0);
     expect(errored).not.toHaveBeenCalled();
+    expect(admitSpy).toHaveBeenCalledWith(expect.anything(), expect.anything(), open);
   });
 
   it('5. combines the explanation when lifecycle and circuit refusals are mixed', async () => {
@@ -344,6 +352,8 @@ describe('Issue #20: dispatcher provider lifecycle diagnostics', () => {
       { msg: CIRCUIT_WARN, providerId: open, state: 'open' },
     ]);
     expect(errored).not.toHaveBeenCalled();
+    expect(admitSpy).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), disabled);
+    expect(admitSpy).toHaveBeenCalledWith(expect.anything(), expect.anything(), open);
   });
 
   it('6. logs an unexpected admission error at error level, in the safe structured form', async () => {
@@ -392,5 +402,6 @@ describe('Issue #20: dispatcher provider lifecycle diagnostics', () => {
     });
     expect(entries(warned, LIFECYCLE_WARN)).toHaveLength(0);
     expect(errored).not.toHaveBeenCalled();
+    expect(admitSpy).not.toHaveBeenCalled();
   });
 });
