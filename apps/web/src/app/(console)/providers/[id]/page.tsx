@@ -15,11 +15,11 @@ import {
   ProviderLifecycleBadge,
 } from '@/components/providers/provider-status-badge';
 import { ProviderTransitionDialog } from '@/components/providers/provider-transition-dialog';
-import { ProviderCapabilitiesDialog } from '@/components/providers/provider-capabilities-dialog';
+import { ProviderCapabilitiesCard } from '@/components/providers/provider-capabilities-card';
 import { ProviderHealthOverrideDialog } from '@/components/providers/provider-health-override-dialog';
 import { ProviderHealthProbeDialog } from '@/components/providers/provider-health-probe-dialog';
 import { ProviderTestSendPanel } from '@/components/providers/provider-test-send-panel';
-import { Card, CardDescription, CardTitle } from '@/components/ui/card';
+import { Card, CardTitle } from '@/components/ui/card';
 import type { ProviderTransition } from '@acc/contracts';
 
 export default function ProviderDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -31,7 +31,6 @@ export default function ProviderDetailPage({ params }: { params: Promise<{ id: s
 
   // Dialog controls
   const [transitionTarget, setTransitionTarget] = useState<ProviderTransition | null>(null);
-  const [isCapabilitiesOpen, setIsCapabilitiesOpen] = useState(false);
   const [isHealthOverrideOpen, setIsHealthOverrideOpen] = useState(false);
   const [isHealthProbeOpen, setIsHealthProbeOpen] = useState(false);
 
@@ -312,43 +311,7 @@ export default function ProviderDetailPage({ params }: { params: Promise<{ id: s
         </Card>
 
         {/* Capabilities Card */}
-        <Card>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>Declared Capabilities</CardTitle>
-              <CardDescription>Non-secret provider adapter attributes</CardDescription>
-            </div>
-            {canManageProviders && (
-              <button
-                type="button"
-                onClick={() => setIsCapabilitiesOpen(true)}
-                className="rounded border border-[var(--color-border-subtle)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-ink)] hover:bg-[var(--color-surface-raised)]"
-                data-testid="edit-capabilities-btn"
-              >
-                Edit
-              </button>
-            )}
-          </div>
-
-          <div className="mt-4">
-            {provider.capabilities.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-[var(--color-border-subtle)] p-6 text-center text-xs text-[var(--color-ink-muted)]">
-                No capabilities declared for this provider.
-              </div>
-            ) : (
-              <div className="max-h-[220px] overflow-y-auto divide-y divide-[var(--color-border-subtle)] pr-1">
-                {provider.capabilities.map((c) => (
-                  <div key={c.key} className="py-2 text-xs flex justify-between items-start gap-2">
-                    <span className="font-mono font-medium text-[var(--color-ink)]">{c.key}</span>
-                    <pre className="font-mono text-[11px] text-[var(--color-ink-muted)] max-w-[200px] overflow-x-auto text-right">
-                      {JSON.stringify(c.value)}
-                    </pre>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </Card>
+        <ProviderCapabilitiesCard provider={provider} canManage={canManageProviders} />
       </div>
 
       {/* Simulator Test-Send Interactive Panel */}
@@ -492,14 +455,6 @@ export default function ProviderDetailPage({ params }: { params: Promise<{ id: s
           onOpenChange={(open) => !open && setTransitionTarget(null)}
           provider={provider}
           transition={transitionTarget}
-        />
-      )}
-
-      {isCapabilitiesOpen && (
-        <ProviderCapabilitiesDialog
-          open={isCapabilitiesOpen}
-          onOpenChange={setIsCapabilitiesOpen}
-          provider={provider}
         />
       )}
 
