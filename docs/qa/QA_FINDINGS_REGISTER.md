@@ -44,6 +44,7 @@ The single list of findings from ACC QA testing. Each finding is traced to its e
 | QAF-015 | Suppression console defects D1–D4: dialog focus loss; stale list after a lift conflict; banner kept after an organization switch; viewers' organization lookup error, now an intentional fallback that shows the organization ID | Suppression acceptance, 23-Oct-2026 | Confirmed defects | Fixed: `bde108d` with regression and Playwright tests; browser re-acceptance passed 23-Oct-2026 on `9cf5872` | The header showing IDs rather than names remains a usability item (`UX_AUDIT_PLAN.md` U14) |
 | QAF-016 | BE-DISPATCH-01: the provider circuit never opened, because the dispatch role could not execute the state guard | FE-3 disposable stack, 23-Oct-2026 | Confirmed defect | Fixed: migration `0036`, PR #3 (`886faa2`) | Live circuit transitions observed (Agent-run, 26-Oct-2026). Acceptance item X-7 **deferred** |
 | QAF-017 | BE-DISPATCH-02: a message whose lease expired mid-submission could be resubmitted | Repeated worker test, 24-Oct-2026 | Confirmed defect | Fixed: PR #14 (`554dea3`), 6 regression tests | QA-host claim path not verifiable; X-6 operator window pending (the planned variant does not prove the claim path) |
+| QAF-020 | CLI tool `activate-user` refused the bootstrap operator when invoked with environment-derived email string, but succeeded when invoked with authenticated-session operator identity from `/auth/me` | QA-D-08 T-4, 30-Oct-2026 | Operational / Tooling discrepancy | Resolved operationally for QA-D-08 via client v2.5 authenticated `/auth/me` operator binding (exit 0, API-confirmed active, `setup/T-4-activate.txt`). Long-term: add whitespace trimming / case-normalization to CLI tool | Verified fact: shell-extracted `AUTH_BOOTSTRAP_EMAIL` was refused (exit 1, "operator must be an active platform administrator holding users.reactivate"). Verified fact: invocation via `d08-client-v2.5.sh` with verified `/auth/me` session identity succeeded with exit 0. Inferred explanation: the initial refusal was caused by string formatting, whitespace, or case mismatch between the environment file and database user record |
 
 ## Acceptance dependencies (not findings)
 
@@ -58,4 +59,11 @@ The single list of findings from ACC QA testing. Each finding is traced to its e
 | D5 storage, access, encryption, retention, frequency, restore operator | F.3-9, QAF-007, QAF-008 | Deferred |
 | X-7 decision | F.3-6 | Deferred |
 | P3-D22 / P3-D24 | QAF-001 | Open ([#24](https://github.com/njvyas/alendei-communications-cloud/issues/24)) |
-| Owner review and separate gate decisions | Gates F.2 and F.3 | **F.2 NOT ACCEPTED; F.3 NOT ACCEPTED** |
+| Owner review and separate gate decisions | Gates F.2 and F.3 | **Gate F.2 ACCEPTED (30-Oct-2026; `QA_RELEASE_PREPARATION.md` §8); Gate F.3 NOT ACCEPTED** |
+
+## Documented residuals (environmental / test state)
+
+| Residual | Context & Evidence | Security & Isolation Assessment | Status |
+|---|---|---|---|
+| Retained active D08B administrator | QA-D-08 S7 cleanup (30-Oct-2026). Organization `qa-disposable-d08b` suspended (`cleanup/C-3-suspended.png`); administrator `qa-disposable-d08b-admin@example.test` retained active (`cleanup/C-2-disable-refused.png`) | Disabling the sole administrator was refused by application rule `AUTHZ_LAST_ORGANIZATION_ADMIN`. Tenant is suspended (non-platform access blocked per ADR-012 F-1); credentials deleted (`shred -u` at C-6); user holds zero cross-tenant reach | Retained, safe residual |
+| Two unattributed failed login audit events | QA-D-08 S7 audit diff (30-Oct-2026). 2 of 35 new audit rows recorded `auth.login.failed` with `actor_id = NULL` (`post/P-7-audit-new.txt`) | Unauthenticated failed login attempts do not capture an actor ID by design (`TESTING.md` §6j). Zero baseline rows lost; zero cross-tenant references to Org A2/B2/C | Retained, safe residual |

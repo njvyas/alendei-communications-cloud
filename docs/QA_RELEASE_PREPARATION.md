@@ -6,7 +6,7 @@ Prepared 24-Oct-2026 from the repository, CI and existing deployment records; up
 
 - **Scope:** the internal QA environment only (`qa/INTERNAL_QA_DEPLOYMENT.md`). Not the controlled MVP, not production.
 - **Candidate:** a `develop` commit at or after `554dea370e84fd6b25589d9cb63309eaec03c636` with its own green CI run (`554dea3`: run `40067932448`, all five jobs). It adds migrations `0036` and `0037` and all of Phase 4.2 and 4.3 to date.
-- **Hold:** this document authorizes nothing. Deploying to QA, applying migrations to the QA database and accessing the QA host each need a separate owner authorization. Gate F.2 acceptance is **pending** and Gate F.3 is **not accepted**.
+- **Hold:** this document authorizes nothing. Deploying to QA, applying migrations to the QA database and accessing the QA host each need a separate owner authorization. Gate F.2 is **ACCEPTED** (project owner decision, 30-Oct-2026; §8); Gate F.3 remains **not accepted**.
 - **Recorded QA state (Agent-run, 24-Oct-2026):** the owner-authorized upgrade deployed `2026.10.24-441a29a` (commit `441a29a`; application code identical to `554dea3`) at 08:11:30 UTC. The live history was read first (`36|093bfe92208baf0ff073f6b154c00c68`, equal to the committed `0000`–`0035`); `migrate` applied `0036` and `0037`; the proof after was `38|04b0fac738f24476e76b88a84fd04850`. Later `develop` commits up to `6735f72` are documentation only. Re-read the live state before any further upgrade (§6 step 3).
 - **QA host outage (Agent-run, 28-Oct-2026):** after an unplanned outage of the QA host between 27-Oct and 28-Oct-2026, the same release `2026.10.24-441a29a` was observed running, with the migration proof unchanged. The outage cause is not known; see §5f. This is not QA acceptance.
 
@@ -48,10 +48,10 @@ Evidence labels: **Observed** (verifiable in GitHub, CI or the repository); **Ag
 
 | # | Item | Automated evidence (Observed) | QA-host evidence | Owner direction (§5a) | Status |
 |---|---|---|---|---|---|
-| F.2-1 | SMS dispatch: approved template and bound DLT; simulator refuses a channel mismatch | PR #6 (CI `40002661592`); PR #11 | Agent-run 26-Oct-2026 (§5b): QA-K-01, K-02, K-03, K-05 PASS; K-04 documentation mismatch, corrected, observed behaviour meets the corrected expectation. Synthetic DLT IDs test format only | X-1: approved for QA simulator testing | Agent-run PASS; owner review pending. **Not** evidence of DLT registration or regulatory compliance |
-| F.2-2 | RCS dispatch: payload re-validation; `rcs_message_types` enforced | PR #7 (CI `40053914870`); PR #11 | Agent-run 26-Oct-2026 (§5b): QA-K-06, K-07, K-08 PASS | X-2: approved for QA simulator testing | Agent-run PASS; owner review pending |
-| F.2-3 | Provider assignments panel | API suites above | QA-D-08. Agent-run 24–26-Oct: the operator used the panel to add, disable, enable and re-prioritize assignments (audit log); no screenshots | — | Console screenshots outstanding |
-| F.2-4 | Same-channel fallback over eligible providers | PR #7; PR #11 | WhatsApp: Agent-run 26-Oct-2026 QA-F-01 – F-05 PASS (`whatsapp/`, `fallback-f02-f04/`). SMS/RCS: Agent-run 26-Oct-2026 QA-K-05, K-09 PASS (same channel only; eligible providers only, K-08) | X-3: approved for QA simulator testing | Agent-run PASS (WhatsApp, SMS, RCS); owner review pending |
+| F.2-1 | SMS dispatch: approved template and bound DLT; simulator refuses a channel mismatch | PR #6 (CI `40002661592`); PR #11 | Agent-run 26-Oct-2026 (§5b): QA-K-01, K-02, K-03, K-05 PASS; K-04 documentation mismatch, corrected, observed behaviour meets the corrected expectation. Synthetic DLT IDs test format only | X-1: approved for QA simulator testing | **ACCEPTED** (owner decision, 30-Oct-2026; §8). Simulator-only, synthetic DLT format validation |
+| F.2-2 | RCS dispatch: payload re-validation; `rcs_message_types` enforced | PR #7 (CI `40053914870`); PR #11 | Agent-run 26-Oct-2026 (§5b): QA-K-06, K-07, K-08 PASS | X-2: approved for QA simulator testing | **ACCEPTED** (owner decision, 30-Oct-2026; §8). Simulator-only |
+| F.2-3 | Provider assignments panel | API suites above | QA-D-08. Verified on QA host: S1–S4 passed; S5 passed (picker prefiltering, 409 conflict codes); S6 passed (path containment 404); S7 passed 30-Oct-2026 (runbook v2.5, non-platform admin DOM suppression, API 403 `AUTHZ_SCOPE_DENIED`, Org A2/B2 isolation confirmed; manifest `2c0fbb7c…`) | QA-D-08 (runbook v2.5 accepted) | **ACCEPTED** (owner decision, 30-Oct-2026; §8). Console screenshots captured (§5g) |
+| F.2-4 | Same-channel fallback over eligible providers | PR #7; PR #11 | WhatsApp: Agent-run 26-Oct-2026 QA-F-01 – F-05 PASS (`whatsapp/`, `fallback-f02-f04/`). SMS/RCS: Agent-run 26-Oct-2026 QA-K-05, K-09 PASS (same channel only; eligible providers only, K-08) | X-3: approved for QA simulator testing | **ACCEPTED** (owner decision, 30-Oct-2026; §8). Simulator-only |
 | F.3-1 | Email and voice sends refused (`422 CHANNEL_NOT_SUPPORTED`) | PR #10 | Agent-run 26-Oct-2026 (§5c): QA-K-10, K-11 PASS at API level; database-table no-storage check **VERIFIED (Agent-run, 26-Oct-2026 09:04 UTC)** | T-1: approved in principle; executed on an AI-agent acting-QA-lead decision (§5c), not a human sign-off | Agent-run PASS (API level; database check verified); owner review pending |
 | F.3-2/3 | SMS/RCS worker, fencing, recovery, idempotency, isolation | PR #11 | Not practical on the host | X-4: automated-only exception approved in principle | Exception; residual risk: live-host concurrency **not verified** |
 | F.3-4 | G-2 recipient re-check at dispatch (migration `0037`) | PR #12: 11 security and 8 integration tests; mutation checks; CI `40066676777` | No supported way to hold a queued message on QA | X-5: automated-only exception approved in principle | Exception; residual risk: the live race window between queueing and claim is not exercised |
@@ -257,6 +257,22 @@ PostgreSQL also logged "last known up at 2026-10-26 11:49:55 UTC". *Interpretati
 
 **This record documents the recovery of the QA environment only. It is not QA acceptance:** Gate F.2 and Gate F.3 remain **NOT ACCEPTED**, and no finding, decision or test result changes because of it.
 
+### 5g. Gate F.2 closeout and QA-D-08 S1–S7 reconciliation (30-Oct-2026)
+
+- **Owner decision:** Gate F.2 (Phase 4.2 — Provider Adapters & Eligibility) is formally **ACCEPTED** (30-Oct-2026; §8). Gate F.3 remains **NOT ACCEPTED**. Phase 5 remains **NOT AUTHORIZED**.
+- **QA-D-08 execution on QA host:**
+  - S1–S4: Seeded assignments, priority reordering, and enable/disable persistence across browser reloads verified.
+  - S5: Picker prefiltering and backend 409 conflict codes (`PROVIDER_ASSIGNMENT_CONFLICT`, `ASSIGNMENT_PRIORITY_CONFLICT`) verified; follow-up screenshots captured.
+  - S6: Path containment verified (cross-tenant assignment reads return 404 `PROVIDER_ASSIGNMENT_NOT_FOUND`).
+  - S7: Verified 30-Oct-2026 under runbook v2.5 (`d08-client-v2.5.sh`). Non-platform administrator signed into disposable tenant D08B (`qa-disposable-d08b`) has the Provider Assignments panel completely suppressed in DOM; direct API calls return 403 `AUTHZ_SCOPE_DENIED`. Org A2/B2 isolation unchanged. Evidence in `~/acc-evidence/2026-10-30-qa-d-08-s7/` (manifest SHA-256 `2c0fbb7c6f6525da17a4d5c3912102a7a50953d38a89831f9130fd5d8728b59e`).
+- **Accepted scope boundaries:**
+  - Simulator-only providers (SMS, RCS, WhatsApp): no real third-party vendor credentials, endpoints, or carrier networks are authorized or exercised.
+  - Synthetic DLT format validation (X-1): DLT entity and template IDs are synthetically generated and validated for structure/presence; does not prove telecom registration or regulatory compliance.
+  - Fallback is strictly provider-to-provider within the same channel; cross-channel fallback remains deferred to Phase 5.
+- **Documented environmental residuals:**
+  - **Retained active D08B administrator:** Organization `QA Disposable D08B` (`01a18d2a-17de-7ebe-8048-895a9ed4ba19`) was suspended at C-3 (`cleanup/C-3-suspended.png`). Its administrator `qa-disposable-d08b-admin@example.test` (`01a18d2c-740b-74f2-828b-92317c9653cb`) is retained active because the product prohibits disabling the last active administrator of an organization (HTTP 409 `AUTHZ_LAST_ORGANIZATION_ADMIN`, `cleanup/C-2-disable-refused.png`). The tenant is suspended, password file was wiped (`shred -u` at C-6), and non-platform access is rejected across all endpoints per ADR-012 F-1.
+  - **Unattributed failed login audit events:** The S7 audit set difference recorded 35 new rows, of which 33 were attributed to verified test operations and exactly 2 recorded `action = 'auth.login.failed'` with `actor_id = NULL`. Anonymous login failure records do not capture an actor ID; zero baseline rows were lost and zero rows reference Org A2/B2/C.
+
 ## 6. Upgrade sequence
 
 Run only within an authorized QA upgrade window. Steps 3–5 follow `RELEASE.md` §6.
@@ -281,13 +297,13 @@ Gate F.2 is decided before Gate F.3. Each sign-off records:
 
 | Field | Gate F.2 | Gate F.3 |
 |---|---|---|
-| Owner | | |
-| Date (DD-MMM-YYYY) | | |
-| Release commit and CI run | | |
-| Automated evidence accepted (matrix rows) | | |
-| QA-host checks passed (matrix rows, results) | | |
-| Automated-only exceptions approved | | |
-| Unresolved limitations | | |
-| Decision | Pending | Not accepted |
+| Owner | Project Owner | |
+| Date (DD-MMM-YYYY) | 30-Oct-2026 | |
+| Release commit and CI run | `441a29a` (CI `40053914870`, `40067932448`) | |
+| Automated evidence accepted (matrix rows) | F.2-1, F.2-2, F.2-3, F.2-4 (PR #6, PR #7, PR #11) | |
+| QA-host checks passed (matrix rows, results) | F.2-1 (QA-K-01..K-05 PASS), F.2-2 (QA-K-06..K-08 PASS), F.2-3 (QA-D-08 S1–S7 PASS), F.2-4 (QA-F-01..F-05, QA-K-05, QA-K-09 PASS) | |
+| Automated-only exceptions approved | None (all Gate F.2 items possess verified QA-host evidence) | |
+| Unresolved limitations | Simulator-only providers (X-1, X-2, X-3); synthetic DLT formatting validation only (X-1); retained suspended disposable tenants D08 and D08B with D08B active admin residual | |
+| Decision | **ACCEPTED** | Not accepted |
 
-Until these fields are completed by an explicit owner decision, Gate F.2 remains pending and Gate F.3 remains not accepted.
+Gate F.2 was accepted by project owner decision on 30-Oct-2026. Gate F.3 remains not accepted until its sign-off fields are completed by a separate owner decision.

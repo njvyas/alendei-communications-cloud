@@ -2197,7 +2197,7 @@ Because migration `0019` granted EXECUTE on `app_has_platform_permission` only t
 ## 1z. Phase 4.3 F.3-1: email and voice message sending unsupported, fail closed: 24-Oct-2026
 
 ### 1z.1 Decision
-- **Status:** project owner decision G-1, 24-Oct-2026. Implemented in PR #10. Gate F.3 remains **not accepted**; Gate F.2 acceptance remains **pending**.
+- **Status:** project owner decision G-1, 24-Oct-2026. Implemented in PR #10. Gate F.3 remains **not accepted**; Gate F.2 is **ACCEPTED** (project owner decision, 30-Oct-2026; `QA_RELEASE_PREPARATION.md` §8).
 - `email` and `voice` are catalogued channels (ADR-013 F-2) with no authorized message send path (§1w.10). Sending a message on either is **unsupported** and fails closed. No feature flag enables delivery.
 - The provider test-send diagnostic (`POST /providers/{id}/test-send`, Phase 2.2) remains a **separate, simulator-only** platform capability: it submits a synthetic payload through the provider's adapter (the simulator is the only adapter), persists no message and is not a message send path. It is not affected by this decision.
 
@@ -2210,7 +2210,7 @@ Because migration `0019` granted EXECUTE on `app_has_platform_permission` only t
 ## 1za. Phase 4.3 G-2: suppression and consent re-checked at dispatch (migration 0037): 24-Oct-2026
 
 ### 1za.1 Decision
-- **Status:** project owner approved approach B, 24-Oct-2026. Merged to `develop` via PR #12 (commit `ce18f4d`); migration `0037` verified in disposable database clones and **not applied** to shared QA or production, and its deployment needs separate authorization. Gate F.3 remains **not accepted**; Gate F.2 acceptance remains **pending**.
+- **Status:** project owner approved approach B, 24-Oct-2026. Merged to `develop` via PR #12 (commit `ce18f4d`); migration `0037` verified in disposable database clones and **not applied** to shared QA or production, and its deployment needs separate authorization. Gate F.3 remains **not accepted**; Gate F.2 is **ACCEPTED** (project owner decision, 30-Oct-2026; `QA_RELEASE_PREPARATION.md` §8).
 - The send path refuses a suppressed or consent-revoked recipient, but a queued message — or one requeued for same-channel fallback — can wait while either changes. The dispatcher therefore re-checks both on **every claim**, fallback re-claims included, before any provider is selected.
 - **Approach B (chosen):** one narrow `SECURITY DEFINER` function, `app_dispatch_recipient_block()`, with `EXECUTE` for `acc_dispatch` only. `acc_dispatch` receives **no** grant on `suppressions` or `consent_events`. Approach A (column grants plus claim-scoped policies on both tables) was rejected: it exposes rows to the dispatch role and adds policy surface.
 
