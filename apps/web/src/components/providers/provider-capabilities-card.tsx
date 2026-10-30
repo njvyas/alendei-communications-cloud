@@ -97,9 +97,7 @@ export function SimulatorBehaviorSelector({
   onChange,
   disabled = false,
 }: SimulatorBehaviorSelectorProps) {
-  const isCustomValue = Boolean(
-    value && !SUPPORTED_SIMULATOR_BEHAVIORS.includes(value as SupportedSimulatorBehavior),
-  );
+  const isSupported = (SUPPORTED_SIMULATOR_BEHAVIORS as readonly string[]).includes(value);
 
   return (
     <div className="space-y-1">
@@ -119,7 +117,11 @@ export function SimulatorBehaviorSelector({
             </option>
           );
         })}
-        {isCustomValue && <option value={value}>{value} (Custom / Legacy)</option>}
+        {!isSupported && (
+          <option value={value}>
+            {value === '' ? '(Empty / Unspecified)' : `${value} (Custom / Legacy)`}
+          </option>
+        )}
       </select>
       <p className="text-[11px] text-[var(--color-ink-muted)]">
         Simulated outcome when dispatching messages through this adapter.
@@ -141,6 +143,196 @@ export interface ProviderCapabilitiesDialogProps {
 export interface CapabilityRow {
   key: string;
   valueJson: string;
+}
+
+export interface FormattedCapability {
+  readonly key: string;
+  readonly value: unknown;
+}
+
+export interface CapabilityValidationError {
+  readonly title: string;
+  readonly message: string;
+  readonly rowNumber?: number;
+}
+
+export type CapabilityValidationResult =
+  | { readonly ok: true; readonly capabilities: readonly FormattedCapability[] }
+  | { readonly ok: false; readonly error: CapabilityValidationError };
+
+/**
+ * Pure, independently testable helper to validate and format capability rows into the API contract.
+ */
+export function validateAndFormatCapabilityRows(
+  rows: readonly CapabilityRow[],
+): CapabilityValidationResult {
+  const seenKeys = new Set<string>();
+  const formattedCapabilities: FormattedCapability[] = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    const trimmedKey = row.key.trim();
+
+    if (!trimmedKey) {
+      return {
+        ok: false,
+        error: {
+          title: 'Validation Error',
+          message: `Row ${i + 1}: capability key cannot be empty.`,
+          rowNumber: i + 1,
+        },
+      };
+    }
+
+    if (!PROVIDER_CAPABILITY_KEY_PATTERN.test(trimmedKey)) {
+      return {
+        ok: false,
+        error: {
+          title: 'Invalid Key Format',
+          message: `Row ${i + 1}: key "${trimmedKey}" must be 2–64 lower-case letters, digits or underscores, starting with a letter.`,
+          rowNumber: i + 1,
+        },
+      };
+    }
+
+    for (const forbidden of PROVIDER_CAPABILITY_FORBIDDEN_KEY_FRAGMENTS) {
+      if (trimmedKey.includes(forbidden)) {
+        return {
+          ok: false,
+          error: {
+            title: 'Forbidden Key Fragment',
+            message: `Row ${i + 1}: key cannot contain forbidden secret fragment "${forbidden}".`,
+            rowNumber: i + 1,
+          },
+        };
+      }
+    }
+
+    if (seenKeys.has(trimmedKey)) {
+      return {
+        ok: false,
+        error: {
+          title: 'Duplicate Key',
+          message: `Duplicate capability key "${trimmedKey}". Keys must be unique.`,
+          rowNumber: i + 1,
+        },
+      };
+    }
+    seenKeys.add(trimmedKey);
+
+    let parsedValue: unknown;
+    try {
+      parsedValue = JSON.parse(row.valueJson);
+    } catch {
+      return {
+        ok: false,
+        error: {
+          title: 'Invalid JSON',
+          message: `Row ${i + 1}: value must be valid JSON.`,
+          rowNumber: i + 1,
+        },
+      };
+    }
+
+    if (parsedValue === null) {
+      return {
+        ok: false,
+        error: {
+          title: 'Invalid Value',
+          message: `Row ${i + 1}: capability value cannot be null.`,
+          rowNumber: i + 1,
+        },
+      };
+    }
+
+    const serializedSize = new TextEncoder().encode(JSON.stringify(parsedValue)).length;
+    if (serializedSize > PROVIDER_CAPABILITY_LIMITS.MAX_VALUE_BYTES) {
+      return {
+        ok: false,
+        error: {
+          title: 'Value Size Limit Exceeded',
+          message: `Row ${i + 1}: serialized value size (${serializedSize} bytes) exceeds limit (${PROVIDER_CAPABILITY_LIMITS.MAX_VALUE_BYTES} bytes).`,
+          rowNumber: i + 1,
+        },
+      };
+    }
+
+    formattedCapabilities.push({ key: trimmedKey, value: parsedValue });
+  }
+
+  return { ok: true, capabilities: formattedCapabilities };
+}
+
+export function addCapabilityRow(rows: readonly CapabilityRow[]): readonly CapabilityRow[] {
+  if (rows.length >= PROVIDER_CAPABILITY_LIMITS.MAX_ENTRIES) return rows;
+  return [...rows, { key: '', valueJson: '""' }];
+}
+
+export function addSimulatorBehaviorRow(rows: readonly CapabilityRow[]): readonly CapabilityRow[] {
+  if (rows.length >= PROVIDER_CAPABILITY_LIMITS.MAX_ENTRIES) return rows;
+  return [
+    ...rows,
+    {
+      key: SIMULATOR_BEHAVIOR_KEY,
+      valueJson: formatSimulatorBehaviorPayload(SUPPORTED_SIMULATOR_BEHAVIORS[0]),
+    },
+  ];
+}
+
+export function removeCapabilityRow(
+  rows: readonly CapabilityRow[],
+  index: number,
+): readonly CapabilityRow[] {
+  return rows.filter((_, i) => i !== index);
+}
+
+export function updateCapabilityKey(
+  rows: readonly CapabilityRow[],
+  index: number,
+  newKey: string,
+): readonly CapabilityRow[] {
+  const copy = [...rows];
+  const target = copy[index];
+  if (!target) return rows;
+
+  const wasSimulator = isSimulatorBehaviorKey(target.key);
+  const willBeSimulator = isSimulatorBehaviorKey(newKey);
+
+  let updatedValueJson = target.valueJson;
+  if (!wasSimulator && willBeSimulator) {
+    const parsed = parseSimulatorBehaviorValue(target.valueJson);
+    const validBehavior = (SUPPORTED_SIMULATOR_BEHAVIORS as readonly string[]).includes(parsed)
+      ? parsed
+      : SUPPORTED_SIMULATOR_BEHAVIORS[0];
+    updatedValueJson = formatSimulatorBehaviorPayload(validBehavior);
+  }
+
+  copy[index] = {
+    ...target,
+    key: newKey,
+    valueJson: updatedValueJson,
+  };
+  return copy;
+}
+
+export function updateCapabilityValue(
+  rows: readonly CapabilityRow[],
+  index: number,
+  newValueJson: string,
+): readonly CapabilityRow[] {
+  const copy = [...rows];
+  const target = copy[index];
+  if (!target) return rows;
+  copy[index] = { ...target, valueJson: newValueJson };
+  return copy;
+}
+
+export function updateSimulatorBehavior(
+  rows: readonly CapabilityRow[],
+  index: number,
+  selectedBehavior: string,
+): readonly CapabilityRow[] {
+  return updateCapabilityValue(rows, index, formatSimulatorBehaviorPayload(selectedBehavior));
 }
 
 export function ProviderCapabilitiesDialog({
@@ -171,7 +363,7 @@ export function ProviderCapabilitiesDialog({
       });
       return;
     }
-    setRows((prev) => [...prev, { key: '', valueJson: '""' }]);
+    setRows((prev) => [...addCapabilityRow(prev)]);
   };
 
   const handleAddSimulatorBehavior = () => {
@@ -184,148 +376,47 @@ export function ProviderCapabilitiesDialog({
       });
       return;
     }
-    setRows((prev) => [
-      ...prev,
-      {
-        key: SIMULATOR_BEHAVIOR_KEY,
-        valueJson: formatSimulatorBehaviorPayload(SUPPORTED_SIMULATOR_BEHAVIORS[0]),
-      },
-    ]);
+    setRows((prev) => [...addSimulatorBehaviorRow(prev)]);
   };
 
   const handleRemoveRow = (index: number) => {
     setFeedback(null);
-    setRows((prev) => prev.filter((_, i) => i !== index));
+    setRows((prev) => [...removeCapabilityRow(prev, index)]);
   };
 
   const handleKeyChange = (index: number, newKey: string) => {
     setFeedback(null);
-    setRows((prev) => {
-      const copy = [...prev];
-      const target = copy[index]!;
-      const wasSimulator = isSimulatorBehaviorKey(target.key);
-      const willBeSimulator = isSimulatorBehaviorKey(newKey);
-
-      let updatedValueJson = target.valueJson;
-      if (!wasSimulator && willBeSimulator) {
-        // Switching to simulator_behavior: ensure valid default valueJson
-        const parsed = parseSimulatorBehaviorValue(target.valueJson);
-        const validBehavior = (SUPPORTED_SIMULATOR_BEHAVIORS as readonly string[]).includes(parsed)
-          ? parsed
-          : SUPPORTED_SIMULATOR_BEHAVIORS[0];
-        updatedValueJson = formatSimulatorBehaviorPayload(validBehavior);
-      }
-
-      copy[index] = {
-        ...target,
-        key: newKey,
-        valueJson: updatedValueJson,
-      };
-      return copy;
-    });
+    setRows((prev) => [...updateCapabilityKey(prev, index, newKey)]);
   };
 
   const handleValueChange = (index: number, newValueJson: string) => {
     setFeedback(null);
-    setRows((prev) => {
-      const copy = [...prev];
-      copy[index] = { ...copy[index]!, valueJson: newValueJson };
-      return copy;
-    });
+    setRows((prev) => [...updateCapabilityValue(prev, index, newValueJson)]);
   };
 
   const handleSimulatorSelect = (index: number, selectedBehavior: string) => {
-    handleValueChange(index, formatSimulatorBehaviorPayload(selectedBehavior));
+    setFeedback(null);
+    setRows((prev) => [...updateSimulatorBehavior(prev, index, selectedBehavior)]);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFeedback(null);
 
-    const seenKeys = new Set<string>();
-    const formattedCapabilities: Array<{ key: string; value: unknown }> = [];
-
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i]!;
-      const trimmedKey = row.key.trim();
-
-      if (!trimmedKey) {
-        setFeedback({
-          type: 'error',
-          title: 'Validation Error',
-          message: `Row ${i + 1}: capability key cannot be empty.`,
-        });
-        return;
-      }
-
-      if (!PROVIDER_CAPABILITY_KEY_PATTERN.test(trimmedKey)) {
-        setFeedback({
-          type: 'error',
-          title: 'Invalid Key Format',
-          message: `Row ${i + 1}: key "${trimmedKey}" must be 2–64 lower-case letters, digits or underscores, starting with a letter.`,
-        });
-        return;
-      }
-
-      for (const forbidden of PROVIDER_CAPABILITY_FORBIDDEN_KEY_FRAGMENTS) {
-        if (trimmedKey.includes(forbidden)) {
-          setFeedback({
-            type: 'error',
-            title: 'Forbidden Key Fragment',
-            message: `Row ${i + 1}: key cannot contain forbidden secret fragment "${forbidden}".`,
-          });
-          return;
-        }
-      }
-
-      if (seenKeys.has(trimmedKey)) {
-        setFeedback({
-          type: 'error',
-          title: 'Duplicate Key',
-          message: `Duplicate capability key "${trimmedKey}". Keys must be unique.`,
-        });
-        return;
-      }
-      seenKeys.add(trimmedKey);
-
-      let parsedValue: unknown;
-      try {
-        parsedValue = JSON.parse(row.valueJson);
-      } catch {
-        setFeedback({
-          type: 'error',
-          title: 'Invalid JSON',
-          message: `Row ${i + 1}: value must be valid JSON.`,
-        });
-        return;
-      }
-
-      if (parsedValue === null) {
-        setFeedback({
-          type: 'error',
-          title: 'Invalid Value',
-          message: `Row ${i + 1}: capability value cannot be null.`,
-        });
-        return;
-      }
-
-      const serializedSize = new TextEncoder().encode(JSON.stringify(parsedValue)).length;
-      if (serializedSize > PROVIDER_CAPABILITY_LIMITS.MAX_VALUE_BYTES) {
-        setFeedback({
-          type: 'error',
-          title: 'Value Size Limit Exceeded',
-          message: `Row ${i + 1}: serialized value size (${serializedSize} bytes) exceeds limit (${PROVIDER_CAPABILITY_LIMITS.MAX_VALUE_BYTES} bytes).`,
-        });
-        return;
-      }
-
-      formattedCapabilities.push({ key: trimmedKey, value: parsedValue });
+    const validation = validateAndFormatCapabilityRows(rows);
+    if (!validation.ok) {
+      setFeedback({
+        type: 'error',
+        title: validation.error.title,
+        message: validation.error.message,
+      });
+      return;
     }
 
     setIsSubmitting(true);
     try {
       await providersApi.replaceCapabilities(provider.id, {
-        capabilities: formattedCapabilities,
+        capabilities: [...validation.capabilities],
       });
 
       await queryClient.invalidateQueries({ queryKey: ['providers'] });
@@ -449,6 +540,7 @@ export function ProviderCapabilitiesDialog({
                         disabled={isSubmitting}
                         className="mt-4 rounded p-1 text-[var(--color-bad,#ef4444)] hover:bg-[var(--color-bad-subtle,rgba(239,68,68,0.1))] text-xs font-medium"
                         title="Remove capability"
+                        aria-label={`Remove capability ${row.key.trim() || `row ${index + 1}`}`}
                         data-testid={`remove-capability-${index}`}
                       >
                         Delete
@@ -572,7 +664,7 @@ export function ProviderCapabilitiesCard({
                           data-testid="simulator-behavior-badge"
                           className="font-mono text-[11px] font-semibold px-2 py-0.5 rounded bg-[var(--color-surface)] text-[var(--color-ink)] border border-[var(--color-border-subtle)]"
                         >
-                          {String(c.value)}
+                          {c.value === '' ? '(empty)' : String(c.value)}
                         </span>
                       ) : (
                         <pre className="font-mono text-[11px] text-[var(--color-ink-muted)] max-w-[200px] overflow-x-auto text-right">
@@ -588,11 +680,13 @@ export function ProviderCapabilitiesCard({
         </Card>
       </div>
 
-      <ProviderCapabilitiesDialog
-        open={isDialogOpen}
-        onOpenChange={setIsDialogOpen}
-        provider={provider}
-      />
+      {isDialogOpen && (
+        <ProviderCapabilitiesDialog
+          open={isDialogOpen}
+          onOpenChange={setIsDialogOpen}
+          provider={provider}
+        />
+      )}
     </>
   );
 }

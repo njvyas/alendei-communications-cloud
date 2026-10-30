@@ -9,10 +9,14 @@ import {
   ProviderCapabilitiesDialog,
   SimulatorBehaviorSelector,
   formatSimulatorBehaviorPayload,
+  validateAndFormatCapabilityRows,
 } from './provider-capabilities-card';
 import {
   ProviderCapabilitiesDialog as ReExportedDialog,
   ProviderCapabilitiesCard as ReExportedCard,
+  validateAndFormatCapabilityRows as reExportedValidate,
+  addCapabilityRow as reExportedAddRow,
+  addSimulatorBehaviorRow as reExportedAddSimulator,
 } from './provider-capabilities-dialog';
 import { createAppQueryClient } from '../../lib/query-client';
 import {
@@ -53,6 +57,9 @@ describe('SEC-U8: Provider Capabilities Security, Validation & Type Preservation
       assert.equal(typeof ReExportedCard, 'function');
       assert.equal(ReExportedDialog, ProviderCapabilitiesDialog);
       assert.equal(ReExportedCard, ProviderCapabilitiesCard);
+      assert.equal(reExportedValidate, validateAndFormatCapabilityRows);
+      assert.equal(typeof reExportedAddRow, 'function');
+      assert.equal(typeof reExportedAddSimulator, 'function');
     });
   });
 
