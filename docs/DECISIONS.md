@@ -2297,6 +2297,15 @@ Because migration `0019` granted EXECUTE on `app_has_platform_permission` only t
   - Disk analysis is read-only; nothing is deleted without approval.
 - Gate F.3 is **not** accepted; Phase 5 is **not** authorized; no deployment.
 
+### 1zc.4 QA host backup incident and housekeeping (owner decisions, 31-Oct-2026)
+
+- **Backup incident.** The QA-I-04 dump retained on 28-Oct-2026 could not be located on 31-Oct.
+  - *Inference:* it was lost when `/tmp` was cleared by a host boot on 28-Oct-2026 at 09:37:44 UTC. That boot is recorded as an observed event with unknown cause.
+  - **Approved:** a fresh `pg_dump` recovery copy to a known absolute path, verified with `pg_restore -l` and not restored (`QA_RELEASE_PREPARATION.md` §4). It is a local recovery copy only; it is **not** an approved off-host backup and does **not** satisfy D5.
+- **Disk clean-up (approved with scope limits).** Removed the build cache and the superseded `2026.10.22-869971e` images only; `2026.10.23-9cf5872` kept as the rollback target. No broader clean-up.
+- **Disclosure recorded.** One failed read-only query against a nonexistent `role_assignments` table left a single PostgreSQL error log line. No further action.
+- **Unchanged.** PR #50 stays a draft. X-6 is not executed (named operator, window and operational authorization outstanding). Section J waits for nominations and account set-up. D1, D2 and D5 are pending infrastructure-owner decisions. Gate F.3 is not accepted; Phase 5 is not authorized.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.
