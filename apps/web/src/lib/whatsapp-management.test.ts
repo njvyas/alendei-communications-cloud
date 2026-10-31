@@ -196,6 +196,55 @@ describe('WhatsApp Management API Clients (Templates, Contacts, Messages)', () =
       const parsedBody = JSON.parse(call.options.body as string);
       assert.equal(parsedBody.targetStatus, 'approved');
     });
+
+    it('update sends PATCH with name and body and attaches X-Acc-Organization', async () => {
+      mockHandlers.push({
+        match: (url, opts) => opts.method === 'PATCH' && url.includes(`/templates/${TEMPLATE_ID}`),
+        handle: () =>
+          new Response(
+            JSON.stringify({
+              data: {
+                id: TEMPLATE_ID,
+                orgId: ORG_A,
+                channelId: CHANNEL_ID,
+                name: 'order_update_v2',
+                body: 'Your order {{1}} is out for delivery',
+                variables: ['1'],
+                approvalStatus: 'draft',
+                createdAt: '2026-10-15T10:00:00Z',
+                updatedAt: '2026-10-15T10:10:00Z',
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
+      });
+
+      const res = await templatesApi.update(TEMPLATE_ID, {
+        name: 'order_update_v2',
+        body: 'Your order {{1}} is out for delivery',
+      });
+
+      assert.equal(res.data.name, 'order_update_v2');
+      const call = fetchCalls[0]!;
+      assert.equal(call.options.method, 'PATCH');
+      const headers = call.options.headers as Record<string, string>;
+      assert.equal(headers['X-Acc-Organization'], ORG_A);
+      const parsedBody = JSON.parse(call.options.body as string);
+      assert.equal(parsedBody.name, 'order_update_v2');
+    });
+
+    it('delete sends DELETE to /templates/:id and attaches X-Acc-Organization', async () => {
+      mockHandlers.push({
+        match: (url, opts) => opts.method === 'DELETE' && url.includes(`/templates/${TEMPLATE_ID}`),
+        handle: () => new Response(null, { status: 204 }),
+      });
+
+      await templatesApi.delete(TEMPLATE_ID);
+      const call = fetchCalls[0]!;
+      assert.equal(call.options.method, 'DELETE');
+      const headers = call.options.headers as Record<string, string>;
+      assert.equal(headers['X-Acc-Organization'], ORG_A);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -362,6 +411,74 @@ describe('WhatsApp Management API Clients (Templates, Contacts, Messages)', () =
       const call = fetchCalls[0]!;
       assert.ok(call.url.includes(`channelId=${CHANNEL_ID}`));
       assert.ok(call.url.includes('consentType=transactional'));
+    });
+
+    it('update sends PATCH to /contacts/:id and attaches X-Acc-Organization', async () => {
+      mockHandlers.push({
+        match: (url, opts) => opts.method === 'PATCH' && url.includes(`/contacts/${CONTACT_ID}`),
+        handle: () =>
+          new Response(
+            JSON.stringify({
+              data: {
+                id: CONTACT_ID,
+                workspaceId: WORKSPACE_1,
+                firstName: 'Alice',
+                lastName: 'Smith',
+                metadata: { vip: true },
+                createdAt: '2026-10-15T10:00:00Z',
+                updatedAt: '2026-10-15T10:05:00Z',
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
+      });
+
+      const res = await contactsApi.update(CONTACT_ID, {
+        firstName: 'Alice',
+        lastName: 'Smith',
+        metadata: { vip: true },
+      });
+
+      assert.equal(res.data.firstName, 'Alice');
+      const call = fetchCalls[0]!;
+      assert.equal(call.options.method, 'PATCH');
+      const headers = call.options.headers as Record<string, string>;
+      assert.equal(headers['X-Acc-Organization'], ORG_A);
+    });
+
+    it('listIdentities sends GET to /contacts/:id/identities and attaches X-Acc-Organization', async () => {
+      mockHandlers.push({
+        match: (url, opts) =>
+          opts.method === 'GET' && url.includes(`/contacts/${CONTACT_ID}/identities`),
+        handle: () =>
+          new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: 'idnt-1',
+                  workspaceId: WORKSPACE_1,
+                  contactId: CONTACT_ID,
+                  channelId: CHANNEL_ID,
+                  rawAddress: '+12025550199',
+                  normalizedAddress: '+12025550199',
+                  isPrimary: true,
+                  status: 'active',
+                  createdAt: '2026-10-15T10:00:00Z',
+                  updatedAt: '2026-10-15T10:00:00Z',
+                },
+              ],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
+      });
+
+      const res = await contactsApi.listIdentities(CONTACT_ID);
+      assert.equal(res.data.length, 1);
+      assert.equal(res.data[0]?.rawAddress, '+12025550199');
+      const call = fetchCalls[0]!;
+      assert.equal(call.options.method, 'GET');
+      const headers = call.options.headers as Record<string, string>;
+      assert.equal(headers['X-Acc-Organization'], ORG_A);
     });
   });
 

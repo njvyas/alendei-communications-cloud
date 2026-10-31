@@ -2135,17 +2135,25 @@ export interface ListTemplatesParams {
   readonly sort?: string;
 }
 
+export interface SmsDltMetadataParams {
+  readonly entityId: string;
+  readonly templateId: string;
+  readonly headerId?: string;
+}
+
 export interface CreateTemplateParams {
   readonly channelId: string;
   readonly name: string;
   readonly body: string;
   readonly variables?: readonly string[];
+  readonly dlt?: SmsDltMetadataParams;
 }
 
 export interface UpdateTemplateParams {
   readonly name?: string;
   readonly body?: string;
   readonly variables?: readonly string[];
+  readonly dlt?: SmsDltMetadataParams;
 }
 
 export type TargetApprovalStatus = 'pending' | 'approved' | 'rejected';
@@ -2353,6 +2361,19 @@ export const contactsApi = {
       {
         method: 'POST',
         body: params,
+        signal,
+      },
+    );
+  },
+
+  async listIdentities(
+    contactId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<readonly ContactIdentityResponse[]>> {
+    return apiFetch<ApiDataResponse<readonly ContactIdentityResponse[]>>(
+      `/contacts/${encodeURIComponent(contactId)}/identities`,
+      {
+        method: 'GET',
         signal,
       },
     );
