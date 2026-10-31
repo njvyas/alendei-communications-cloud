@@ -40,6 +40,29 @@ All public and console APIs are served under `/api/v1`. Breaking changes ship as
 
 `POST /messages` accepts an optional `requested_channel_id`. When supplied, it is a **hard channel constraint by default** — ACC never substitutes a different channel for that message unless the caller also sets `cross_channel_fallback_enabled: true`. This is the API-facing view of the mechanism defined canonically in `ROUTING_ENGINE.md` §1a; do not re-derive the semantics independently here. A caller sending a transactional OTP should never set `cross_channel_fallback_enabled`; a caller sending a marketing message that should be allowed to escalate across channels must set it explicitly — the platform default is the safer, non-escalating behavior.
 
+### 2b. `GET /usage/messages` — message usage report (owner-directed, 31-Oct-2026)
+
+The request organization's message consumption over a period, for the console's Usage page and for API-key clients.
+
+- **Query:**
+  - `from` (inclusive) and `to` (exclusive) are required ISO timestamps, at most 366 days apart.
+  - Optional filters: `channelCode`, `workspaceId`, and `timeZone` (an IANA name, default `UTC`, used only for the daily buckets).
+  - Anything else, including `orgId`, is refused with `400`.
+- **Authorization:**
+  - Requires `messages.read` at the request organization, the same as `GET /messages`, and runs in the tenant transaction. It can only count rows the caller could list.
+  - Another organization's `workspaceId` counts nothing.
+  - Selecting an organization the caller is not authorized for is refused with `403`.
+- **Response `data`:**
+  - `totals` and per-channel counts (`byChannel`), each split into `accepted`, `failed`, `outcomeUnknown` and `pending`.
+  - `byDay`: per-day counts by channel. Days with no messages are omitted.
+  - `acceptanceRate`: accepted ÷ settled, or `null`.
+  - `topFailureReasons`: the top ten failure reason codes. A reason that does not start with an upper-case code is reported as `OTHER`, because free text can contain a recipient.
+- **Meaning:**
+  - `accepted` means a provider accepted the submission. No handset receipt data exists yet.
+  - These are operational counts, not metered or rated usage. The Phase 7 usage ledger remains the billing source.
+- **Not included:** reseller-wide or platform-wide aggregation. Counting across organizations needs an RLS and authorization decision (Phase 9 "reseller reporting").
+- **Export:** the console exports the daily breakdown as CSV client-side, with formula-injection protection.
+
 ## 3. Authentication & request identity
 
 Every authenticated caller resolves to exactly one **identity type**, and `audit_logs.actor_type` (`DATABASE.md` §12) always records which:

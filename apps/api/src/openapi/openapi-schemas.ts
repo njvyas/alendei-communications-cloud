@@ -622,3 +622,70 @@ export class MessageDetailSchema {
   })
   attempts!: MessageAttemptSchema[];
 }
+
+const count = { type: 'integer', minimum: 0 } as const;
+
+@ApiSchema({ name: 'MessageUsageCounts' })
+export class MessageUsageCountsSchema {
+  @ApiProperty(count) total!: number;
+  @ApiProperty({ ...count, description: 'A provider accepted the submission.' }) accepted!: number;
+  @ApiProperty(count) failed!: number;
+  @ApiProperty(count) outcomeUnknown!: number;
+  @ApiProperty({ ...count, description: 'Not yet settled.' }) pending!: number;
+}
+
+@ApiSchema({ name: 'MessageUsageChannelRow' })
+export class MessageUsageChannelRowSchema extends MessageUsageCountsSchema {
+  @ApiProperty({ enum: CHANNEL_CODES }) channelCode!: string;
+}
+
+@ApiSchema({ name: 'MessageUsageDayRow' })
+export class MessageUsageDayRowSchema extends MessageUsageChannelRowSchema {
+  @ApiProperty({
+    type: 'string',
+    format: 'date',
+    description: 'Calendar day in the report time zone. Days with no messages are omitted.',
+  })
+  day!: string;
+}
+
+@ApiSchema({ name: 'MessageUsageFailureReason' })
+export class MessageUsageFailureReasonSchema {
+  @ApiProperty({
+    type: 'string',
+    description: 'The leading upper-case reason code, or OTHER for free text.',
+    example: 'NO_ELIGIBLE_PROVIDER',
+  })
+  reason!: string;
+  @ApiProperty(count) count!: number;
+}
+
+@ApiSchema({ name: 'MessageUsageReport' })
+export class MessageUsageReportSchema {
+  @ApiProperty(uuid) orgId!: string;
+  @ApiProperty(timestamp) from!: string;
+  @ApiProperty(timestamp) to!: string;
+  @ApiProperty({ type: 'string', example: 'Asia/Kolkata' }) timeZone!: string;
+  @ApiProperty(nullableUuid) workspaceId!: string | null;
+  @ApiProperty({
+    // OpenAPI 3.0: a nullable enum must list null among its values.
+    enum: [...CHANNEL_CODES, null],
+    nullable: true,
+  })
+  channelCode!: string | null;
+  @ApiProperty({ type: MessageUsageCountsSchema }) totals!: MessageUsageCountsSchema;
+  @ApiProperty({
+    type: 'number',
+    minimum: 0,
+    maximum: 1,
+    nullable: true,
+    description: 'accepted / (accepted + failed + outcomeUnknown); null when nothing has settled.',
+  })
+  acceptanceRate!: number | null;
+  @ApiProperty({ type: MessageUsageChannelRowSchema, isArray: true })
+  byChannel!: MessageUsageChannelRowSchema[];
+  @ApiProperty({ type: MessageUsageDayRowSchema, isArray: true })
+  byDay!: MessageUsageDayRowSchema[];
+  @ApiProperty({ type: MessageUsageFailureReasonSchema, isArray: true })
+  topFailureReasons!: MessageUsageFailureReasonSchema[];
+}

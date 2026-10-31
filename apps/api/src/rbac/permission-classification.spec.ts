@@ -385,9 +385,14 @@ describe('the message keys in Phase 3.3 are referenced only by the messages modu
     // four tenant-content reads that admit a tenant operator to the channel
     // catalogue list — named by the route declaration and checked by
     // ProviderAccess.authorizeCatalogueRead. Read only; nothing else.
+    // Usage reporting (owner-directed, 31-Oct-2026): GET /usage/messages counts
+    // the messages a messages.read holder can already list, inside the messages
+    // module. Read only; no new permission key.
     expect(hits.sort()).toEqual([
       'apps/api/src/messages/messages.controller.ts',
       'apps/api/src/messages/messages.service.ts',
+      'apps/api/src/messages/usage/message-usage.controller.ts',
+      'apps/api/src/messages/usage/message-usage.service.ts',
       'apps/api/src/providers/channels.controller.ts',
       'apps/api/src/providers/provider-access.service.ts',
     ]);
