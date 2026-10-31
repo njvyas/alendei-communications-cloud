@@ -57,7 +57,7 @@ Create one item in the company-controlled password vault. Every field below is r
 | Title | `ACC QA – platform administrator access register` |
 | Environment | QA host `172.16.16.72`, release under test `2026.10.24-441a29a` |
 | Accountable owner | The company Super Admin role account designated by the owner on 31-Oct-2026 (its address is entered in the vault, not written in this public repository) / Super Admin |
-| **Accountable human custodian** | **MISSING. The owner must name one individual.** A role mailbox cannot answer for a credential, so D2 is incomplete until this is filled |
+| **Accountable human custodian** | Identified by the owner on 31-Oct-2026 (primary custodian named in the vault entry only, never in Git) |
 | Deputy custodian | Name of a second individual (recommended, for emergency access §6) |
 | Account 1 | The bootstrap platform administrator: its login identifier, role `alendei_super_admin` at platform scope, creation date (from the console Users page) |
 | Credential | Stored as the secret of this vault item only |
