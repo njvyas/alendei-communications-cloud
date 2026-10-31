@@ -820,4 +820,49 @@ describe('SEC-MSG: Message Components Integration, Privacy & Behavior Tests', ()
       React.useSyncExternalStore = (_subscribe, getSnapshot) => getSnapshot();
     }
   });
+
+  it('12. MessageListCard renders provider selector, address filter, and date filters', () => {
+    setupSessionWithGrants(ORG_A, ['messages.read']);
+    const queryClient: QueryClient = createAppQueryClient();
+
+    const mockSummaryFailed: MessageSummaryResponse = {
+      ...mockSummary,
+      status: 'failed',
+      failureReason: 'NO_ELIGIBLE_PROVIDER',
+    };
+
+    queryClient.setQueryData(
+      [
+        'messages',
+        'list',
+        ORG_A,
+        {
+          status: undefined,
+          channelCode: undefined,
+          workspaceId: undefined,
+          cursor: undefined,
+          limit: 25,
+        },
+      ],
+      {
+        data: [mockSummaryFailed],
+        page: { hasMore: false, nextCursor: null, limit: 25 },
+      },
+    );
+
+    const html = renderWithQueryClient(
+      React.createElement(MessageListCard, {
+        orgId: ORG_A,
+        channels: [mockChannel],
+      }),
+      queryClient,
+    );
+
+    assert.ok(html.includes('id="filter-recipient-address"'));
+    assert.ok(html.includes('id="filter-created-from"'));
+    assert.ok(html.includes('id="filter-created-to"'));
+    assert.ok(html.includes('data-testid="failure-reason-01955b0a-7b3b-7411-9a4f-msg000000001"'));
+    assert.ok(html.includes('No Available Provider'));
+    assert.ok(html.includes('NO_ELIGIBLE_PROVIDER'));
+  });
 });

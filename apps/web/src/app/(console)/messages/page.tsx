@@ -1,15 +1,27 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { channelsApi } from '@/lib/api-client';
-import { useCanReadMessages, useCanReadProviders, useSession } from '@/lib/session-store';
+import {
+  useCanReadMessages,
+  useCanReadProviders,
+  useCanSendMessages,
+  useSession,
+} from '@/lib/session-store';
 import { MessageListCard } from '@/components/messages/message-list-card';
+import { MessageDispatchDialog } from '@/components/messages/message-dispatch-dialog';
+import { MessageDetailDialog } from '@/components/messages/message-detail-dialog';
 
 export default function MessagesPage() {
   const selectedOrganizationId = useSession((state) => state.selectedOrganizationId);
   const canReadMessages = useCanReadMessages();
   const canReadProviders = useCanReadProviders();
+  const canSendMessages = useCanSendMessages();
+
+  const [isDispatchOpen, setIsDispatchOpen] = useState(false);
+  const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
 
   // Query channels catalogue if permitted to enrich channel display names
   const { data: channelsData } = useQuery({
@@ -18,6 +30,8 @@ export default function MessagesPage() {
     enabled: Boolean(selectedOrganizationId) && (canReadProviders || canReadMessages),
     retry: false,
   });
+
+  const channels = channelsData?.data ?? [];
 
   if (!selectedOrganizationId) {
     return (
@@ -58,18 +72,45 @@ export default function MessagesPage() {
           </p>
         </div>
 
-        <Link
-          href="/whatsapp"
-          className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 shadow-xs transition-colors"
-        >
-          Dispatch Test Message
-        </Link>
+        <div className="flex items-center gap-2">
+          {canSendMessages && (
+            <button
+              type="button"
+              onClick={() => setIsDispatchOpen(true)}
+              className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 shadow-xs transition-colors"
+              data-testid="dispatch-message-btn"
+            >
+              + Dispatch Message
+            </button>
+          )}
+          <Link
+            href="/whatsapp"
+            className="rounded-md border border-[var(--color-border-subtle)] px-3 py-1.5 text-xs font-medium text-[var(--color-ink)] hover:bg-[var(--color-surface-raised)] shadow-xs transition-colors"
+          >
+            WhatsApp Simulator
+          </Link>
+        </div>
       </div>
 
       <MessageListCard
         key={selectedOrganizationId}
         orgId={selectedOrganizationId}
-        channels={channelsData?.data ?? []}
+        channels={channels}
+      />
+
+      <MessageDispatchDialog
+        open={isDispatchOpen}
+        onOpenChange={setIsDispatchOpen}
+        onMessageDispatched={(id) => {
+          setActiveMessageId(id);
+        }}
+        channels={channels}
+      />
+
+      <MessageDetailDialog
+        messageId={activeMessageId}
+        onClose={() => setActiveMessageId(null)}
+        channels={channels}
       />
     </div>
   );
