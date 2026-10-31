@@ -50,6 +50,8 @@ const TABLES = [
   'message_dispatch_queue',
   'message_events',
   'messages',
+  // Phase 4 (migration 0038): organization domains (U12)
+  'organization_domains',
   // Phase 3.2 (migration 0032): organization provider assignments
   'organization_provider_assignments',
   'organizations',
@@ -97,6 +99,7 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
     message_dispatch_queue: 'DELETE,INSERT,SELECT,UPDATE',
     message_events: 'INSERT,SELECT',
     messages: 'INSERT,SELECT,UPDATE',
+    organization_domains: 'DELETE,INSERT,SELECT,UPDATE',
     organization_provider_assignments: 'INSERT,SELECT,UPDATE',
     organizations: 'INSERT,SELECT',
     permissions: 'SELECT',
@@ -123,6 +126,7 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
   acc_auth: {
     api_keys: 'SELECT',
     audit_logs: 'INSERT',
+    organization_domains: 'SELECT',
     organizations: 'SELECT',
     permissions: 'SELECT',
     resellers: 'SELECT',

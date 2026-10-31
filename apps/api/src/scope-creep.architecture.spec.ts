@@ -534,6 +534,7 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       'message_dispatch_queue',
       'message_events',
       'messages',
+      'organization_domains',
       'organization_provider_assignments',
       'organizations',
       'permissions',
