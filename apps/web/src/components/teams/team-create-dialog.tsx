@@ -4,6 +4,7 @@ import { useState, useEffect, type FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ApiError, teamsApi, workspacesApi, type TeamView } from '@/lib/api-client';
 import { useSession } from '@/lib/session-store';
+import { useModalDialog } from '@/components/ui/dialog';
 
 interface TeamCreateDialogProps {
   readonly isOpen: boolean;
@@ -56,6 +57,8 @@ export function TeamCreateDialog({
       setWorkspaceId(activeWorkspaces[0]!.id);
     }
   }, [isOpen, initialWorkspaceId, workspaceId, activeWorkspaces]);
+
+  const modal = useModalDialog(isOpen);
 
   if (!isOpen) return null;
 
@@ -127,9 +130,14 @@ export function TeamCreateDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="create-team-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 focus:outline-none"
+      {...modal.overlayProps(onClose, !isSubmitting)}
     >
-      <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl">
+      <div
+        ref={modal.panelRef}
+        tabIndex={-1}
+        className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl"
+      >
         <h2
           id="create-team-title"
           className="text-lg font-semibold tracking-tight text-[var(--color-ink)]"
@@ -141,7 +149,10 @@ export function TeamCreateDialog({
         </p>
 
         {errorMessage && (
-          <div className="mt-4 rounded-md border border-[var(--color-bad)]/20 bg-[var(--color-bad)]/10 p-3 text-xs text-[var(--color-bad)] leading-relaxed">
+          <div
+            role="alert"
+            className="mt-4 rounded-md border border-[var(--color-bad)]/20 bg-[var(--color-bad)]/10 p-3 text-xs text-[var(--color-bad)] leading-relaxed"
+          >
             {errorMessage}
           </div>
         )}
@@ -156,7 +167,7 @@ export function TeamCreateDialog({
                 Parent Workspace <span className="text-[var(--color-bad)]">*</span>
               </label>
               {workspacesLoading ? (
-                <div className="mt-1 text-xs text-[var(--color-ink-muted)]">
+                <div role="status" className="mt-1 text-xs text-[var(--color-ink-muted)]">
                   Loading workspaces…
                 </div>
               ) : activeWorkspaces.length === 0 ? (

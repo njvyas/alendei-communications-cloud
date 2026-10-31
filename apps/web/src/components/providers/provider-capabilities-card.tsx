@@ -448,6 +448,7 @@ export function ProviderCapabilitiesDialog({
       isOpen={open}
       onClose={() => onOpenChange(false)}
       titleId="edit-capabilities-title"
+      dismissible={!isSubmitting}
       descriptionId="edit-capabilities-desc"
       maxWidth="max-w-2xl"
     >

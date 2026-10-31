@@ -159,6 +159,7 @@ export function CreateSuppressionDialog({
       isOpen={isOpen}
       onClose={handleClose}
       titleId="create-suppression-title"
+      dismissible={!isSubmitting}
       descriptionId="create-suppression-desc"
       maxWidth="max-w-md"
     >

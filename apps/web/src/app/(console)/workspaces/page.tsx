@@ -128,6 +128,7 @@ export default function WorkspacesPage() {
               key={t.id}
               type="button"
               onClick={() => handleStatusChange(t.id)}
+              aria-pressed={statusFilter === t.id}
               className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
                 statusFilter === t.id
                   ? 'bg-[var(--color-accent)] text-white'
@@ -172,14 +173,20 @@ export default function WorkspacesPage() {
           </p>
         </div>
       ) : isLoading ? (
-        <div className="flex items-center justify-center rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-12">
+        <div
+          role="status"
+          className="flex items-center justify-center rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-12"
+        >
           <div className="flex items-center gap-3">
             <div className="size-4 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent" />
             <p className="text-sm text-[var(--color-ink-muted)]">Loading workspaces…</p>
           </div>
         </div>
       ) : error ? (
-        <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center">
+        <div
+          role="alert"
+          className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center"
+        >
           <p className="text-base font-semibold text-[var(--color-bad)]">
             Failed to Load Workspaces
           </p>

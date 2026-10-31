@@ -186,7 +186,7 @@ export default function ChannelDetailPage({ params }: { params: Promise<{ id: st
         </div>
 
         {isProvidersLoading ? (
-          <div className="flex justify-center py-8">
+          <div role="status" className="flex justify-center py-8">
             <div className="size-5 animate-spin rounded-full border-2 border-[var(--color-ink-muted)] border-t-transparent" />
           </div>
         ) : providers.length === 0 ? (

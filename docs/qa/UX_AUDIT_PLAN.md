@@ -39,6 +39,8 @@ None yet — QA round 1 has not run. One automated-test observation supports ite
 | U13 | all | Home page shows a static "Phase 1 & 2" card and platform status; no task-oriented starting point | `app/(console)/page.tsx` |
 | U14 | all | Dates follow the browser locale; header shows a truncated user UUID instead of the user's email/name | `layout.tsx:166-169` |
 
+**U10 implementation note (31-Oct-2026, branch `feat/console-accessibility-u10`, baseline `9c439a5`, not merged).** Re-inventory at the baseline: 39 modal dialogs (8 already on `AccessibleDialog`, 31 with hand-rolled overlays). Of the 31, 26 had `role="dialog"`, `aria-modal` and a title reference but no focus containment, Escape handling or focus return; 5 provider dialogs (`circuit-policy`, `provider-create`, `provider-health-override`, `provider-health-probe`, `provider-transition`) had no dialog semantics at all. The finding's count of seven provider dialogs does not reproduce: at the audit commit (`fd9f13d`) six provider dialogs lacked `role="dialog"`, and U8 (`9c439a5`) moved the capabilities dialog onto `AccessibleDialog`, leaving five. All 31 now share the `AccessibleDialog` focus logic through `useModalDialog`; Escape is ignored while a mutation is in flight. Also fixed: 17 unlabelled controls, 7 toggle-button groups without `aria-pressed` (6 list filters and the API-key expiry presets), 49 `<th>` without `scope`, and missing `role="alert"`/`role="status"` on error and loading states. Automated checks only; no screen-reader or WCAG conformance testing has been done.
+
 ### 2c. Improvements that need validation with users
 
 | ID | Question to validate | Method |

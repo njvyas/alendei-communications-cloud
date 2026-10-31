@@ -232,16 +232,23 @@ export default function ContactsPage() {
             <table className="w-full text-left text-xs" data-testid="contacts-table">
               <thead>
                 <tr className="border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] text-[var(--color-ink-muted)]">
-                  <th className="px-4 py-3 font-medium">Contact Name</th>
-                  <th className="px-4 py-3 font-medium">Contact ID</th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    Contact Name
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    Contact ID
+                  </th>
                   <th
+                    scope="col"
                     className="px-4 py-3 font-medium"
                     aria-sort="descending"
                     data-testid="contacts-created-header"
                   >
                     Created Date <span className="font-normal">(newest first)</span>
                   </th>
-                  <th className="px-4 py-3 font-medium text-right">Actions</th>
+                  <th scope="col" className="px-4 py-3 font-medium text-right">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border-subtle)]">
@@ -300,7 +307,10 @@ export default function ContactsPage() {
 
           {/* Keyset pagination footer */}
           {pageInfo && (
-            <div className="flex items-center justify-between border-t border-[var(--color-border-subtle)] px-4 py-3 text-xs text-[var(--color-ink-muted)]">
+            <div
+              role="status"
+              className="flex items-center justify-between border-t border-[var(--color-border-subtle)] px-4 py-3 text-xs text-[var(--color-ink-muted)]"
+            >
               <span>
                 Page limit: {pageInfo.limit}
                 {cursorStack.length > 0 && ` • Page offset ${cursorStack.length + 1}`}

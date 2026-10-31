@@ -136,7 +136,10 @@ export function MessageDetailDialog({
 
         {/* Loading state */}
         {isLoading && (
-          <div className="flex flex-col items-center justify-center py-12 text-xs text-[var(--color-ink-muted)]">
+          <div
+            role="status"
+            className="flex flex-col items-center justify-center py-12 text-xs text-[var(--color-ink-muted)]"
+          >
             <div className="size-6 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent" />
             <p className="mt-3">Loading message details…</p>
           </div>
@@ -255,11 +258,21 @@ export function MessageDetailDialog({
                     <table className="w-full text-left text-xs" data-testid="attempts-table">
                       <thead className="border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] text-[var(--color-ink-muted)]">
                         <tr>
-                          <th className="px-3 py-2 font-medium">#</th>
-                          <th className="px-3 py-2 font-medium">Status</th>
-                          <th className="px-3 py-2 font-medium">Provider Ref</th>
-                          <th className="px-3 py-2 font-medium">Latency</th>
-                          <th className="px-3 py-2 font-medium">Failure Reason</th>
+                          <th scope="col" className="px-3 py-2 font-medium">
+                            #
+                          </th>
+                          <th scope="col" className="px-3 py-2 font-medium">
+                            Status
+                          </th>
+                          <th scope="col" className="px-3 py-2 font-medium">
+                            Provider Ref
+                          </th>
+                          <th scope="col" className="px-3 py-2 font-medium">
+                            Latency
+                          </th>
+                          <th scope="col" className="px-3 py-2 font-medium">
+                            Failure Reason
+                          </th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[var(--color-border-subtle)]">

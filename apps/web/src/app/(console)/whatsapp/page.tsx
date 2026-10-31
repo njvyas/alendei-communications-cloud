@@ -73,7 +73,10 @@ export default function WhatsAppPage() {
                 : 'Failed to retrieve message status.'}
             </div>
           ) : isLoading ? (
-            <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-8 text-center text-xs text-[var(--color-ink-muted)] shadow-xs">
+            <div
+              role="status"
+              className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-8 text-center text-xs text-[var(--color-ink-muted)] shadow-xs"
+            >
               Fetching message status and dispatch timeline…
             </div>
           ) : message ? (

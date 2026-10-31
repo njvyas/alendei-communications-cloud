@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ContactResponse } from '@acc/contracts';
 import { ApiError, channelsApi, contactsApi } from '@/lib/api-client';
+import { useModalDialog } from '@/components/ui/dialog';
 
 interface ContactCreateDialogProps {
   open: boolean;
@@ -87,6 +88,8 @@ export function ContactCreateDialog({
   const channels = channelsData?.data ?? [];
   const whatsappChannel = channels.find((c) => c.code === 'whatsapp');
 
+  const modal = useModalDialog(open);
+
   if (!open) return null;
 
   const handleClose = () => {
@@ -149,12 +152,17 @@ export function ContactCreateDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs focus:outline-none"
+      {...modal.overlayProps(handleClose, !isSubmitting)}
       role="dialog"
       aria-modal="true"
       aria-labelledby="contact-create-title"
     >
-      <div className="w-full max-w-lg rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl">
+      <div
+        ref={modal.panelRef}
+        tabIndex={-1}
+        className="w-full max-w-lg rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl"
+      >
         <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)] pb-3">
           <h2 id="contact-create-title" className="text-base font-semibold text-[var(--color-ink)]">
             Create Workspace Contact

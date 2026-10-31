@@ -339,7 +339,7 @@ export default function ProviderDetailPage({ params }: { params: Promise<{ id: s
         </div>
 
         {isSamplesLoading ? (
-          <div className="flex justify-center py-6">
+          <div role="status" className="flex justify-center py-6">
             <div className="size-5 animate-spin rounded-full border-2 border-[var(--color-ink-muted)] border-t-transparent" />
           </div>
         ) : samples.length === 0 ? (

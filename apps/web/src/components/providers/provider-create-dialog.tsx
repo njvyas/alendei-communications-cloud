@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, channelsApi, providersApi } from '@/lib/api-client';
+import { useModalDialog } from '@/components/ui/dialog';
 
 interface ProviderCreateDialogProps {
   open: boolean;
@@ -31,6 +32,8 @@ export function ProviderCreateDialog({
   });
 
   const channels = channelsData?.data ?? [];
+
+  const modal = useModalDialog(open);
 
   if (!open) return null;
 
@@ -88,16 +91,31 @@ export function ProviderCreateDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
-      <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl">
-        <h2 className="text-base font-semibold text-[var(--color-ink)]">Create Provider</h2>
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="create-provider-title"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs focus:outline-none"
+      {...modal.overlayProps(() => onOpenChange(false), !isSubmitting)}
+    >
+      <div
+        ref={modal.panelRef}
+        tabIndex={-1}
+        className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl"
+      >
+        <h2 id="create-provider-title" className="text-base font-semibold text-[var(--color-ink)]">
+          Create Provider
+        </h2>
         <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
           Providers are created in <strong>disabled</strong> status. An administrator must enable
           them before they carry traffic.
         </p>
 
         {errorMessage && (
-          <div className="mt-4 rounded-md border border-[var(--color-bad-subtle,rgba(239,68,68,0.2))] bg-[var(--color-bad-subtle,rgba(239,68,68,0.05))] p-3 text-xs text-[var(--color-bad,#ef4444)]">
+          <div
+            role="alert"
+            className="mt-4 rounded-md border border-[var(--color-bad-subtle,rgba(239,68,68,0.2))] bg-[var(--color-bad-subtle,rgba(239,68,68,0.05))] p-3 text-xs text-[var(--color-bad,#ef4444)]"
+          >
             {errorMessage}
           </div>
         )}

@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { ApiError, templatesApi, type TargetApprovalStatus } from '@/lib/api-client';
 import type { TemplateResponse } from '@acc/contracts';
 import { TemplateStatusBadge } from './template-status-badge';
+import { useModalDialog } from '@/components/ui/dialog';
 
 interface TemplateApprovalDialogProps {
   open: boolean;
@@ -22,6 +23,8 @@ export function TemplateApprovalDialog({
   const [targetStatus, setTargetStatus] = useState<TargetApprovalStatus>('approved');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const modal = useModalDialog(open && !!template);
 
   if (!open || !template) return null;
 
@@ -56,12 +59,17 @@ export function TemplateApprovalDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs focus:outline-none"
+      {...modal.overlayProps(handleClose, !isSubmitting)}
       role="dialog"
       aria-modal="true"
       aria-labelledby="template-approval-title"
     >
-      <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl">
+      <div
+        ref={modal.panelRef}
+        tabIndex={-1}
+        className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl"
+      >
         <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)] pb-3">
           <h2
             id="template-approval-title"

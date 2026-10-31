@@ -81,7 +81,10 @@ function OrgSelectionForm({
         </CardDescription>
 
         {error && (
-          <div className="mt-4 rounded-md border border-[var(--color-bad)]/20 bg-[var(--color-bad)]/10 p-3 text-xs text-[var(--color-bad)]">
+          <div
+            role="alert"
+            className="mt-4 rounded-md border border-[var(--color-bad)]/20 bg-[var(--color-bad)]/10 p-3 text-xs text-[var(--color-bad)]"
+          >
             {error}
           </div>
         )}
@@ -96,7 +99,7 @@ function OrgSelectionForm({
                 Authorized Organizations
               </label>
               {isLoading && (
-                <span className="text-[11px] font-mono text-[var(--color-ink-muted)]">
+                <span role="status" className="text-[11px] font-mono text-[var(--color-ink-muted)]">
                   resolving names…
                 </span>
               )}

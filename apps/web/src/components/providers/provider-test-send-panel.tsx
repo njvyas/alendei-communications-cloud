@@ -118,7 +118,10 @@ export function ProviderTestSendPanel({ provider, canTestSend }: ProviderTestSen
       </div>
 
       {errorMessage && (
-        <div className="mt-4 rounded-md border border-[var(--color-bad-subtle,rgba(239,68,68,0.2))] bg-[var(--color-bad-subtle,rgba(239,68,68,0.05))] p-3 text-xs text-[var(--color-bad,#ef4444)]">
+        <div
+          role="alert"
+          className="mt-4 rounded-md border border-[var(--color-bad-subtle,rgba(239,68,68,0.2))] bg-[var(--color-bad-subtle,rgba(239,68,68,0.05))] p-3 text-xs text-[var(--color-bad,#ef4444)]"
+        >
           {errorMessage}
         </div>
       )}

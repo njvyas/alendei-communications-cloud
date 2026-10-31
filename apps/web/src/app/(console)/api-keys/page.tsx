@@ -154,6 +154,7 @@ export default function ApiKeysPage() {
                 key={tab.id}
                 type="button"
                 onClick={() => handleStatusChange(tab.id)}
+                aria-pressed={statusFilter === tab.id}
                 className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                   statusFilter === tab.id
                     ? 'border border-[var(--color-border-subtle)] bg-[var(--color-surface)] text-[var(--color-ink)] shadow-xs'
@@ -167,8 +168,11 @@ export default function ApiKeysPage() {
 
           {/* Scope Filter */}
           <div className="flex items-center gap-2">
-            <span className="text-xs text-[var(--color-ink-muted)]">Scope:</span>
+            <label htmlFor="api-key-scope-filter" className="text-xs text-[var(--color-ink-muted)]">
+              Scope:
+            </label>
             <select
+              id="api-key-scope-filter"
               value={scopeFilter}
               onChange={(e) => handleScopeChange(e.target.value as 'all' | ApiKeyScopeType)}
               className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2.5 py-1 text-xs text-[var(--color-ink)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
@@ -185,6 +189,7 @@ export default function ApiKeysPage() {
           <form onSubmit={handleNameSearch} className="flex items-center gap-2">
             <input
               type="text"
+              aria-label="Search API keys by exact name"
               placeholder="Search key name exactly…"
               value={nameInput}
               onChange={(e) => setNameInput(e.target.value)}
@@ -199,8 +204,11 @@ export default function ApiKeysPage() {
           </form>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs text-[var(--color-ink-muted)]">Sort:</span>
+            <label htmlFor="api-key-sort" className="text-xs text-[var(--color-ink-muted)]">
+              Sort:
+            </label>
             <select
+              id="api-key-sort"
               value={sort}
               onChange={(e) => handleSortChange(e.target.value)}
               className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2.5 py-1 text-xs text-[var(--color-ink)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
@@ -235,14 +243,20 @@ export default function ApiKeysPage() {
           </p>
         </div>
       ) : isLoading ? (
-        <div className="flex items-center justify-center rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-12">
+        <div
+          role="status"
+          className="flex items-center justify-center rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-12"
+        >
           <div className="flex items-center gap-3">
             <div className="size-4 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent" />
             <p className="text-sm text-[var(--color-ink-muted)]">Loading API keys…</p>
           </div>
         </div>
       ) : error ? (
-        <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center">
+        <div
+          role="alert"
+          className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center"
+        >
           {error instanceof ApiError && error.status === 403 ? (
             <>
               <p className="text-base font-semibold text-[var(--color-bad)]">Access Forbidden</p>

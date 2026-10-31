@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ApiError, providersApi, type ProviderDetailView } from '@/lib/api-client';
 import type { ProviderTransition } from '@acc/contracts';
+import { useModalDialog } from '@/components/ui/dialog';
 
 interface ProviderTransitionDialogProps {
   open: boolean;
@@ -48,6 +49,8 @@ export function ProviderTransitionDialog({
   const queryClient = useQueryClient();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const modal = useModalDialog(open);
 
   if (!open) return null;
 
@@ -95,9 +98,24 @@ export function ProviderTransitionDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
-      <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl">
-        <h2 className="text-base font-semibold text-[var(--color-ink)]">{details.title}</h2>
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="provider-transition-title"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs focus:outline-none"
+      {...modal.overlayProps(() => onOpenChange(false), !isSubmitting)}
+    >
+      <div
+        ref={modal.panelRef}
+        tabIndex={-1}
+        className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl"
+      >
+        <h2
+          id="provider-transition-title"
+          className="text-base font-semibold text-[var(--color-ink)]"
+        >
+          {details.title}
+        </h2>
         <p className="mt-2 text-xs text-[var(--color-ink-muted)]">
           Target provider: <strong>{provider.name}</strong> (currently{' '}
           <strong>{provider.status}</strong>)
@@ -107,7 +125,10 @@ export function ProviderTransitionDialog({
         </p>
 
         {errorMessage && (
-          <div className="mt-4 rounded-md border border-[var(--color-bad-subtle,rgba(239,68,68,0.2))] bg-[var(--color-bad-subtle,rgba(239,68,68,0.05))] p-3 text-xs text-[var(--color-bad,#ef4444)]">
+          <div
+            role="alert"
+            className="mt-4 rounded-md border border-[var(--color-bad-subtle,rgba(239,68,68,0.2))] bg-[var(--color-bad-subtle,rgba(239,68,68,0.05))] p-3 text-xs text-[var(--color-bad,#ef4444)]"
+          >
             {errorMessage}
           </div>
         )}
