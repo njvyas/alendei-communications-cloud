@@ -6,6 +6,10 @@
 # Config (mode 600): D5_CONF (default ~/.config/acc-d5/d5.conf) defining:
 #   DEST="user@backup-host:/path"  or a local path (tests only)    GPG_RECIPIENT="<fingerprint>"
 #   RETENTION_DAYS=30   COMPOSE="cd ~/acc && docker compose -f deploy/compose.release.yml --env-file deploy/release.env"
+#   REMOTE_SSH="ssh ... acc-qa"  optional: run from the backup machine (pull model). COMPOSE then runs on the QA host,
+#                                 encryption and decryption happen on the backup machine; the private key never reaches QA.
+#   RESTORE_COMPOSE="<wrapper>"  optional: restore-verify into a scratch DB on a different PostgreSQL (for example the
+#                                 backup machine's), so the live QA cluster is only read. Same "exec -T postgres ..." syntax.
 # Never writes a plaintext dump to disk. Scratch database name is hard-coded and allowlisted.
 set -euo pipefail
 umask 077
@@ -21,7 +25,8 @@ log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
 remote() { [[ $DEST == *:* ]]; }
 dest_host() { echo "${DEST%%:*}"; }
 dest_path() { echo "${DEST#*:}"; }
-c() { bash -c "$COMPOSE $*"; }
+r() { if [[ -n ${RESTORE_COMPOSE:-} ]]; then bash -c "$RESTORE_COMPOSE $*"; else c "$@"; fi; }
+c() { if [[ -n ${REMOTE_SSH:-} ]]; then $REMOTE_SSH "$(printf '%q ' bash -c "$COMPOSE $*")"; else bash -c "$COMPOSE $*"; fi; }
 
 backup() {
   local ts f; ts=$(date -u +%Y%m%dT%H%M%SZ); f="acc-qa-$ts.dump.gpg"
@@ -49,8 +54,8 @@ prune() {
   log "OK prune retention=${RETENTION_DAYS}d removed=$(printf '%s' "$out" | grep -c . || true)"
 }
 
-counts() { # counts DB -> "table=rows ..." for every base table in public
-  c "exec -T -e PGOPTIONS='-c default_transaction_read_only=on' postgres psql -U postgres -d $1 -At -v ON_ERROR_STOP=1 -f -" <<'SQL'
+counts() { # counts RUNNER DB -> "table=rows ..." for every base table in public
+  "$1" "exec -T -e PGOPTIONS='-c default_transaction_read_only=on' postgres psql -U postgres -d $2 -At -v ON_ERROR_STOP=1 -f -" <<'SQL'
 SELECT string_agg(t || '=' || (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM public.%I', t), false, true, '')))[1]::text, ' ' ORDER BY t)
 FROM (SELECT tablename AS t FROM pg_tables WHERE schemaname = 'public') s;
 SQL
@@ -58,7 +63,7 @@ SQL
 
 restore_verify() {
   RV_TMP=$(mktemp -d); local tmp=$RV_TMP
-  trap 'rm -rf "$RV_TMP"; c "exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c \"DROP DATABASE IF EXISTS acc_d5_verify WITH (FORCE);\"" </dev/null >/dev/null 2>&1 || true' EXIT
+  trap 'rm -rf "$RV_TMP"; r "exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c \"DROP DATABASE IF EXISTS acc_d5_verify WITH (FORCE);\"" </dev/null >/dev/null 2>&1 || true' EXIT
   local f
   if remote; then
     f=$(ssh -o BatchMode=yes "$(dest_host)" "cd '$(dest_path)' && ls -1t acc-qa-*.dump.gpg | head -1" </dev/null)
@@ -68,11 +73,11 @@ restore_verify() {
   fi
   (cd "$tmp" && sha256sum -c "$f.sha256" >/dev/null) || { log "FAIL hash check for $f"; exit 4; }
   [[ $SCRATCH == acc_d5_verify ]] || exit 9
-  c "exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c \"DROP DATABASE IF EXISTS acc_d5_verify WITH (FORCE);\"" </dev/null >/dev/null
-  c "exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c \"CREATE DATABASE acc_d5_verify;\"" </dev/null >/dev/null
-  gpg --batch --decrypt "$tmp/$f" 2>/dev/null | c "exec -T postgres pg_restore -U postgres -d acc_d5_verify --no-owner --exit-on-error" \
+  r "exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c \"DROP DATABASE IF EXISTS acc_d5_verify WITH (FORCE);\"" </dev/null >/dev/null
+  r "exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c \"CREATE DATABASE acc_d5_verify;\"" </dev/null >/dev/null
+  gpg --batch --decrypt "$tmp/$f" 2>/dev/null | r "exec -T postgres pg_restore -U postgres -d acc_d5_verify --no-owner --exit-on-error" \
     || { log "FAIL restore of $f into acc_d5_verify (scratch dropped on exit)"; exit 5; }
-  local live scratch; live=$(counts "$SRC_DB"); scratch=$(counts acc_d5_verify)
+  local live scratch; live=$(counts c "$SRC_DB"); scratch=$(counts r acc_d5_verify)
   if [[ $live == "$scratch" ]]; then log "OK restore-verify $f: row counts identical ($(wc -w <<<"$live") tables)"
   else log "DIFF restore-verify $f: counts differ (live data may have changed since the dump)"; diff <(tr ' ' '\n' <<<"$live") <(tr ' ' '\n' <<<"$scratch") | tee -a "$LOG" || true; fi
 }

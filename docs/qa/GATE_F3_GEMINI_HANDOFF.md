@@ -21,13 +21,13 @@ Prepared 31-Oct-2026. The owner submits this **once**, when every row in §2 is 
 | Area | Status (31-Oct-2026) | Evidence to attach when done |
 |---|---|---|
 | F.3-8 human evaluation (E1–E3, journeys 1–5, keyboard, NVDA/VoiceOver, J-01, J-02) | **Pending:** evaluators not nominated | Three signed summaries, feedback entries, `QA_TEST_PLAN.md` J results, evidence manifest (`QA_J_EVALUATOR_PACKAGE.md` §9) |
-| QAF-026 | Fixed in PR #52 (draft, CI green); **not merged, not deployed** | Merge commit on `develop`. QA verification only on an owner-approved deployed candidate; otherwise carried as an accepted residual against `441a29a` |
+| QAF-026 | PR #52: Gemini APPROVE, CI green; **not merged, not deployed** | Merge commit on `develop`; QA verification on an owner-approved candidate |
 | D1 firewall | **Ready.** Applied and verified 31-Oct-2026 | `~/acc-evidence/2026-10-31-f3-9-infra/MANIFEST-d1-final.sha256` `9ccb28ed…` (privileged before/after/actions, HTTPS allowed, denied probe, `VERIFICATION.txt`). Note for review: SSH password authentication enabled; root login by key permitted (outside D1 scope) |
 | D2 access register | Procedure written; human custodian identified 31-Oct-2026; **vault entry creation pending** | Owner confirmation of the entry and date (no vault content) |
-| D5 encrypted off-host backup | Tool tested locally only (**not D5 acceptance**); destination, access, public key and custodian pending | `d5-backup.sh` logs for a real backup (destination hash verified) and `restore-verify` (row counts identical); cron entry |
+| D5 encrypted off-host backup | **Ready (with residuals)** 31-Oct-2026 | `~/acc-evidence/2026-10-31-f3-9-infra/d5/MANIFEST-d5-qa.sha256` `fa01c9af…`; residuals in `GATE_F3_CLOSEOUT.md` §3 |
 | Fresh-cluster restore (QAF-007/W-4) | Proposal ready; **not authorized** | Drill record, or an owner exception carrying it as a residual |
 | PR #50 (closeout record) | Draft | Final head commit |
-| PR #51 (watcher dry-run fix; not part of X-6 acceptance evidence) | Draft; review and branch-target decision pending | Review outcome; harness rerun result |
+| PR #51 (watcher dry-run fix; not part of X-6 acceptance evidence) | Gemini APPROVE, no findings; branch target decision pending | Review record on the PR |
 
 ## 3. Exceptions and residual risks to review
 
