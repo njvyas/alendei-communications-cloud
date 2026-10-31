@@ -15,6 +15,7 @@ import {
 import { cn } from '@/lib/cn';
 import { useHeldOrganizationPermissions, useSession } from '@/lib/session-store';
 import { useModalDialog } from '@/components/ui/dialog';
+import { toast } from '@/lib/toast';
 
 interface RoleCreateDialogProps {
   isOpen: boolean;
@@ -202,6 +203,7 @@ export function RoleCreateDialog({ isOpen, onClose, onSuccess }: RoleCreateDialo
     try {
       const res = await rolesApi.create(payload, idempotencyKey);
       onSuccess(res.data);
+      toast.success('Role Created', `Custom role "${res.data.name}" created successfully.`);
       onClose();
     } catch (err: unknown) {
       if (err instanceof ApiError) {

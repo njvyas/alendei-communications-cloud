@@ -4,6 +4,7 @@ import { useState, useEffect, type FormEvent } from 'react';
 import { ApiError, workspacesApi, type WorkspaceView } from '@/lib/api-client';
 import { useSession } from '@/lib/session-store';
 import { useModalDialog } from '@/components/ui/dialog';
+import { toast } from '@/lib/toast';
 
 interface WorkspaceCreateDialogProps {
   readonly isOpen: boolean;
@@ -101,6 +102,7 @@ export function WorkspaceCreateDialog({ isOpen, onClose, onSuccess }: WorkspaceC
         idempotencyKey,
       );
       onSuccess(res.data);
+      toast.success('Workspace Created', `Workspace "${res.data.name}" provisioned successfully.`);
       onClose();
     } catch (err: unknown) {
       if (err instanceof ApiError) {

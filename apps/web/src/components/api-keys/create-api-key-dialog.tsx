@@ -19,6 +19,7 @@ import {
 } from '@/lib/api-client';
 import { useSession } from '@/lib/session-store';
 import { useModalDialog } from '@/components/ui/dialog';
+import { toast } from '@/lib/toast';
 
 export interface ComputeHeldApiKeyPermissionsParams {
   readonly authorization: EffectiveAuthorization | null;
@@ -331,6 +332,7 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
       // Successfully created or replayed. Transition to secret step.
       setCreatedResult(response.data);
       onSuccess();
+      toast.success('API Key Created', `API key "${trimmedName}" generated successfully.`);
     } catch (err: unknown) {
       if (err instanceof ApiError) {
         if (err.status === 403 && err.code === 'AUTHZ_CANNOT_GRANT_UNHELD_PERMISSION') {

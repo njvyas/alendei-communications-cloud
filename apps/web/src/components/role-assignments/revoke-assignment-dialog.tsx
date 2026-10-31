@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { ERROR_CODES } from '@acc/contracts';
 import { ApiError, roleAssignmentsApi, type RoleAssignmentView } from '@/lib/api-client';
 import { useModalDialog } from '@/components/ui/dialog';
+import { toast } from '@/lib/toast';
 
 export function getRevokeErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -73,6 +74,7 @@ export function RevokeAssignmentDialog({
     try {
       await roleAssignmentsApi.delete(assignment.id);
       onSuccess();
+      toast.success('Role Revoked', `Role grant revoked from ${userEmail}.`);
       onClose();
     } catch (err: unknown) {
       setErrorMessage(getRevokeErrorMessage(err));

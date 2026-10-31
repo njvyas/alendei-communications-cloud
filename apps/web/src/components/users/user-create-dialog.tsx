@@ -12,6 +12,7 @@ import {
 } from '@/lib/api-client';
 import { useSession } from '@/lib/session-store';
 import { useModalDialog } from '@/components/ui/dialog';
+import { toast } from '@/lib/toast';
 
 interface UserCreateDialogProps {
   readonly isOpen: boolean;
@@ -204,6 +205,7 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
     try {
       await usersApi.create(payload, idempotencyKey);
       onSuccess();
+      toast.success('User Invited', `Invitation created for ${trimmedEmail}.`);
       onClose();
     } catch (err: unknown) {
       if (err instanceof ApiError) {

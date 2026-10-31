@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { ApiError, apiKeysApi, type ApiKeyView } from '@/lib/api-client';
 import { useModalDialog } from '@/components/ui/dialog';
+import { toast } from '@/lib/toast';
 
 interface RevokeApiKeyDialogProps {
   readonly isOpen: boolean;
@@ -31,12 +32,14 @@ export function RevokeApiKeyDialog({
     try {
       await apiKeysApi.revoke(apiKey.id);
       onSuccess();
+      toast.success('API Key Revoked', `API key "${apiKey.name}" has been revoked.`);
       onClose();
     } catch (err: unknown) {
       if (err instanceof ApiError) {
         if (err.status === 409 && err.code === 'API_KEY_LIFECYCLE_CONFLICT') {
           // Already revoked: treat status as authoritative and refresh
           onSuccess();
+          toast.info('API Key Already Revoked', `API key "${apiKey.name}" was already revoked.`);
           onClose();
           return;
         } else if (err.status === 403) {

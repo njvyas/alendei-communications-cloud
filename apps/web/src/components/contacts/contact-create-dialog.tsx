@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ContactResponse } from '@acc/contracts';
 import { ApiError, channelsApi, contactsApi } from '@/lib/api-client';
+import { toast } from '@/lib/toast';
 import { useModalDialog } from '@/components/ui/dialog';
 
 interface ContactCreateDialogProps {
@@ -136,6 +137,12 @@ export function ContactCreateDialog({
 
       await queryClient.invalidateQueries({ queryKey: ['contacts', 'list', workspaceId] });
       onCreated?.(created);
+      toast.success(
+        'Contact Created',
+        created.firstName || created.lastName
+          ? `Contact ${[created.firstName, created.lastName].filter(Boolean).join(' ')} created.`
+          : 'New contact was added to the workspace.',
+      );
       handleClose();
     } catch (err) {
       if (err instanceof ApiError) {

@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, channelsApi, templatesApi } from '@/lib/api-client';
+import { toast } from '@/lib/toast';
 import { useModalDialog } from '@/components/ui/dialog';
 
 interface TemplateCreateDialogProps {
@@ -96,6 +97,10 @@ export function TemplateCreateDialog({
       );
 
       await queryClient.invalidateQueries({ queryKey: ['templates', 'list'] });
+      toast.success(
+        'Template Created',
+        `Template "${trimmedName}" created and submitted for approval.`,
+      );
       handleClose();
     } catch (err) {
       if (err instanceof ApiError) {

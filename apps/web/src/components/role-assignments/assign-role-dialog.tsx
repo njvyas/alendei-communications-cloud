@@ -16,6 +16,7 @@ import {
 } from '../../lib/api-client';
 import { useSession } from '../../lib/session-store';
 import { useModalDialog } from '@/components/ui/dialog';
+import { toast } from '@/lib/toast';
 
 interface AssignRoleDialogProps {
   readonly isOpen: boolean;
@@ -247,6 +248,7 @@ export function AssignRoleDialog({
     try {
       await roleAssignmentsApi.create(payload, idempotencyKey);
       onSuccess();
+      toast.success('Role Assigned', `Role granted to ${userEmail}.`);
       onClose();
     } catch (err: unknown) {
       if (err instanceof ApiError) {

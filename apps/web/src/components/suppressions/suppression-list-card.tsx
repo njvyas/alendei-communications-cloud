@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   suppressionsApi,
@@ -10,6 +10,7 @@ import {
 } from '@/lib/api-client';
 import { useCanManageSuppressions, useCanReadSuppressions } from '@/lib/session-store';
 import { ActionFeedback, type ActionFeedbackMessage } from '@/components/ui/action-feedback';
+import { toast } from '@/lib/toast';
 import { humanizeApiError } from '@/lib/error-mapping';
 import { SuppressionStatusBadge } from './suppression-status-badge';
 import { SuppressionDetailDialog } from './suppression-detail-dialog';
@@ -28,6 +29,7 @@ export function SuppressionListCard({ orgId, channels = [] }: SuppressionListCar
   // Filters
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [selectedChannelId, setSelectedChannelId] = useState<string>('all');
+  const [addressFilter, setAddressFilter] = useState<string>('');
 
   // Keyset cursor pagination history stack
   const [cursorStack, setCursorStack] = useState<string[]>([]);
@@ -50,6 +52,7 @@ export function SuppressionListCard({ orgId, channels = [] }: SuppressionListCar
     setCursorStack([]);
     setSelectedChannelId('all');
     setSelectedStatus('all');
+    setAddressFilter('');
   }, [orgId]);
 
   const queryParams = {
@@ -86,6 +89,10 @@ export function SuppressionListCard({ orgId, channels = [] }: SuppressionListCar
   };
 
   const handleCreateSuccess = (newSuppression: SuppressionResponse) => {
+    toast.success(
+      'Suppression Added',
+      `Suppression successfully created for ${newSuppression.rawAddress}.`,
+    );
     setFeedback({
       type: 'success',
       title: 'Suppression Added',
@@ -95,6 +102,10 @@ export function SuppressionListCard({ orgId, channels = [] }: SuppressionListCar
   };
 
   const handleLiftSuccess = (lifted: SuppressionResponse) => {
+    toast.success(
+      'Suppression Lifted',
+      `Suppression lifted for ${lifted.rawAddress}. Future dispatches enabled.`,
+    );
     setFeedback({
       type: 'success',
       title: 'Suppression Lifted',
@@ -105,6 +116,10 @@ export function SuppressionListCard({ orgId, channels = [] }: SuppressionListCar
 
   const handleLiftConflict = (suppression: SuppressionResponse) => {
     setLiftTarget(null);
+    toast.info(
+      'Suppression Already Cleared',
+      `Suppression for ${suppression.rawAddress} was already lifted.`,
+    );
     setFeedback({
       type: 'info',
       title: 'Suppression Already Cleared',
@@ -116,10 +131,20 @@ export function SuppressionListCard({ orgId, channels = [] }: SuppressionListCar
   const clearFilters = () => {
     setSelectedStatus('all');
     setSelectedChannelId('all');
+    setAddressFilter('');
     setCursorStack([]);
   };
 
   const items = data?.data ?? [];
+  const filteredItems = useMemo(() => {
+    const query = addressFilter.trim().toLowerCase();
+    if (!query) return items;
+    return items.filter(
+      (item) =>
+        item.rawAddress.toLowerCase().includes(query) ||
+        (item.normalizedAddress && item.normalizedAddress.toLowerCase().includes(query)),
+    );
+  }, [items, addressFilter]);
   const hasMore = Boolean(data?.page.hasMore);
   const pageIndex = cursorStack.length + 1;
 
@@ -177,7 +202,34 @@ export function SuppressionListCard({ orgId, channels = [] }: SuppressionListCar
             </select>
           </div>
 
-          {(selectedStatus !== 'all' || selectedChannelId !== 'all') && (
+          {/* Client-side address filter over loaded page (FE-2) */}
+          <div className="relative">
+            <label htmlFor="filter-address" className="sr-only">
+              Filter loaded addresses
+            </label>
+            <input
+              id="filter-address"
+              type="text"
+              placeholder="Filter address…"
+              value={addressFilter}
+              onChange={(e) => setAddressFilter(e.target.value)}
+              className="w-36 rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] px-2.5 py-1.5 text-xs text-[var(--color-ink)] placeholder-[var(--color-ink-muted)] focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              title="Filter addresses on the currently loaded page"
+              data-testid="filter-address"
+            />
+            {addressFilter && (
+              <button
+                type="button"
+                onClick={() => setAddressFilter('')}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+                aria-label="Clear address filter"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+
+          {(selectedStatus !== 'all' || selectedChannelId !== 'all' || addressFilter) && (
             <button
               type="button"
               onClick={clearFilters}
@@ -185,6 +237,12 @@ export function SuppressionListCard({ orgId, channels = [] }: SuppressionListCar
             >
               Clear filters
             </button>
+          )}
+
+          {addressFilter && (
+            <span className="text-[11px] text-[var(--color-ink-muted)] italic">
+              ({filteredItems.length} of {items.length} loaded)
+            </span>
           )}
 
           <button
@@ -266,6 +324,22 @@ export function SuppressionListCard({ orgId, channels = [] }: SuppressionListCar
               )}
             </div>
           </div>
+        ) : filteredItems.length === 0 ? (
+          <div className="p-12 text-center" data-testid="suppression-address-filter-empty">
+            <p className="text-sm font-medium text-[var(--color-ink)]">
+              No matching addresses found
+            </p>
+            <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
+              No loaded suppressions on this page match the filter &ldquo;{addressFilter}&rdquo;.
+            </p>
+            <button
+              type="button"
+              onClick={() => setAddressFilter('')}
+              className="mt-4 rounded-md border border-[var(--color-border-subtle)] px-3 py-1.5 text-xs text-[var(--color-ink)] hover:bg-[var(--color-surface-raised)]"
+            >
+              Clear address filter
+            </button>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
@@ -292,7 +366,7 @@ export function SuppressionListCard({ orgId, channels = [] }: SuppressionListCar
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border-subtle)]">
-                {items.map((row) => {
+                {filteredItems.map((row) => {
                   const channel = row.channelId
                     ? (channels.find((c) => c.id === row.channelId)?.displayName ??
                       channels.find((c) => c.id === row.channelId)?.code ??
