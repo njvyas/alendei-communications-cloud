@@ -2197,7 +2197,7 @@ Because migration `0019` granted EXECUTE on `app_has_platform_permission` only t
 ## 1z. Phase 4.3 F.3-1: email and voice message sending unsupported, fail closed: 24-Oct-2026
 
 ### 1z.1 Decision
-- **Status:** project owner decision G-1, 24-Oct-2026. Implemented in PR #10. Gate F.3 remains **not accepted**; Gate F.2 acceptance remains **pending**.
+- **Status:** project owner decision G-1, 24-Oct-2026. Implemented in PR #10. Gate F.3 remains **not accepted**; Gate F.2 is **ACCEPTED** (project owner decision, 30-Oct-2026; `QA_RELEASE_PREPARATION.md` §8).
 - `email` and `voice` are catalogued channels (ADR-013 F-2) with no authorized message send path (§1w.10). Sending a message on either is **unsupported** and fails closed. No feature flag enables delivery.
 - The provider test-send diagnostic (`POST /providers/{id}/test-send`, Phase 2.2) remains a **separate, simulator-only** platform capability: it submits a synthetic payload through the provider's adapter (the simulator is the only adapter), persists no message and is not a message send path. It is not affected by this decision.
 
@@ -2210,7 +2210,7 @@ Because migration `0019` granted EXECUTE on `app_has_platform_permission` only t
 ## 1za. Phase 4.3 G-2: suppression and consent re-checked at dispatch (migration 0037): 24-Oct-2026
 
 ### 1za.1 Decision
-- **Status:** project owner approved approach B, 24-Oct-2026. Merged to `develop` via PR #12 (commit `ce18f4d`); migration `0037` verified in disposable database clones and **not applied** to shared QA or production, and its deployment needs separate authorization. Gate F.3 remains **not accepted**; Gate F.2 acceptance remains **pending**.
+- **Status:** project owner approved approach B, 24-Oct-2026. Merged to `develop` via PR #12 (commit `ce18f4d`); migration `0037` verified in disposable database clones and **not applied** to shared QA or production, and its deployment needs separate authorization. Gate F.3 remains **not accepted**; Gate F.2 is **ACCEPTED** (project owner decision, 30-Oct-2026; `QA_RELEASE_PREPARATION.md` §8).
 - The send path refuses a suppressed or consent-revoked recipient, but a queued message — or one requeued for same-channel fallback — can wait while either changes. The dispatcher therefore re-checks both on **every claim**, fallback re-claims included, before any provider is selected.
 - **Approach B (chosen):** one narrow `SECURITY DEFINER` function, `app_dispatch_recipient_block()`, with `EXECUTE` for `acc_dispatch` only. `acc_dispatch` receives **no** grant on `suppressions` or `consent_events`. Approach A (column grants plus claim-scoped policies on both tables) was rejected: it exposes rows to the dispatch role and adds policy surface.
 
@@ -2244,6 +2244,94 @@ Because migration `0019` granted EXECUTE on `app_has_platform_permission` only t
   5. Closed organization: in-flight expired submission settles `OUTCOME_UNKNOWN`, not failed.
   6. Control: unstarted expired lease correctly dispatched once.
 - Verified in CI run `40067932448` (all 5 jobs passing) and local disposable clone verification.
+
+## 1zc. Phase 4.3 Gate F.3 verification decisions (X-4, X-5, X-6, X-7): 30-Oct-2026
+
+### 1zc.1 Decisions
+- **X-4 (Worker Concurrency — F.3-2 / F.3-3): APPROVED (owner decision, 30-Oct-2026).** Formally accept the automated-only verification approach for F.3-2 / F.3-3 based on the comprehensive integration and security suites (`phase4_3-sms-rcs-dispatch-resilience.int-spec.ts`, `phase4_3-sms-rcs-worker.int-spec.ts`, `phase4_3-sms-rcs-isolation.sec-spec.ts`; 1,538 lines, PR #11, commit `60c133c`). Multi-worker concurrency, worker lease fencing under race conditions, and advisory lock serialization cannot be safely or deterministically forced on the single-worker QA host without inserting intrusive delays into production code. **Residual risk accepted:** live multi-worker concurrency is recorded as an explicitly unverified residual.
+- **X-5 (G-2 Recipient Re-Check — F.3-4): APPROVED (owner decision, 30-Oct-2026).** Formally accept the automated-only verification approach for F.3-4 based on automated suites (`phase4_3-g2-recipient-recheck.sec-spec.ts`, `phase4_3-g2-dispatch-recheck.int-spec.ts`, CI run `40066676777`, PR #12, commit `ce18f4d`). In live host operation, worker claims execute within milliseconds; there is no supported runtime mechanism to hold a message in `queued` status while an operator revokes consent or inserts an external suppression. Migration `0037` (`app_dispatch_recipient_block()`) is verified applied on the QA database (proof `38|04b0fac738f24476e76b88a84fd04850`). **Residual risk accepted:** the live queue-to-claim race window is recorded as an explicitly unverified residual.
+- **X-7 (Provider Circuit Breaker — F.3-6): QA-F-07 LIVE TEST REQUIRED (owner decision, 30-Oct-2026).** Acceptance of F.3-6 based solely on existing circuit transition observations during 26-Oct WhatsApp runs and disposable-clone acceptance tests (`scratch/sim500-acceptance.int-spec.ts`) is **rejected**. The owner directs preparation of the structured QA-F-07 scenario (10 messages sent to `QA Sim 500` under `min_samples=5`, verifying breaker trip at attempt 5 and zero attempts on remaining messages) as a mandatory acceptance test to be executed during a future separately authorized operator window.
+- **X-6 (BE-DISPATCH-02 Crash Recovery — F.3-5): LOCAL PREPARATION ONLY AUTHORIZED (owner decision, 30-Oct-2026).** Prepare the concrete operator runbook and bounded watcher diagnostic script locally. This authorization strictly forbids conducting the operator window, issuing SIGKILL (`$C kill api`), restarting containers, altering provider configurations, or performing any other QA-host operation without separate explicit owner scheduling and authorization.
+
+### 1zc.2 QA-F-07 remediation, execution and acceptance (owner decisions, 31-Oct-2026)
+
+- **QA-F-07 procedure v2.2 (approved).** The 30-Oct draft (v2.1) could not produce a valid result against `441a29a`:
+  - its SQL ran as the `NOLOGIN` role `acc_app`;
+  - its non-UUID run id was replaced by the API as correlation id;
+  - it sent the idempotency header under the wrong name;
+  - it did not require `QA Sim 500` to be the only active assignment;
+  - it counted a log string the release never writes;
+  - it relied on unreliable `--since` log reads.
+
+  The owner approved the corrections, a read-only preflight, and Gemini's independent-review corrections (v2.2.3).
+- **Dedicated provider (approved).** The original `QA Sim 500` circuit had been `open` (generation 9) since 26-Oct-2026, and the application has no supported circuit-reset mechanism; closing it would need a direct database mutation, which was not authorized. A dedicated provider `QA Sim 500 F07` was created through the supported API (simulator, `simulator_behavior "500"`, starting `closed`, generation 0). The original provider was not changed.
+- **Temporary routing (approved, restored).** For the test window, the original `QA Sim 500` (priority 1) and `QA Sim OK` (priority 2) qa-org-a2 WhatsApp assignments were disabled and the `QA Sim 500 F07` assignment (priority 4) was enabled. All were restored after the run and verified by `routing-check`.
+- **Template (approved).** `qa_f07_circuit_test` was created in qa-org-a2 and approved through `simulate-approval`. This is a **QA simulator approval only**, not external WhatsApp/Meta approval.
+- **C3b informational; R-AUD-1 (approved).** System-dispatcher circuit and health transitions intentionally skip audit logging under the current privilege design (`provider-state.store.ts`, HIGH-6: the dispatcher holds no `audit_logs` INSERT privilege). This is carried as an informational observability residual, not as evidence that transitions are audited.
+- **P10 (approved).** Read-only runtime configuration evidence (`DISPATCH_WORKER_ENABLED=true`, a single api container) is accepted as the dispatch-worker precondition. The unreadable current start log line is a residual.
+- **QA-F-07 ACCEPTED (owner decision, 31-Oct-2026).** Run `edb1bc78-9b97-4b02-8c29-b074f3cef2e5` (31-Oct-2026 06:08:01–06:08:18 UTC) passed C0–C9:
+  - the circuit tripped at message 5 (generation 0 → 1, health `offline`);
+  - messages 6–10 made zero provider calls and created zero attempt rows;
+  - no SQLSTATE 42501 errors; queue drained.
+
+  C6b, the log corroboration, read 0 because of a driver filter defect: the dispatcher's refusal warning carries `providerId`, not `messageId`. The corrected provider-and-time count of 5 is accepted. Routing restoration is verified.
+- **Effect on Gate F.3.** X-7 (F.3-6) has its required QA-host evidence. **Gate F.3 remains NOT ACCEPTED** pending its own owner decision. Phase 5 remains NOT AUTHORIZED.
+
+### 1zc.3 Gate F.3 closeout decisions (owner decisions, 31-Oct-2026)
+
+- **Release candidate.** `2026.10.24-441a29a` (code identical to `554dea3`) is the **historical Gate F.3 QA evidence candidate**. U8 (PR #44), U10 (PR #45), U1 (PR #46) and the fixes for #20, #21, #28 and #30 were merged to `develop` afterwards. They are **not** deployed to QA and are **not** tested on the candidate, and must not be represented as part of it.
+- **R-1, F.3-1 and F.3-7 evidence accepted as documented.** F.3-1 (email and voice refused, nothing stored) was executed on an **AI-agent acting QA-lead confirmation** (T-1, §5c of `QA_RELEASE_PREPARATION.md`). That is **not** an independent human sign-off, and the record must keep the distinction.
+- **R-4, I-03 Redis outage.** A degraded Redis readiness report (`status: ok`, Redis `degraded: true`) is acceptable **only if all of the following hold during the outage**:
+  1. the degradation is reported accurately;
+  2. liveness remains healthy for operations that do not depend on Redis;
+  3. dispatch readiness is not falsely reported.
+
+  Otherwise I-03 fails.
+- **R-5 and J-01, Section J.** Evaluations use `qa-org-a2` with its existing synthetic data and residuals documented. For QA-J-01, the owner operates the platform-administrator screen while evaluator E1 directs the task. Bootstrap credentials are never shared.
+- **R-8 and W-6.** Commit, push and a **draft** pull request for the closeout documents (no merge). QAF-022, QAF-009 and QAF-010 are filed as public GitHub issues after sanitization (#47, #48, #49).
+- **X-6.** Prepare the live crash-recovery drill with all runbook safeguards preserved. **No execution** until the named operator and window are recorded and explicit operational authorization is given.
+- **Infrastructure.**
+  - D1, D2 and D5 remain pending infrastructure-owner decisions.
+  - The QA-I-04 dump is to be preserved pending retention disposition. On 31-Oct-2026 it could not be located on the QA host; see `QA_RELEASE_PREPARATION.md` §4.
+  - `/tmp/.no` is to be removed only after confirming it is the empty file created on 28-Oct. On 31-Oct it was already absent.
+  - Disk analysis is read-only; nothing is deleted without approval.
+- Gate F.3 is **not** accepted; Phase 5 is **not** authorized; no deployment.
+
+### 1zc.4 QA host backup incident and housekeeping (owner decisions, 31-Oct-2026)
+
+- **Backup incident.** The QA-I-04 dump retained on 28-Oct-2026 could not be located on 31-Oct.
+  - *Inference:* it was lost when `/tmp` was cleared by a host boot on 28-Oct-2026 at 09:37:44 UTC. That boot is recorded as an observed event with unknown cause.
+  - **Approved:** a fresh `pg_dump` recovery copy to a known absolute path, verified with `pg_restore -l` and not restored (`QA_RELEASE_PREPARATION.md` §4). It is a local recovery copy only; it is **not** an approved off-host backup and does **not** satisfy D5.
+- **Disk clean-up (approved with scope limits).** Removed the build cache and the superseded `2026.10.22-869971e` images only; `2026.10.23-9cf5872` kept as the rollback target. No broader clean-up.
+- **Disclosure recorded.** One failed read-only query against a nonexistent `role_assignments` table left a single PostgreSQL error log line. No further action.
+- **Unchanged.** PR #50 stays a draft. X-6 is not executed (named operator, window and operational authorization outstanding). Section J waits for nominations and account set-up. D1, D2 and D5 are pending infrastructure-owner decisions. Gate F.3 is not accepted; Phase 5 is not authorized.
+
+### 1zc.5 X-6 live crash-recovery drill: authorization, execution and acceptance (owner decisions, 31-Oct-2026)
+
+- **Authorization.** The owner explicitly authorized immediate execution of X-6 under runbook v2.1:
+  - exactly one SIGKILL, issued only by the approved watcher;
+  - temporary routing and its restoration;
+  - one expected `outcome_unknown` message and a brief QA outage.
+
+  The **Project Owner was the named operator**, present throughout. Claude Code armed the watcher through the operator's SSH control socket and ran the API restart; the owner made the routing changes as platform administrator.
+- **X-6 ACCEPTED; F.3-5 closed.** Executed 31-Oct-2026 07:04–07:07 UTC (`QA_RELEASE_PREPARATION.md` §5i). After the kill and restart, the sweeper settled the in-flight message `outcome_unknown` with the lease-expiry reason. There was exactly one attempt on `QA Sim Timeout`, none on `QA Sim OK`, the queue was cleared and no locks were orphaned. Routing was restored exactly.
+- **Carried residuals.**
+  - The BE-DISPATCH-02 claim-time race remains automated-test-only evidence (PR #14).
+  - Docker's automatic restart of a killed container remains unverified.
+  - The accepted `outcome_unknown` QA message is retained unaltered.
+- **Follow-up.** The watcher's dry-run defect (QAF-025) is corrected in a separate tooling change. The executed scripts and evidence are not altered retrospectively.
+- Gate F.3 remains **not accepted**; Phase 5 remains **not authorized**.
+
+### 1zc.6 Final F.3 closeout direction (owner, 31-Oct-2026)
+
+- **F.3-8.** Gemini and Claude Code act as **AI evaluators** for Section J and the remaining console rows, with J-01 run by the owner operating the platform-admin screen while the AI evaluator directs. AI results must be distinguished from independent human usability and screen-reader sign-off.
+  - **Executed 31-Oct-2026 (`QA_RELEASE_PREPARATION.md` §5j):** Claude's evaluation of J-03 to J-09.
+  - **Not yet executed:** Gemini's evaluation (no channel from Claude Code), J-01/J-02 and the other-persona rows (owner and platform-administrator set-up).
+- **F.3-9.** Implement D1, D2 and D5 on company-controlled infrastructure, verified in operation; keep the local recovery copy until off-host backups are verified.
+  - **Done 31-Oct-2026:** a read-only re-verification.
+  - **Implementation blocked:** the concrete approved values and privileged access are not available to the agent (`GATE_F3_CLOSEOUT.md` §4).
+- **PR #51** (watcher dry-run fix) stays separate from the historical X-6 evidence.
+- PRs #50 and #51 are not merged; no deployment; Phase 5 not authorized.
 
 ## 3. Risks explicitly accepted by design (not oversights)
 

@@ -481,7 +481,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 
 ## 7. Phase 4 — SMS + RCS
 
-**Status: Phase 4.1 (Gate F.1) APPROVED by project owner decision, 17-Oct-2026 (ADR-016, `DECISIONS.md` §1w). Phase 4.2 (Gate F.2) is IMPLEMENTED and merged to `develop` (Batches 1 and 2, 23–24-Oct-2026, below); Gate F.2 acceptance is PENDING owner review and is not approved. Phase 4.3 (Gate F.3) is IN PROGRESS by owner-authorized batches only (24-Oct-2026: F.3-1 email/voice channel gating; F.3-2/F.3-3 SMS/RCS regression and isolation tests); Gate F.3 is NOT ACCEPTED.** The 17-Oct-2026 migration prerequisite (`DECISIONS.md` §1w.10) is superseded: migration tooling (G) is resolved and history recovery (E) is closed for development (§1x.1); migration `0035` was approved on 21-Oct-2026 (§1x.3) and `0036` was merged with BE-DISPATCH-01 (§1y). Phase 4.2 added no migration.
+**Status: Phase 4.1 (Gate F.1) APPROVED by project owner decision, 17-Oct-2026 (ADR-016, `DECISIONS.md` §1w). Phase 4.2 (Gate F.2) is ACCEPTED by project owner decision, 30-Oct-2026 (`QA_RELEASE_PREPARATION.md` §8). Phase 4.3 (Gate F.3) is IN PROGRESS by owner-authorized batches only (24-Oct-2026: F.3-1 email/voice channel gating; F.3-2/F.3-3 SMS/RCS regression and isolation tests). QA-F-07 (F.3-6) and X-6 (F.3-5) were executed and ACCEPTED on 31-Oct-2026 (`DECISIONS.md` §1zc.2, §1zc.5); Gate F.3 is NOT ACCEPTED. Remaining work: `qa/GATE_F3_CLOSEOUT.md`.** The 17-Oct-2026 migration prerequisite (`DECISIONS.md` §1w.10) is superseded: migration tooling (G) is resolved and history recovery (E) is closed for development (§1x.1); migration `0035` was approved on 21-Oct-2026 (§1x.3) and `0036` was merged with BE-DISPATCH-01 (§1y). Phase 4.2 added no migration.
 - **Provider integrations**: simulator-only; no real credentials, vendor endpoints or external network calls.
 - **Delivery scope**: outbound submission outcomes only; webhooks, handset DLRs and delivery-status progression deferred.
 - **SMS DLT**: bound to the approved SMS template in `templates.variables` (`{ names, dlt }`; legacy arrays still read); a payload may restate it but never supply or override it; no migration.
@@ -495,8 +495,8 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 | Increment | Scope | Deliverables | Status |
 |---|---|---|---|
 | **4.1** | Data & Regulatory Foundation (Gate F.1, ADR-016) | Typed SMS/RCS contracts, GSM-7/UCS-2 segmentation, DLT validation and template binding, template-content binding, RCS rich cards and safe URLs, canonical E.164 normalization, suppression alignment | ✅ APPROVED — Gate F.1, 17-Oct-2026 |
-| **4.2** | Provider Adapters & Eligibility (Gate F.2) | SMS/RCS simulator adapters, channel capability registration, provider assignments | 🟡 IMPLEMENTED — merged to `develop` (PR #6, PR #7); Gate F.2 acceptance PENDING |
-| **4.3** | End-to-End Multi-Channel Dispatch & Verification (Gate F.3) | End-to-end multi-channel dispatch, settlement, and full regression verification | 🟡 IN PROGRESS — owner-authorized batches only (24-Oct-2026); Gate F.3 NOT ACCEPTED |
+| **4.2** | Provider Adapters & Eligibility (Gate F.2) | SMS/RCS simulator adapters, channel capability registration, provider assignments | ✅ ACCEPTED — Gate F.2, 30-Oct-2026 |
+| **4.3** | End-to-End Multi-Channel Dispatch & Verification (Gate F.3) | End-to-end multi-channel dispatch, settlement, and full regression verification | 🟡 IN PROGRESS — owner-authorized batches only (24-Oct-2026); QA-F-07 and X-6 accepted 31-Oct-2026; usability (J), D1/D2/D5 and the F.3 decision outstanding; Gate F.3 NOT ACCEPTED |
 
 **Gate F.1 — Phase 4.1 Data & Regulatory Foundation acceptance.** Status: **APPROVED** (project owner decision, 17-Oct-2026; D-7 approved and voice E.164 acknowledged the same day). The authoritative record is `DECISIONS.md` §1w:
 - validation rules: §1w.2–§1w.5;
@@ -513,7 +513,7 @@ Evidence summary (17-Oct-2026, current working tree):
 - typecheck, lint, `format:check`, `openapi:check`, `npm run build` and `git diff --check` all pass.
 - No change under `packages/db`.
 
-**Phase 4.2 — Provider Adapters & Eligibility: implementation record.** Status: **IMPLEMENTED and merged to `develop`; Gate F.2 acceptance PENDING.** Merging is not gate acceptance: Gate F.2 needs a separate owner decision.
+**Phase 4.2 — Provider Adapters & Eligibility: implementation record.** Status: **ACCEPTED by project owner decision, 30-Oct-2026 (`QA_RELEASE_PREPARATION.md` §8).** Merged to `develop` (Batches 1 and 2, PR #6, PR #7); verified on QA host (`QA_RELEASE_PREPARATION.md` §5, QA-D-08 S1–S7).
 
 - **Batch 1 — SMS dispatch** (PR #6, merge `fa9a5ed`, 23-Oct-2026; commits `244f985`, `5f08dfa`):
   - The dispatcher resolves the channel from the claimed message instead of assuming WhatsApp.
@@ -553,6 +553,16 @@ Evidence summary (17-Oct-2026, current working tree):
 - *Remediation:* after the fencing check and organization lock, `processClaim` reads the claimed message's **status**. A message still in `submitting` can only be claimed again after its submission lease expired, so its earlier submission's outcome is unknown. `processClaim` settles it `OUTCOME_UNKNOWN` through the shared `settleAbandonedSubmission()` (the same settlement as `recoverExpiredLeases()`: the current attempt and the message become `outcome_unknown`, a `message.outcome_unknown` event is written, the queue row is deleted). This happens before the organization-status checks and provider selection, so no adapter is called and the message is never resubmitted. No migration.
 - *Commits:* fix commit `a970479` (PR #14); merged to `develop` as `554dea370e84fd6b25589d9cb63309eaec03c636`.
 - *Verification (automated only):* `apps/api/test/be-dispatch-02-expired-submission.int-spec.ts`, 6/6 on disposable `acc_r015_base` clones at `a970479`; 5 of the 6 fail against the pre-fix dispatcher. CI run `40066664676` (at `a970479`) passed all five jobs. QA-host verification has **not** occurred; QA-F-08 is open.
+
+**Phase 4.3 — QA-F-07 provider circuit breaker (F.3-6, X-7): executed and accepted.** Status: **ACCEPTED (owner decision, 31-Oct-2026); Gate F.3 NOT ACCEPTED.**
+
+- **Run:** 31-Oct-2026 on `2026.10.24-441a29a`, against a dedicated simulator provider (`QA Sim 500 F07`).
+- **Result:** the circuit tripped at message 5 (generation 0 → 1); messages 6–10 made zero provider calls and created zero attempt rows; no SQLSTATE 42501 errors; routing restored.
+- **Residuals:**
+  - R-AUD-1: dispatcher transitions are not audited, by design;
+  - QAF-021: no supported circuit reset;
+  - QAF-022: the refusal log line has no message id.
+- **Record:** `QA_RELEASE_PREPARATION.md` §5h.
 
 **Phase 4.3 — Known limitation: WhatsApp template sends (QA-E-02, 26-Oct-2026).** Status: **OPEN — P3-D22/P3-D24 remain unresolved; no runtime change.** Found on QA at `2026.10.24-441a29a`: an approved-template WhatsApp send was accepted with its payload stored as `{"variables":{"1":"QA-Tester"}}`, not as rendered text.
 - *Current behaviour:* `MessagesService.send` checks the template's existence, organization, channel and approval only; it neither renders WhatsApp templates nor validates their variables, and stores `dto.payload` unchanged (rendering and variable validation exist for SMS only). `ProviderSubmission` (`packages/contracts/src/provider-adapter.ts`) has no structured template identity or variables; `mapMessageForSubmission` passes `payload.text` when present and otherwise serializes the whole payload as JSON text. The simulator ignores message content, so QA results show acceptance only, never provider-ready template dispatch.
