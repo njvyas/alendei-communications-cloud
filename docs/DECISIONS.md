@@ -2245,6 +2245,58 @@ Because migration `0019` granted EXECUTE on `app_has_platform_permission` only t
   6. Control: unstarted expired lease correctly dispatched once.
 - Verified in CI run `40067932448` (all 5 jobs passing) and local disposable clone verification.
 
+## 1zc. Phase 4.3 Gate F.3 verification decisions (X-4, X-5, X-6, X-7): 30-Oct-2026
+
+### 1zc.1 Decisions
+- **X-4 (Worker Concurrency — F.3-2 / F.3-3): APPROVED (owner decision, 30-Oct-2026).** Formally accept the automated-only verification approach for F.3-2 / F.3-3 based on the comprehensive integration and security suites (`phase4_3-sms-rcs-dispatch-resilience.int-spec.ts`, `phase4_3-sms-rcs-worker.int-spec.ts`, `phase4_3-sms-rcs-isolation.sec-spec.ts`; 1,538 lines, PR #11, commit `60c133c`). Multi-worker concurrency, worker lease fencing under race conditions, and advisory lock serialization cannot be safely or deterministically forced on the single-worker QA host without inserting intrusive delays into production code. **Residual risk accepted:** live multi-worker concurrency is recorded as an explicitly unverified residual.
+- **X-5 (G-2 Recipient Re-Check — F.3-4): APPROVED (owner decision, 30-Oct-2026).** Formally accept the automated-only verification approach for F.3-4 based on automated suites (`phase4_3-g2-recipient-recheck.sec-spec.ts`, `phase4_3-g2-dispatch-recheck.int-spec.ts`, CI run `40066676777`, PR #12, commit `ce18f4d`). In live host operation, worker claims execute within milliseconds; there is no supported runtime mechanism to hold a message in `queued` status while an operator revokes consent or inserts an external suppression. Migration `0037` (`app_dispatch_recipient_block()`) is verified applied on the QA database (proof `38|04b0fac738f24476e76b88a84fd04850`). **Residual risk accepted:** the live queue-to-claim race window is recorded as an explicitly unverified residual.
+- **X-7 (Provider Circuit Breaker — F.3-6): QA-F-07 LIVE TEST REQUIRED (owner decision, 30-Oct-2026).** Acceptance of F.3-6 based solely on existing circuit transition observations during 26-Oct WhatsApp runs and disposable-clone acceptance tests (`scratch/sim500-acceptance.int-spec.ts`) is **rejected**. The owner directs preparation of the structured QA-F-07 scenario (10 messages sent to `QA Sim 500` under `min_samples=5`, verifying breaker trip at attempt 5 and zero attempts on remaining messages) as a mandatory acceptance test to be executed during a future separately authorized operator window.
+- **X-6 (BE-DISPATCH-02 Crash Recovery — F.3-5): LOCAL PREPARATION ONLY AUTHORIZED (owner decision, 30-Oct-2026).** Prepare the concrete operator runbook and bounded watcher diagnostic script locally. This authorization strictly forbids conducting the operator window, issuing SIGKILL (`$C kill api`), restarting containers, altering provider configurations, or performing any other QA-host operation without separate explicit owner scheduling and authorization.
+
+### 1zc.2 QA-F-07 remediation, execution and acceptance (owner decisions, 31-Oct-2026)
+
+- **QA-F-07 procedure v2.2 (approved).** The 30-Oct draft (v2.1) could not produce a valid result against `441a29a`:
+  - its SQL ran as the `NOLOGIN` role `acc_app`;
+  - its non-UUID run id was replaced by the API as correlation id;
+  - it sent the idempotency header under the wrong name;
+  - it did not require `QA Sim 500` to be the only active assignment;
+  - it counted a log string the release never writes;
+  - it relied on unreliable `--since` log reads.
+
+  The owner approved the corrections, a read-only preflight, and Gemini's independent-review corrections (v2.2.3).
+- **Dedicated provider (approved).** The original `QA Sim 500` circuit had been `open` (generation 9) since 26-Oct-2026, and the application has no supported circuit-reset mechanism; closing it would need a direct database mutation, which was not authorized. A dedicated provider `QA Sim 500 F07` was created through the supported API (simulator, `simulator_behavior "500"`, starting `closed`, generation 0). The original provider was not changed.
+- **Temporary routing (approved, restored).** For the test window, the original `QA Sim 500` (priority 1) and `QA Sim OK` (priority 2) qa-org-a2 WhatsApp assignments were disabled and the `QA Sim 500 F07` assignment (priority 4) was enabled. All were restored after the run and verified by `routing-check`.
+- **Template (approved).** `qa_f07_circuit_test` was created in qa-org-a2 and approved through `simulate-approval`. This is a **QA simulator approval only**, not external WhatsApp/Meta approval.
+- **C3b informational; R-AUD-1 (approved).** System-dispatcher circuit and health transitions intentionally skip audit logging under the current privilege design (`provider-state.store.ts`, HIGH-6: the dispatcher holds no `audit_logs` INSERT privilege). This is carried as an informational observability residual, not as evidence that transitions are audited.
+- **P10 (approved).** Read-only runtime configuration evidence (`DISPATCH_WORKER_ENABLED=true`, a single api container) is accepted as the dispatch-worker precondition. The unreadable current start log line is a residual.
+- **QA-F-07 ACCEPTED (owner decision, 31-Oct-2026).** Run `edb1bc78-9b97-4b02-8c29-b074f3cef2e5` (31-Oct-2026 06:08:01–06:08:18 UTC) passed C0–C9:
+  - the circuit tripped at message 5 (generation 0 → 1, health `offline`);
+  - messages 6–10 made zero provider calls and created zero attempt rows;
+  - no SQLSTATE 42501 errors; queue drained.
+
+  C6b, the log corroboration, read 0 because of a driver filter defect: the dispatcher's refusal warning carries `providerId`, not `messageId`. The corrected provider-and-time count of 5 is accepted. Routing restoration is verified.
+- **Effect on Gate F.3.** X-7 (F.3-6) has its required QA-host evidence. **Gate F.3 remains NOT ACCEPTED** pending its own owner decision. Phase 5 remains NOT AUTHORIZED.
+
+### 1zc.3 Gate F.3 closeout decisions (owner decisions, 31-Oct-2026)
+
+- **Release candidate.** `2026.10.24-441a29a` (code identical to `554dea3`) is the **historical Gate F.3 QA evidence candidate**. U8 (PR #44), U10 (PR #45), U1 (PR #46) and the fixes for #20, #21, #28 and #30 were merged to `develop` afterwards. They are **not** deployed to QA and are **not** tested on the candidate, and must not be represented as part of it.
+- **R-1, F.3-1 and F.3-7 evidence accepted as documented.** F.3-1 (email and voice refused, nothing stored) was executed on an **AI-agent acting QA-lead confirmation** (T-1, §5c of `QA_RELEASE_PREPARATION.md`). That is **not** an independent human sign-off, and the record must keep the distinction.
+- **R-4, I-03 Redis outage.** A degraded Redis readiness report (`status: ok`, Redis `degraded: true`) is acceptable **only if all of the following hold during the outage**:
+  1. the degradation is reported accurately;
+  2. liveness remains healthy for operations that do not depend on Redis;
+  3. dispatch readiness is not falsely reported.
+
+  Otherwise I-03 fails.
+- **R-5 and J-01, Section J.** Evaluations use `qa-org-a2` with its existing synthetic data and residuals documented. For QA-J-01, the owner operates the platform-administrator screen while evaluator E1 directs the task. Bootstrap credentials are never shared.
+- **R-8 and W-6.** Commit, push and a **draft** pull request for the closeout documents (no merge). QAF-022, QAF-009 and QAF-010 are filed as public GitHub issues after sanitization (#47, #48, #49).
+- **X-6.** Prepare the live crash-recovery drill with all runbook safeguards preserved. **No execution** until the named operator and window are recorded and explicit operational authorization is given.
+- **Infrastructure.**
+  - D1, D2 and D5 remain pending infrastructure-owner decisions.
+  - The QA-I-04 dump is to be preserved pending retention disposition. On 31-Oct-2026 it could not be located on the QA host; see `QA_RELEASE_PREPARATION.md` §4.
+  - `/tmp/.no` is to be removed only after confirming it is the empty file created on 28-Oct. On 31-Oct it was already absent.
+  - Disk analysis is read-only; nothing is deleted without approval.
+- Gate F.3 is **not** accepted; Phase 5 is **not** authorized; no deployment.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.
