@@ -506,4 +506,44 @@ describe('SEC-SUPP: Suppression Components Integration & Accessibility Tests', (
       'Keystroke rerenders with new onClose identity must NOT steal focus or re-focus initial element',
     );
   });
+
+  it('13. SuppressionListCard renders client-side address filter input (FE-2)', () => {
+    setupSession([
+      {
+        roleId: 'role-org-admin',
+        roleKey: 'org_admin',
+        scopeType: 'organization',
+        scopeId: ORG_A,
+        orgId: ORG_A,
+        permissions: ['suppressions.read', 'suppressions.manage'],
+      },
+    ]);
+
+    const queryClient = createAppQueryClient();
+    queryClient.setQueryData(
+      [
+        'suppressions',
+        'list',
+        ORG_A,
+        { status: undefined, channelId: undefined, cursor: undefined, limit: 25 },
+      ],
+      {
+        data: [mockActiveSuppression, mockClearedSuppression],
+        page: { hasMore: false, nextCursor: null },
+      },
+    );
+
+    const html = renderToStaticMarkup(
+      React.createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        React.createElement(SuppressionListCard, { orgId: ORG_A, channels: [mockChannel] }),
+      ),
+    );
+
+    assert.ok(html.includes('data-testid="filter-address"'));
+    assert.ok(html.includes('placeholder="Filter address…"'));
+    assert.ok(html.includes('+12025550101'));
+    assert.ok(html.includes('user@example.com'));
+  });
 });

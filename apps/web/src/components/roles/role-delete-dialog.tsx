@@ -4,6 +4,7 @@ import { useState } from 'react';
 
 import { rolesApi, ApiError, type RoleView } from '@/lib/api-client';
 import { useModalDialog } from '@/components/ui/dialog';
+import { toast } from '@/lib/toast';
 
 interface RoleDeleteDialogProps {
   role: RoleView | null;
@@ -31,6 +32,7 @@ export function RoleDeleteDialog({ role, isOpen, onClose, onSuccess }: RoleDelet
     try {
       await rolesApi.delete(role.id);
       onSuccess(role.id);
+      toast.success('Role Deleted', `Custom role "${role.name}" has been deleted.`);
       onClose();
     } catch (err: unknown) {
       if (err instanceof ApiError) {
@@ -43,6 +45,7 @@ export function RoleDeleteDialog({ role, isOpen, onClose, onSuccess }: RoleDelet
         } else if (err.status === 404) {
           // Already deleted, proceed cleanly
           onSuccess(role.id);
+          toast.info('Role Already Deleted', `Role "${role.name}" was already deleted.`);
           onClose();
         } else {
           setErrorMessage(err.message || 'Failed to delete role.');

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ApiError, channelsApi, messagesApi, templatesApi, workspacesApi } from '@/lib/api-client';
 import { humanizeApiError } from '@/lib/error-mapping';
+import { toast } from '@/lib/toast';
 import { useCanSendMessages, useSession } from '@/lib/session-store';
 import { resolveActiveWorkspaceId } from '@/components/contacts/workspace-selection';
 import { approvedWhatsAppTemplates, findWhatsAppChannelId } from './whatsapp-templates';
@@ -155,6 +156,10 @@ export function WhatsAppSendPanel({
 
       // Successfully queued message!
       onMessageDispatched(res.data.id);
+      toast.success(
+        'Message Queued',
+        `WhatsApp message accepted for dispatch to ${trimmedRecipient}.`,
+      );
     } catch (err) {
       const humanized = humanizeApiError(err, 'Failed to dispatch message');
       setErrorMessage(

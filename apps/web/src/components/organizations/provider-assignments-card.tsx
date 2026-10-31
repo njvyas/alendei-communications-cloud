@@ -12,6 +12,7 @@ import {
 import { useCanManageProviders, useCanReadProviders } from '@/lib/session-store';
 import { StatusDot } from '@/components/ui/status-dot';
 import { ActionFeedback, type ActionFeedbackMessage } from '@/components/ui/action-feedback';
+import { toast } from '@/lib/toast';
 import {
   AssignProviderDialog,
   UpdatePriorityDialog,
@@ -380,6 +381,10 @@ export function ProviderAssignmentsCard({ orgId, orgStatus }: ProviderAssignment
           setCursor(null);
           setPageIndex(0);
           void refetchAssignments();
+          toast.success(
+            'Provider Assigned',
+            'New provider assignment was added to the organization routing list.',
+          );
           setFeedback({
             type: 'success',
             title: 'Provider Assigned',
@@ -399,6 +404,10 @@ export function ProviderAssignmentsCard({ orgId, orgStatus }: ProviderAssignment
         onClose={() => setEditingAssignment(null)}
         onSuccess={() => {
           void refetchAssignments();
+          toast.success(
+            'Priority Updated',
+            'Assignment routing priority was updated successfully.',
+          );
           setFeedback({
             type: 'success',
             title: 'Priority Updated',
@@ -418,13 +427,16 @@ export function ProviderAssignmentsCard({ orgId, orgStatus }: ProviderAssignment
         onClose={() => setTogglingAssignment(null)}
         onSuccess={(updated) => {
           void refetchAssignments();
+          const title = updated.status === 'active' ? 'Provider Enabled' : 'Provider Disabled';
+          const msg =
+            updated.status === 'active'
+              ? 'Provider assignment reinstated for active candidate routing.'
+              : 'Provider assignment disabled and removed from active candidate routing.';
+          toast.success(title, msg);
           setFeedback({
             type: 'success',
-            title: updated.status === 'active' ? 'Provider Enabled' : 'Provider Disabled',
-            message:
-              updated.status === 'active'
-                ? 'Provider assignment reinstated for active candidate routing.'
-                : 'Provider assignment disabled and removed from active candidate routing.',
+            title,
+            message: msg,
           });
         }}
       />

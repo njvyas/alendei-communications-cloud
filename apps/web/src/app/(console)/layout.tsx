@@ -19,6 +19,8 @@ import { OrgSelectionView } from '@/components/org-selection-view';
 import { OrgSwitcher } from '@/components/org-switcher';
 import { SessionBadge } from '@/components/session-badge';
 import { ZeroOrgView } from '@/components/zero-org-view';
+import { EnvironmentBadge } from '@/components/ui/environment-badge';
+import { ToastContainer } from '@/components/ui/toast';
 import ConsoleLoading from './loading';
 
 /**
@@ -153,7 +155,10 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
       <div className="mx-auto flex min-h-dvh max-w-6xl flex-col px-4 py-6 sm:px-6">
         <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--color-border-subtle)] pb-4">
           <div>
-            <p className="text-sm font-semibold tracking-tight">Alendei Communications Cloud</p>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-semibold tracking-tight">Alendei Communications Cloud</p>
+              <EnvironmentBadge />
+            </div>
             <p className="text-xs text-[var(--color-ink-muted)]">Control plane</p>
           </div>
           <div className="flex flex-wrap items-center gap-3 sm:gap-4">
@@ -166,6 +171,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
           </div>
         </header>
         <OrgSelectionView />
+        <ToastContainer />
       </div>
     );
   }
@@ -175,7 +181,10 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
     <div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col px-4 py-6 sm:px-6">
       <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--color-border-subtle)] pb-4">
         <div>
-          <p className="text-sm font-semibold tracking-tight">Alendei Communications Cloud</p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-semibold tracking-tight">Alendei Communications Cloud</p>
+            <EnvironmentBadge />
+          </div>
           <p className="text-xs text-[var(--color-ink-muted)]">Control plane</p>
         </div>
 
@@ -271,6 +280,8 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
 
         <main className="min-w-0 flex-1">{children}</main>
       </div>
+
+      <ToastContainer />
     </div>
   );
 }

@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, channelsApi, contactsApi } from '@/lib/api-client';
+import { toast } from '@/lib/toast';
 import type { ContactResponse, ConsentEventType } from '@acc/contracts';
 import { ConsentStatusBadge } from './consent-status-badge';
 import { useModalDialog } from '@/components/ui/dialog';
@@ -73,6 +74,7 @@ export function ContactConsentDialog({ open, onOpenChange, contact }: ContactCon
 
       await queryClient.invalidateQueries({ queryKey: ['contacts', 'consent', contact.id] });
       await queryClient.invalidateQueries({ queryKey: ['contacts', 'list'] });
+      toast.success('Consent Recorded', `Recorded ${event} consent event for contact.`);
       handleClose();
     } catch (err) {
       if (err instanceof ApiError) {

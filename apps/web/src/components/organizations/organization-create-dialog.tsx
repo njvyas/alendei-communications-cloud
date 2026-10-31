@@ -11,6 +11,7 @@ import {
 } from '@/lib/api-client';
 import { useCanManagePlatformTenants, useSession } from '@/lib/session-store';
 import { useModalDialog } from '@/components/ui/dialog';
+import { toast } from '@/lib/toast';
 
 interface OrganizationCreateDialogProps {
   readonly isOpen: boolean;
@@ -147,6 +148,10 @@ export function OrganizationCreateDialog({
     try {
       const res = await organizationsApi.create(payload, idempotencyKey);
       onSuccess(res.data);
+      toast.success(
+        'Organization Created',
+        `Organization "${payload.name}" provisioned successfully.`,
+      );
       onClose();
     } catch (err: unknown) {
       if (err instanceof ApiError) {
