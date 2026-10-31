@@ -261,6 +261,8 @@ describe('DispatcherService provider lifecycle exclusion before admission (Issue
         msg: expect.stringContaining('not active'),
         providerId: 'p-disabled',
         status: 'disabled',
+        messageId: claim.messageId,
+        orgId: claim.orgId,
       }),
     );
     expect(errorSpy).not.toHaveBeenCalled();
@@ -283,6 +285,8 @@ describe('DispatcherService provider lifecycle exclusion before admission (Issue
         msg: expect.stringContaining('not active'),
         providerId: 'p-draining',
         status: 'draining',
+        messageId: claim.messageId,
+        orgId: claim.orgId,
       }),
     );
     expect(errorSpy).not.toHaveBeenCalled();
@@ -315,5 +319,39 @@ describe('DispatcherService provider lifecycle exclusion before admission (Issue
       reason: 'NO_ELIGIBLE_PROVIDER',
       details: 'No assigned provider is active (disabled or draining)',
     });
+  });
+
+  it('logs provider circuit refusal with messageId and orgId (issue #47, QAF-022)', async () => {
+    const candidates = [
+      {
+        id: 'opa-1',
+        provider_id: 'p-open-circuit',
+        priority: 1,
+        provider_status: 'active' as const,
+      },
+      { id: 'opa-2', provider_id: 'p-active', priority: 2, provider_status: 'active' as const },
+    ];
+    const { service, stateStore, warnSpy } = makeDispatcherWithCandidates(candidates);
+
+    // First candidate refused by open circuit; second candidate admitted
+    jest.spyOn(stateStore, 'admit').mockImplementation(async (_tx, _principal, providerId) => {
+      if (providerId === 'p-open-circuit') {
+        return { admitted: false, state: 'open', generation: 1 } as never;
+      }
+      return { admitted: true, state: 'closed', generation: 0 } as never;
+    });
+
+    const result = await service.processClaim(claim);
+    expect(result.outcome).toBe('accepted');
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        msg: 'Provider circuit refused admission; trying next candidate',
+        providerId: 'p-open-circuit',
+        state: 'open',
+        messageId: claim.messageId,
+        orgId: claim.orgId,
+      }),
+    );
   });
 });

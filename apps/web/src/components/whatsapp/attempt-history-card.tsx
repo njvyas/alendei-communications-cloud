@@ -1,7 +1,9 @@
 'use client';
 
-import type { MessageDetailWithAttempts } from '@/lib/api-client';
+import type { MessageDetailWithAttempts } from '../../lib/api-client';
 import { MessageStatusBadge } from './message-status-badge';
+import { FailureReasonAlert } from '../messages/failure-reason-alert';
+import { formatFailureReason, emptyAttemptsGuidance } from '../../lib/failure-reasons';
 
 interface AttemptHistoryCardProps {
   message: MessageDetailWithAttempts;
@@ -62,12 +64,7 @@ export function AttemptHistoryCard({ message, isPolling }: AttemptHistoryCardPro
       </div>
 
       {/* Failure reason callout if failed */}
-      {message.failureReason && (
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300">
-          <span className="font-semibold">Terminal Failure: </span>
-          <code className="text-xs">{message.failureReason}</code>
-        </div>
-      )}
+      {message.failureReason && <FailureReasonAlert failureReason={message.failureReason} />}
 
       {/* Distinction Banner */}
       <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 p-3 text-[11px] text-[var(--color-ink-muted)]">
@@ -113,7 +110,19 @@ export function AttemptHistoryCard({ message, isPolling }: AttemptHistoryCardPro
               {message.attempts.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-3 py-4 text-center text-[var(--color-ink-muted)]">
-                    No attempt rows yet. Message is currently claimed or waiting in dispatch queue.
+                    {(() => {
+                      const guidance = emptyAttemptsGuidance(message.status, message.failureReason);
+                      return (
+                        <div className="space-y-1">
+                          <p>{guidance.message}</p>
+                          {guidance.action && (
+                            <p className="text-[11px] text-[var(--color-ink)] opacity-80">
+                              {guidance.action}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </td>
                 </tr>
               ) : (
@@ -150,8 +159,22 @@ export function AttemptHistoryCard({ message, isPolling }: AttemptHistoryCardPro
                         ? new Date(att.completedAt).toLocaleTimeString()
                         : 'In flight'}
                     </td>
-                    <td className="px-3 py-2 text-[var(--color-ink-muted)] font-mono text-[10px] max-w-xs truncate">
-                      {att.failureReason ?? '—'}
+                    <td
+                      className="px-3 py-2 text-[var(--color-ink-muted)] text-[10px] max-w-xs truncate"
+                      title={att.failureReason ?? undefined}
+                    >
+                      {att.failureReason ? (
+                        <>
+                          <span className="font-medium text-[var(--color-ink)]">
+                            {formatFailureReason(att.failureReason)?.title || att.failureReason}
+                          </span>
+                          <span className="ml-1 font-mono text-[var(--color-ink-muted)]">
+                            ({att.failureReason})
+                          </span>
+                        </>
+                      ) : (
+                        '—'
+                      )}
                     </td>
                   </tr>
                 ))

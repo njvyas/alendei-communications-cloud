@@ -13,6 +13,19 @@ import { AccessibleDialog } from '@/components/ui/dialog';
 import { MessageStatusBadge } from '@/components/whatsapp/message-status-badge';
 import { cn } from '@/lib/cn';
 
+import { FailureReasonAlert } from '@/components/messages/failure-reason-alert';
+import { emptyAttemptsGuidance, formatFailureReason } from '@/lib/failure-reasons';
+
+/**
+ * Backward-compatible helper for empty-attempts wording (QAF-026).
+ */
+export function emptyAttemptsMessage(
+  status: string,
+  failureReason: string | null | undefined,
+): string {
+  return emptyAttemptsGuidance(status, failureReason).message;
+}
+
 export interface MessageDetailDialogProps {
   readonly messageId: string | null;
   readonly onClose: () => void;
@@ -160,18 +173,8 @@ export function MessageDetailDialog({
         {/* Loaded Content */}
         {message && !isLoading && (
           <div className="space-y-4 text-xs">
-            {/* Failure Alert Banner (if failed) */}
-            {message.failureReason && (
-              <div
-                className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-rose-400"
-                role="alert"
-              >
-                <p className="font-semibold">Dispatch Failure: {message.failureReason}</p>
-                <p className="mt-0.5 text-[11px] opacity-90">
-                  The orchestrator was unable to settle this message with the assigned provider(s).
-                </p>
-              </div>
-            )}
+            {/* Failure Guidance Card (if failed) */}
+            {message.failureReason && <FailureReasonAlert failureReason={message.failureReason} />}
 
             {/* Core Metadata Grid */}
             <div className="grid grid-cols-1 gap-3 rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-3 sm:grid-cols-2">
@@ -249,9 +252,22 @@ export function MessageDetailDialog({
               </div>
 
               {message.attempts.length === 0 ? (
-                <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-4 text-center text-xs text-[var(--color-ink-muted)]">
-                  No dispatch attempts recorded yet. Message is currently queued.
-                </div>
+                (() => {
+                  const guidance = emptyAttemptsGuidance(message.status, message.failureReason);
+                  return (
+                    <div
+                      className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-4 text-center text-xs text-[var(--color-ink-muted)] space-y-1"
+                      data-testid="attempts-empty"
+                    >
+                      <p>{guidance.message}</p>
+                      {guidance.action && (
+                        <p className="text-[11px] text-[var(--color-ink)] opacity-80">
+                          {guidance.action}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()
               ) : (
                 <div className="overflow-hidden rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface)]">
                   <div className="overflow-x-auto">
@@ -289,7 +305,16 @@ export function MessageDetailDialog({
                               <AttemptStatusBadge status={att.status} />
                             </td>
                             <td className="px-3 py-2 font-mono text-[11px] text-[var(--color-ink-muted)]">
-                              {att.providerId ? `${att.providerId.slice(0, 8)}…` : '—'}
+                              {att.providerId ? (
+                                <span
+                                  title={`Provider ID: ${att.providerId}`}
+                                  data-testid={`attempt-provider-${att.attemptNumber}`}
+                                >
+                                  {att.providerId.slice(0, 8)}…
+                                </span>
+                              ) : (
+                                '—'
+                              )}
                             </td>
                             <td className="px-3 py-2 text-[var(--color-ink-muted)]">
                               {att.latencyMs !== null && att.latencyMs !== undefined
@@ -298,9 +323,18 @@ export function MessageDetailDialog({
                             </td>
                             <td className="px-3 py-2 text-[var(--color-ink-muted)]">
                               {att.failureReason ? (
-                                <span className="text-rose-400 font-mono text-[11px]">
-                                  {att.failureReason}
-                                </span>
+                                (() => {
+                                  const fmt = formatFailureReason(att.failureReason);
+                                  return (
+                                    <span
+                                      className="text-rose-400 text-[11px]"
+                                      title={att.failureReason}
+                                      data-testid={`attempt-failure-${att.attemptNumber}`}
+                                    >
+                                      {fmt?.title || att.failureReason}
+                                    </span>
+                                  );
+                                })()
                               ) : (
                                 <span className="opacity-50">—</span>
                               )}
