@@ -4,6 +4,7 @@ import { useContext, useState } from 'react';
 import { QueryClientContext, useQuery } from '@tanstack/react-query';
 
 import { authApi, organizationsApi, type OrganizationView } from '../lib/api-client';
+import { formatOrgOptionLabel, formatOrgTooltip } from '../lib/org-formatters';
 import { useCanReadOrganizations, useSession } from '../lib/session-store';
 import { Card, CardDescription, CardTitle } from './ui/card';
 
@@ -112,9 +113,10 @@ function OrgSelectionForm({
             >
               {authorizedOrganizationIds.map((id) => {
                 const org = orgMap?.get(id);
-                const label = org ? `${org.name} (${org.slug})` : id;
+                const label = formatOrgOptionLabel(id, org);
+                const tooltip = formatOrgTooltip(id, org);
                 return (
-                  <option key={id} value={id} title={id}>
+                  <option key={id} value={id} title={tooltip}>
                     {label}
                   </option>
                 );

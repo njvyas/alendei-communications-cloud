@@ -41,6 +41,14 @@ None yet — QA round 1 has not run. One automated-test observation supports ite
 
 **U10 implementation note (31-Oct-2026, branch `feat/console-accessibility-u10`, baseline `9c439a5`, not merged).** Re-inventory at the baseline: 39 modal dialogs (8 already on `AccessibleDialog`, 31 with hand-rolled overlays). Of the 31, 26 had `role="dialog"`, `aria-modal` and a title reference but no focus containment, Escape handling or focus return; 5 provider dialogs (`circuit-policy`, `provider-create`, `provider-health-override`, `provider-health-probe`, `provider-transition`) had no dialog semantics at all. The finding's count of seven provider dialogs does not reproduce: at the audit commit (`fd9f13d`) six provider dialogs lacked `role="dialog"`, and U8 (`9c439a5`) moved the capabilities dialog onto `AccessibleDialog`, leaving five. All 31 now share the `AccessibleDialog` focus logic through `useModalDialog`; Escape is ignored while a mutation is in flight. Also fixed: 17 unlabelled controls, 7 toggle-button groups without `aria-pressed` (6 list filters and the API-key expiry presets), 49 `<th>` without `scope`, and missing `role="alert"`/`role="status"` on error and loading states. Automated checks only; no screen-reader or WCAG conformance testing has been done.
 
+**U1 implementation note (31-Oct-2026, branch `feat/console-organization-picker-u1`, baseline `75fa6d5`, pending merge authorization).** Organization names and slugs are now resolved in both the initial organization selection screen (`org-selection-view.tsx`) and the top console header switcher (`org-switcher.tsx`) using shared formatting utilities (`apps/web/src/lib/org-formatters.ts`).
+- Resolved organizations render as `${org.name} (${org.slug})`.
+- Unresolved organizations (missing lookup, unprivileged caller without `organizations.read`, or API lookup failure) fall back gracefully to `Organization ${id.slice(0, 8)}…`, preserving the complete UUID in `title` / tooltip attributes and `option` values.
+- Loading indicator (`resolving…` with `role="status"`) provides visual and screen-reader feedback without disabling selection or causing layout shift.
+- Strict security and multi-tenancy invariants preserved: `authorizedOrganizationIds` remains the sole source of selectable organization IDs, `sessionStore.selectOrganization` verifies authorization, tenant headers are re-pinned on switch, SEC-05 detail-route resets and authenticated query-cache clearing remain intact.
+- Verified by 9 unit tests (`org-formatters.test.ts`), 5 selection-view component tests (`org-selection-view.test.ts`), 8 switcher component tests (`org-switcher.test.ts`), updated security assertions (`org-switcher-security.sec.test.ts`), and 4 Playwright real-browser tests (`apps/web/e2e/org-picker-switcher.spec.ts`).
+
+
 ### 2c. Improvements that need validation with users
 
 | ID | Question to validate | Method |

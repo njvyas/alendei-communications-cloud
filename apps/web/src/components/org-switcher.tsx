@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { QueryClientContext, useQuery } from '@tanstack/react-query';
 
 import { organizationsApi, type OrganizationView } from '../lib/api-client';
+import { formatOrgOptionLabel, formatOrgTooltip } from '../lib/org-formatters';
 import { clearAuthenticatedQueryCache } from '../lib/query-client';
 import { useCanReadOrganizations, useSession } from '../lib/session-store';
 
@@ -51,7 +52,7 @@ export function OrgSwitcher() {
 
 function OrgSwitcherWithQuery() {
   const canReadOrganizations = useCanReadOrganizations();
-  const { data } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['organizations', 'lookup'],
     queryFn: ({ signal }) => organizationsApi.listAll({}, signal),
     staleTime: 60_000,
@@ -66,10 +67,16 @@ function OrgSwitcherWithQuery() {
     }
   }
 
-  return <OrgSwitcherBase orgMap={orgMap} />;
+  return <OrgSwitcherBase orgMap={orgMap} isLoading={isLoading} />;
 }
 
-function OrgSwitcherBase({ orgMap }: { orgMap?: Map<string, OrganizationView> }) {
+function OrgSwitcherBase({
+  orgMap,
+  isLoading,
+}: {
+  orgMap?: Map<string, OrganizationView>;
+  isLoading?: boolean;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const authorizedOrganizationIds = useSession((state) => state.authorizedOrganizationIds);
@@ -82,15 +89,30 @@ function OrgSwitcherBase({ orgMap }: { orgMap?: Map<string, OrganizationView> })
 
   if (authorizedOrganizationIds.length === 1) {
     const orgId = authorizedOrganizationIds[0];
-    const org = orgId ? orgMap?.get(orgId) : undefined;
-    const label = org ? `${org.name} (${org.slug})` : orgId;
+    if (!orgId) {
+      return null;
+    }
+    const org = orgMap?.get(orgId);
+    const label = formatOrgOptionLabel(orgId, org);
+    const tooltip = formatOrgTooltip(orgId, org);
     return (
-      <div
-        className="flex items-center gap-1.5 rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2.5 py-1 text-xs font-mono text-[var(--color-ink-muted)]"
-        title={org ? `${org.name} (${org.slug})` : `Organization ID: ${orgId}`}
-      >
-        <span className="font-sans text-[var(--color-ink)]">Org:</span>
-        <span className="truncate max-w-[160px] sm:max-w-none">{label}</span>
+      <div className="flex items-center gap-1.5">
+        <div
+          className="flex items-center gap-1.5 rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2.5 py-1 text-xs font-mono text-[var(--color-ink-muted)]"
+          title={tooltip}
+        >
+          <span className="font-sans text-[var(--color-ink)]">Org:</span>
+          <span className="truncate max-w-[160px] sm:max-w-none">{label}</span>
+        </div>
+        {isLoading && (
+          <span
+            role="status"
+            className="text-[11px] font-mono text-[var(--color-ink-muted)]"
+            title="Resolving organization names…"
+          >
+            resolving…
+          </span>
+        )}
       </div>
     );
   }
@@ -124,14 +146,24 @@ function OrgSwitcherBase({ orgMap }: { orgMap?: Map<string, OrganizationView> })
       >
         {authorizedOrganizationIds.map((id) => {
           const org = orgMap?.get(id);
-          const label = org ? `${org.name} (${org.slug})` : id;
+          const label = formatOrgOptionLabel(id, org);
+          const tooltip = formatOrgTooltip(id, org);
           return (
-            <option key={id} value={id} title={id}>
+            <option key={id} value={id} title={tooltip}>
               {label}
             </option>
           );
         })}
       </select>
+      {isLoading && (
+        <span
+          role="status"
+          className="text-[11px] font-mono text-[var(--color-ink-muted)]"
+          title="Resolving organization names…"
+        >
+          resolving…
+        </span>
+      )}
     </div>
   );
 }

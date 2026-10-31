@@ -507,7 +507,7 @@ describe('SEC-05: Organization Switcher Context Synchronization & Route Scoping'
       assert.ok(!html.includes('<select'));
     });
 
-    it('gracefully falls back to raw UUID when organization is not found in lookup data', () => {
+    it('gracefully falls back to formatted Organization label when organization is not found in lookup data', () => {
       const client = createAppQueryClient();
       client.setQueryData(['organizations', 'lookup'], {
         data: [],
@@ -518,6 +518,24 @@ describe('SEC-05: Organization Switcher Context Synchronization & Route Scoping'
       assert.ok(html.includes(ORG_A));
       assert.ok(html.includes(ORG_B));
       assert.ok(html.includes(`value="${ORG_A}"`));
+      assert.ok(html.includes(`Organization ${ORG_A.slice(0, 8)}…`));
+      assert.ok(html.includes(`Organization ${ORG_B.slice(0, 8)}…`));
+      assert.ok(html.includes(`title="Organization ID: ${ORG_A}"`));
+    });
+
+    it('gracefully falls back to formatted Organization label in OrgSelectionView when lookup data is empty', () => {
+      const client = createAppQueryClient();
+      client.setQueryData(['organizations', 'lookup'], {
+        data: [],
+        page: { hasMore: false, nextCursor: null },
+      });
+
+      const html = renderWithQueryClient(React.createElement(OrgSelectionView), client, '/login');
+      assert.ok(html.includes(`Organization ${ORG_A.slice(0, 8)}…`));
+      assert.ok(html.includes(`Organization ${ORG_B.slice(0, 8)}…`));
+      assert.ok(html.includes(`value="${ORG_A}"`));
+      assert.ok(html.includes(`value="${ORG_B}"`));
+      assert.ok(html.includes(`title="Organization ID: ${ORG_A}"`));
     });
 
     it('renders human-readable Name (slug) in OrgSelectionView', () => {
@@ -711,6 +729,7 @@ describe('SEC-05: Organization Switcher Context Synchronization & Route Scoping'
 
         // Header renders intentional styled fallback with tooltip without breaking layout
         assert.ok(html.includes(ORG_A));
+        assert.ok(html.includes(`Organization ${ORG_A.slice(0, 8)}…`));
         assert.ok(html.includes(`title="Organization ID: ${ORG_A}"`));
       } finally {
         organizationsApi.listAll = origListAll;
