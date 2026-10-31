@@ -23,10 +23,7 @@ export interface OrganizationNameSource {
  * - When resolved with name and slug: `${org.name} (${org.slug})`
  * - When unresolved: `Organization ${id.slice(0, 8)}…`
  */
-export function formatOrgOptionLabel(
-  id: string,
-  org?: OrganizationNameSource | null,
-): string {
+export function formatOrgOptionLabel(id: string, org?: OrganizationNameSource | null): string {
   if (org?.name && org?.slug) {
     return `${org.name} (${org.slug})`;
   }
@@ -39,10 +36,7 @@ export function formatOrgOptionLabel(
  * - When resolved: `${org.name} (${org.slug})`
  * - When unresolved: `Organization ID: ${id}` (preserving the full UUID)
  */
-export function formatOrgTooltip(
-  id: string,
-  org?: OrganizationNameSource | null,
-): string {
+export function formatOrgTooltip(id: string, org?: OrganizationNameSource | null): string {
   if (org?.name && org?.slug) {
     return `${org.name} (${org.slug})`;
   }

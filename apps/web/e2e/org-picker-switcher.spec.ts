@@ -170,7 +170,9 @@ test.describe('U1 — Organization Picker and Switcher Improvements', () => {
     const switcher = page.locator('#org-select');
     await expect(switcher).toBeVisible();
     await expect(switcher).toHaveValue(ORG_A);
-    await expect(switcher.locator(`option[value="${ORG_A}"]`)).toHaveText('Acme International (acme)');
+    await expect(switcher.locator(`option[value="${ORG_A}"]`)).toHaveText(
+      'Acme International (acme)',
+    );
     await expect(switcher.locator(`option[value="${ORG_B}"]`)).toHaveText('Beta Systems (beta)');
 
     // 4. Switch to Beta Systems
@@ -261,4 +263,3 @@ test.describe('U1 — Organization Picker and Switcher Improvements', () => {
     await expect(badge).toContainText(fallbackLabel);
   });
 });
-

@@ -16,10 +16,7 @@ describe('OrgSelectionView Component Behavior & Formats (U1)', () => {
   const ORG_B = '01955b0a-7b3b-7411-9a4f-9e67d4f90002';
   const UNAUTHORIZED_ORG = '01955b0a-7b3b-7411-9a4f-9e67d4f99999';
 
-  const setupSession = (
-    authorizedOrgs = [ORG_A, ORG_B],
-    isPlatformAdmin = true,
-  ) => {
+  const setupSession = (authorizedOrgs = [ORG_A, ORG_B], isPlatformAdmin = true) => {
     const user: UserIdentity = {
       userId: 'test-user-1',
       actorType: 'user',
@@ -60,11 +57,7 @@ describe('OrgSelectionView Component Behavior & Formats (U1)', () => {
 
   const renderWithQueryClient = (client: QueryClient) => {
     return renderToStaticMarkup(
-      React.createElement(
-        QueryClientProvider,
-        { client },
-        React.createElement(OrgSelectionView),
-      ),
+      React.createElement(QueryClientProvider, { client }, React.createElement(OrgSelectionView)),
     );
   };
 

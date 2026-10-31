@@ -81,11 +81,7 @@ describe('OrgSwitcher Component Behavior & Formats (U1)', () => {
         React.createElement(
           PathnameContext.Provider,
           { value: pathname },
-          React.createElement(
-            QueryClientProvider,
-            { client },
-            React.createElement(OrgSwitcher),
-          ),
+          React.createElement(QueryClientProvider, { client }, React.createElement(OrgSwitcher)),
         ),
       ),
     );
