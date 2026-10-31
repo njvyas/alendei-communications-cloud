@@ -13,6 +13,33 @@ import { AccessibleDialog } from '@/components/ui/dialog';
 import { MessageStatusBadge } from '@/components/whatsapp/message-status-badge';
 import { cn } from '@/lib/cn';
 
+/**
+ * Wording for the attempts panel when a message has no provider attempt (QAF-026).
+ * A terminal message with zero attempts was never submitted to a provider; saying it is
+ * "currently queued" contradicts its status. Exported for unit tests.
+ */
+export function emptyAttemptsMessage(
+  status: string,
+  failureReason: string | null | undefined,
+): string {
+  switch (status) {
+    case 'queued':
+    case 'routing':
+      return 'No dispatch attempts recorded yet. The message is queued for dispatch.';
+    case 'submitting':
+      return 'No dispatch attempts recorded yet.';
+    case 'failed':
+      if (failureReason === 'NO_ELIGIBLE_PROVIDER') {
+        return 'No provider was attempted: every assigned provider was unavailable (disabled, draining, or its circuit was open). Check the organization\u2019s provider assignments, or send the message again later.';
+      }
+      return 'No provider was attempted before the message failed. See the failure reason above.';
+    case 'outcome_unknown':
+      return 'No provider attempt was recorded, and the outcome could not be determined.';
+    default:
+      return 'No provider attempt was recorded for this message.';
+  }
+}
+
 export interface MessageDetailDialogProps {
   readonly messageId: string | null;
   readonly onClose: () => void;
@@ -249,8 +276,11 @@ export function MessageDetailDialog({
               </div>
 
               {message.attempts.length === 0 ? (
-                <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-4 text-center text-xs text-[var(--color-ink-muted)]">
-                  No dispatch attempts recorded yet. Message is currently queued.
+                <div
+                  className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-4 text-center text-xs text-[var(--color-ink-muted)]"
+                  data-testid="attempts-empty"
+                >
+                  {emptyAttemptsMessage(message.status, message.failureReason)}
                 </div>
               ) : (
                 <div className="overflow-hidden rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface)]">
