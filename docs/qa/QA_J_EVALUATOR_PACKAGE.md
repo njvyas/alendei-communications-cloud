@@ -68,7 +68,7 @@ Every evaluator also completes the end-of-session summary in `USABILITY_FEEDBACK
 ## 5. Recording and evidence
 
 - **Format:** `USABILITY_FEEDBACK_TEMPLATE.md`, one entry per observation, each with a screenshot or recording reference.
-- **Severity:** use the template's scale. Any functional or security defect goes to `QA_FINDINGS_REGISTER.md` with a `QAF-` ID (next free: QAF-025), not only to the usability log.
+- **Severity:** use the template's scale. Any functional or security defect goes to `QA_FINDINGS_REGISTER.md` with a `QAF-` ID (next free: QAF-027), not only to the usability log.
 - **Storage:** evidence outside Git (for example `~/acc-evidence/<date>-qa-j/`) with a `MANIFEST.sha256`. Feedback forms may name the evaluator by initials only; the mapping from initials to people stays in the access register, outside Git.
 - **Results:** recorded in `QA_TEST_PLAN.md` section J (`Actual` column) as tester-run, with the build. The usability items are triaged against `UX_AUDIT_PLAN.md` U1–U14.
 
@@ -103,3 +103,26 @@ Evaluators must not be told how this data was produced; the facilitator uses thi
 
 Any message an evaluator sends adds to this data; note the time window of each session so evaluator activity can be separated from earlier QA runs.
 
+
+## 9. Final human execution requirements (owner direction 31-Oct-2026)
+
+AI evaluations (§5j of the release preparation) do **not** count towards this section. Gate F.3-8 needs every item below.
+
+| # | Requirement | Owner / operator action | Done when |
+|---|---|---|---|
+| H-1 | Three independent human evaluators E1–E3 and one facilitator (§1) | Nominate them; names and the initials mapping go in the vault register, not Git | Nominations confirmed |
+| H-2 | Build | `2026.10.24-441a29a` (historical candidate). A later candidate needs its own identification, explicit owner deployment approval, and testing against its actual deployed commit | Build recorded on every entry |
+| H-3 | J-01: owner-operated platform-admin session, with E1 directing (J-D2 (b)) | Owner schedules and operates | J-01 result and entries recorded |
+| H-4 | J-02: one multi-organization user with roles in two organizations | Platform administrator creates it, the operator activates it, and the credential goes to E1 out of band | E1 signs in and switches organization |
+| H-5 | Keyboard-only evaluation (J-06, J-03 by keyboard) | E3, with no mouse | Results recorded |
+| H-6 | Screen-reader evaluation (J-07) with NVDA (Windows) or VoiceOver (macOS); record the version | E3 | Results recorded |
+| H-7 | Journeys 1–5 each covered at least once | Facilitator checks | §6 completion criteria met |
+| H-8 | Defects recorded: usability entries in `USABILITY_FEEDBACK_TEMPLATE.md`; functional or security defects in `QA_FINDINGS_REGISTER.md` (next ID **QAF-027**) | Facilitator | All logged |
+| H-9 | Signed results | Each evaluator signs the sign-off line below on their summary (initials and date; signed copy stored outside Git with checksum) | Three signed summaries |
+
+Sign-off line for each evaluator summary:
+
+```
+I performed the tasks listed above myself, without coaching, on build ________ on DD-MMM-YYYY.
+Evaluator initials: ____   Role: E_   Signature: ________   Facilitator initials: ____
+```

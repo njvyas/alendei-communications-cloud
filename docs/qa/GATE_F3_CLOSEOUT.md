@@ -130,6 +130,12 @@ If the owner chooses not to run X-6, the alternative is an automated-only except
 | B-8 | PR #51 | An independent review, and owner permission to retarget it to `develop` so CI runs (the retarget was refused by the session permission policy and was not retried) |
 | B-9 | QAF-026 | **Fixed** in draft PR #52 (into `develop`, CI green: lint/typecheck/build, integration, OpenAPI, audit, secret scan; web tests fail 6/6 without the fix). Verification on QA needs an authorized upgrade; the historical `441a29a` image does **not** contain this or any later `develop` fix |
 
+**Execution documents (31-Oct-2026, owner direction "Blocker Resolution and Final Closeout"):**
+- owner and operator actions: `QA_F3_OWNER_EXECUTION.md`;
+- D2 vault entry and bootstrap retirement: `QA_D2_ACCESS_REGISTER_PROCEDURE.md` §8–§9;
+- human evaluation requirements and sign-off: `QA_J_EVALUATOR_PACKAGE.md` §9;
+- Gemini handoff: `GATE_F3_GEMINI_HANDOFF.md`, to be submitted once, when complete.
+
 **Recommendation: do NOT accept Gate F.3 yet.**
 - **Ready:** F.3-1 to F.3-7 have accepted evidence or approved exceptions. The functional and dispatch-safety criteria are therefore satisfied for the historical candidate `441a29a`.
 - **Not ready:**
