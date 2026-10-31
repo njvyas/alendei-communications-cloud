@@ -425,6 +425,7 @@ PostgreSQL also logged "last known up at 2026-10-26 11:49:55 UTC". *Interpretati
 - **Exposure:** web (3000) and API (3001) bound to loopback only; PostgreSQL and Redis not published; only 443 and 22 listen on all interfaces.
 - **Not verifiable by the agent:** `ufw` is active but its rules need root; the operator account has no passwordless `sudo`. The D1 IP restriction (443 from internal ranges, 22 from named operators) is therefore **unverified**.
 - **D2 and D5:** not implemented. The approved values (accountable person, off-host storage target, encryption key custody) are not recorded anywhere this agent can read.
+- **D1 done 31-Oct-2026:** verified (`qa/GATE_F3_CLOSEOUT.md` §3); the `ufw` restriction to `172.16.16.0/24` was already in place, and the SSH `AllowUsers` restriction was added.
 - **Update 31-Oct-2026 (owner decisions confirmed):** D1 apply script ready and staged, awaiting the operator's `sudo` run; D2 procedure in `qa/QA_D2_ACCESS_REGISTER_PROCEDURE.md`, vault entry and human custodian pending; D5 tool `scripts/qa/d5-backup.sh` passed a local end-to-end test, off-host destination and key pending. See `qa/GATE_F3_CLOSEOUT.md` §6.
 
 ## 6. Upgrade sequence

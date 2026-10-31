@@ -22,7 +22,7 @@ Prepared 31-Oct-2026. The owner submits this **once**, when every row in §2 is 
 |---|---|---|
 | F.3-8 human evaluation (E1–E3, journeys 1–5, keyboard, NVDA/VoiceOver, J-01, J-02) | **Pending:** evaluators not nominated | Three signed summaries, feedback entries, `QA_TEST_PLAN.md` J results, evidence manifest (`QA_J_EVALUATOR_PACKAGE.md` §9) |
 | QAF-026 | Fixed in PR #52 (draft, CI green); **not merged, not deployed** | Merge commit on `develop`. QA verification only on an owner-approved deployed candidate; otherwise carried as an accepted residual against `441a29a` |
-| D1 firewall | Script staged, offline-tested; **not applied** | `before.txt`, `after.txt`, `actions.txt` (privileged `ufw`/`sshd -T`), new-SSH-session and HTTPS checks, denied-path probe, with hashes |
+| D1 firewall | **Ready.** Applied and verified 31-Oct-2026 | `~/acc-evidence/2026-10-31-f3-9-infra/MANIFEST-d1-final.sha256` `9ccb28ed…` (privileged before/after/actions, HTTPS allowed, denied probe, `VERIFICATION.txt`). Note for review: SSH password authentication enabled; root login by key permitted (outside D1 scope) |
 | D2 access register | Procedure written; **vault entry and named human custodian pending** | Owner confirmation of the entry and date (no vault content) |
 | D5 encrypted off-host backup | Tool tested locally only (**not D5 acceptance**); destination, access, public key and custodian pending | `d5-backup.sh` logs for a real backup (destination hash verified) and `restore-verify` (row counts identical); cron entry |
 | Fresh-cluster restore (QAF-007/W-4) | Proposal ready; **not authorized** | Drill record, or an owner exception carrying it as a residual |
