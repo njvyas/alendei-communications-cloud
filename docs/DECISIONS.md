@@ -2322,6 +2322,17 @@ Because migration `0019` granted EXECUTE on `app_has_platform_permission` only t
 - **Follow-up.** The watcher's dry-run defect (QAF-025) is corrected in a separate tooling change. The executed scripts and evidence are not altered retrospectively.
 - Gate F.3 remains **not accepted**; Phase 5 remains **not authorized**.
 
+### 1zc.6 Final F.3 closeout direction (owner, 31-Oct-2026)
+
+- **F.3-8.** Gemini and Claude Code act as **AI evaluators** for Section J and the remaining console rows, with J-01 run by the owner operating the platform-admin screen while the AI evaluator directs. AI results must be distinguished from independent human usability and screen-reader sign-off.
+  - **Executed 31-Oct-2026 (`QA_RELEASE_PREPARATION.md` §5j):** Claude's evaluation of J-03 to J-09.
+  - **Not yet executed:** Gemini's evaluation (no channel from Claude Code), J-01/J-02 and the other-persona rows (owner and platform-administrator set-up).
+- **F.3-9.** Implement D1, D2 and D5 on company-controlled infrastructure, verified in operation; keep the local recovery copy until off-host backups are verified.
+  - **Done 31-Oct-2026:** a read-only re-verification.
+  - **Implementation blocked:** the concrete approved values and privileged access are not available to the agent (`GATE_F3_CLOSEOUT.md` §4).
+- **PR #51** (watcher dry-run fix) stays separate from the historical X-6 evidence.
+- PRs #50 and #51 are not merged; no deployment; Phase 5 not authorized.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

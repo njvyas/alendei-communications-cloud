@@ -19,8 +19,8 @@ Owner decision (31-Oct-2026): `441a29a` is the historical F.3 QA evidence candid
 | F.3-5 | BE-DISPATCH-02: no resubmission after an expired submission lease | PR #14 suites, CI `40066664676` (Observed); **X-6 executed 31-Oct-2026** (Agent-run, owner as named operator; `QA_RELEASE_PREPARATION.md` §5i) | **Closed: X-6 ACCEPTED** (owner decision, 31-Oct-2026). Residuals: the claim-time race remains automated-test-only evidence; Docker automatic restart unverified | None |
 | F.3-6 | BE-DISPATCH-01 circuit fix (`0036`) | QA-F-07 executed 31-Oct-2026 and **ACCEPTED** by the owner (§5h; `DECISIONS.md` §1zc.2) | **Closed.** Residuals: R-AUD-1, QAF-021, QAF-022 | None |
 | F.3-7 | Migration history after upgrade | Disposable-clone proof (Observed); QA before `36\|093bfe92…`, after `38\|04b0fac7…` (Agent-run, 24-Oct-2026); re-observed `38\|04b0fac7…` on 28-Oct (after the outage), in the QA-I-04 scratch restore, and in every 31-Oct preflight | **Evidence accepted** (owner decision, 31-Oct-2026) | None |
-| F.3-8 | Full regression on the release commit | CI `40067932448` on `554dea3` (Observed); Agent-run API checks and console automation of 36 rows (§5d); QA-F-07 (§5h) | **Partial.** Outstanding: console rows needing the platform administrator, other personas or the operator; QA-I-01 – I-03; usability (J). The candidate is fixed at `441a29a`; later merges are outside it | The outstanding rows, I-01 – I-03 (§2) and J (`QA_J_EVALUATOR_PACKAGE.md`) |
-| F.3-9 | Deployment controls (exposure, TLS, startup checks, accounts, secrets, backup) | Loopback-only ports, startup principal check, dispatch-credential refusal, health, restart, 0 secret values in logs (Agent-run, 24-Oct-2026); QA-I-04 restore PASS (Agent-run, 28-Oct-2026) | **Partial.** D1, D2 and D5 open (§3) | Infrastructure-owner and owner decisions (§3) |
+| F.3-8 | Full regression on the release commit | CI `40067932448` (Observed); Agent-run API checks and console automation of 36 rows; QA-F-07, X-6; **Section J AI evaluation (Claude), 31-Oct-2026** (`QA_RELEASE_PREPARATION.md` §5j) | **Partial.** AI evaluation: J-03, J-05, J-08, J-09 pass; J-04 and J-06 fail (QAF-026; pre-U10 dialog behaviour; QAF-018); J-07 automated only; J-01/J-02 blocked. No Gemini, human usability or screen-reader evaluation. Platform-admin, other-persona and operator rows and I-01 – I-03 not run | See §6 |
+| F.3-9 | Deployment controls (exposure, TLS, startup checks, accounts, secrets, backup) | Agent-run 24-Oct-2026 controls; QA-I-04 PASS (28-Oct-2026); **read-only re-verification 31-Oct-2026** (TLS 1.2/1.3 only; loopback-only app ports; only 443 and 22 exposed; `ufw` active, rules unreadable) | **Partial.** D1 IP restriction unverified (needs `sudo`); D2 register and D5 off-host encrypted backups not implemented (inputs missing) | See §6 |
 
 **Summary:**
 - **Closed** (by evidence or approved exception): F.3-2/3, F.3-4, F.3-5 (X-6 accepted 31-Oct-2026), F.3-6.
@@ -103,3 +103,38 @@ If the owner chooses not to run X-6, the alternative is an automated-only except
 - **Providers and templates:** simulator-only providers; template approval is simulated (no Meta/WhatsApp approval); synthetic DLT format validation only (from F.2).
 - **QA host logs:** API log `--since` reads are unreliable after the 27/28-Oct outage; the current API start line is unreadable.
 - **Retained QA data:** `QA Sim 500 F07` (assignment disabled), QA-F-07 test messages and contacts, the D08/D08B suspended tenants and the active D08B administrator.
+
+## 6. Status at final closeout (31-Oct-2026)
+
+| Criterion | Status |
+|---|---|
+| F.3-1 | Evidence accepted (AI-agent QA-lead confirmation, not human sign-off) |
+| F.3-2/3, F.3-4 | Closed by approved automated-only exceptions (residuals carried) |
+| F.3-5 | Closed (X-6 accepted) |
+| F.3-6 | Closed (QA-F-07 accepted) |
+| F.3-7 | Evidence accepted |
+| F.3-8 | **Open** (partial: AI evaluation recorded; human, Gemini, persona, operator and J-01/J-02 work outstanding) |
+| F.3-9 | **Open** (D1 unverified; D2 and D5 not implemented) |
+
+**Blockers that need the owner or the infrastructure owner (nothing else is waiting on Claude Code):**
+
+| ID | Blocker | What is needed |
+|---|---|---|
+| B-1 | D5 off-host encrypted backups | The approved **off-host storage target** on company infrastructure (host and path, or bucket) and how the QA host or operator reaches it; the **encryption key custody** (whose public key encrypts, who holds the private key); confirmation of retention (proposed 30 days) and schedule (weekly plus pre-upgrade). The local recovery copy stays until an off-host restore is verified |
+| B-2 | D1 IP-restricted access | The approved **network ranges** for 443 and the **named SSH operators** for 22 (recorded outside Git), plus an operator with `sudo` to apply or show the `ufw` rules. The agent has no passwordless `sudo` |
+| B-3 | D2 access register | The **accountable person** for the bootstrap administrator and the **register location** (outside Git); approval of the bootstrap-password procedure |
+| B-4 | J-01 and platform-admin console rows | An owner-operated platform-admin session with the AI evaluator directing (A-01, A-13, B-01 – B-04, B-13, D-01 – D-08, E-06, J-01) |
+| B-5 | J-02, E-09 and other-persona rows | Platform-administrator creation of a multi-organization user and of the `qa-org-a2` ws-manager, team-reader, agent and reader personas, with operator activation (B-07 – B-09, B-11, B-12, C-07, G-05, H-04, H-05) |
+| B-6 | Gemini AI evaluation | Run Gemini on `QA_J_EVALUATOR_PACKAGE.md` with the handoff in the AI evaluation record |
+| B-7 | Human usability and screen-reader evaluation | Required for the round 1 exit criterion; AI evaluation does not replace it |
+| B-8 | PR #51 | An independent review; no CI applies to the stacked PR |
+
+**Recommendation: do NOT accept Gate F.3 yet.**
+- **Ready:** F.3-1 to F.3-7 have accepted evidence or approved exceptions. The functional and dispatch-safety criteria are therefore satisfied for the historical candidate `441a29a`.
+- **Not ready:**
+  - **F.3-9** has no implemented off-host backup (B-1) and no verified network restriction (B-2). These are deployment controls the gate requires; they are not usability items.
+  - **F.3-8:** the AI evaluation found two failures on the candidate (J-04, J-06), and the human evaluation required by the QA round 1 exit criterion has not happened.
+- **Smallest path to acceptance:**
+  1. Close B-1 and B-2, which are mandatory controls.
+  2. Then either complete B-4 – B-7, or record an explicit owner exception for F.3-8 accepting AI evaluation in place of human usability and screen-reader sign-off on `441a29a`, with J-04, J-06 and QAF-026 as accepted residuals. Their U10/QAF-018 parts are already fixed on `develop`.
+

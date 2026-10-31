@@ -158,15 +158,15 @@ Record findings with `USABILITY_FEEDBACK_TEMPLATE.md`. Each item is a task to at
 
 | ID | Role | Task | Observe | Actual | Sev. if fail | Evidence |
 |---|---|---|---|---|---|---|
-| QA-J-01 | qa-platform-admin | Onboard a new organization end to end (create org → create its admin → hand over) | Steps that need IDs, outside help or the operator | | S2 | feedback entries |
-| QA-J-02 | user with several organizations | Pick the right organization at sign-in and switch later | Can the right organization be recognised? | | S2 | feedback |
-| QA-J-03 | qa-org-a2-admin | Send a templated message to a contact and find out whether it worked | Clarity of status and attempts | | S2 | feedback |
-| QA-J-04 | qa-org-a2-admin | A message failed: find out why and what to do | Clarity of failure reasons and next steps | | S2 | feedback |
-| QA-J-05 | qa-org-a2-admin | Find a message you sent yesterday | Using `/messages` (filters, pagination); record time and difficulty | | S2 | feedback |
-| QA-J-06 | any | Complete A-01, C-01 and E-01 using only the keyboard | Focus visible; dialogs usable; Escape behaviour | | S3 | feedback + recording |
-| QA-J-07 | any | Use a screen reader (NVDA/VoiceOver) on Users, Audit Logs, WhatsApp | Inputs announced with names; status changes announced | | S3 | feedback |
-| QA-J-08 | any | Zoom 200 % and a 1280 px wide window | No lost content or controls | | S4 | screenshots |
-| QA-J-09 | any | Read every error you encountered in A–I | Were messages understandable without codes? | | S3 | feedback |
+| QA-J-01 | qa-platform-admin | Onboard a new organization end to end (create org → create its admin → hand over) | Steps that need IDs, outside help or the operator | **BLOCKED** — needs the owner operating the platform-admin screen with an evaluator directing (31-Oct-2026); not scheduled | S2 | feedback entries |
+| QA-J-02 | user with several organizations | Pick the right organization at sign-in and switch later | Can the right organization be recognised? | **BLOCKED** — no multi-organization user (platform-administrator set-up needed) | S2 | feedback |
+| QA-J-03 | qa-org-a2-admin | Send a templated message to a contact and find out whether it worked | Clarity of status and attempts | *AI evaluation (Claude), 31-Oct-2026; not human:* PASS with friction — sent in about 9 s; status and attempts visible; the WhatsApp list also offers an SMS template (QAF-018, fixed on `develop`, not deployed) | S2 | feedback |
+| QA-J-04 | qa-org-a2-admin | A message failed: find out why and what to do | Clarity of failure reasons and next steps | *AI evaluation:* **FAIL (usability)** — raw `NO_ELIGIBLE_PROVIDER` with no next step (U5); a failed message with 0 attempts says "currently queued" (QAF-026) | S2 | feedback |
+| QA-J-05 | qa-org-a2-admin | Find a message you sent yesterday | Using `/messages` (filters, pagination); record time and difficulty | *AI evaluation:* PASS with friction — no recipient or contact search; status/channel/workspace filters only | S2 | feedback |
+| QA-J-06 | any | Complete A-01, C-01 and E-01 using only the keyboard | Focus visible; dialogs usable; Escape behaviour | *AI evaluation:* **FAIL (accessibility)** — dialog focus not moved or contained and Escape does not close (pre-U10; fixed on `develop`, not deployed); keyboard template choice hit the SMS template (QAF-018) | S3 | feedback + recording |
+| QA-J-07 | any | Use a screen reader (NVDA/VoiceOver) on Users, Audit Logs, WhatsApp | Inputs announced with names; status changes announced | *Automated checks only; screen-reader evaluation NOT done:* `/users` headers without `scope`; `/audit-logs` 7 unlabelled controls; no live regions (U10 items fixed on `develop`, not deployed). Needs a human screen-reader user | S3 | feedback |
+| QA-J-08 | any | Zoom 200 % and a 1280 px wide window | No lost content or controls | *AI evaluation:* PASS — no horizontal overflow or lost controls at 640 CSS px (200 % of 1280 px) | S4 | screenshots |
+| QA-J-09 | any | Read every error you encountered in A–I | Were messages understandable without codes? | *AI evaluation:* PASS for form and sign-in errors; failure codes in message details are not understandable without explanation (see J-04) | S3 | feedback |
 
 ## K. SMS, RCS and unsupported channels (API, simulator)
 

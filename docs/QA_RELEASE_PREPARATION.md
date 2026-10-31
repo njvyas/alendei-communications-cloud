@@ -59,8 +59,8 @@ Evidence labels: **Observed** (verifiable in GitHub, CI or the repository); **Ag
 | F.3-5 | BE-DISPATCH-02: no resubmission after an expired submission lease | PR #14: 6 tests (5 fail on the pre-fix code); 40/40 repeated runs under load; CI `40066664676` | **X-6 executed 31-Oct-2026** (Agent-run, owner as named operator; §5i): one watcher-issued SIGKILL during `submitting`; after restart the sweeper settled the message `outcome_unknown` (lease-expiry reason), exactly 1 attempt on `QA Sim Timeout`, 0 on `QA Sim OK`, queue 0, no orphaned locks; routing restored | X-6: **ACCEPTED** (owner decision, 31-Oct-2026; `DECISIONS.md` §1zc.5) | **Closed.** The claim-time race fix remains evidenced by the automated suite only (PR #14) |
 | F.3-6 | BE-DISPATCH-01 circuit fix (migration `0036`) | Merged suites | **QA-F-07 executed 31-Oct-2026** (Agent-run, owner-authorized; §5h): dedicated `QA Sim 500 F07`, 10 gated messages. Circuit tripped at message 5 (generation 0 → 1, health `offline`); messages 6–10 made 0 provider calls and created 0 attempt rows; 0 SQLSTATE 42501 errors; queue drained; routing restored | X-7: QA-F-07 live test required (30-Oct-2026) → **QA-F-07 ACCEPTED** (owner decision, 31-Oct-2026; `DECISIONS.md` §1zc.2) | **QA-host evidence accepted.** Residuals: R-AUD-1 (dispatcher transitions not audited, by design); C6b corrected count accepted. Gate decision pending |
 | F.3-7 | Migration history after upgrade | Disposable-clone proof `38\|04b0fac738f24476e76b88a84fd04850` | Agent-run 24-Oct-2026: before `36\|093bfe92…`, after `38\|04b0fac7…`; re-observed 28-Oct (after the outage), in the QA-I-04 restore and in the 31-Oct preflights | — | **Evidence accepted** (owner decision, 31-Oct-2026) |
-| F.3-8 | Full regression on the release commit | CI `40067932448` (`554dea3`); docs-only since | Agent-run API checks (sign-in, isolation, WhatsApp C/E/F, masking) and, on 26-Oct-2026, Agent-run console automation of 36 plan rows plus a read-only trace for G-06 (§5d). Platform-admin, other-persona and operator rows, I-01 – I-03 and usability (J) outstanding. QA still runs `441a29a`; later `develop` code fixes (#20, #21, #28, #30, U8, U10, U1) are not deployed; the #22 fix (PR #34) is not merged and not regression-tested on QA | Console checklist: proceed | Partial. Candidate fixed at `441a29a` (owner decision, 31-Oct-2026); later merges are not part of it |
-| F.3-9 | Deployment controls: exposure, TLS, startup checks, accounts, secrets, backup | — | Agent-run 24-Oct-2026: loopback-only ports, startup principal check, dispatch-credential refusal, health, restart, 0 secret values in logs. QA-I-04 scratch restore PASS (28-Oct-2026, §4). TLS, D2 and D5 items open | D1/D2 routed; D5 deferred | Partial; depends on D1, D2, D5 |
+| F.3-8 | Full regression on the release commit | CI `40067932448` (`554dea3`); docs-only since | Agent-run API checks and console automation of 36 rows (§5d); QA-F-07 and X-6 (§5h, §5i); **Section J AI evaluation (Claude), 31-Oct-2026** (§5j): J-03, J-05, J-08, J-09 pass (two with friction); J-04 and J-06 fail; J-07 automated checks only; J-01 and J-02 blocked. Outstanding: human usability and screen-reader evaluation; platform-admin, other-persona and operator console rows; I-01 – I-03 | Console checklist: proceed; AI evaluators directed by the owner (31-Oct-2026) | **Partial.** Candidate fixed at `441a29a` |
+| F.3-9 | Deployment controls: exposure, TLS, startup checks, accounts, secrets, backup | — | Agent-run 24-Oct-2026: loopback-only ports, startup principal check, dispatch-credential refusal, health, restart, 0 secret values in logs. QA-I-04 scratch restore PASS (28-Oct-2026). **Read-only re-verification 31-Oct-2026** (§5j): TLS 1.2/1.3 only (1.0/1.1 refused by the server); web and API on loopback; PostgreSQL and Redis not published; only 443 and 22 exposed; `ufw` active but its rules are unreadable without `sudo`. Local recovery copy (§4) | D1/D2/D5: implementation directed 31-Oct-2026; the concrete approved values and infrastructure access are not yet provided | **Partial.** D1 IP restriction unverified; D2 register and D5 off-host encrypted backups not implemented |
 
 Findings from QA testing, with their development issues and dispositions, are tracked in `qa/QA_FINDINGS_REGISTER.md`.
 
@@ -405,6 +405,26 @@ PostgreSQL also logged "last known up at 2026-10-26 11:49:55 UTC". *Interpretati
 - drill run `05-drill-run/MANIFEST.sha256`: `58af2d518f4c9b727a8727b46475c81c2acf735b5565da8567f210daf8208303`
 - host clean-up `08-host-cleanup/MANIFEST.sha256`: `3e19704d65082eea7636d8ab7456e4bff32620a96d2dd9e09be5aaeba6683a9a`
 - scripts: `x6-routing.sh` `5f52587362c25b39ffe09f9af3d9495ba23287277f6181ff659fb913b524cc64`, `x6-drill.sh` `feab0d3d439581dfd29084cc0c688308b8d57e0b47447c35777f5910dbb520a5`
+
+### 5j. Section J AI evaluation and F.3-9 re-verification (31-Oct-2026)
+
+**Section J: AI evaluation by Claude Code.** This is **not** an independent human usability evaluation and **not** a screen-reader sign-off.
+- **Run:** owner direction 31-Oct-2026 (AI evaluators); QA `441a29a`; qa-org-a2; `qa-org-a2-admin`; Playwright with the TLS key pin verified; 07:42:00–07:42:39 UTC.
+- **Side effects:** one message (J-03, accepted after fallback) and one refused send (422, nothing stored).
+- **Results** (recorded in `qa/QA_TEST_PLAN.md` section J):
+  - **PASS:** J-03 (with friction: the WhatsApp list offers an SMS template, QAF-018), J-05 (with friction: no recipient search), J-08, J-09.
+  - **FAIL:** J-04 (raw `NO_ELIGIBLE_PROVIDER` with no next step; a failed message with 0 attempts is described as "currently queued", **QAF-026**) and J-06 (dialog focus is not moved or contained and Escape does not close it, the pre-U10 behaviour; keyboard template choice hit QAF-018).
+  - **Partial:** J-07, automated checks only (U10 items fixed on `develop`, not deployed).
+  - **BLOCKED:** J-01 (owner-operated platform-admin session not scheduled) and J-02 (no multi-organization user).
+- **Context:** several failures are known U10/QAF-018 issues already fixed on `develop`. They are recorded against the historical candidate `441a29a`, which is what QA runs.
+- **Evidence:** `~/acc-evidence/2026-10-31-qa-j-ai/` (manifest `bd0b7ddc40bbf0bf91565d2ebc683589c74dc45cd56251ca40e3c948c62dad3c`).
+- **Gemini:** has not evaluated yet; Claude Code has no channel to it (handoff in the evidence record).
+
+**F.3-9: read-only re-verification (Agent-run; not implementation).** Evidence `~/acc-evidence/2026-10-31-f3-9-infra/` (manifest `1c0b60a309d3f445bfe6b87e80c326511f74a3c1d6d2b0163202d5ce307e5f7a`).
+- **TLS:** IP-only certificate from the private "ACC Office QA Root CA", valid until 22-Oct-2027; key pin unchanged. The server negotiates TLS 1.2 (ECDHE-RSA-AES256-GCM-SHA384) and TLS 1.3 (TLS_AES_256_GCM_SHA384) and **refuses TLS 1.0 and 1.1** ("protocol version" alert). The global nginx default still lists `TLSv1 TLSv1.1`; the site configuration overrides it.
+- **Exposure:** web (3000) and API (3001) bound to loopback only; PostgreSQL and Redis not published; only 443 and 22 listen on all interfaces.
+- **Not verifiable by the agent:** `ufw` is active but its rules need root; the operator account has no passwordless `sudo`. The D1 IP restriction (443 from internal ranges, 22 from named operators) is therefore **unverified**.
+- **D2 and D5:** not implemented. The approved values (accountable person, off-host storage target, encryption key custody) are not recorded anywhere this agent can read.
 
 ## 6. Upgrade sequence
 

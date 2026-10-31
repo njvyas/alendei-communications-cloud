@@ -2,7 +2,7 @@
 
 Prepared 31-Oct-2026 for the Gate F.3 closeout. It covers `QA_TEST_PLAN.md` section J (QA-J-01 – J-09) and the round 1 exit criterion: "Usability feedback collected from at least three testers covering journeys 1–5" (`UX_AUDIT_PLAN.md` §1).
 
-**Status:** prepared, **not started**. Results cannot be produced by an AI agent; every J result must come from a human evaluator. Owner decisions recorded 31-Oct-2026 (§7); the evaluator nominations (J-D4) are still needed.
+**Status (31-Oct-2026):** the owner directed AI evaluators (Gemini and Claude Code). Claude's AI evaluation of J-03 – J-09 is recorded (`QA_RELEASE_PREPARATION.md` §5j); Gemini's evaluation, J-01/J-02, and any **human** usability and screen-reader evaluation remain outstanding. AI evaluation does not replace an independent human sign-off.
 
 ## 1. Evaluator requirements (three independent evaluators)
 
