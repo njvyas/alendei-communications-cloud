@@ -15,6 +15,7 @@ import {
 import { useCanReadMessages } from '@/lib/session-store';
 import { MessageStatusBadge } from '@/components/whatsapp/message-status-badge';
 import { MessageDetailDialog } from './message-detail-dialog';
+import { formatFailureReason } from '@/lib/failure-reasons';
 
 export interface MessageListCardTestHandle {
   readonly setCursorStack: (stack: string[]) => void;
@@ -352,12 +353,24 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
                       </td>
                       <td className="px-4 py-3">
                         {msg.failureReason ? (
-                          <span
-                            className="font-mono text-[11px] text-rose-400"
-                            title={msg.failureReason}
-                          >
-                            {msg.failureReason}
-                          </span>
+                          (() => {
+                            const formatted = formatFailureReason(msg.failureReason);
+                            const title = formatted ? formatted.title : msg.failureReason;
+                            const tooltip = formatted
+                              ? `${formatted.title} (${msg.failureReason}): ${formatted.description}`
+                              : msg.failureReason;
+                            return (
+                              <span
+                                className="inline-block max-w-[200px] truncate text-[11px] text-rose-400"
+                                title={tooltip}
+                              >
+                                <span className="font-medium">{title}</span>
+                                <span className="ml-1 font-mono text-[10px] text-[var(--color-ink-muted)]">
+                                  ({msg.failureReason})
+                                </span>
+                              </span>
+                            );
+                          })()
                         ) : (
                           <span className="text-[var(--color-ink-muted)] opacity-40">—</span>
                         )}

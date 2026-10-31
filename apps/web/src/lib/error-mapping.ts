@@ -119,6 +119,15 @@ const ERROR_CODE_MAP: Record<string, { title: string; message: string }> = {
   },
 
   // --- Messages & Templates ---
+  NO_ELIGIBLE_PROVIDER: {
+    title: 'No Available Provider',
+    message:
+      'No eligible or healthy provider is currently available to route this message. Check provider assignments or circuit breaker status.',
+  },
+  CHANNEL_NOT_SUPPORTED: {
+    title: 'Channel Not Supported',
+    message: 'The requested communication channel does not support message dispatch.',
+  },
   CONSENT_REVOKED: {
     title: 'Consent Revoked',
     message: 'Recipient consent has expired or was revoked. Dispatches require verified consent.',
@@ -126,6 +135,40 @@ const ERROR_CODE_MAP: Record<string, { title: string; message: string }> = {
   TEMPLATE_NOT_APPROVED: {
     title: 'Template Not Approved',
     message: 'The template must be approved before outbound messages can be dispatched.',
+  },
+  TEMPLATE_NOT_FOUND: {
+    title: 'Template Not Found',
+    message: 'The requested template could not be found in this organization.',
+  },
+  TEMPLATE_CHANNEL_MISMATCH: {
+    title: 'Template Channel Mismatch',
+    message: 'The selected template does not match the requested communication channel.',
+  },
+  SMS_DLT_METADATA_REQUIRED: {
+    title: 'DLT Metadata Required',
+    message:
+      'SMS messaging requires approved Distributed Ledger Technology (DLT) Entity ID and Template ID registration.',
+  },
+  SMS_PAYLOAD_INVALID: {
+    title: 'SMS Payload Invalid',
+    message: 'The SMS payload does not match the approved template variables or character bounds.',
+  },
+  SMS_TEMPLATE_VARIABLE_INVALID: {
+    title: 'Template Variable Invalid',
+    message: 'One or more required SMS template variables are missing or incorrectly formatted.',
+  },
+  RCS_UNSAFE_ACTION_URL: {
+    title: 'Unsafe Action URL',
+    message:
+      'An action URL in this RCS message is unsafe or insecure. Only valid HTTPS URLs are permitted.',
+  },
+  RCS_PAYLOAD_INVALID: {
+    title: 'RCS Payload Invalid',
+    message: 'The submitted RCS card or payload structure does not conform to RCS messaging rules.',
+  },
+  ALL_PROVIDERS_FAILED: {
+    title: 'All Providers Failed',
+    message: 'All attempted provider adapters failed during message dispatch.',
   },
   MESSAGE_NOT_FOUND: {
     title: 'Message Not Found',

@@ -270,7 +270,13 @@ describe('Issue #20: dispatcher provider lifecycle diagnostics', () => {
     expect(attempts).toHaveLength(1);
     expect(attempts[0]!.providerId).toBe(active);
     expect(entries(warned, LIFECYCLE_WARN)).toEqual([
-      { msg: LIFECYCLE_WARN, providerId: disabled, status: 'disabled' },
+      {
+        msg: LIFECYCLE_WARN,
+        providerId: disabled,
+        status: 'disabled',
+        messageId,
+        orgId: t.orgId,
+      },
     ]);
     expect(errored).not.toHaveBeenCalled();
     expect(admitSpy).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), disabled);
@@ -290,7 +296,13 @@ describe('Issue #20: dispatcher provider lifecycle diagnostics', () => {
 
     await expectNoEligibleProvider(messageId, LIFECYCLE_ONLY);
     expect(entries(warned, LIFECYCLE_WARN)).toEqual([
-      { msg: LIFECYCLE_WARN, providerId: disabled, status: 'disabled' },
+      {
+        msg: LIFECYCLE_WARN,
+        providerId: disabled,
+        status: 'disabled',
+        messageId,
+        orgId: t.orgId,
+      },
     ]);
     expect(errored).not.toHaveBeenCalled();
     expect(admitSpy).not.toHaveBeenCalled();
@@ -308,7 +320,13 @@ describe('Issue #20: dispatcher provider lifecycle diagnostics', () => {
 
     await expectNoEligibleProvider(messageId, LIFECYCLE_ONLY);
     expect(entries(warned, LIFECYCLE_WARN)).toEqual([
-      { msg: LIFECYCLE_WARN, providerId: draining, status: 'draining' },
+      {
+        msg: LIFECYCLE_WARN,
+        providerId: draining,
+        status: 'draining',
+        messageId,
+        orgId: t.orgId,
+      },
     ]);
     expect(errored).not.toHaveBeenCalled();
     expect(admitSpy).not.toHaveBeenCalled();
@@ -326,7 +344,7 @@ describe('Issue #20: dispatcher provider lifecycle diagnostics', () => {
 
     await expectNoEligibleProvider(messageId, CIRCUIT_ONLY);
     expect(entries(warned, CIRCUIT_WARN)).toEqual([
-      { msg: CIRCUIT_WARN, providerId: open, state: 'open' },
+      { msg: CIRCUIT_WARN, providerId: open, state: 'open', messageId, orgId: t.orgId },
     ]);
     expect(entries(warned, LIFECYCLE_WARN)).toHaveLength(0);
     expect(errored).not.toHaveBeenCalled();
@@ -346,10 +364,16 @@ describe('Issue #20: dispatcher provider lifecycle diagnostics', () => {
 
     await expectNoEligibleProvider(messageId, MIXED);
     expect(entries(warned, LIFECYCLE_WARN)).toEqual([
-      { msg: LIFECYCLE_WARN, providerId: disabled, status: 'disabled' },
+      {
+        msg: LIFECYCLE_WARN,
+        providerId: disabled,
+        status: 'disabled',
+        messageId,
+        orgId: t.orgId,
+      },
     ]);
     expect(entries(warned, CIRCUIT_WARN)).toEqual([
-      { msg: CIRCUIT_WARN, providerId: open, state: 'open' },
+      { msg: CIRCUIT_WARN, providerId: open, state: 'open', messageId, orgId: t.orgId },
     ]);
     expect(errored).not.toHaveBeenCalled();
     expect(admitSpy).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), disabled);
@@ -376,6 +400,8 @@ describe('Issue #20: dispatcher provider lifecycle diagnostics', () => {
         msg: ADMISSION_ERROR,
         error: "The provider's adapter is not registered",
         providerId: unregistered,
+        messageId,
+        orgId: t.orgId,
       },
     ]);
     expect(JSON.stringify(logged)).not.toContain('unregistered_adapter');

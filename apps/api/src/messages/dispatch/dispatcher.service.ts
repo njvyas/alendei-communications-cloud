@@ -518,6 +518,8 @@ export class DispatcherService {
             msg: 'Provider is not active (disabled or draining); trying next candidate',
             providerId: candidate.provider_id,
             status: candidate.provider_status,
+            messageId: message.id,
+            orgId: claim.orgId,
           });
           continue;
         }
@@ -538,6 +540,8 @@ export class DispatcherService {
             msg: 'Provider circuit refused admission; trying next candidate',
             providerId: candidate.provider_id,
             state: candidateAdmission.state,
+            messageId: message.id,
+            orgId: claim.orgId,
           });
         } catch (admitErr) {
           if (isProviderLifecycleRefusal(admitErr)) {
@@ -546,6 +550,8 @@ export class DispatcherService {
               msg: 'Provider is not active (disabled or draining); trying next candidate',
               providerId: candidate.provider_id,
               status: admitErr.details?.status,
+              messageId: message.id,
+              orgId: claim.orgId,
             });
             continue;
           }
@@ -553,6 +559,8 @@ export class DispatcherService {
           this.logger.error({
             ...failureLogEntry('Error checking circuit admission for provider', admitErr),
             providerId: candidate.provider_id,
+            messageId: message.id,
+            orgId: claim.orgId,
           });
         }
       }

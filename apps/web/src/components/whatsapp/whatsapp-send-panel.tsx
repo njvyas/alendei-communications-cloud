@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ApiError, channelsApi, messagesApi, templatesApi, workspacesApi } from '@/lib/api-client';
+import { humanizeApiError } from '@/lib/error-mapping';
 import { useCanSendMessages, useSession } from '@/lib/session-store';
 import { resolveActiveWorkspaceId } from '@/components/contacts/workspace-selection';
 import { approvedWhatsAppTemplates, findWhatsAppChannelId } from './whatsapp-templates';
@@ -155,13 +156,12 @@ export function WhatsAppSendPanel({
       // Successfully queued message!
       onMessageDispatched(res.data.id);
     } catch (err) {
-      if (err instanceof ApiError) {
-        setErrorMessage(
-          err.code ? `${err.code}: ${err.message}` : err.message || 'Failed to dispatch message.',
-        );
-      } else {
-        setErrorMessage('An unexpected error occurred while dispatching the message.');
-      }
+      const humanized = humanizeApiError(err, 'Failed to dispatch message');
+      setErrorMessage(
+        err instanceof ApiError && err.code && !humanized.message.includes(err.code)
+          ? `${humanized.message} (${err.code})`
+          : humanized.message,
+      );
     } finally {
       setIsSubmitting(false);
     }
