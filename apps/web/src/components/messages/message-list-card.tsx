@@ -266,20 +266,34 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
           <table className="w-full text-left text-xs" data-testid="messages-table">
             <thead>
               <tr className="border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] text-[var(--color-ink-muted)]">
-                <th className="px-4 py-3 font-medium">Dispatched</th>
-                <th className="px-4 py-3 font-medium">Channel</th>
-                <th className="px-4 py-3 font-medium">Recipient Address</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Attempts</th>
-                <th className="px-4 py-3 font-medium">Failure Reason</th>
-                <th className="px-4 py-3 font-medium text-right">Actions</th>
+                <th scope="col" className="px-4 py-3 font-medium">
+                  Dispatched
+                </th>
+                <th scope="col" className="px-4 py-3 font-medium">
+                  Channel
+                </th>
+                <th scope="col" className="px-4 py-3 font-medium">
+                  Recipient Address
+                </th>
+                <th scope="col" className="px-4 py-3 font-medium">
+                  Status
+                </th>
+                <th scope="col" className="px-4 py-3 font-medium">
+                  Attempts
+                </th>
+                <th scope="col" className="px-4 py-3 font-medium">
+                  Failure Reason
+                </th>
+                <th scope="col" className="px-4 py-3 font-medium text-right">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--color-border-subtle)]">
               {isLoading ? (
                 <tr>
                   <td colSpan={7} className="px-4 py-12 text-center text-[var(--color-ink-muted)]">
-                    <div className="flex items-center justify-center gap-2">
+                    <div role="status" className="flex items-center justify-center gap-2">
                       <div className="size-4 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent" />
                       <span>Loading messages…</span>
                     </div>

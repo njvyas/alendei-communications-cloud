@@ -237,14 +237,20 @@ export default function UsersPage() {
 
       {/* Main Content Area */}
       {isLoading ? (
-        <div className="flex items-center justify-center rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-12">
+        <div
+          role="status"
+          className="flex items-center justify-center rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-12"
+        >
           <div className="flex items-center gap-3">
             <div className="size-4 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent" />
             <p className="text-sm text-[var(--color-ink-muted)]">Loading users…</p>
           </div>
         </div>
       ) : error ? (
-        <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center">
+        <div
+          role="alert"
+          className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center"
+        >
           {error instanceof ApiError && error.status === 403 ? (
             <>
               <p className="text-base font-semibold text-[var(--color-bad)]">Access Forbidden</p>
@@ -320,11 +326,21 @@ export default function UsersPage() {
             <table className="w-full text-left text-xs">
               <thead>
                 <tr className="border-b border-[var(--color-border-subtle)] text-[var(--color-ink-muted)]">
-                  <th className="px-4 py-3 font-medium">User Identity</th>
-                  <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium">Phone</th>
-                  <th className="px-4 py-3 font-medium">Created</th>
-                  <th className="px-4 py-3 text-right font-medium">Action</th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    User Identity
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    Status
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    Phone
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    Created
+                  </th>
+                  <th scope="col" className="px-4 py-3 text-right font-medium">
+                    Action
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border-subtle)]">
@@ -366,7 +382,11 @@ export default function UsersPage() {
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--color-border-subtle)] px-4 py-3 text-xs text-[var(--color-ink-muted)]">
             <div>
               <span>Page {cursorStack.length + 1}</span>
-              {isFetching && <span className="ml-2 text-[var(--color-accent)]">Updating…</span>}
+              {isFetching && (
+                <span role="status" className="ml-2 text-[var(--color-accent)]">
+                  Updating…
+                </span>
+              )}
             </div>
 
             <div className="flex items-center gap-2">

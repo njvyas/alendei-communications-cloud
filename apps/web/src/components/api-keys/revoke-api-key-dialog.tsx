@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { ApiError, apiKeysApi, type ApiKeyView } from '@/lib/api-client';
+import { useModalDialog } from '@/components/ui/dialog';
 
 interface RevokeApiKeyDialogProps {
   readonly isOpen: boolean;
@@ -18,6 +19,8 @@ export function RevokeApiKeyDialog({
 }: RevokeApiKeyDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const modal = useModalDialog(isOpen && !!apiKey);
 
   if (!isOpen || !apiKey) return null;
 
@@ -54,9 +57,14 @@ export function RevokeApiKeyDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="revoke-key-dialog-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs focus:outline-none"
+      {...modal.overlayProps(onClose, !isSubmitting)}
     >
-      <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl text-[var(--color-ink)]">
+      <div
+        ref={modal.panelRef}
+        tabIndex={-1}
+        className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl text-[var(--color-ink)]"
+      >
         <div className="flex items-center gap-3">
           <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[var(--color-bad)]/15 text-[var(--color-bad)] font-bold text-lg">
             !
@@ -86,7 +94,10 @@ export function RevokeApiKeyDialog({
           </div>
 
           {errorMessage && (
-            <div className="rounded-md border border-[var(--color-bad)]/40 bg-[var(--color-bad)]/10 p-2.5 text-xs text-[var(--color-bad)]">
+            <div
+              role="alert"
+              className="rounded-md border border-[var(--color-bad)]/40 bg-[var(--color-bad)]/10 p-2.5 text-xs text-[var(--color-bad)]"
+            >
               {errorMessage}
             </div>
           )}

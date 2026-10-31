@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { ERROR_CODES } from '@acc/contracts';
 import { ApiError, roleAssignmentsApi, type RoleAssignmentView } from '@/lib/api-client';
+import { useModalDialog } from '@/components/ui/dialog';
 
 export function getRevokeErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -61,6 +62,8 @@ export function RevokeAssignmentDialog({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const modal = useModalDialog(isOpen && !!assignment);
+
   if (!isOpen || !assignment) return null;
 
   const handleRevoke = async () => {
@@ -83,9 +86,12 @@ export function RevokeAssignmentDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="revoke-assignment-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 focus:outline-none"
+      {...modal.overlayProps(onClose, !isSubmitting)}
     >
       <div
+        ref={modal.panelRef}
+        tabIndex={-1}
         className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >

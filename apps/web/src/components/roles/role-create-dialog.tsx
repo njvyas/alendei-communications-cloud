@@ -14,6 +14,7 @@ import {
 } from '@/lib/api-client';
 import { cn } from '@/lib/cn';
 import { useHeldOrganizationPermissions, useSession } from '@/lib/session-store';
+import { useModalDialog } from '@/components/ui/dialog';
 
 interface RoleCreateDialogProps {
   isOpen: boolean;
@@ -113,6 +114,8 @@ export function RoleCreateDialog({ isOpen, onClose, onSuccess }: RoleCreateDialo
     }
     return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [tenantAssignablePermissions, permissionFilter, filterOnlyHeld, heldPermissions]);
+
+  const modal = useModalDialog(isOpen);
 
   if (!isOpen) return null;
 
@@ -231,9 +234,14 @@ export function RoleCreateDialog({ isOpen, onClose, onSuccess }: RoleCreateDialo
       role="dialog"
       aria-modal="true"
       aria-labelledby="create-role-dialog-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 focus:outline-none"
+      {...modal.overlayProps(onClose, !isSubmitting)}
     >
-      <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] shadow-xl">
+      <div
+        ref={modal.panelRef}
+        tabIndex={-1}
+        className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] shadow-xl"
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)] px-6 py-4">
           <div>
@@ -261,7 +269,10 @@ export function RoleCreateDialog({ isOpen, onClose, onSuccess }: RoleCreateDialo
           <div className="flex-1 space-y-5 overflow-y-auto px-6 py-5 text-xs">
             {/* Top Error Alert */}
             {errorMessage && (
-              <div className="rounded-lg border border-[var(--color-bad)]/40 bg-[var(--color-bad)]/10 p-3 text-[var(--color-bad)]">
+              <div
+                role="alert"
+                className="rounded-lg border border-[var(--color-bad)]/40 bg-[var(--color-bad)]/10 p-3 text-[var(--color-bad)]"
+              >
                 <p className="font-semibold">{errorMessage}</p>
                 {rejectedPermissions.length > 0 && (
                   <div className="mt-2">
@@ -423,6 +434,7 @@ export function RoleCreateDialog({ isOpen, onClose, onSuccess }: RoleCreateDialo
                   type="text"
                   value={permissionFilter}
                   onChange={(e) => setPermissionFilter(e.target.value)}
+                  aria-label="Filter permissions"
                   placeholder="Filter permissions by keyword or domain..."
                   className="w-full rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-3 py-1.5 text-xs text-[var(--color-ink)] focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
                 />
@@ -431,11 +443,14 @@ export function RoleCreateDialog({ isOpen, onClose, onSuccess }: RoleCreateDialo
               {/* Grouped Permission List */}
               <div className="mt-3 max-h-60 space-y-4 overflow-y-auto rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-3">
                 {permissionsLoading ? (
-                  <p className="text-center text-xs text-[var(--color-ink-muted)] py-4">
+                  <p
+                    role="status"
+                    className="text-center text-xs text-[var(--color-ink-muted)] py-4"
+                  >
                     Loading catalogue...
                   </p>
                 ) : permissionsError ? (
-                  <p className="text-center text-xs text-[var(--color-bad)] py-4">
+                  <p role="alert" className="text-center text-xs text-[var(--color-bad)] py-4">
                     Failed to load permissions catalogue.
                   </p>
                 ) : groupedPermissions.length === 0 ? (

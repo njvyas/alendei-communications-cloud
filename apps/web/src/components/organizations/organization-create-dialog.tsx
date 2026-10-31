@@ -10,6 +10,7 @@ import {
   type OrganizationView,
 } from '@/lib/api-client';
 import { useCanManagePlatformTenants, useSession } from '@/lib/session-store';
+import { useModalDialog } from '@/components/ui/dialog';
 
 interface OrganizationCreateDialogProps {
   readonly isOpen: boolean;
@@ -70,6 +71,8 @@ export function OrganizationCreateDialog({
       setFieldErrors({});
     }
   }, [isOpen]);
+
+  const modal = useModalDialog(isOpen);
 
   if (!isOpen) return null;
 
@@ -184,9 +187,14 @@ export function OrganizationCreateDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="create-org-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 focus:outline-none"
+      {...modal.overlayProps(onClose, !isSubmitting)}
     >
-      <div className="w-full max-w-lg rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl max-h-[90vh] overflow-y-auto">
+      <div
+        ref={modal.panelRef}
+        tabIndex={-1}
+        className="w-full max-w-lg rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl max-h-[90vh] overflow-y-auto"
+      >
         <h2
           id="create-org-title"
           className="text-lg font-semibold tracking-tight text-[var(--color-ink)]"
@@ -198,7 +206,10 @@ export function OrganizationCreateDialog({
         </p>
 
         {errorMessage && (
-          <div className="mt-4 rounded-md border border-[var(--color-bad)]/20 bg-[var(--color-bad)]/10 p-3 text-xs text-[var(--color-bad)]">
+          <div
+            role="alert"
+            className="mt-4 rounded-md border border-[var(--color-bad)]/20 bg-[var(--color-bad)]/10 p-3 text-xs text-[var(--color-bad)]"
+          >
             {errorMessage}
           </div>
         )}

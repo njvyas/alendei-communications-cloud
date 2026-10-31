@@ -188,6 +188,7 @@ export default function AuditLogsPage() {
                 key={tab.id}
                 type="button"
                 onClick={() => handleOutcomeChange(tab.id)}
+                aria-pressed={outcomeFilter === tab.id}
                 className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                   outcomeFilter === tab.id
                     ? 'border border-[var(--color-border-subtle)] bg-[var(--color-surface)] text-[var(--color-ink)] shadow-xs'
@@ -201,8 +202,11 @@ export default function AuditLogsPage() {
 
           {/* Actor Type Filter */}
           <div className="flex items-center gap-2">
-            <span className="text-xs text-[var(--color-ink-muted)]">Actor:</span>
+            <label htmlFor="audit-actor-filter" className="text-xs text-[var(--color-ink-muted)]">
+              Actor:
+            </label>
             <select
+              id="audit-actor-filter"
               value={actorTypeFilter}
               onChange={(e) => handleActorTypeChange(e.target.value as 'all' | AuditActorType)}
               className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2.5 py-1 text-xs text-[var(--color-ink)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
@@ -224,6 +228,7 @@ export default function AuditLogsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <input
               type="text"
+              aria-label="Action key"
               placeholder="Action key (e.g. user_role.granted)"
               value={actionInput}
               onChange={(e) => setActionInput(e.target.value)}
@@ -231,6 +236,7 @@ export default function AuditLogsPage() {
             />
             <input
               type="text"
+              aria-label="Resource type"
               placeholder="Resource Type (e.g. RoleAssignment)"
               value={resourceTypeInput}
               onChange={(e) => setResourceTypeInput(e.target.value)}
@@ -238,6 +244,7 @@ export default function AuditLogsPage() {
             />
             <input
               type="text"
+              aria-label="Correlation ID"
               placeholder="Correlation ID (UUID)"
               value={correlationIdInput}
               onChange={(e) => setCorrelationIdInput(e.target.value)}
@@ -247,8 +254,14 @@ export default function AuditLogsPage() {
 
           <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-[var(--color-ink-muted)]">From:</span>
+              <label
+                htmlFor="audit-occurred-from"
+                className="text-xs text-[var(--color-ink-muted)]"
+              >
+                From:
+              </label>
               <input
+                id="audit-occurred-from"
                 type="date"
                 value={occurredFromDate}
                 onChange={(e) => {
@@ -257,8 +270,11 @@ export default function AuditLogsPage() {
                 }}
                 className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2 py-0.5 text-xs text-[var(--color-ink)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
               />
-              <span className="text-xs text-[var(--color-ink-muted)]">To:</span>
+              <label htmlFor="audit-occurred-to" className="text-xs text-[var(--color-ink-muted)]">
+                To:
+              </label>
               <input
+                id="audit-occurred-to"
                 type="date"
                 value={occurredToDate}
                 onChange={(e) => {
@@ -270,8 +286,11 @@ export default function AuditLogsPage() {
             </div>
 
             <div className="flex items-center gap-2">
-              <span className="text-xs text-[var(--color-ink-muted)]">Sort:</span>
+              <label htmlFor="audit-sort" className="text-xs text-[var(--color-ink-muted)]">
+                Sort:
+              </label>
               <select
+                id="audit-sort"
                 value={sort}
                 onChange={(e) => handleSortChange(e.target.value)}
                 className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2.5 py-1 text-xs text-[var(--color-ink)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
@@ -314,14 +333,20 @@ export default function AuditLogsPage() {
           </p>
         </div>
       ) : isLoading ? (
-        <div className="flex items-center justify-center rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-12">
+        <div
+          role="status"
+          className="flex items-center justify-center rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-12"
+        >
           <div className="flex items-center gap-3">
             <div className="size-4 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent" />
             <p className="text-sm text-[var(--color-ink-muted)]">Loading audit trail…</p>
           </div>
         </div>
       ) : error ? (
-        <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center">
+        <div
+          role="alert"
+          className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8 text-center"
+        >
           {error instanceof ApiError && error.status === 403 ? (
             <>
               <p className="text-base font-semibold text-[var(--color-bad)]">Access Forbidden</p>

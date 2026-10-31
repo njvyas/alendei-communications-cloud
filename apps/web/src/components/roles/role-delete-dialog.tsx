@@ -3,6 +3,7 @@
 import { useState } from 'react';
 
 import { rolesApi, ApiError, type RoleView } from '@/lib/api-client';
+import { useModalDialog } from '@/components/ui/dialog';
 
 interface RoleDeleteDialogProps {
   role: RoleView | null;
@@ -14,6 +15,8 @@ interface RoleDeleteDialogProps {
 export function RoleDeleteDialog({ role, isOpen, onClose, onSuccess }: RoleDeleteDialogProps) {
   const [isDeleting, setIsDeleting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const modal = useModalDialog(isOpen && !!role);
 
   if (!isOpen || !role) return null;
 
@@ -57,9 +60,14 @@ export function RoleDeleteDialog({ role, isOpen, onClose, onSuccess }: RoleDelet
       role="dialog"
       aria-modal="true"
       aria-labelledby="delete-role-dialog-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 focus:outline-none"
+      {...modal.overlayProps(onClose, !isDeleting)}
     >
-      <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-6 shadow-xl">
+      <div
+        ref={modal.panelRef}
+        tabIndex={-1}
+        className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-6 shadow-xl"
+      >
         <h2
           id="delete-role-dialog-title"
           className="text-base font-semibold text-[var(--color-ink)]"
@@ -99,7 +107,10 @@ export function RoleDeleteDialog({ role, isOpen, onClose, onSuccess }: RoleDelet
             </p>
 
             {errorMessage && (
-              <div className="rounded-lg border border-[var(--color-bad)]/40 bg-[var(--color-bad)]/10 p-3 text-[var(--color-bad)]">
+              <div
+                role="alert"
+                className="rounded-lg border border-[var(--color-bad)]/40 bg-[var(--color-bad)]/10 p-3 text-[var(--color-bad)]"
+              >
                 <p className="font-semibold">Deletion Blocked</p>
                 <p className="mt-1 text-[11px]">{errorMessage}</p>
               </div>

@@ -309,14 +309,20 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
             You do not have permission to view teams in this workspace.
           </div>
         ) : teamsLoading ? (
-          <div className="flex items-center justify-center rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8">
+          <div
+            role="status"
+            className="flex items-center justify-center rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8"
+          >
             <div className="flex items-center gap-3">
               <div className="size-4 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent" />
               <p className="text-xs text-[var(--color-ink-muted)]">Loading teams…</p>
             </div>
           </div>
         ) : teamsError ? (
-          <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-6 text-center">
+          <div
+            role="alert"
+            className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-6 text-center"
+          >
             <p className="text-xs text-[var(--color-bad)]">
               Failed to load teams for this workspace.
             </p>

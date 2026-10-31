@@ -76,11 +76,14 @@ export default function ChannelsPage() {
 
       {/* Main Content */}
       {isLoading ? (
-        <div className="flex justify-center py-12">
+        <div role="status" className="flex justify-center py-12">
           <div className="size-6 animate-spin rounded-full border-2 border-[var(--color-ink-muted)] border-t-transparent" />
         </div>
       ) : error ? (
-        <div className="rounded-xl border border-[var(--color-bad-subtle,rgba(239,68,68,0.2))] bg-[var(--color-surface)] p-6 text-center shadow-xs">
+        <div
+          role="alert"
+          className="rounded-xl border border-[var(--color-bad-subtle,rgba(239,68,68,0.2))] bg-[var(--color-surface)] p-6 text-center shadow-xs"
+        >
           <p className="text-xs font-medium text-[var(--color-bad,#ef4444)]">
             Failed to load channels catalogue.
           </p>

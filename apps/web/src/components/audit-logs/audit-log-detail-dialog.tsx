@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { StatusDot, type StatusTone } from '@/components/ui/status-dot';
 import type { AuditLogView } from '@/lib/api-client';
+import { useModalDialog } from '@/components/ui/dialog';
 
 interface AuditLogDetailDialogProps {
   readonly isOpen: boolean;
@@ -24,6 +25,8 @@ export function AuditLogDetailDialog({
   onFilterByCorrelation,
 }: AuditLogDetailDialogProps) {
   const [copiedCorrelation, setCopiedCorrelation] = useState(false);
+
+  const modal = useModalDialog(isOpen && !!log);
 
   if (!isOpen || !log) return null;
 
@@ -59,9 +62,14 @@ export function AuditLogDetailDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="audit-log-detail-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs focus:outline-none"
+      {...modal.overlayProps(onClose, true)}
     >
-      <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl text-[var(--color-ink)]">
+      <div
+        ref={modal.panelRef}
+        tabIndex={-1}
+        className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl text-[var(--color-ink)]"
+      >
         {/* Header */}
         <div className="flex items-start justify-between border-b border-[var(--color-border-subtle)] pb-4">
           <div>

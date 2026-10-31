@@ -130,6 +130,7 @@ export default function RolesPage() {
           <button
             type="button"
             onClick={() => handleFilterChange('all')}
+            aria-pressed={systemFilter === 'all'}
             className={cn(
               'rounded-md px-2.5 py-1 font-medium transition-colors',
               systemFilter === 'all'
@@ -142,6 +143,7 @@ export default function RolesPage() {
           <button
             type="button"
             onClick={() => handleFilterChange('system')}
+            aria-pressed={systemFilter === 'system'}
             className={cn(
               'rounded-md px-2.5 py-1 font-medium transition-colors',
               systemFilter === 'system'
@@ -154,6 +156,7 @@ export default function RolesPage() {
           <button
             type="button"
             onClick={() => handleFilterChange('custom')}
+            aria-pressed={systemFilter === 'custom'}
             className={cn(
               'rounded-md px-2.5 py-1 font-medium transition-colors',
               systemFilter === 'custom'
@@ -172,6 +175,7 @@ export default function RolesPage() {
               type="text"
               value={keySearch}
               onChange={(e) => setKeySearch(e.target.value)}
+              aria-label="Search roles by key"
               placeholder="Search by role key..."
               className="w-48 rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2.5 py-1 text-xs text-[var(--color-ink)] focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
             />
@@ -200,6 +204,7 @@ export default function RolesPage() {
           <select
             value={sortOption}
             onChange={(e) => handleSortChange(e.target.value as SortOption)}
+            aria-label="Sort roles"
             className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2.5 py-1 text-xs text-[var(--color-ink)] focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
           >
             <option value="key">Sort: Key (A-Z)</option>
@@ -213,11 +218,11 @@ export default function RolesPage() {
       {/* Main Table Content */}
       <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] shadow-xs overflow-hidden">
         {isLoading ? (
-          <div className="p-8 text-center text-xs text-[var(--color-ink-muted)]">
+          <div role="status" className="p-8 text-center text-xs text-[var(--color-ink-muted)]">
             Loading roles...
           </div>
         ) : error ? (
-          <div className="p-8 text-center">
+          <div role="alert" className="p-8 text-center">
             <p className="text-sm font-semibold text-[var(--color-bad)]">Failed to load roles</p>
             <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
               {error instanceof ApiError ? error.message : 'An unexpected error occurred.'}
@@ -244,12 +249,24 @@ export default function RolesPage() {
             <table className="w-full text-left text-xs">
               <thead>
                 <tr className="border-b border-[var(--color-border-subtle)] text-[var(--color-ink-muted)] bg-[var(--color-surface)]/50">
-                  <th className="px-6 py-3 font-medium">Role Name & Key</th>
-                  <th className="px-6 py-3 font-medium">Type</th>
-                  <th className="px-6 py-3 font-medium">Allowed Grant Scopes</th>
-                  <th className="px-6 py-3 font-medium">Permissions</th>
-                  <th className="px-6 py-3 font-medium">Last Updated</th>
-                  <th className="px-6 py-3 font-medium text-right">Actions</th>
+                  <th scope="col" className="px-6 py-3 font-medium">
+                    Role Name & Key
+                  </th>
+                  <th scope="col" className="px-6 py-3 font-medium">
+                    Type
+                  </th>
+                  <th scope="col" className="px-6 py-3 font-medium">
+                    Allowed Grant Scopes
+                  </th>
+                  <th scope="col" className="px-6 py-3 font-medium">
+                    Permissions
+                  </th>
+                  <th scope="col" className="px-6 py-3 font-medium">
+                    Last Updated
+                  </th>
+                  <th scope="col" className="px-6 py-3 font-medium text-right">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border-subtle)]">
@@ -357,7 +374,7 @@ export default function RolesPage() {
 
         {/* Keyset Cursor Pagination Footer */}
         <div className="flex items-center justify-between border-t border-[var(--color-border-subtle)] px-6 py-3 text-xs text-[var(--color-ink-muted)]">
-          <div>{isFetching && <span>Refreshing...</span>}</div>
+          <div>{isFetching && <span role="status">Refreshing...</span>}</div>
 
           <div className="flex items-center gap-2">
             <button

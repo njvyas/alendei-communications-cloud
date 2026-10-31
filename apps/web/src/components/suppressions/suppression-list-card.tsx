@@ -212,7 +212,7 @@ export function SuppressionListCard({ orgId, channels = [] }: SuppressionListCar
       {/* Main Table Card */}
       <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] shadow-xs">
         {error ? (
-          <div className="p-6">
+          <div role="alert" className="p-6">
             <ActionFeedback
               feedback={{
                 type: 'error',
@@ -234,7 +234,7 @@ export function SuppressionListCard({ orgId, channels = [] }: SuppressionListCar
             </div>
           </div>
         ) : isLoading ? (
-          <div className="p-12 text-center text-xs text-[var(--color-ink-muted)]">
+          <div role="status" className="p-12 text-center text-xs text-[var(--color-ink-muted)]">
             <p>Loading suppression records...</p>
           </div>
         ) : items.length === 0 ? (
@@ -358,7 +358,11 @@ export function SuppressionListCard({ orgId, channels = [] }: SuppressionListCar
           <div className="flex items-center justify-between border-t border-[var(--color-border-subtle)] px-4 py-3 text-xs text-[var(--color-ink-muted)]">
             <div>
               <span>Page {pageIndex}</span>
-              {isFetching && <span className="ml-2 italic">(Updating...)</span>}
+              {isFetching && (
+                <span role="status" className="ml-2 italic">
+                  (Updating...)
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <button

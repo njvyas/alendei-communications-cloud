@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, channelsApi, contactsApi } from '@/lib/api-client';
 import type { ContactResponse, ConsentEventType } from '@acc/contracts';
 import { ConsentStatusBadge } from './consent-status-badge';
+import { useModalDialog } from '@/components/ui/dialog';
 
 interface ContactConsentDialogProps {
   open: boolean;
@@ -41,6 +42,8 @@ export function ContactConsentDialog({ open, onOpenChange, contact }: ContactCon
       ),
     enabled: Boolean(open && contact && whatsappChannel),
   });
+
+  const modal = useModalDialog(open && !!contact);
 
   if (!open || !contact) return null;
 
@@ -90,12 +93,17 @@ export function ContactConsentDialog({ open, onOpenChange, contact }: ContactCon
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs focus:outline-none"
+      {...modal.overlayProps(handleClose, !isSubmitting)}
       role="dialog"
       aria-modal="true"
       aria-labelledby="consent-dialog-title"
     >
-      <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl">
+      <div
+        ref={modal.panelRef}
+        tabIndex={-1}
+        className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl"
+      >
         <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)] pb-3">
           <h2 id="consent-dialog-title" className="text-base font-semibold text-[var(--color-ink)]">
             Record Consent Event
@@ -134,7 +142,9 @@ export function ContactConsentDialog({ open, onOpenChange, contact }: ContactCon
               </div>
               <div>
                 {isConsentLoading ? (
-                  <span className="text-[10px] text-[var(--color-ink-muted)]">Evaluating…</span>
+                  <span role="status" className="text-[10px] text-[var(--color-ink-muted)]">
+                    Evaluating…
+                  </span>
                 ) : (
                   <ConsentStatusBadge status={effectiveState} />
                 )}

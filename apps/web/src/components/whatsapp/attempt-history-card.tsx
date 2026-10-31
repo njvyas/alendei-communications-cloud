@@ -89,12 +89,24 @@ export function AttemptHistoryCard({ message, isPolling }: AttemptHistoryCardPro
           <table className="w-full text-left text-xs" data-testid="attempts-table">
             <thead>
               <tr className="border-b border-[var(--color-border-subtle)] text-[11px] text-[var(--color-ink-muted)]">
-                <th className="px-3 py-2 font-medium">Attempt #</th>
-                <th className="px-3 py-2 font-medium">Provider ID</th>
-                <th className="px-3 py-2 font-medium">Outcome</th>
-                <th className="px-3 py-2 font-medium">Latency</th>
-                <th className="px-3 py-2 font-medium">Completed</th>
-                <th className="px-3 py-2 font-medium">Details / Reason</th>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  Attempt #
+                </th>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  Provider ID
+                </th>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  Outcome
+                </th>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  Latency
+                </th>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  Completed
+                </th>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  Details / Reason
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--color-border-subtle)]">

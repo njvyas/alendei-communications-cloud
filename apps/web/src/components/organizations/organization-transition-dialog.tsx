@@ -2,6 +2,7 @@
 
 import { useState, useEffect, type FormEvent } from 'react';
 import { ApiError, organizationsApi, type OrganizationView } from '@/lib/api-client';
+import { useModalDialog } from '@/components/ui/dialog';
 
 export type OrganizationLifecycleAction = 'suspend' | 'reactivate' | 'close';
 
@@ -39,6 +40,8 @@ export function OrganizationTransitionDialog({
       setErrorMessage(null);
     }
   }, [isOpen, action]);
+
+  const modal = useModalDialog(isOpen && !!organization);
 
   if (!isOpen || !organization) return null;
 
@@ -91,9 +94,14 @@ export function OrganizationTransitionDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="transition-org-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 focus:outline-none"
+      {...modal.overlayProps(onClose, !isSubmitting)}
     >
-      <div className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl">
+      <div
+        ref={modal.panelRef}
+        tabIndex={-1}
+        className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl"
+      >
         <h2
           id="transition-org-title"
           className="text-lg font-semibold tracking-tight text-[var(--color-ink)]"
@@ -126,7 +134,10 @@ export function OrganizationTransitionDialog({
         )}
 
         {errorMessage && (
-          <div className="mt-4 rounded-md border border-[var(--color-bad)]/20 bg-[var(--color-bad)]/10 p-3 text-xs text-[var(--color-bad)]">
+          <div
+            role="alert"
+            className="mt-4 rounded-md border border-[var(--color-bad)]/20 bg-[var(--color-bad)]/10 p-3 text-xs text-[var(--color-bad)]"
+          >
             {errorMessage}
           </div>
         )}

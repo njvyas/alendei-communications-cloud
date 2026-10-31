@@ -115,6 +115,7 @@ export function LiftSuppressionDialog({
       isOpen={isOpen}
       onClose={handleClose}
       titleId="lift-suppression-title"
+      dismissible={!isSubmitting}
       descriptionId="lift-suppression-desc"
       maxWidth="max-w-md"
     >

@@ -3,6 +3,7 @@
 import { StatusDot, type StatusTone } from '@/components/ui/status-dot';
 import { useHasPermission } from '@/lib/session-store';
 import type { ApiKeyView } from '@/lib/api-client';
+import { useModalDialog } from '@/components/ui/dialog';
 
 interface ApiKeyDetailDialogProps {
   readonly isOpen: boolean;
@@ -25,6 +26,8 @@ export function ApiKeyDetailDialog({
 }: ApiKeyDetailDialogProps) {
   const canRevoke = useHasPermission('api_keys.revoke');
 
+  const modal = useModalDialog(isOpen && !!apiKey);
+
   if (!isOpen || !apiKey) return null;
 
   return (
@@ -32,9 +35,14 @@ export function ApiKeyDetailDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="api-key-detail-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs focus:outline-none"
+      {...modal.overlayProps(onClose, true)}
     >
-      <div className="w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl text-[var(--color-ink)]">
+      <div
+        ref={modal.panelRef}
+        tabIndex={-1}
+        className="w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl text-[var(--color-ink)]"
+      >
         <div className="flex items-start justify-between border-b border-[var(--color-border-subtle)] pb-4">
           <div>
             <div className="flex items-center gap-2">

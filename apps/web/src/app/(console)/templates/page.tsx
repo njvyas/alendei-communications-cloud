@@ -142,18 +142,28 @@ export default function TemplatesPage() {
           <table className="w-full text-left text-xs" data-testid="templates-table">
             <thead>
               <tr className="border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] text-[var(--color-ink-muted)]">
-                <th className="px-4 py-3 font-medium">Template Name</th>
-                <th className="px-4 py-3 font-medium">Approval Status</th>
-                <th className="px-4 py-3 font-medium">Variables</th>
-                <th className="px-4 py-3 font-medium">Body Preview</th>
-                <th className="px-4 py-3 font-medium text-right">Actions</th>
+                <th scope="col" className="px-4 py-3 font-medium">
+                  Template Name
+                </th>
+                <th scope="col" className="px-4 py-3 font-medium">
+                  Approval Status
+                </th>
+                <th scope="col" className="px-4 py-3 font-medium">
+                  Variables
+                </th>
+                <th scope="col" className="px-4 py-3 font-medium">
+                  Body Preview
+                </th>
+                <th scope="col" className="px-4 py-3 font-medium text-right">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--color-border-subtle)]">
               {isLoading ? (
                 <tr>
                   <td colSpan={5} className="px-4 py-8 text-center text-[var(--color-ink-muted)]">
-                    Loading templates…
+                    <span role="status">Loading templates…</span>
                   </td>
                 </tr>
               ) : templates.length === 0 ? (

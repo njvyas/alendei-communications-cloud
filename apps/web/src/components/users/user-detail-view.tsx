@@ -14,6 +14,7 @@ import { useHasPermission, useSession } from '@/lib/session-store';
 import { StatusDot, type StatusTone } from '@/components/ui/status-dot';
 import { AssignRoleDialog } from '@/components/role-assignments/assign-role-dialog';
 import { RevokeAssignmentDialog } from '@/components/role-assignments/revoke-assignment-dialog';
+import { useModalDialog } from '@/components/ui/dialog';
 
 interface UserDetailViewProps {
   readonly userId: string;
@@ -47,6 +48,7 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
   const [confirmAction, setConfirmAction] = useState<'disable' | 'reactivate' | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [isSubmittingAction, setIsSubmittingAction] = useState(false);
+  const confirmModal = useModalDialog(confirmAction !== null);
 
   // Reset open dialogs and transient state if organization switches (SEC-05)
   useEffect(() => {
@@ -338,12 +340,19 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
               <div className="mt-1 space-y-2">
                 <input
                   type="tel"
+                  aria-label="Phone number"
+                  aria-invalid={phoneError ? true : undefined}
+                  aria-describedby={phoneError ? 'user-phone-error' : undefined}
                   value={phoneInput}
                   onChange={(e) => setPhoneInput(e.target.value)}
                   placeholder="+919876543210 (or leave empty to clear)"
                   className="w-full rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2.5 py-1 text-xs text-[var(--color-ink)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
                 />
-                {phoneError && <p className="text-xs text-[var(--color-bad)]">{phoneError}</p>}
+                {phoneError && (
+                  <p id="user-phone-error" role="alert" className="text-xs text-[var(--color-bad)]">
+                    {phoneError}
+                  </p>
+                )}
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
@@ -432,9 +441,11 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
             <code className="font-mono">role_assignments.read</code> permission.
           </p>
         ) : assignmentsLoading ? (
-          <p className="mt-4 text-xs text-[var(--color-ink-muted)]">Loading assignments…</p>
+          <p role="status" className="mt-4 text-xs text-[var(--color-ink-muted)]">
+            Loading assignments…
+          </p>
         ) : assignmentsError ? (
-          <p className="mt-4 text-xs text-[var(--color-bad)]">
+          <p role="alert" className="mt-4 text-xs text-[var(--color-bad)]">
             Failed to load assignments:{' '}
             {assignmentsError instanceof ApiError ? assignmentsError.message : 'Unknown error'}
           </p>
@@ -443,11 +454,23 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
             <table className="w-full text-left text-xs">
               <thead>
                 <tr className="border-b border-[var(--color-border-subtle)] text-[var(--color-ink-muted)]">
-                  <th className="pb-2 font-medium">Role Key</th>
-                  <th className="pb-2 font-medium">Scope Level</th>
-                  <th className="pb-2 font-medium">Target Scope</th>
-                  <th className="pb-2 font-medium">Granted At</th>
-                  {canRevokeAssignment && <th className="pb-2 font-medium text-right">Actions</th>}
+                  <th scope="col" className="pb-2 font-medium">
+                    Role Key
+                  </th>
+                  <th scope="col" className="pb-2 font-medium">
+                    Scope Level
+                  </th>
+                  <th scope="col" className="pb-2 font-medium">
+                    Target Scope
+                  </th>
+                  <th scope="col" className="pb-2 font-medium">
+                    Granted At
+                  </th>
+                  {canRevokeAssignment && (
+                    <th scope="col" className="pb-2 font-medium text-right">
+                      Actions
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border-subtle)]">
@@ -546,9 +569,12 @@ export function UserDetailView({ userId, onBack, onUserMutated }: UserDetailView
           role="dialog"
           aria-modal="true"
           aria-labelledby="confirm-action-title"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 focus:outline-none"
+          {...confirmModal.overlayProps(() => setConfirmAction(null), !isSubmittingAction)}
         >
           <div
+            ref={confirmModal.panelRef}
+            tabIndex={-1}
             className="w-full max-w-md rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >

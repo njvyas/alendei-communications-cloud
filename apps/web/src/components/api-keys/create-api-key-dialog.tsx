@@ -18,6 +18,7 @@ import {
   type EffectiveAuthorization,
 } from '@/lib/api-client';
 import { useSession } from '@/lib/session-store';
+import { useModalDialog } from '@/components/ui/dialog';
 
 export interface ComputeHeldApiKeyPermissionsParams {
   readonly authorization: EffectiveAuthorization | null;
@@ -210,6 +211,8 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
     });
   }, [heldPermissions]);
 
+  const modal = useModalDialog(isOpen);
+
   if (!isOpen) return null;
 
   const handleClose = () => {
@@ -385,9 +388,14 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
       role="dialog"
       aria-modal="true"
       aria-labelledby="create-api-key-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs focus:outline-none"
+      {...modal.overlayProps(handleClose, !isSubmitting)}
     >
-      <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl text-[var(--color-ink)]">
+      <div
+        ref={modal.panelRef}
+        tabIndex={-1}
+        className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl text-[var(--color-ink)]"
+      >
         {/* Step 2: Secret Display Screen */}
         {createdResult ? (
           <div className="space-y-6">
@@ -542,7 +550,10 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
             </div>
 
             {errorMessage && (
-              <div className="rounded-md border border-[var(--color-bad)]/40 bg-[var(--color-bad)]/10 p-3 text-xs text-[var(--color-bad)]">
+              <div
+                role="alert"
+                className="rounded-md border border-[var(--color-bad)]/40 bg-[var(--color-bad)]/10 p-3 text-xs text-[var(--color-bad)]"
+              >
                 {errorMessage}
               </div>
             )}
@@ -662,6 +673,7 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
                     key={preset.id}
                     type="button"
                     onClick={() => setExpiryPreset(preset.id)}
+                    aria-pressed={expiryPreset === preset.id}
                     className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
                       expiryPreset === preset.id
                         ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
@@ -677,6 +689,7 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
                 <div className="mt-2">
                   <input
                     type="date"
+                    aria-label="Custom expiry date"
                     value={customExpiryDate}
                     onChange={(e) => setCustomExpiryDate(e.target.value)}
                     min={new Date(Date.now() + 86400000).toISOString().split('T')[0]}
@@ -722,6 +735,7 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
 
               <input
                 type="text"
+                aria-label="Search available permissions"
                 placeholder="Search available permissions…"
                 value={scopeSearch}
                 onChange={(e) => setScopeSearch(e.target.value)}
@@ -730,7 +744,10 @@ export function CreateApiKeyDialog({ isOpen, onClose, onSuccess }: CreateApiKeyD
 
               <div className="max-h-48 overflow-y-auto rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-2 divide-y divide-[var(--color-border-subtle)]">
                 {permissionsLoading ? (
-                  <p className="p-3 text-center text-xs text-[var(--color-ink-muted)]">
+                  <p
+                    role="status"
+                    className="p-3 text-center text-xs text-[var(--color-ink-muted)]"
+                  >
                     Loading permissions…
                   </p>
                 ) : filteredPermissions.length === 0 ? (

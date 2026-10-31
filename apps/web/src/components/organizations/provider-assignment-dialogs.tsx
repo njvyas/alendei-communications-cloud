@@ -161,6 +161,7 @@ export function AssignProviderDialog({
       isOpen={isOpen}
       onClose={onClose}
       titleId="assign-provider-title"
+      dismissible={!isSubmitting}
       descriptionId="assign-provider-desc"
     >
       <div className="space-y-4">
@@ -383,6 +384,7 @@ export function UpdatePriorityDialog({
       isOpen={isOpen}
       onClose={onClose}
       titleId="update-priority-title"
+      dismissible={!isSubmitting}
       descriptionId="update-priority-desc"
     >
       <div className="space-y-4">
@@ -535,6 +537,7 @@ export function ToggleAssignmentDialog({
       isOpen={isOpen}
       onClose={onClose}
       titleId="toggle-assignment-title"
+      dismissible={!isSubmitting}
       descriptionId="toggle-assignment-desc"
     >
       <div className="space-y-4">

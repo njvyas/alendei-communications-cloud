@@ -185,7 +185,7 @@ export function ProviderAssignmentsCard({ orgId, orgStatus }: ProviderAssignment
 
       {/* Loading state */}
       {isLoading && (
-        <div className="flex items-center justify-center p-8">
+        <div role="status" className="flex items-center justify-center p-8">
           <div className="flex items-center gap-3">
             <div className="size-4 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent" />
             <p className="text-xs text-[var(--color-ink-muted)]">Loading provider assignments…</p>
@@ -195,7 +195,10 @@ export function ProviderAssignmentsCard({ orgId, orgStatus }: ProviderAssignment
 
       {/* Error state */}
       {!isLoading && loadError && (
-        <div className="mt-4 rounded-md border border-[var(--color-bad)]/20 bg-[var(--color-bad)]/10 p-4 text-center">
+        <div
+          role="alert"
+          className="mt-4 rounded-md border border-[var(--color-bad)]/20 bg-[var(--color-bad)]/10 p-4 text-center"
+        >
           <p className="text-xs font-medium text-[var(--color-bad)]">
             Failed to load provider assignments
           </p>
@@ -242,12 +245,26 @@ export function ProviderAssignmentsCard({ orgId, orgStatus }: ProviderAssignment
           <table className="w-full text-left text-xs">
             <thead>
               <tr className="border-b border-[var(--color-border-subtle)] text-[11px] font-medium text-[var(--color-ink-muted)]">
-                <th className="pb-2.5 font-medium">Channel</th>
-                <th className="pb-2.5 font-medium">Provider</th>
-                <th className="pb-2.5 font-medium">Adapter</th>
-                <th className="pb-2.5 font-medium text-center">Priority</th>
-                <th className="pb-2.5 font-medium">Status</th>
-                {allowMutations && <th className="pb-2.5 font-medium text-right">Actions</th>}
+                <th scope="col" className="pb-2.5 font-medium">
+                  Channel
+                </th>
+                <th scope="col" className="pb-2.5 font-medium">
+                  Provider
+                </th>
+                <th scope="col" className="pb-2.5 font-medium">
+                  Adapter
+                </th>
+                <th scope="col" className="pb-2.5 font-medium text-center">
+                  Priority
+                </th>
+                <th scope="col" className="pb-2.5 font-medium">
+                  Status
+                </th>
+                {allowMutations && (
+                  <th scope="col" className="pb-2.5 font-medium text-right">
+                    Actions
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--color-border-subtle)]">

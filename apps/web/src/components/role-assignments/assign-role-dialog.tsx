@@ -15,6 +15,7 @@ import {
   type WorkspaceItem,
 } from '../../lib/api-client';
 import { useSession } from '../../lib/session-store';
+import { useModalDialog } from '@/components/ui/dialog';
 
 interface AssignRoleDialogProps {
   readonly isOpen: boolean;
@@ -284,6 +285,8 @@ export function AssignRoleDialog({
     }
   };
 
+  const modal = useModalDialog(isOpen);
+
   if (!isOpen) return null;
 
   return (
@@ -291,9 +294,12 @@ export function AssignRoleDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="assign-role-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 focus:outline-none"
+      {...modal.overlayProps(onClose, !isSubmitting)}
     >
       <div
+        ref={modal.panelRef}
+        tabIndex={-1}
         className="w-full max-w-lg rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
@@ -326,9 +332,13 @@ export function AssignRoleDialog({
               Select Role <span className="text-[var(--color-bad)]">*</span>
             </label>
             {rolesLoading ? (
-              <p className="mt-1 text-xs text-[var(--color-ink-muted)]">Loading roles…</p>
+              <p role="status" className="mt-1 text-xs text-[var(--color-ink-muted)]">
+                Loading roles…
+              </p>
             ) : rolesError ? (
-              <p className="mt-1 text-xs text-[var(--color-bad)]">Failed to load roles.</p>
+              <p role="alert" className="mt-1 text-xs text-[var(--color-bad)]">
+                Failed to load roles.
+              </p>
             ) : assignableRoles.length === 0 ? (
               <div className="mt-1 rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-3 text-xs text-[var(--color-ink-muted)]">
                 No assignable roles found in this organization. Platform roles cannot be assigned
@@ -445,7 +455,7 @@ export function AssignRoleDialog({
                       {selectedScopeType === 'workspace' && (
                         <div className="mt-2">
                           {workspacesLoading ? (
-                            <p className="text-[11px] text-[var(--color-ink-muted)]">
+                            <p role="status" className="text-[11px] text-[var(--color-ink-muted)]">
                               Loading workspaces…
                             </p>
                           ) : workspaces.length === 0 ? (
@@ -503,7 +513,10 @@ export function AssignRoleDialog({
                               Workspace
                             </label>
                             {workspacesLoading ? (
-                              <p className="mt-1 text-[11px] text-[var(--color-ink-muted)]">
+                              <p
+                                role="status"
+                                className="mt-1 text-[11px] text-[var(--color-ink-muted)]"
+                              >
                                 Loading workspaces…
                               </p>
                             ) : workspaces.length === 0 ? (
@@ -537,11 +550,14 @@ export function AssignRoleDialog({
                               Team
                             </label>
                             {teamsLoading ? (
-                              <p className="mt-1 text-[11px] text-[var(--color-ink-muted)]">
+                              <p
+                                role="status"
+                                className="mt-1 text-[11px] text-[var(--color-ink-muted)]"
+                              >
                                 Loading teams…
                               </p>
                             ) : teamsError ? (
-                              <p className="mt-1 text-[11px] text-[var(--color-bad)]">
+                              <p role="alert" className="mt-1 text-[11px] text-[var(--color-bad)]">
                                 Failed to load teams.
                               </p>
                             ) : teams.length === 0 ? (

@@ -11,6 +11,7 @@ import {
   type CreateUserInput,
 } from '@/lib/api-client';
 import { useSession } from '@/lib/session-store';
+import { useModalDialog } from '@/components/ui/dialog';
 
 interface UserCreateDialogProps {
   readonly isOpen: boolean;
@@ -114,6 +115,8 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
       setTeamId('');
     }
   }, [scopeType, teamsData, teamId]);
+
+  const modal = useModalDialog(isOpen);
 
   if (!isOpen) return null;
 
@@ -249,9 +252,12 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
       role="dialog"
       aria-modal="true"
       aria-labelledby="create-user-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 focus:outline-none"
+      {...modal.overlayProps(onClose, !isSubmitting)}
     >
       <div
+        ref={modal.panelRef}
+        tabIndex={-1}
         className="w-full max-w-lg rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -371,7 +377,9 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
                   Workspace
                 </label>
                 {workspacesLoading ? (
-                  <p className="mt-1 text-xs text-[var(--color-ink-muted)]">Loading workspaces…</p>
+                  <p role="status" className="mt-1 text-xs text-[var(--color-ink-muted)]">
+                    Loading workspaces…
+                  </p>
                 ) : workspacesData?.data && workspacesData.data.length > 0 ? (
                   <select
                     id="user-workspace-id"
@@ -411,9 +419,13 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
                   Team
                 </label>
                 {teamsLoading ? (
-                  <p className="mt-1 text-xs text-[var(--color-ink-muted)]">Loading teams…</p>
+                  <p role="status" className="mt-1 text-xs text-[var(--color-ink-muted)]">
+                    Loading teams…
+                  </p>
                 ) : teamsError ? (
-                  <p className="mt-1 text-xs text-[var(--color-bad)]">Failed to load teams.</p>
+                  <p role="alert" className="mt-1 text-xs text-[var(--color-bad)]">
+                    Failed to load teams.
+                  </p>
                 ) : teamsData?.data && teamsData.data.length > 0 ? (
                   <select
                     id="user-team-id"
@@ -446,7 +458,7 @@ export function UserCreateDialog({ isOpen, onClose, onSuccess }: UserCreateDialo
                 Role
               </label>
               {rolesLoading ? (
-                <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
+                <p role="status" className="mt-1 text-xs text-[var(--color-ink-muted)]">
                   Loading available roles…
                 </p>
               ) : availableRoles.length > 0 ? (
