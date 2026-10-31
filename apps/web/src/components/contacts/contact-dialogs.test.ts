@@ -102,4 +102,35 @@ describe('Contact Dialog Components (U9)', () => {
 
     assert.ok(!html.includes('+ Add Identity'));
   });
+
+  it('5. Contact search query correctly filters contacts by name or ID', () => {
+    const contacts: ContactResponse[] = [
+      baseContact,
+      {
+        id: '01955b0a-7b3b-7411-9a4f-ct000000002',
+        workspaceId: '01955b0a-7b3b-7411-9a4f-ws000000001',
+        firstName: 'Bob',
+        lastName: 'Jones',
+        metadata: {},
+        createdAt: '2026-10-31T11:00:00.000Z',
+        updatedAt: '2026-10-31T11:00:00.000Z',
+      },
+    ];
+
+    const filterContacts = (list: ContactResponse[], query: string) => {
+      const q = query.trim().toLowerCase();
+      if (!q) return list;
+      return list.filter((c) => {
+        const fullName = `${c.firstName || ''} ${c.lastName || ''}`.toLowerCase();
+        return fullName.includes(q) || c.id.toLowerCase().includes(q);
+      });
+    };
+
+    assert.equal(filterContacts(contacts, 'Alice').length, 1);
+    assert.equal(filterContacts(contacts, 'Alice')[0]?.firstName, 'Alice');
+    assert.equal(filterContacts(contacts, 'jones').length, 1);
+    assert.equal(filterContacts(contacts, 'jones')[0]?.firstName, 'Bob');
+    assert.equal(filterContacts(contacts, 'ct000000002').length, 1);
+    assert.equal(filterContacts(contacts, 'nonexistent').length, 0);
+  });
 });

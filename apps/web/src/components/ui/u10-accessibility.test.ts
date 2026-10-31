@@ -244,7 +244,7 @@ describe('U10 source sweep', () => {
     assert.deepEqual(problems, []);
   });
 
-  it('all 35 custom dialog panels are programmatically focusable (tabIndex={-1})', () => {
+  it('all 36 custom dialog panels are programmatically focusable (tabIndex={-1})', () => {
     const panels: string[] = [];
     const missing: string[] = [];
     for (const { file, text } of SOURCES) {
@@ -255,7 +255,7 @@ describe('U10 source sweep', () => {
         if (!/tabIndex=\{-1\}/.test(tag)) missing.push(`${file}:${line}`);
       }
     }
-    assert.equal(panels.length, 35);
+    assert.equal(panels.length, 36);
     assert.deepEqual(missing, []);
   });
 

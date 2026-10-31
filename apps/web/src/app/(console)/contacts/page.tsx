@@ -44,6 +44,7 @@ export default function ContactsPage() {
 
   // Keyset cursor pagination history, bound to the workspace it was built for
   const [pager, setPager] = useState<ContactsPager>(EMPTY_PAGER);
+  const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Dialog states
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -61,6 +62,7 @@ export default function ContactsPage() {
     setPrevOrganizationId(selectedOrganizationId);
     setSelectedWorkspaceId('');
     setPager(EMPTY_PAGER);
+    setSearchQuery('');
     setCreatedRecord(null);
     setConsentTargetContact(null);
     setDetailTargetContact(null);
@@ -81,6 +83,7 @@ export default function ContactsPage() {
   const handleWorkspaceChange = (newWsId: string) => {
     setSelectedWorkspaceId(newWsId);
     setPager(EMPTY_PAGER);
+    setSearchQuery('');
     setCreatedRecord(null);
   };
 
@@ -93,6 +96,15 @@ export default function ContactsPage() {
     queryFn: ({ signal }) => contactsApi.list(activeWorkspaceId, queryParams, signal),
     enabled: Boolean(canReadContacts && selectedOrganizationId && activeWorkspaceId),
   });
+
+  const rawContacts = data?.data ?? [];
+  const contacts = searchQuery.trim()
+    ? rawContacts.filter((c) => {
+        const q = searchQuery.trim().toLowerCase();
+        const fullName = `${c.firstName || ''} ${c.lastName || ''}`.toLowerCase();
+        return fullName.includes(q) || c.id.toLowerCase().includes(q);
+      })
+    : rawContacts;
 
   const handleNextPage = () => {
     if (data?.page.nextCursor) {
@@ -120,7 +132,6 @@ export default function ContactsPage() {
     );
   }
 
-  const contacts = data?.data ?? [];
   const pageInfo = data?.page;
 
   return (
@@ -152,29 +163,62 @@ export default function ContactsPage() {
       {/* Workspace selector bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-3 shadow-xs">
         <div className="flex flex-wrap items-center gap-3">
-          <label
-            htmlFor="select-workspace"
-            className="text-xs font-medium text-[var(--color-ink-muted)]"
-          >
-            Target Workspace:
-          </label>
-          <select
-            id="select-workspace"
-            value={activeWorkspaceId}
-            onChange={(e) => handleWorkspaceChange(e.target.value)}
-            disabled={isWorkspacesLoading || workspaces.length === 0}
-            className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] px-2.5 py-1 text-xs text-[var(--color-ink)]"
-          >
-            {workspaces.length === 0 ? (
-              <option value="">No workspaces available</option>
-            ) : (
-              workspaces.map((ws) => (
-                <option key={ws.id} value={ws.id}>
-                  {ws.name} ({ws.id.slice(0, 8)}…)
-                </option>
-              ))
-            )}
-          </select>
+          <div className="flex items-center gap-2">
+            <label
+              htmlFor="select-workspace"
+              className="text-xs font-medium text-[var(--color-ink-muted)]"
+            >
+              Target Workspace:
+            </label>
+            <select
+              id="select-workspace"
+              value={activeWorkspaceId}
+              onChange={(e) => handleWorkspaceChange(e.target.value)}
+              disabled={isWorkspacesLoading || workspaces.length === 0}
+              className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] px-2.5 py-1 text-xs text-[var(--color-ink)]"
+            >
+              {workspaces.length === 0 ? (
+                <option value="">No workspaces available</option>
+              ) : (
+                workspaces.map((ws) => (
+                  <option key={ws.id} value={ws.id}>
+                    {ws.name} ({ws.id.slice(0, 8)}…)
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+
+          {activeWorkspaceId && (
+            <div className="flex items-center gap-2">
+              <label
+                htmlFor="search-contacts"
+                className="text-xs font-medium text-[var(--color-ink-muted)]"
+              >
+                Search:
+              </label>
+              <div className="relative">
+                <input
+                  id="search-contacts"
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Filter name or ID…"
+                  className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] px-2.5 py-1 text-xs text-[var(--color-ink)] w-36 sm:w-48 pr-6"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+                    aria-label="Clear contact search"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         <button
@@ -268,7 +312,9 @@ export default function ContactsPage() {
                 ) : contacts.length === 0 ? (
                   <tr>
                     <td colSpan={4} className="px-4 py-8 text-center text-[var(--color-ink-muted)]">
-                      No contacts found in this workspace.
+                      {searchQuery.trim()
+                        ? `No contacts matching "${searchQuery}".`
+                        : 'No contacts found in this workspace.'}
                     </td>
                   </tr>
                 ) : (
@@ -341,6 +387,7 @@ export default function ContactsPage() {
               <span>
                 Page limit: {pageInfo.limit}
                 {cursorStack.length > 0 && ` • Page offset ${cursorStack.length + 1}`}
+                {searchQuery && ` • ${contacts.length} filtered on page`}
               </span>
               <div className="flex gap-2">
                 <button

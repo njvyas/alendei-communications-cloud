@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   ApiError,
   messagesApi,
+  providersApi,
   maskRecipientAddress,
   type ChannelView,
   type MessageAttemptStatus,
@@ -88,6 +89,13 @@ export function MessageDetailDialog({
     queryFn: ({ signal }) => messagesApi.get(messageId!, signal),
     enabled: Boolean(messageId),
   });
+
+  const { data: providersData } = useQuery({
+    queryKey: ['providers', 'list-for-detail'],
+    queryFn: ({ signal }) => providersApi.list({ limit: 50 }, signal),
+    enabled: Boolean(messageId),
+  });
+  const providers = providersData?.data ?? [];
 
   const message = data?.data;
 
@@ -305,16 +313,20 @@ export function MessageDetailDialog({
                               <AttemptStatusBadge status={att.status} />
                             </td>
                             <td className="px-3 py-2 font-mono text-[11px] text-[var(--color-ink-muted)]">
-                              {att.providerId ? (
-                                <span
-                                  title={`Provider ID: ${att.providerId}`}
-                                  data-testid={`attempt-provider-${att.attemptNumber}`}
-                                >
-                                  {att.providerId.slice(0, 8)}…
-                                </span>
-                              ) : (
-                                '—'
-                              )}
+                              {att.providerId
+                                ? (() => {
+                                    const prov = providers.find((p) => p.id === att.providerId);
+                                    return (
+                                      <span
+                                        title={`Provider ID: ${att.providerId}`}
+                                        data-testid={`attempt-provider-${att.attemptNumber}`}
+                                        className="text-[var(--color-ink)]"
+                                      >
+                                        {prov ? prov.name : `${att.providerId.slice(0, 8)}…`}
+                                      </span>
+                                    );
+                                  })()
+                                : '—'}
                             </td>
                             <td className="px-3 py-2 text-[var(--color-ink-muted)]">
                               {att.latencyMs !== null && att.latencyMs !== undefined
