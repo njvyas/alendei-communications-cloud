@@ -36,35 +36,71 @@ import type {
   TemplateApprovalStatus,
   TemplateResponse,
   UpdateOrganizationProviderAssignmentInput,
+  BrandConfig,
+  DirectCustomerOnboardingDto,
+  DomainDnsRecord,
+  DomainStatus,
+  DomainType,
+  DomainVerificationDetails,
+  DomainVerificationMethod,
+  DomainVerificationStatus,
+  DomainView,
+  OnboardingResult,
+  ResellerCustomerOnboardingDto,
+  ResolvedDomainView,
+  WhiteLabelCustomerOnboardingDto,
 } from '@acc/contracts';
 import {
   ASSIGNMENT_STATUS,
+  DOMAIN_STATUSES,
+  DOMAIN_TYPES,
+  DOMAIN_VERIFICATION_METHODS,
+  DOMAIN_VERIFICATION_STATUSES,
   MESSAGE_ATTEMPT_STATUSES,
   MESSAGE_STATUSES,
+  PLATFORM_RESERVED_DOMAINS,
   SUPPRESSION_STATUSES,
 } from '@acc/contracts';
 import { maskRecipientAddress } from './address-masking';
 
 export type {
   AssignmentStatus,
+  BrandConfig,
   ChannelCode,
   CreateOrganizationProviderAssignmentInput,
+  DirectCustomerOnboardingDto,
+  DomainDnsRecord,
+  DomainStatus,
+  DomainType,
+  DomainVerificationDetails,
+  DomainVerificationMethod,
+  DomainVerificationStatus,
+  DomainView,
   EffectiveConsentState,
   MessageAttemptResponse,
   MessageAttemptStatus,
   MessageDetailResponse,
   MessageStatus,
   MessageSummaryResponse,
+  OnboardingResult,
   OrganizationProviderAssignment,
   PageInfo,
+  ResellerCustomerOnboardingDto,
+  ResolvedDomainView,
   SuppressionResponse,
   SuppressionStatus,
   UpdateOrganizationProviderAssignmentInput,
+  WhiteLabelCustomerOnboardingDto,
 };
 export {
   ASSIGNMENT_STATUS,
+  DOMAIN_STATUSES,
+  DOMAIN_TYPES,
+  DOMAIN_VERIFICATION_METHODS,
+  DOMAIN_VERIFICATION_STATUSES,
   MESSAGE_ATTEMPT_STATUSES,
   MESSAGE_STATUSES,
+  PLATFORM_RESERVED_DOMAINS,
   SUPPRESSION_STATUSES,
   maskRecipientAddress,
 };
@@ -2601,5 +2637,265 @@ export const suppressionsApi = {
         signal,
       },
     );
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Domains & Branding API Endpoints (Phase 4, U12)
+// -----------------------------------------------------------------------------
+export interface RegisterDomainInput {
+  readonly domain: string;
+  readonly isPrimary?: boolean;
+}
+
+export interface SuspendDomainInput {
+  readonly reason?: string;
+}
+
+export interface UpdateBrandingInput {
+  readonly brandName?: string;
+  readonly logoUrl?: string;
+  readonly faviconUrl?: string;
+  readonly primaryColor?: string;
+  readonly accentColor?: string;
+  readonly supportEmail?: string;
+  readonly supportPhone?: string;
+  readonly customCss?: string;
+  readonly privacyPolicyUrl?: string;
+  readonly termsOfServiceUrl?: string;
+}
+
+export const domainsApi = {
+  /**
+   * Resolves public branding and portal routing for a given hostname.
+   * Normative invariant: Hostname NEVER selects tenancy or authorization.
+   */
+  async resolve(
+    hostname: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<ResolvedDomainView>> {
+    const query = new URLSearchParams({ hostname });
+    return apiFetch<ApiDataResponse<ResolvedDomainView>>(`/domains/resolve?${query.toString()}`, {
+      method: 'GET',
+      auth: false,
+      skipTenant: true,
+      signal,
+    });
+  },
+
+  /**
+   * Lists domains registered to the organization.
+   */
+  async list(orgId: string, signal?: AbortSignal): Promise<ApiDataResponse<readonly DomainView[]>> {
+    return apiFetch<ApiDataResponse<readonly DomainView[]>>(
+      `/organizations/${encodeURIComponent(orgId)}/domains`,
+      {
+        method: 'GET',
+        signal,
+      },
+    );
+  },
+
+  /**
+   * Registers a subdomain (.alendei.io) or custom domain for the organization.
+   */
+  async register(
+    orgId: string,
+    input: RegisterDomainInput,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<DomainView>> {
+    return apiFetch<ApiDataResponse<DomainView>>(
+      `/organizations/${encodeURIComponent(orgId)}/domains`,
+      {
+        method: 'POST',
+        body: input,
+        signal,
+      },
+    );
+  },
+
+  /**
+   * Retrieves DNS verification instructions and challenge record for a domain.
+   */
+  async getVerification(
+    orgId: string,
+    domainId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<DomainVerificationDetails>> {
+    return apiFetch<ApiDataResponse<DomainVerificationDetails>>(
+      `/organizations/${encodeURIComponent(orgId)}/domains/${encodeURIComponent(domainId)}/verification`,
+      {
+        method: 'GET',
+        signal,
+      },
+    );
+  },
+
+  /**
+   * Triggers DNS verification for a pending custom domain.
+   */
+  async verify(
+    orgId: string,
+    domainId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<DomainView>> {
+    return apiFetch<ApiDataResponse<DomainView>>(
+      `/organizations/${encodeURIComponent(orgId)}/domains/${encodeURIComponent(domainId)}/verify`,
+      {
+        method: 'POST',
+        signal,
+      },
+    );
+  },
+
+  /**
+   * Sets a verified/active domain as the primary domain for the organization.
+   */
+  async setPrimary(
+    orgId: string,
+    domainId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<DomainView>> {
+    return apiFetch<ApiDataResponse<DomainView>>(
+      `/organizations/${encodeURIComponent(orgId)}/domains/${encodeURIComponent(domainId)}/primary`,
+      {
+        method: 'PATCH',
+        signal,
+      },
+    );
+  },
+
+  /**
+   * Removes a domain mapping.
+   */
+  async remove(
+    orgId: string,
+    domainId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<{ success: boolean }>> {
+    return apiFetch<ApiDataResponse<{ success: boolean }>>(
+      `/organizations/${encodeURIComponent(orgId)}/domains/${encodeURIComponent(domainId)}`,
+      {
+        method: 'DELETE',
+        signal,
+      },
+    );
+  },
+
+  /**
+   * Suspends a domain (platform-admin only).
+   */
+  async suspend(
+    orgId: string,
+    domainId: string,
+    input: SuspendDomainInput = {},
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<DomainView>> {
+    return apiFetch<ApiDataResponse<DomainView>>(
+      `/organizations/${encodeURIComponent(orgId)}/domains/${encodeURIComponent(domainId)}/suspend`,
+      {
+        method: 'POST',
+        body: input,
+        signal,
+      },
+    );
+  },
+
+  /**
+   * Activates a suspended domain (platform-admin only).
+   */
+  async activate(
+    orgId: string,
+    domainId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<DomainView>> {
+    return apiFetch<ApiDataResponse<DomainView>>(
+      `/organizations/${encodeURIComponent(orgId)}/domains/${encodeURIComponent(domainId)}/activate`,
+      {
+        method: 'POST',
+        signal,
+      },
+    );
+  },
+
+  /**
+   * Retrieves branding configuration for an organization.
+   */
+  async getBranding(orgId: string, signal?: AbortSignal): Promise<ApiDataResponse<BrandConfig>> {
+    return apiFetch<ApiDataResponse<BrandConfig>>(
+      `/organizations/${encodeURIComponent(orgId)}/branding`,
+      {
+        method: 'GET',
+        signal,
+      },
+    );
+  },
+
+  /**
+   * Updates organization branding configuration.
+   */
+  async updateBranding(
+    orgId: string,
+    input: UpdateBrandingInput,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<BrandConfig>> {
+    return apiFetch<ApiDataResponse<BrandConfig>>(
+      `/organizations/${encodeURIComponent(orgId)}/branding`,
+      {
+        method: 'PATCH',
+        body: input,
+        signal,
+      },
+    );
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Onboarding API Endpoints (Phase 4, U12)
+// -----------------------------------------------------------------------------
+export const onboardingApi = {
+  /**
+   * Onboards a direct customer organization with platform subdomain and admin user.
+   */
+  async onboardDirect(
+    input: DirectCustomerOnboardingDto,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<OnboardingResult>> {
+    return apiFetch<ApiDataResponse<OnboardingResult>>('/onboarding/direct', {
+      method: 'POST',
+      body: input,
+      skipTenant: true,
+      signal,
+    });
+  },
+
+  /**
+   * Onboards a reseller-managed customer organization.
+   */
+  async onboardResellerCustomer(
+    input: ResellerCustomerOnboardingDto,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<OnboardingResult>> {
+    return apiFetch<ApiDataResponse<OnboardingResult>>('/onboarding/reseller-customer', {
+      method: 'POST',
+      body: input,
+      skipTenant: true,
+      signal,
+    });
+  },
+
+  /**
+   * Onboards a white-label customer with custom domain challenge.
+   */
+  async onboardWhiteLabel(
+    input: WhiteLabelCustomerOnboardingDto,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<OnboardingResult>> {
+    return apiFetch<ApiDataResponse<OnboardingResult>>('/onboarding/white-label', {
+      method: 'POST',
+      body: input,
+      skipTenant: true,
+      signal,
+    });
   },
 };

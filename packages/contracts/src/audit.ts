@@ -75,6 +75,15 @@ export const AUDIT_ACTIONS = {
   ORGANIZATION_PROVIDER_DISABLED: 'organization_provider.disabled',
   ORGANIZATION_PROVIDER_ENABLED: 'organization_provider.enabled',
 
+  // Phase 4: Domains, Branding & Onboarding (U12)
+  DOMAIN_REGISTERED: 'domain.registered',
+  DOMAIN_VERIFIED: 'domain.verified',
+  DOMAIN_ACTIVATED: 'domain.activated',
+  DOMAIN_SUSPENDED: 'domain.suspended',
+  DOMAIN_REMOVED: 'domain.removed',
+  BRANDING_UPDATED: 'branding.updated',
+  CUSTOMER_ONBOARDED: 'customer.onboarded',
+
   AUTHORIZATION_DENIED: 'authorization.denied',
 } as const;
 

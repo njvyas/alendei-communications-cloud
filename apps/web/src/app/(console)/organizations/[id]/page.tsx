@@ -16,6 +16,8 @@ import {
   type OrganizationLifecycleAction,
 } from '@/components/organizations/organization-transition-dialog';
 import { ProviderAssignmentsCard } from '@/components/organizations/provider-assignments-card';
+import { DomainListCard } from '@/components/domains/domain-list-card';
+import { BrandingSettingsCard } from '@/components/domains/branding-settings-card';
 
 const STATUS_TONES: Record<OrganizationStatus, StatusTone> = {
   active: 'ok',
@@ -298,6 +300,12 @@ export default function OrganizationDetailPage({ params }: { params: Promise<{ i
 
       {/* Provider Assignments Panel (Phase 3.2, ADR-014 §4) */}
       <ProviderAssignmentsCard orgId={id} orgStatus={org.status} />
+
+      {/* Domains & Hostnames (Phase 4, U12) */}
+      <DomainListCard orgId={id} isPlatformAdmin={isPlatformAdmin} canManage={canUpdate} />
+
+      {/* Organization Branding & Customization (Phase 4, U12) */}
+      <BrandingSettingsCard orgId={id} canManage={canUpdate} />
 
       {/* Edit Dialog */}
       <OrganizationEditDialog
