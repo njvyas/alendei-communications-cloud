@@ -414,3 +414,13 @@ Any deviation means STOP; nothing is improvised.
 - API `--since` log reads are unreliable, so this runbook uses `--tail`;
 - whether Docker's `unless-stopped` policy restarts a killed container on its own is **unverified**, so step 4.5 restarts it explicitly.
 
+## 10. Execution record and post-execution notes (31-Oct-2026)
+
+This version (2.1) was executed once on 31-Oct-2026 and **accepted** by the owner (`QA_RELEASE_PREPARATION.md` §5i; `DECISIONS.md` §1zc.5). The procedure above is left as executed. The notes below record where reality differed from the text; apply them before any future use:
+
+1. **Event names (§5 item 6).** The first lifecycle event is `message.queued`, not `message.created`. Observed: `message.queued` → `message.submitting` → `message.outcome_unknown`.
+2. **False-pass guard.** A plain provider TIMEOUT also settles the message `outcome_unknown` with one attempt and no fallback (`dispatcher.service.ts`, ambiguous-outcome path). Crash recovery is shown only if the message and attempt `failure_reason` is "Dispatch lease expired during external submission (outcome_unknown)" and the log shows `recovered expired dispatch leases`. Both were checked in the accepted run.
+3. **Dry run (§7 / watcher `--dry-run`).** The executed watcher stubs every Docker Compose command in dry-run mode, so a dry run fails its own queue check and never reaches the database (QAF-025). It is corrected in a separate tooling change. For the accepted run, the real database path was validated with read-only commands instead.
+4. **Docker restart policy.** Whether `unless-stopped` restarts a SIGKILLed container on its own is still **unverified**; step 4.5's explicit restart remains required.
+5. **Polling cost.** Each watcher poll is a `docker compose exec` (about 0.35–0.55 s on QA), so `--max-seconds` bounds iterations, not wall time. The accepted run detected the message at age 1.1 s and killed it 0.63 s later.
+

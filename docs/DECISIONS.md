@@ -2306,6 +2306,22 @@ Because migration `0019` granted EXECUTE on `app_has_platform_permission` only t
 - **Disclosure recorded.** One failed read-only query against a nonexistent `role_assignments` table left a single PostgreSQL error log line. No further action.
 - **Unchanged.** PR #50 stays a draft. X-6 is not executed (named operator, window and operational authorization outstanding). Section J waits for nominations and account set-up. D1, D2 and D5 are pending infrastructure-owner decisions. Gate F.3 is not accepted; Phase 5 is not authorized.
 
+### 1zc.5 X-6 live crash-recovery drill: authorization, execution and acceptance (owner decisions, 31-Oct-2026)
+
+- **Authorization.** The owner explicitly authorized immediate execution of X-6 under runbook v2.1:
+  - exactly one SIGKILL, issued only by the approved watcher;
+  - temporary routing and its restoration;
+  - one expected `outcome_unknown` message and a brief QA outage.
+
+  The **Project Owner was the named operator**, present throughout. Claude Code armed the watcher through the operator's SSH control socket and ran the API restart; the owner made the routing changes as platform administrator.
+- **X-6 ACCEPTED; F.3-5 closed.** Executed 31-Oct-2026 07:04–07:07 UTC (`QA_RELEASE_PREPARATION.md` §5i). After the kill and restart, the sweeper settled the in-flight message `outcome_unknown` with the lease-expiry reason. There was exactly one attempt on `QA Sim Timeout`, none on `QA Sim OK`, the queue was cleared and no locks were orphaned. Routing was restored exactly.
+- **Carried residuals.**
+  - The BE-DISPATCH-02 claim-time race remains automated-test-only evidence (PR #14).
+  - Docker's automatic restart of a killed container remains unverified.
+  - The accepted `outcome_unknown` QA message is retained unaltered.
+- **Follow-up.** The watcher's dry-run defect (QAF-025) is corrected in a separate tooling change. The executed scripts and evidence are not altered retrospectively.
+- Gate F.3 remains **not accepted**; Phase 5 remains **not authorized**.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

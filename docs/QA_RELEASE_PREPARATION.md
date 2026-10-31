@@ -56,7 +56,7 @@ Evidence labels: **Observed** (verifiable in GitHub, CI or the repository); **Ag
 | F.3-1 | Email and voice sends refused (`422 CHANNEL_NOT_SUPPORTED`) | PR #10 | Agent-run 26-Oct-2026 (§5c): QA-K-10, K-11 PASS at API level; database-table no-storage check **VERIFIED (Agent-run, 26-Oct-2026 09:04 UTC)** | T-1: approved in principle; executed on an AI-agent acting-QA-lead decision (§5c), not a human sign-off | **Evidence accepted** (owner decision, 31-Oct-2026; `DECISIONS.md` §1zc.3). Confirmation was by an AI-agent acting QA lead, **not** an independent human sign-off |
 | F.3-2/3 | SMS/RCS worker, fencing, recovery, idempotency, isolation | PR #11 | Not practical on the host | X-4: APPROVED (owner decision, 30-Oct-2026) | Automated-only verification accepted; residual risk: live-host multi-worker concurrency explicitly unverified |
 | F.3-4 | G-2 recipient re-check at dispatch (migration `0037`) | PR #12: 11 security and 8 integration tests; mutation checks; CI `40066676777` | No supported way to hold a queued message on QA | X-5: APPROVED (owner decision, 30-Oct-2026) | Automated-only verification accepted; residual risk: live queue-to-claim race window explicitly unverified |
-| F.3-5 | BE-DISPATCH-02: no resubmission after an expired submission lease | PR #14: 6 tests (5 fail on the pre-fix code); 40/40 repeated runs under load; CI `40066664676` | Planned operator-window variant (QA-I-01 with `QA Sim Timeout` p1, `QA Sim OK` p2). It cannot force the claim-before-recovery path | X-6: Local preparation only authorized (owner decision, 30-Oct-2026) | Runbook v2.1 and watcher corrected 31-Oct-2026 (`qa/QA_X6_OPERATOR_RUNBOOK.md` §0: database role, UUID run id, header name, provider-state preflight; watcher harness 26/26). Host execution **blocked** pending a separate operator-window authorization |
+| F.3-5 | BE-DISPATCH-02: no resubmission after an expired submission lease | PR #14: 6 tests (5 fail on the pre-fix code); 40/40 repeated runs under load; CI `40066664676` | **X-6 executed 31-Oct-2026** (Agent-run, owner as named operator; §5i): one watcher-issued SIGKILL during `submitting`; after restart the sweeper settled the message `outcome_unknown` (lease-expiry reason), exactly 1 attempt on `QA Sim Timeout`, 0 on `QA Sim OK`, queue 0, no orphaned locks; routing restored | X-6: **ACCEPTED** (owner decision, 31-Oct-2026; `DECISIONS.md` §1zc.5) | **Closed.** The claim-time race fix remains evidenced by the automated suite only (PR #14) |
 | F.3-6 | BE-DISPATCH-01 circuit fix (migration `0036`) | Merged suites | **QA-F-07 executed 31-Oct-2026** (Agent-run, owner-authorized; §5h): dedicated `QA Sim 500 F07`, 10 gated messages. Circuit tripped at message 5 (generation 0 → 1, health `offline`); messages 6–10 made 0 provider calls and created 0 attempt rows; 0 SQLSTATE 42501 errors; queue drained; routing restored | X-7: QA-F-07 live test required (30-Oct-2026) → **QA-F-07 ACCEPTED** (owner decision, 31-Oct-2026; `DECISIONS.md` §1zc.2) | **QA-host evidence accepted.** Residuals: R-AUD-1 (dispatcher transitions not audited, by design); C6b corrected count accepted. Gate decision pending |
 | F.3-7 | Migration history after upgrade | Disposable-clone proof `38\|04b0fac738f24476e76b88a84fd04850` | Agent-run 24-Oct-2026: before `36\|093bfe92…`, after `38\|04b0fac7…`; re-observed 28-Oct (after the outage), in the QA-I-04 restore and in the 31-Oct preflights | — | **Evidence accepted** (owner decision, 31-Oct-2026) |
 | F.3-8 | Full regression on the release commit | CI `40067932448` (`554dea3`); docs-only since | Agent-run API checks (sign-in, isolation, WhatsApp C/E/F, masking) and, on 26-Oct-2026, Agent-run console automation of 36 plan rows plus a read-only trace for G-06 (§5d). Platform-admin, other-persona and operator rows, I-01 – I-03 and usability (J) outstanding. QA still runs `441a29a`; later `develop` code fixes (#20, #21, #28, #30, U8, U10, U1) are not deployed; the #22 fix (PR #34) is not merged and not regression-tested on QA | Console checklist: proceed | Partial. Candidate fixed at `441a29a` (owner decision, 31-Oct-2026); later merges are not part of it |
@@ -76,7 +76,7 @@ Recorded from the project owner's direction of 26-Oct-2026. These directions do 
 | T-1 email/voice | Approved in principle | QA-lead confirmation before execution; prove no message record is stored |
 | X-4 worker safety | APPROVED (owner decision, 30-Oct-2026) | Automated-only verification accepted; live multi-worker concurrency explicitly unverified |
 | X-5 G-2 re-check | APPROVED (owner decision, 30-Oct-2026) | Automated-only verification accepted; live queue-to-claim race window explicitly unverified |
-| X-6 BE-DISPATCH-02 | Local preparation only authorized (owner decision, 30-Oct-2026) | Runbook v2.1 and watcher prepared and corrected locally (31-Oct-2026); no host operations, container restarts or SIGKILL authorized |
+| X-6 BE-DISPATCH-02 | Local preparation (30-Oct-2026); live drill authorized and executed 31-Oct-2026; **ACCEPTED** (owner decision, 31-Oct-2026) | Sweeper recovery of an abandoned submission shown on QA (§5i); the claim-time race remains automated-test-only evidence |
 | X-7 provider circuit | QA-F-07 live test required (owner decision, 30-Oct-2026); **QA-F-07 ACCEPTED (owner decision, 31-Oct-2026)** | Executed 31-Oct-2026 (§5h); C0–C9 PASS, corrected C6b accepted, routing restoration verified |
 | D1 | Record and route for approval | Infrastructure owner approves the exception, expiry, CA trust, network access and SSH operators |
 | D2 | Record and route for approval | Accountable owner and bootstrap-password procedure in the authorized access register |
@@ -146,7 +146,9 @@ Authorization record: `t1/00-decision-record.md`. Evidence location as §5b; the
   - **What is not:** no screenshot of the secret dialog exists; it was deliberately not captured. The H-07 and H-08 screenshots are byte-identical (same SHA-256) post-revocation list views and do not show the secret display.
   - **If a visual record is required:** it needs an owner-approved procedure that never records a live secret.
 
-### 5e. Operator-supervised session procedure (draft; nothing here is authorized)
+### 5e. Operator-supervised session procedure
+
+*Status 31-Oct-2026:* X-6 was executed under `qa/QA_X6_OPERATOR_RUNBOOK.md` v2.1 and accepted (§5i). I-01 – I-03 below remain **draft and not authorized**; the I-03 expected result was decided on 31-Oct-2026.
 
 Covers X-6 and QA-I-01 – I-03. It runs only after the project owner approves this exact procedure and a window, with an authorized QA operator present. Host commands use `$C` as in `qa/INTERNAL_QA_DEPLOYMENT.md`. Claude sends test messages through the API and records read-only state; the operator runs host and console actions.
 
@@ -343,6 +345,66 @@ PostgreSQL also logged "last known up at 2026-10-26 11:49:55 UTC". *Interpretati
 - `MANIFEST-run-and-restore.sha256`: `4dcc09961fc0dbfc95a3880abd1c3d293649799a585833d6e20ba24cc6a5495e`
 - `MANIFEST-v2.2.3-final.sha256` (procedure and final preflight): `2940fe7181bf2a4a72b905cd518b989d7e7127875da4028109cd155a3764e469`
 - `MANIFEST-remediation3.sha256` (provider set-up and routing): `279398a98fc3c3845cabda68e4cef8ddd0efcbf8af43ec5ebb96c62d5d444af9`
+
+### 5i. X-6 live crash-recovery drill: execution and acceptance (31-Oct-2026)
+
+**Agent-run** under explicit owner operational authorization. **Named operator:** the Project Owner, present throughout. The owner applied and restored the routing as platform administrator; Claude Code armed the approved watcher through the operator's SSH control socket, sent the single message and ran the API restart. Procedure: `qa/QA_X6_OPERATOR_RUNBOOK.md` v2.1; watcher `scripts/qa/x6-watcher.sh` as executed (SHA-256 `b4a2cc02eff21cae59a3d9d3b4d4633b4437eb1179f359989e69ac63165d2830`). Owner decision: `DECISIONS.md` §1zc.5.
+
+**Preflight** (release `441a29a`, migration proof `38|04b0fac738f24476e76b88a84fd04850`):
+- queue, in-flight attempts and unfinished messages 0;
+- no idle-in-transaction sessions, ungranted locks or advisory locks;
+- `QA Sim Timeout` and `QA Sim OK` `active`, `closed`, `healthy`; `QA Sim Timeout` = `"TIMEOUT"`;
+- template valid; recipient not suppressed; no recent qa-org-a2 traffic.
+- The watcher's real database path was validated read-only on the host, because its dry-run mode cannot exercise it (QAF-025).
+
+**Timeline (UTC, 31-Oct-2026)**
+
+| Time | Event |
+|---|---|
+| 07:04:55–56 | Owner applied test routing: `QA Sim 500` priority 1 → 10, disabled; then `QA Sim Timeout` priority 3 → 1, active |
+| 07:05:12.3 / 07:05:13 | Watcher armed (`--non-interactive --armed`; own pre-flight: queue 0, container `fbc08181fb1a`); polling started |
+| 07:05:14.21 | Single message sent: HTTP 202, `01a190c6-dd56-7b9f-8589-b1f274b7548e` (run id `d21df6a4-2b16-4a2e-93f6-8b1f02942f79`, correlation id honoured) |
+| 07:05:15.12 | Attempt 1 on `QA Sim Timeout`, status `submitting` |
+| 07:05:15.448 | Watcher match (message age 1.103 s; limit 2.5 s) |
+| ≈07:05:16.08 | **One SIGKILL** to the verified container (Docker latency 405 ms; detect-to-kill 634 ms); watcher exit 0 |
+| 07:05:16.16 – 07:05:22.95 | `$C up -d --wait api`: the container (same ID) started at 07:05:17.06; API startup lines at 07:05:19.97; `/health/ready` 200 |
+| 07:05:45.44 | Sweeper settled the message `outcome_unknown` |
+| 07:05:45.48 | Log `recovered expired dispatch leases`, `recovered: 1` |
+| 07:07:30–31 | Owner restored routing |
+
+**Results (runbook §5 and §7, plus recovery-specific checks)**
+
+| Criterion | Result |
+|---|---|
+| Kill during `submitting` within the window | Met |
+| Exactly one SIGKILL against the verified container | Met |
+| API healthy within 60 s of restart | Met (about 3 s) |
+| Message terminal within 90 s of restart | Met (22.5 s after the restart completed) |
+| Exactly 1 attempt (`QA Sim Timeout`), 0 on `QA Sim OK` | Met: no duplicate delivery |
+| Queue row removed; no orphaned locks or dispatch sessions | Met |
+| **Recovery path (not a plain provider timeout)** | Met: message and attempt `failure_reason` = "Dispatch lease expired during external submission (outcome_unknown)"; sweeper log `recovered: 1` |
+| Events | `message.queued` → `message.submitting` → `message.outcome_unknown` |
+| Other qa-org-a2 traffic in the window | 0 |
+| Routing restored to the exact baseline | Met: `QA Sim 500`=1 active, `QA Sim OK`=2 active, `QA Sim Timeout`=3 disabled, `QA Sim 500 F07`=4 disabled, `QA Sim 429`=11 disabled |
+
+**Owner decision (31-Oct-2026): X-6 ACCEPTED; F.3-5 closed.**
+
+**Residuals and notes**
+- **Retained message:** one QA message (`01a190c6-…`) is retained `outcome_unknown`, as accepted. It is not to be altered.
+- **Claim-time race:** the BE-DISPATCH-02 claim-time race (a claim landing before the sweep) is **not** exercised by X-6; it remains evidenced by the automated suite only (PR #14).
+- **Docker restart behaviour:** whether Docker's `unless-stopped` policy restarts a SIGKILLed container on its own remains **unverified**. The container's new start time (07:05:17.06) follows the explicit `up -d --wait api` (started 07:05:16.16), and the restart count stayed 0.
+- **Runbook discrepancies (recorded in its §10; procedure unchanged):**
+  - the expected first event is `message.queued`, not `message.created`;
+  - a plain provider timeout also ends `outcome_unknown` with one attempt, so the recovery-reason check is required to avoid a false pass.
+- **Watcher dry-run defect:** QAF-025, corrected in a separate tooling change; the executed watcher is unchanged.
+- **Logs:** API `--since` reads still return nothing (`--tail` works); the restarted container's start line is readable.
+- **Host clean-up (owner-approved):** after verifying no watcher process and no lock holder, `~/x6-run-20261031/` (the watcher copy) and `/tmp/acc-x6-watcher.lock` were removed (07:14:50 UTC). The lock file present at that moment had been created by the verification step itself (`flock -n` creates its target); the watcher had already removed its own lock on exit.
+
+**Evidence** (outside Git, `~/acc-evidence/2026-10-31-qa-x6/`):
+- `MANIFEST-x6.sha256`: `7be26ad11fd6dc733066821b45e40d7d6f3797a760412016953d909063cf83cf`
+- drill run `05-drill-run/MANIFEST.sha256`: `58af2d518f4c9b727a8727b46475c81c2acf735b5565da8567f210daf8208303`
+- host clean-up `08-host-cleanup/MANIFEST.sha256`: `3e19704d65082eea7636d8ab7456e4bff32620a96d2dd9e09be5aaeba6683a9a`
+- scripts: `x6-routing.sh` `5f52587362c25b39ffe09f9af3d9495ba23287277f6181ff659fb913b524cc64`, `x6-drill.sh` `feab0d3d439581dfd29084cc0c688308b8d57e0b47447c35777f5910dbb520a5`
 
 ## 6. Upgrade sequence
 

@@ -16,18 +16,20 @@ Owner decision (31-Oct-2026): `441a29a` is the historical F.3 QA evidence candid
 | F.3-1 | Email and voice refused (`422 CHANNEL_NOT_SUPPORTED`), nothing stored | PR #10 (Observed); QA-K-10/K-11 PASS at API level and database no-storage check (Agent-run, 26-Oct-2026; `QA_RELEASE_PREPARATION.md` §5c) | **Evidence accepted** (owner decision, 31-Oct-2026). Confirmation was by an **AI-agent acting QA lead (T-1), not an independent human sign-off** | None |
 | F.3-2/3 | SMS/RCS worker safety, fencing, recovery, idempotency, isolation | PR #11 suites, 1,538 lines (Observed); X-4 automated-only verification **approved** 30-Oct-2026 (`DECISIONS.md` §1zc.1) | **Closed by approved exception.** Residual: live multi-worker concurrency unverified | None (residual carried to the sign-off) |
 | F.3-4 | G-2 recipient re-check at dispatch (`0037`) | PR #12, CI `40066676777` (Observed); `0037` applied on QA (proof `38\|04b0fac7…`, Agent-run); X-5 **approved** 30-Oct-2026 | **Closed by approved exception.** Residual: the live queue-to-claim race is not exercised | None (residual carried) |
-| F.3-5 | BE-DISPATCH-02: no resubmission after an expired submission lease | PR #14, 6 tests (5 fail on the pre-fix code), 40/40 repeated runs, CI `40066664676` (Observed); X-6 runbook v2.1 and watcher corrected 31-Oct-2026 (QAF-023) | **Open.** No QA-host evidence. The planned X-6 variant shows sweeper recovery, not the claim-time race, which only the automated suite proves (`QA_RELEASE_PREPARATION.md` §5e) | Owner: authorize the X-6 window (§2) **or** decide an automated-only exception as for X-4/X-5 (R-2) |
+| F.3-5 | BE-DISPATCH-02: no resubmission after an expired submission lease | PR #14 suites, CI `40066664676` (Observed); **X-6 executed 31-Oct-2026** (Agent-run, owner as named operator; `QA_RELEASE_PREPARATION.md` §5i) | **Closed: X-6 ACCEPTED** (owner decision, 31-Oct-2026). Residuals: the claim-time race remains automated-test-only evidence; Docker automatic restart unverified | None |
 | F.3-6 | BE-DISPATCH-01 circuit fix (`0036`) | QA-F-07 executed 31-Oct-2026 and **ACCEPTED** by the owner (§5h; `DECISIONS.md` §1zc.2) | **Closed.** Residuals: R-AUD-1, QAF-021, QAF-022 | None |
 | F.3-7 | Migration history after upgrade | Disposable-clone proof (Observed); QA before `36\|093bfe92…`, after `38\|04b0fac7…` (Agent-run, 24-Oct-2026); re-observed `38\|04b0fac7…` on 28-Oct (after the outage), in the QA-I-04 scratch restore, and in every 31-Oct preflight | **Evidence accepted** (owner decision, 31-Oct-2026) | None |
 | F.3-8 | Full regression on the release commit | CI `40067932448` on `554dea3` (Observed); Agent-run API checks and console automation of 36 rows (§5d); QA-F-07 (§5h) | **Partial.** Outstanding: console rows needing the platform administrator, other personas or the operator; QA-I-01 – I-03; usability (J). The candidate is fixed at `441a29a`; later merges are outside it | The outstanding rows, I-01 – I-03 (§2) and J (`QA_J_EVALUATOR_PACKAGE.md`) |
 | F.3-9 | Deployment controls (exposure, TLS, startup checks, accounts, secrets, backup) | Loopback-only ports, startup principal check, dispatch-credential refusal, health, restart, 0 secret values in logs (Agent-run, 24-Oct-2026); QA-I-04 restore PASS (Agent-run, 28-Oct-2026) | **Partial.** D1, D2 and D5 open (§3) | Infrastructure-owner and owner decisions (§3) |
 
 **Summary:**
-- **Closed** (by evidence or approved exception): F.3-2/3, F.3-4, F.3-6.
+- **Closed** (by evidence or approved exception): F.3-2/3, F.3-4, F.3-5 (X-6 accepted 31-Oct-2026), F.3-6.
 - **Evidence accepted:** F.3-1 (AI-agent QA-lead confirmation, not human sign-off), F.3-7.
-- **Open:** F.3-5, F.3-8, F.3-9.
+- **Open:** F.3-8, F.3-9.
 
 ## 2. X-6 (and I-01 – I-03): the exact operational authorization needed
+
+**X-6 was executed and ACCEPTED on 31-Oct-2026** (`QA_RELEASE_PREPARATION.md` §5i; `DECISIONS.md` §1zc.5). The authorization fields below were completed in the evidence package. They remain the template for I-01 – I-03, which are not authorized.
 
 Materials are ready:
 - `QA_X6_OPERATOR_RUNBOOK.md` v2.1;
@@ -77,14 +79,14 @@ If the owner chooses not to run X-6, the alternative is an automated-only except
 | ID | Item | Owner action needed | Who executes | Evidence / reference | Blocker |
 |---|---|---|---|---|---|
 | R-1 | F.3-1 and F.3-7 evidence | **Decided 31-Oct-2026:** accepted; F.3-1 marked as AI-agent QA-lead confirmation, not human sign-off | — | `DECISIONS.md` §1zc.3 | — |
-| R-2 | F.3-5 route | **Decided 31-Oct-2026:** prepare the live drill. **Still needed (owner input):** record the named operator and window, then give explicit operational authorization (`QA_X6_OPERATOR_RUNBOOK.md` §9) | Owner | §2 | Named operator and window |
+| R-2 | F.3-5 route | **Done 31-Oct-2026:** X-6 authorized, executed (owner as named operator) and **accepted** | — | `QA_RELEASE_PREPARATION.md` §5i | — |
 | R-3 | Release commit for Gate F.3 | **Decided 31-Oct-2026:** `441a29a` is the historical evidence candidate; U8, U10, U1 and the #20/#21/#28/#30 fixes are later merges, not deployed or tested on it. The #22 fix (PR #34) is not merged | — | §1 | — |
 | R-4 | I-03 expected result | **Decided 31-Oct-2026:** degraded readiness acceptable only with accurate reporting, healthy liveness for independent operations, and no false dispatch readiness | — | `QA_RELEASE_PREPARATION.md` §5e | — |
 | R-5 | Section J set-up | **Decided 31-Oct-2026:** qa-org-a2; the owner operates the platform-admin screen for J-01 while E1 directs; build `441a29a`. **Still needed (owner input):** nominate evaluators E1–E3 and a facilitator (J-D4); the platform administrator creates E1's multi-organization user (J-02) | Owner | `QA_J_EVALUATOR_PACKAGE.md` §2, §7 | Evaluator nominations |
 | R-6 | D1, D2, D5 approvals (the recovery copy and the disk clean-up were done on 31-Oct-2026 and do not satisfy D5) | *Infrastructure owner* | Infrastructure owner, operator | §3 | Infrastructure input |
 | R-7 | QAF-021 (circuit reset capability) and QAF-004 (recipient in event payloads; privacy), each a product decision | *Owner* | Owner | `QA_FINDINGS_REGISTER.md` | None. Not F.3 blockers unless the owner says so |
 | R-8 | Publish the governance record (including `a511949`, the Gate F.2 acceptance) | **Decided 31-Oct-2026:** commit, push and draft PR; no merge | Claude Code | This document | Merge stays an owner decision |
-| W-1 | X-6 window (and I-01 – I-03 if included) | — | Operator (host, assignments), Claude Code (messages, read-only checks) | §2 | R-2 |
+| W-1 | X-6 window | **Done 31-Oct-2026** (accepted). I-01 – I-03 not run; they need their own authorization if the owner requires them for F.3-8 | Operator, Claude Code | §2 | Authorization for I-01 – I-03 |
 | W-2 | Section J sessions with three independent evaluators | — | Evaluators, facilitator, operator (accounts) | `QA_J_EVALUATOR_PACKAGE.md` | R-5 |
 | W-3 | Outstanding console rows needing the platform administrator, other personas or the operator | — | Testers with those personas | `QA_RELEASE_PREPARATION.md` §5d | Personas (D2, J-D2) |
 | W-4 | QAF-007 fresh-cluster drill and QAF-008 restore command | — | Named operator | §3 | D5 (R-6) |
@@ -96,6 +98,7 @@ If the owner chooses not to run X-6, the alternative is an automated-only except
 
 - **F.3-2/3:** live multi-worker concurrency unverified (X-4).
 - **F.3-4:** live queue-to-claim race not exercised (X-5).
+- **F.3-5:** the claim-time race is evidenced by automated tests only; Docker automatic restart of a killed container unverified; one accepted `outcome_unknown` QA message retained.
 - **F.3-6:** R-AUD-1 (dispatcher circuit and health transitions not audited, by design); QAF-021 (no supported circuit reset; the original `QA Sim 500` remains open); QAF-022 (the refusal log has no message id).
 - **Providers and templates:** simulator-only providers; template approval is simulated (no Meta/WhatsApp approval); synthetic DLT format validation only (from F.2).
 - **QA host logs:** API log `--since` reads are unreliable after the 27/28-Oct outage; the current API start line is unreadable.
