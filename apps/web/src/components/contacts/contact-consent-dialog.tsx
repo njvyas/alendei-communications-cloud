@@ -9,42 +9,47 @@ import { ConsentStatusBadge } from './consent-status-badge';
 import { useModalDialog } from '@/components/ui/dialog';
 
 interface ContactConsentDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  contact: ContactResponse | null;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly contact: ContactResponse | null;
 }
 
 export function ContactConsentDialog({ open, onOpenChange, contact }: ContactConsentDialogProps) {
   const queryClient = useQueryClient();
 
+  const [selectedChannelId, setSelectedChannelId] = useState<string>('');
+  const [consentType, setConsentType] = useState<string>('transactional');
   const [event, setEvent] = useState<ConsentEventType>('grant');
   const [source, setSource] = useState('console_admin_override');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Fetch channels to discover WhatsApp channelId
+  // Fetch channels to populate channel selector
   const { data: channelsData } = useQuery({
     queryKey: ['channels', 'list', { limit: 50 }],
-    queryFn: ({ signal }) => channelsApi.list({ limit: 50 }, signal),
+    queryFn: ({ signal }) => channelsApi.list({ limit: 50, tenantScoped: true }, signal),
     enabled: open,
   });
 
   const channels = channelsData?.data ?? [];
   const whatsappChannel = channels.find((c) => c.code === 'whatsapp');
 
-  // Fetch current effective consent
+  // Resolve effective channel: selected or default to WhatsApp or first available
+  const activeChannelId = selectedChannelId || whatsappChannel?.id || channels[0]?.id || '';
+
+  // Fetch current effective consent for chosen channel & consent type
   const { data: consentData, isLoading: isConsentLoading } = useQuery({
-    queryKey: ['contacts', 'consent', contact?.id, whatsappChannel?.id],
+    queryKey: ['contacts', 'consent', contact?.id, activeChannelId, consentType],
     queryFn: ({ signal }) =>
       contactsApi.getEffectiveConsent(
         contact!.id,
-        { channelId: whatsappChannel!.id, consentType: 'transactional' },
+        { channelId: activeChannelId, consentType },
         signal,
       ),
-    enabled: Boolean(open && contact && whatsappChannel),
+    enabled: Boolean(open && contact && activeChannelId),
   });
 
-  const modal = useModalDialog(open && !!contact);
+  const modal = useModalDialog(open && Boolean(contact));
 
   if (!open || !contact) return null;
 
@@ -57,16 +62,16 @@ export function ContactConsentDialog({ open, onOpenChange, contact }: ContactCon
     e.preventDefault();
     setErrorMessage(null);
 
-    if (!whatsappChannel) {
-      setErrorMessage('WhatsApp channel is not available.');
+    if (!activeChannelId) {
+      setErrorMessage('A communication channel is required to record consent.');
       return;
     }
 
     setIsSubmitting(true);
     try {
       await contactsApi.createConsentEvent(contact.id, {
-        channelId: whatsappChannel.id,
-        consentType: 'transactional',
+        channelId: activeChannelId,
+        consentType,
         event,
         occurredAt: new Date().toISOString(),
         source: source.trim() || 'console_admin_override',
@@ -74,9 +79,15 @@ export function ContactConsentDialog({ open, onOpenChange, contact }: ContactCon
 
       await queryClient.invalidateQueries({ queryKey: ['contacts', 'consent', contact.id] });
       await queryClient.invalidateQueries({ queryKey: ['contacts', 'list'] });
-      toast.success('Consent Recorded', `Recorded ${event} consent event for contact.`);
+
+      const channelObj = channels.find((c) => c.id === activeChannelId);
+      const channelLabel = channelObj ? channelObj.displayName : 'Channel';
+      toast.success(
+        'Consent Recorded',
+        `Recorded ${event.toUpperCase()} event for ${channelLabel} (${consentType}).`,
+      );
       handleClose();
-    } catch (err) {
+    } catch (err: unknown) {
       if (err instanceof ApiError) {
         setErrorMessage(
           err.code
@@ -151,6 +162,49 @@ export function ContactConsentDialog({ open, onOpenChange, contact }: ContactCon
                   <ConsentStatusBadge status={effectiveState} />
                 )}
               </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label
+                htmlFor="consent-channel"
+                className="block text-xs font-medium text-[var(--color-ink-muted)]"
+              >
+                Channel
+              </label>
+              <select
+                id="consent-channel"
+                value={activeChannelId}
+                onChange={(e) => setSelectedChannelId(e.target.value)}
+                disabled={isSubmitting || channels.length === 0}
+                className="mt-1 w-full rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] px-3 py-1.5 text-xs text-[var(--color-ink)]"
+              >
+                {channels.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.displayName || c.code.toUpperCase()}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label
+                htmlFor="consent-type"
+                className="block text-xs font-medium text-[var(--color-ink-muted)]"
+              >
+                Consent Type
+              </label>
+              <select
+                id="consent-type"
+                value={consentType}
+                onChange={(e) => setConsentType(e.target.value)}
+                disabled={isSubmitting}
+                className="mt-1 w-full rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] px-3 py-1.5 text-xs text-[var(--color-ink)]"
+              >
+                <option value="transactional">Transactional</option>
+                <option value="marketing">Marketing</option>
+              </select>
             </div>
           </div>
 

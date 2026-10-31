@@ -2,16 +2,19 @@
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ApiError, templatesApi, type ListTemplatesParams } from '@/lib/api-client';
-import { useCanManageTemplates, useCanReadTemplates } from '@/lib/session-store';
+import { ApiError, channelsApi, templatesApi, type ListTemplatesParams } from '@/lib/api-client';
+import { useCanManageTemplates, useCanReadTemplates, useSession } from '@/lib/session-store';
 import { TemplateStatusBadge } from '@/components/templates/template-status-badge';
 import { TemplateCreateDialog } from '@/components/templates/template-create-dialog';
 import { TemplateApprovalDialog } from '@/components/templates/template-approval-dialog';
+import { TemplateEditDialog } from '@/components/templates/template-edit-dialog';
+import { TemplateDeleteDialog } from '@/components/templates/template-delete-dialog';
 import type { TemplateApprovalStatus, TemplateResponse } from '@acc/contracts';
 
 export default function TemplatesPage() {
   const canReadTemplates = useCanReadTemplates();
   const canManageTemplates = useCanManageTemplates();
+  const selectedOrganizationId = useSession((state) => state.selectedOrganizationId);
 
   // Filters
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
@@ -25,6 +28,17 @@ export default function TemplatesPage() {
   const [approvalTargetTemplate, setApprovalTargetTemplate] = useState<TemplateResponse | null>(
     null,
   );
+  const [editTargetTemplate, setEditTargetTemplate] = useState<TemplateResponse | null>(null);
+  const [deleteTargetTemplate, setDeleteTargetTemplate] = useState<TemplateResponse | null>(null);
+
+  // Query channels to display channel names
+  const { data: channelsData } = useQuery({
+    queryKey: ['channels', 'list', selectedOrganizationId],
+    queryFn: ({ signal }) => channelsApi.list({ limit: 50, tenantScoped: true }, signal),
+    enabled: Boolean(canReadTemplates && selectedOrganizationId),
+  });
+
+  const channels = channelsData?.data ?? [];
 
   const queryParams: ListTemplatesParams = {
     approvalStatus:
@@ -146,6 +160,9 @@ export default function TemplatesPage() {
                   Template Name
                 </th>
                 <th scope="col" className="px-4 py-3 font-medium">
+                  Channel
+                </th>
+                <th scope="col" className="px-4 py-3 font-medium">
                   Approval Status
                 </th>
                 <th scope="col" className="px-4 py-3 font-medium">
@@ -162,65 +179,93 @@ export default function TemplatesPage() {
             <tbody className="divide-y divide-[var(--color-border-subtle)]">
               {isLoading ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-[var(--color-ink-muted)]">
+                  <td colSpan={6} className="px-4 py-8 text-center text-[var(--color-ink-muted)]">
                     <span role="status">Loading templates…</span>
                   </td>
                 </tr>
               ) : templates.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-[var(--color-ink-muted)]">
+                  <td colSpan={6} className="px-4 py-8 text-center text-[var(--color-ink-muted)]">
                     No message templates found for the selected criteria.
                   </td>
                 </tr>
               ) : (
-                templates.map((tpl) => (
-                  <tr
-                    key={tpl.id}
-                    data-testid={`template-row-${tpl.id}`}
-                    className="hover:bg-[var(--color-surface-raised)]"
-                  >
-                    <td className="px-4 py-3 font-medium text-[var(--color-ink)]">
-                      <div>{tpl.name}</div>
-                      <div className="font-mono text-[10px] text-[var(--color-ink-muted)]">
-                        {tpl.id.slice(0, 8)}…
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <TemplateStatusBadge status={tpl.approvalStatus} />
-                    </td>
-                    <td className="px-4 py-3 text-[var(--color-ink-muted)]">
-                      {tpl.variables && tpl.variables.length > 0 ? (
-                        <div className="flex flex-wrap gap-1">
-                          {tpl.variables.map((v) => (
-                            <span
-                              key={v}
-                              className="rounded bg-[var(--color-surface-raised)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-ink)] border border-[var(--color-border-subtle)]"
-                            >
-                              {`{{${v}}}`}
-                            </span>
-                          ))}
+                templates.map((tpl) => {
+                  const channel = channels.find((c) => c.id === tpl.channelId);
+                  const channelName = channel ? channel.code.toUpperCase() : 'UNKNOWN';
+
+                  return (
+                    <tr
+                      key={tpl.id}
+                      data-testid={`template-row-${tpl.id}`}
+                      className="hover:bg-[var(--color-surface-raised)]"
+                    >
+                      <td className="px-4 py-3 font-medium text-[var(--color-ink)]">
+                        <div>{tpl.name}</div>
+                        <div className="font-mono text-[10px] text-[var(--color-ink-muted)]">
+                          {tpl.id.slice(0, 8)}…
                         </div>
-                      ) : (
-                        <span className="text-[10px] italic">None</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-[var(--color-ink-muted)] max-w-xs truncate font-mono text-[11px]">
-                      {tpl.body}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      {canManageTemplates && (
-                        <button
-                          type="button"
-                          onClick={() => setApprovalTargetTemplate(tpl)}
-                          data-testid={`simulate-approval-btn-${tpl.id}`}
-                          className="rounded-md border border-[var(--color-border-subtle)] px-2 py-1 text-[11px] text-[var(--color-ink)] hover:bg-[var(--color-surface-raised)]"
-                        >
-                          Simulate Approval
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="rounded bg-[var(--color-surface-raised)] border border-[var(--color-border-subtle)] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[var(--color-ink)]">
+                          {channelName}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <TemplateStatusBadge status={tpl.approvalStatus} />
+                      </td>
+                      <td className="px-4 py-3 text-[var(--color-ink-muted)]">
+                        {tpl.variables && tpl.variables.length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {tpl.variables.map((v) => (
+                              <span
+                                key={v}
+                                className="rounded bg-[var(--color-surface-raised)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-ink)] border border-[var(--color-border-subtle)]"
+                              >
+                                {`{{${v}}}`}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-[10px] italic">None</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-[var(--color-ink-muted)] max-w-xs truncate font-mono text-[11px]">
+                        {tpl.body}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {canManageTemplates && (
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setEditTargetTemplate(tpl)}
+                              data-testid={`edit-template-btn-${tpl.id}`}
+                              className="rounded-md border border-[var(--color-border-subtle)] px-2 py-1 text-[11px] text-[var(--color-ink)] hover:bg-[var(--color-surface-raised)]"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setApprovalTargetTemplate(tpl)}
+                              data-testid={`simulate-approval-btn-${tpl.id}`}
+                              className="rounded-md border border-[var(--color-border-subtle)] px-2 py-1 text-[11px] text-[var(--color-ink)] hover:bg-[var(--color-surface-raised)]"
+                            >
+                              Approval
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeleteTargetTemplate(tpl)}
+                              data-testid={`delete-template-btn-${tpl.id}`}
+                              className="rounded-md border border-rose-500/30 px-2 py-1 text-[11px] text-rose-400 hover:bg-rose-500/10"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -262,6 +307,18 @@ export default function TemplatesPage() {
         open={Boolean(approvalTargetTemplate)}
         onOpenChange={(open) => !open && setApprovalTargetTemplate(null)}
         template={approvalTargetTemplate}
+      />
+
+      <TemplateEditDialog
+        open={Boolean(editTargetTemplate)}
+        onOpenChange={(open) => !open && setEditTargetTemplate(null)}
+        template={editTargetTemplate}
+      />
+
+      <TemplateDeleteDialog
+        open={Boolean(deleteTargetTemplate)}
+        onOpenChange={(open) => !open && setDeleteTargetTemplate(null)}
+        template={deleteTargetTemplate}
       />
     </div>
   );

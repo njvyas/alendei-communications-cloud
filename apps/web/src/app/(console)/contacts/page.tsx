@@ -6,6 +6,8 @@ import { ApiError, contactsApi, workspacesApi, type ListContactsParams } from '@
 import { useCanManageContacts, useCanReadContacts, useSession } from '@/lib/session-store';
 import { ContactCreateDialog } from '@/components/contacts/contact-create-dialog';
 import { ContactConsentDialog } from '@/components/contacts/contact-consent-dialog';
+import { ContactDetailDialog } from '@/components/contacts/contact-detail-dialog';
+import { ContactEditDialog } from '@/components/contacts/contact-edit-dialog';
 import {
   ContactCreatedNotice,
   shouldShowCreatedContactNotice,
@@ -46,6 +48,8 @@ export default function ContactsPage() {
   // Dialog states
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [consentTargetContact, setConsentTargetContact] = useState<ContactResponse | null>(null);
+  const [detailTargetContact, setDetailTargetContact] = useState<ContactResponse | null>(null);
+  const [editTargetContact, setEditTargetContact] = useState<ContactResponse | null>(null);
   const [createdRecord, setCreatedRecord] = useState<CreatedContactRecord | null>(null);
 
   // State adjustment during render when the organization changes (React recommended
@@ -58,6 +62,9 @@ export default function ContactsPage() {
     setSelectedWorkspaceId('');
     setPager(EMPTY_PAGER);
     setCreatedRecord(null);
+    setConsentTargetContact(null);
+    setDetailTargetContact(null);
+    setEditTargetContact(null);
     // The create form belongs to the previous organization's workspace: close it
     // (the dialog is also remounted per organization below, clearing its fields).
     setIsCreateOpen(false);
@@ -286,16 +293,36 @@ export default function ContactsPage() {
                           {new Date(c.createdAt).toLocaleDateString()}
                         </td>
                         <td className="px-4 py-3 text-right">
-                          {canManageContacts && (
+                          <div className="flex items-center justify-end gap-1.5">
                             <button
                               type="button"
-                              onClick={() => setConsentTargetContact(c)}
-                              data-testid={`manage-consent-btn-${c.id}`}
+                              onClick={() => setDetailTargetContact(c)}
+                              data-testid={`view-contact-btn-${c.id}`}
                               className="rounded-md border border-[var(--color-border-subtle)] px-2 py-1 text-[11px] text-[var(--color-ink)] hover:bg-[var(--color-surface-raised)]"
                             >
-                              Manage Consent
+                              Details
                             </button>
-                          )}
+                            {canManageContacts && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditTargetContact(c)}
+                                  data-testid={`edit-contact-btn-${c.id}`}
+                                  className="rounded-md border border-[var(--color-border-subtle)] px-2 py-1 text-[11px] text-[var(--color-ink)] hover:bg-[var(--color-surface-raised)]"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConsentTargetContact(c)}
+                                  data-testid={`manage-consent-btn-${c.id}`}
+                                  className="rounded-md border border-[var(--color-border-subtle)] px-2 py-1 text-[11px] text-[var(--color-ink)] hover:bg-[var(--color-surface-raised)]"
+                                >
+                                  Consent
+                                </button>
+                              </>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -355,6 +382,20 @@ export default function ContactsPage() {
         open={Boolean(consentTargetContact)}
         onOpenChange={(open) => !open && setConsentTargetContact(null)}
         contact={consentTargetContact}
+      />
+
+      <ContactDetailDialog
+        open={Boolean(detailTargetContact)}
+        onOpenChange={(open) => !open && setDetailTargetContact(null)}
+        contact={detailTargetContact}
+        canManage={canManageContacts}
+        onRecordConsent={(contact) => setConsentTargetContact(contact)}
+      />
+
+      <ContactEditDialog
+        open={Boolean(editTargetContact)}
+        onOpenChange={(open) => !open && setEditTargetContact(null)}
+        contact={editTargetContact}
       />
     </div>
   );
