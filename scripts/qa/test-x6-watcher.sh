@@ -182,6 +182,50 @@ assert_output_contains "21e. SQL parameterization binds payload testRunId and co
 assert_exit "22. Query dump mode exits 0 (Query Inspection)" 0 \
   "$WATCHER" --test-run-id "6f1c2a9e-3b7d-4c1e-9a2f-0d4b5e6f7a81" --dump-query
 
+# 23. Dry run (without test mode) uses the REAL compose path for read-only queries and stubs ONLY the kill (QAF-025).
+#     A fake compose (via $C) and a fake `docker` on PATH record every call; no host is contacted.
+FAKE_DIR="$(mktemp -d)"
+trap 'rm -rf "$FAKE_DIR"' EXIT
+cat >"$FAKE_DIR/fake-compose" <<'FAKE'
+#!/usr/bin/env bash
+echo "COMPOSE $*" >>"$FAKE_LOG"
+case "$*" in
+  *"ps -q"*) echo "fakecontainer0001" ;;
+  *"COUNT(*) FROM message_dispatch_queue"*) echo "0" ;;
+  *" -f -"*|*"-F|"*) cat >/dev/null; [[ -n ${FAKE_MATCH:-} ]] && echo "$FAKE_MATCH" ;;
+esac
+exit 0
+FAKE
+cat >"$FAKE_DIR/docker" <<'FAKE'
+#!/usr/bin/env bash
+echo "DOCKER $*" >>"$FAKE_LOG"
+exit 0
+FAKE
+chmod +x "$FAKE_DIR/fake-compose" "$FAKE_DIR/docker"
+
+export FAKE_LOG="$FAKE_DIR/calls.log"
+: >"$FAKE_LOG"
+assert_output_contains "23a. Dry run without a match reaches the fail-safe timeout after real read-only queries" "FAIL-SAFE TIMEOUT EXPIRED" \
+  env C="$FAKE_DIR/fake-compose" PATH="$FAKE_DIR:$PATH" "$WATCHER" --test-run-id "6f1c2a9e-3b7d-4c1e-9a2f-0d4b5e6f7a81" \
+  --dry-run --non-interactive --max-seconds 1.0 --poll-interval 0.1 --lock-file "$FAKE_DIR/lock"
+echo -n "Test: 23a-2. Dry run executed real ps/queue/detection calls and no docker kill... "
+if grep -q "COMPOSE ps -q api" "$FAKE_LOG" && grep -q "COUNT(\*) FROM message_dispatch_queue" "$FAKE_LOG" \
+   && grep -q -- "-v test_run_id=6f1c2a9e" "$FAKE_LOG" && ! grep -q "^DOCKER kill" "$FAKE_LOG"; then
+  echo "PASS"; PASSED=$((PASSED + 1))
+else
+  echo "FAIL"; cat "$FAKE_LOG"; FAILED=$((FAILED + 1))
+fi
+
+: >"$FAKE_LOG"
+NOW_EPOCH=$(date +%s.%N)
+MATCH_EPOCH=$(awk "BEGIN {printf \"%.3f\", $NOW_EPOCH - 0.4}")
+assert_output_contains "23b. Dry run with a match reports the kill it would issue (and exits 0)" "\\[DRY RUN\\] Would execute" \
+  env C="$FAKE_DIR/fake-compose" PATH="$FAKE_DIR:$PATH" \
+  FAKE_MATCH="msgid0001|submitting|attid0001|1|QA Sim Timeout|$MATCH_EPOCH|0.400" \
+  "$WATCHER" --test-run-id "6f1c2a9e-3b7d-4c1e-9a2f-0d4b5e6f7a81" --dry-run --non-interactive --max-seconds 1.0 --poll-interval 0.1 --lock-file "$FAKE_DIR/lock"
+echo -n "Test: 23b-2. Dry run with a match never invoked docker kill... "
+if ! grep -q "^DOCKER kill" "$FAKE_LOG"; then echo "PASS"; PASSED=$((PASSED + 1)); else echo "FAIL"; cat "$FAKE_LOG"; FAILED=$((FAILED + 1)); fi
+
 echo ""
 echo "=== Test Suite Summary ==="
 echo "Total Tests Executed: $((PASSED + FAILED))"

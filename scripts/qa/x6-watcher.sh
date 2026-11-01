@@ -63,7 +63,7 @@ usage() {
 Usage: $(basename "$0") --test-run-id <ID> [OPTIONS]
 
 Required:
-  --test-run-id <ID>         Exact synthetic test-run identifier (8-64 alphanumeric/hyphen chars)
+  --test-run-id <ID>         Exact synthetic test-run identifier (lowercase UUID; sent as X-Correlation-ID)
 
 Target Identification:
   --recipient <phone>        Target synthetic recipient phone (default: +12025550186)
@@ -80,15 +80,15 @@ Timing and Bounds:
 Environment & Containers:
   --api-service <name>       API service name in compose (default: api)
   --pg-container <name>      Postgres container service name (default: postgres)
-  --db-user <user>           Database user for query (default: acc_app)
+  --db-user <user>           Database user for query (default: postgres; read-only transaction)
   --db-name <name>           Database name for query (default: acc)
   --lock-file <path>         Path to single-instance lock file (default: /tmp/acc-x6-watcher.lock)
 
 Modes & Safety:
-  --dry-run                  Simulate detection without issuing SIGKILL (structurally stubbed)
+  --dry-run                  Real read-only pre-flight and detection queries; only the SIGKILL is stubbed
   --non-interactive          Run non-interactively (requires --armed)
   --armed                    Acknowledge kill authority for non-interactive mode
-  --test-mode                Mock execution for local testing (structurally stubbed)
+  --test-mode                Mock execution for local testing (every Docker command stubbed)
   --dump-query               Print generated psql query and parameters then exit
   --help|-h                  Show this help message and exit
 EOF
@@ -185,9 +185,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Enforce Structural Safety: In dry-run or test-mode, overwrite commands with safety echo stubs
-if [[ "$DRY_RUN" == true || "$TEST_MODE" == true ]]; then
+# Enforce Structural Safety.
+# - Test mode: every Docker command is an echo stub (no host access at all; local harness).
+# - Dry run: ONLY the kill is stubbed. The read-only pre-flight and detection queries use the real
+#   compose command, so a dry run on the QA host exercises the real database path (QAF-025).
+if [[ "$TEST_MODE" == true ]]; then
   DOCKER_COMPOSE_BIN=("echo" "[SAFETY_STUB_COMPOSE]")
+  DOCKER_KILL_CMD=("echo" "[SAFETY_STUB_KILL]")
+elif [[ "$DRY_RUN" == true ]]; then
   DOCKER_KILL_CMD=("echo" "[SAFETY_STUB_KILL]")
 fi
 
