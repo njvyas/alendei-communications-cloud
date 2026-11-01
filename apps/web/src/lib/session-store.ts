@@ -517,6 +517,42 @@ export function useCanManagePlatformTenants(): boolean {
 }
 
 /**
+ * Evaluates whether the actor can view resellers.
+ * Requires holding `resellers.read` at reseller/platform scope, or platform admin / platform tenants permission.
+ */
+export function useCanReadResellers(): boolean {
+  return useSession((state) => {
+    if (!state.authorization) return false;
+    if (state.authorization.isPlatformAdmin) return true;
+    return state.authorization.grants.some(
+      (g) =>
+        (g.scopeType === 'platform' &&
+          (g.permissions.includes('platform.tenants.manage') ||
+            g.permissions.includes('platform.tenants.read') ||
+            g.permissions.includes('resellers.read'))) ||
+        (g.scopeType === 'reseller' && g.permissions.includes('resellers.read')),
+    );
+  });
+}
+
+/**
+ * Evaluates whether the actor can create, update, or administer resellers.
+ */
+export function useCanManageResellers(): boolean {
+  return useSession((state) => {
+    if (!state.authorization) return false;
+    if (state.authorization.isPlatformAdmin) return true;
+    return state.authorization.grants.some(
+      (g) =>
+        (g.scopeType === 'platform' &&
+          (g.permissions.includes('platform.tenants.manage') ||
+            g.permissions.includes('resellers.manage'))) ||
+        (g.scopeType === 'reseller' && g.permissions.includes('resellers.update')),
+    );
+  });
+}
+
+/**
  * Evaluates whether the actor can view the provider/channel catalogue.
  * Requires platform admin or holding `providers.read` at platform scope.
  */

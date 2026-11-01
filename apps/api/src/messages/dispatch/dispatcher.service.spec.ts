@@ -159,8 +159,14 @@ describe('DispatcherService provider lifecycle exclusion before admission (Issue
     }[],
     options?: {
       admitted?: boolean;
+      orgStatuses?: ('active' | 'suspended' | 'closed')[] | 'active' | 'suspended' | 'closed';
     },
   ) {
+    const orgStatusQueue = Array.isArray(options?.orgStatuses)
+      ? [...options.orgStatuses]
+      : options?.orgStatuses
+        ? [options.orgStatuses]
+        : ['active'];
     const admitMock = jest.fn(async () => ({
       admitted: (options?.admitted ?? true) as true,
       state: 'closed' as const,
@@ -198,7 +204,9 @@ describe('DispatcherService provider lifecycle exclusion before admission (Issue
           return { rows: [{ status: 'queued', current_attempt_id: null }], rowCount: 1 };
         }
         if (sql.includes('FROM organizations')) {
-          return { rows: [{ status: 'active' }], rowCount: 1 };
+          const status =
+            orgStatusQueue.length > 1 ? orgStatusQueue.shift()! : (orgStatusQueue[0] ?? 'active');
+          return { rows: [{ status }], rowCount: 1 };
         }
         if (sql.includes('FROM messages m')) {
           return {
@@ -353,5 +361,121 @@ describe('DispatcherService provider lifecycle exclusion before admission (Issue
         orgId: claim.orgId,
       }),
     );
+  });
+
+  describe('organization lifecycle & pre-submission race protection (U13.2)', () => {
+    const candidates = [
+      { id: 'opa-1', provider_id: 'p-active', priority: 1, provider_status: 'active' as const },
+    ];
+
+    it('holds message with 60s backoff when organization is suspended at claim time', async () => {
+      const { service, executor, queries } = makeDispatcherWithCandidates(candidates, {
+        orgStatuses: 'suspended',
+      });
+
+      const result = await service.processClaim(claim);
+
+      expect(result).toEqual({
+        messageId: claim.messageId,
+        outcome: 'held',
+        error: 'Organization suspended',
+      });
+      expect(executor.execute).not.toHaveBeenCalled();
+
+      const queueUpdate = queries.find(
+        (q) => q.sql.includes('UPDATE message_dispatch_queue') && q.sql.includes('60 seconds'),
+      );
+      expect(queueUpdate).toBeDefined();
+    });
+
+    it('terminalizes message as failed when organization is closed at claim time', async () => {
+      const { service, executor, queries } = makeDispatcherWithCandidates(candidates, {
+        orgStatuses: 'closed',
+      });
+
+      const result = await service.processClaim(claim);
+
+      expect(result).toEqual({
+        messageId: claim.messageId,
+        outcome: 'failed',
+        error: 'Organization closed',
+      });
+      expect(executor.execute).not.toHaveBeenCalled();
+
+      const msgUpdate = queries.find(
+        (q) => q.sql.includes('UPDATE messages') && q.sql.includes("status = 'failed'"),
+      );
+      expect(msgUpdate).toBeDefined();
+
+      const queueDelete = queries.find((q) => q.sql.includes('DELETE FROM message_dispatch_queue'));
+      expect(queueDelete).toBeDefined();
+    });
+
+    it('pre-submission race protection: aborts provider submission and holds message if suspended after claim intent', async () => {
+      const { service, executor, queries } = makeDispatcherWithCandidates(candidates, {
+        orgStatuses: ['active', 'suspended'],
+      });
+
+      const result = await service.processClaim(claim);
+
+      expect(result).toEqual({
+        messageId: claim.messageId,
+        outcome: 'held',
+        error: 'Organization suspended before provider submission',
+      });
+      expect(executor.execute).not.toHaveBeenCalled();
+
+      const msgRevert = queries.find(
+        (q) => q.sql.includes('UPDATE messages') && q.sql.includes("status = 'queued'"),
+      );
+      expect(msgRevert).toBeDefined();
+
+      const attemptFail = queries.find(
+        (q) =>
+          q.sql.includes('UPDATE message_attempts') &&
+          q.sql.includes('Organization was suspended before provider submission'),
+      );
+      expect(attemptFail).toBeDefined();
+
+      const queueBackoff = queries.find(
+        (q) => q.sql.includes('UPDATE message_dispatch_queue') && q.sql.includes('60 seconds'),
+      );
+      expect(queueBackoff).toBeDefined();
+    });
+
+    it('pre-submission race protection: aborts provider submission and fails message if closed after claim intent', async () => {
+      const { service, executor, queries } = makeDispatcherWithCandidates(candidates, {
+        orgStatuses: ['active', 'closed'],
+      });
+
+      const result = await service.processClaim(claim);
+
+      expect(result).toEqual({
+        messageId: claim.messageId,
+        outcome: 'failed',
+        error: 'Organization closed',
+      });
+      expect(executor.execute).not.toHaveBeenCalled();
+
+      const msgFail = queries.find(
+        (q) => q.sql.includes('UPDATE messages') && q.sql.includes("status = 'failed'"),
+      );
+      expect(msgFail).toBeDefined();
+
+      const attemptFail = queries.find(
+        (q) =>
+          q.sql.includes('UPDATE message_attempts') &&
+          q.sql.includes("failure_reason = 'Organization is closed'"),
+      );
+      expect(attemptFail).toBeDefined();
+
+      const eventInsert = queries.find(
+        (q) => q.sql.includes('INSERT INTO message_events') && q.sql.includes('message.failed'),
+      );
+      expect(eventInsert).toBeDefined();
+
+      const queueDelete = queries.find((q) => q.sql.includes('DELETE FROM message_dispatch_queue'));
+      expect(queueDelete).toBeDefined();
+    });
   });
 });

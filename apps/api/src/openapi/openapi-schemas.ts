@@ -776,3 +776,52 @@ export class OnboardingResultSchema {
   @ApiProperty({ type: BrandConfigSchema }) branding!: BrandConfigSchema;
   @ApiProperty() portalUrl!: string;
 }
+
+// --- organization lifecycle history (Phase 4, U13.2) -----------------------
+
+@ApiSchema({ name: 'OrganizationLifecycleActor' })
+export class OrganizationLifecycleActorSchema {
+  @ApiProperty() type!: string;
+  @ApiProperty({ type: 'string', nullable: true }) id!: string | null;
+  @ApiProperty({ type: 'string', nullable: true }) email!: string | null;
+}
+
+@ApiSchema({ name: 'OrganizationLifecycleEvent' })
+export class OrganizationLifecycleEventSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty(uuid) orgId!: string;
+  @ApiProperty() action!: string;
+  @ApiProperty({ type: 'string', nullable: true, enum: ['active', 'suspended', 'closed'] })
+  previousStatus!: string | null;
+  @ApiProperty({ enum: ['active', 'suspended', 'closed'] }) newStatus!: string;
+  @ApiProperty({ type: 'string', nullable: true }) reason!: string | null;
+  @ApiProperty({ type: OrganizationLifecycleActorSchema }) actor!: OrganizationLifecycleActorSchema;
+  @ApiProperty(timestamp) occurredAt!: string;
+}
+
+// --- resellers & hierarchy (Phase 4, U13) -----------------------------------
+
+@ApiSchema({ name: 'Reseller' })
+export class ResellerSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty() name!: string;
+  @ApiProperty() slug!: string;
+  @ApiProperty({ type: 'string', nullable: true }) domain!: string | null;
+  @ApiProperty({ type: BrandConfigSchema }) brandConfig!: BrandConfigSchema;
+  @ApiProperty({ example: '15.000' }) defaultMarkupPct!: string;
+  @ApiProperty({ enum: ['active', 'suspended', 'closed'] }) status!: string;
+  @ApiProperty() isPlatformDefault!: boolean;
+  @ApiProperty({ type: 'integer', minimum: 0, required: false }) customerCount?: number;
+  @ApiProperty(timestamp) createdAt!: string;
+  @ApiProperty(timestamp) updatedAt!: string;
+}
+
+@ApiSchema({ name: 'ResellerOrganization' })
+export class ResellerOrganizationSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty() name!: string;
+  @ApiProperty() slug!: string;
+  @ApiProperty() status!: string;
+  @ApiProperty(timestamp) createdAt!: string;
+  @ApiProperty(timestamp) updatedAt!: string;
+}

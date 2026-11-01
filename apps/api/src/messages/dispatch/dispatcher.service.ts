@@ -670,6 +670,104 @@ export class DispatcherService {
       // -----------------------------------------------------------------------
       // Step 2: Submission Execution (Outside DB Transaction)
       // -----------------------------------------------------------------------
+
+      // Pre-submission race protection (U13.2 Requirement 4 & 5):
+      // Recheck organization status immediately before external provider submission.
+      const preCheck = await client.query<{ status: string }>(
+        `SELECT status FROM organizations WHERE id = $1`,
+        [claim.orgId],
+      );
+      const preStatus = preCheck.rows[0]?.status;
+
+      if (preStatus === 'suspended') {
+        await client.query('BEGIN');
+        await client.query(
+          `SELECT set_config('app.current_org_id', $1, true),
+                  set_config('app.dispatch_message_id', $2, true),
+                  set_config('app.dispatch_claim_token', $3, true)`,
+          [claim.orgId, claim.messageId, claim.claimToken],
+        );
+        await client.query(`SELECT pg_advisory_xact_lock_shared($1, hashtext($2))`, [
+          ORG_LIFECYCLE_LOCK_CLASS,
+          claim.orgId,
+        ]);
+        await client.query(
+          `UPDATE messages
+           SET status = 'queued',
+               updated_at = now()
+           WHERE id = $1`,
+          [claim.messageId],
+        );
+        await client.query(
+          `UPDATE message_attempts
+           SET status = 'failed',
+               failure_reason = 'Organization was suspended before provider submission',
+               completed_at = now()
+           WHERE id = $1`,
+          [attemptId],
+        );
+        await client.query(
+          `UPDATE message_dispatch_queue
+           SET claim_token = NULL,
+               claimed_until = NULL,
+               claimed_by = NULL,
+               available_at = now() + interval '60 seconds'
+           WHERE message_id = $1 AND claim_token = $2`,
+          [claim.messageId, claim.claimToken],
+        );
+        await client.query('COMMIT');
+        return {
+          messageId: claim.messageId,
+          outcome: 'held',
+          error: 'Organization suspended before provider submission',
+        };
+      }
+
+      if (preStatus === 'closed') {
+        await client.query('BEGIN');
+        await client.query(
+          `SELECT set_config('app.current_org_id', $1, true),
+                  set_config('app.dispatch_message_id', $2, true),
+                  set_config('app.dispatch_claim_token', $3, true)`,
+          [claim.orgId, claim.messageId, claim.claimToken],
+        );
+        await client.query(`SELECT pg_advisory_xact_lock_shared($1, hashtext($2))`, [
+          ORG_LIFECYCLE_LOCK_CLASS,
+          claim.orgId,
+        ]);
+        await client.query(
+          `UPDATE messages
+           SET status = 'failed',
+               failure_reason = 'Organization is closed',
+               completed_at = now(),
+               updated_at = now()
+           WHERE id = $1`,
+          [claim.messageId],
+        );
+        await client.query(
+          `UPDATE message_attempts
+           SET status = 'failed',
+               failure_reason = 'Organization is closed',
+               completed_at = now()
+           WHERE id = $1`,
+          [attemptId],
+        );
+        await client.query(
+          `INSERT INTO message_events (id, org_id, message_id, attempt_id, event_type, payload)
+           VALUES ($1, $2, $3, $4, 'message.failed', '{"reason":"Organization is closed"}')`,
+          [uuidv7(), claim.orgId, claim.messageId, attemptId],
+        );
+        await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
+          claim.messageId,
+        ]);
+        await client.query('COMMIT');
+        return {
+          messageId: claim.messageId,
+          outcome: 'failed',
+          error: 'Organization closed',
+        };
+      }
+
       const settled = await this.executor.execute(
         admission.admission,
         {

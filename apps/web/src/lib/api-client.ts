@@ -49,6 +49,12 @@ import type {
   ResellerCustomerOnboardingDto,
   ResolvedDomainView,
   WhiteLabelCustomerOnboardingDto,
+  CreateResellerInput,
+  ResellerOrganizationView,
+  ResellerStatus,
+  ResellerTransitionInput,
+  ResellerView,
+  UpdateResellerInput,
 } from '@acc/contracts';
 import {
   ASSIGNMENT_STATUS,
@@ -59,6 +65,7 @@ import {
   MESSAGE_ATTEMPT_STATUSES,
   MESSAGE_STATUSES,
   PLATFORM_RESERVED_DOMAINS,
+  RESELLER_STATUSES,
   SUPPRESSION_STATUSES,
 } from '@acc/contracts';
 import { maskRecipientAddress } from './address-masking';
@@ -68,6 +75,7 @@ export type {
   BrandConfig,
   ChannelCode,
   CreateOrganizationProviderAssignmentInput,
+  CreateResellerInput,
   DirectCustomerOnboardingDto,
   DomainDnsRecord,
   DomainStatus,
@@ -86,10 +94,15 @@ export type {
   OrganizationProviderAssignment,
   PageInfo,
   ResellerCustomerOnboardingDto,
+  ResellerOrganizationView,
+  ResellerStatus,
+  ResellerTransitionInput,
+  ResellerView,
   ResolvedDomainView,
   SuppressionResponse,
   SuppressionStatus,
   UpdateOrganizationProviderAssignmentInput,
+  UpdateResellerInput,
   WhiteLabelCustomerOnboardingDto,
 };
 export {
@@ -101,6 +114,7 @@ export {
   MESSAGE_ATTEMPT_STATUSES,
   MESSAGE_STATUSES,
   PLATFORM_RESERVED_DOMAINS,
+  RESELLER_STATUSES,
   SUPPRESSION_STATUSES,
   maskRecipientAddress,
 };
@@ -760,6 +774,23 @@ export interface OrganizationView {
   readonly updatedAt: string;
 }
 
+export interface OrganizationLifecycleActorView {
+  readonly type: string;
+  readonly id: string | null;
+  readonly email: string | null;
+}
+
+export interface OrganizationLifecycleEventView {
+  readonly id: string;
+  readonly orgId: string;
+  readonly action: string;
+  readonly previousStatus: string | null;
+  readonly newStatus: string;
+  readonly reason: string | null;
+  readonly actor: OrganizationLifecycleActorView;
+  readonly occurredAt: string;
+}
+
 export interface ListOrganizationsParams {
   readonly status?: OrganizationStatus;
   readonly resellerId?: string;
@@ -1163,14 +1194,14 @@ export const organizationsApi = {
 
   async suspend(
     id: string,
-    reason?: string,
+    reason: string,
     signal?: AbortSignal,
   ): Promise<ApiDataResponse<OrganizationView>> {
     return apiFetch<ApiDataResponse<OrganizationView>>(
       `/organizations/${encodeURIComponent(id)}/suspend`,
       {
         method: 'POST',
-        body: reason ? { reason } : {},
+        body: { reason },
         signal,
         skipTenant: true,
       },
@@ -1195,14 +1226,28 @@ export const organizationsApi = {
 
   async close(
     id: string,
-    reason?: string,
+    reason: string,
     signal?: AbortSignal,
   ): Promise<ApiDataResponse<OrganizationView>> {
     return apiFetch<ApiDataResponse<OrganizationView>>(
       `/organizations/${encodeURIComponent(id)}/close`,
       {
         method: 'POST',
-        body: reason ? { reason } : {},
+        body: { reason },
+        signal,
+        skipTenant: true,
+      },
+    );
+  },
+
+  async lifecycleHistory(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<OrganizationLifecycleEventView[]>> {
+    return apiFetch<ApiDataResponse<OrganizationLifecycleEventView[]>>(
+      `/organizations/${encodeURIComponent(id)}/lifecycle-history`,
+      {
+        method: 'GET',
         signal,
         skipTenant: true,
       },
@@ -2914,5 +2959,143 @@ export const onboardingApi = {
       skipTenant: true,
       signal,
     });
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Reseller Management API Endpoints (Phase 4, U13.1)
+// -----------------------------------------------------------------------------
+export const resellersApi = {
+  /**
+   * List resellers accessible to caller.
+   */
+  async list(
+    params?: {
+      search?: string;
+      status?: ResellerStatus;
+      limit?: number;
+      cursor?: string;
+      sort?: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<ResellerView>> {
+    const query = new URLSearchParams();
+    if (params?.search) query.set('search', params.search);
+    if (params?.status) query.set('status', params.status);
+    if (params?.limit) query.set('limit', String(params.limit));
+    if (params?.cursor) query.set('cursor', params.cursor);
+    if (params?.sort) query.set('sort', params.sort);
+
+    const qs = query.toString();
+    return apiFetch<ApiPagedResponse<ResellerView>>(`/resellers${qs ? `?${qs}` : ''}`, {
+      method: 'GET',
+      skipTenant: true,
+      signal,
+    });
+  },
+
+  /**
+   * Get reseller by ID.
+   */
+  async get(id: string, signal?: AbortSignal): Promise<ApiDataResponse<ResellerView>> {
+    return apiFetch<ApiDataResponse<ResellerView>>(`/resellers/${encodeURIComponent(id)}`, {
+      method: 'GET',
+      skipTenant: true,
+      signal,
+    });
+  },
+
+  /**
+   * Create a new reseller (platform administrator only).
+   */
+  async create(
+    input: CreateResellerInput,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<ResellerView>> {
+    return apiFetch<ApiDataResponse<ResellerView>>('/resellers', {
+      method: 'POST',
+      body: input,
+      skipTenant: true,
+      signal,
+    });
+  },
+
+  /**
+   * Update reseller details (markup percentage, name, branding, domain).
+   */
+  async update(
+    id: string,
+    input: UpdateResellerInput,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<ResellerView>> {
+    return apiFetch<ApiDataResponse<ResellerView>>(`/resellers/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: input,
+      skipTenant: true,
+      signal,
+    });
+  },
+
+  /**
+   * Suspend a reseller (platform administrator only).
+   */
+  async suspend(
+    id: string,
+    input?: ResellerTransitionInput,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<ResellerView>> {
+    return apiFetch<ApiDataResponse<ResellerView>>(`/resellers/${encodeURIComponent(id)}/suspend`, {
+      method: 'POST',
+      body: input ?? {},
+      skipTenant: true,
+      signal,
+    });
+  },
+
+  /**
+   * Reactivate a suspended reseller (platform administrator only).
+   */
+  async reactivate(
+    id: string,
+    input?: ResellerTransitionInput,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<ResellerView>> {
+    return apiFetch<ApiDataResponse<ResellerView>>(
+      `/resellers/${encodeURIComponent(id)}/reactivate`,
+      {
+        method: 'POST',
+        body: input ?? {},
+        skipTenant: true,
+        signal,
+      },
+    );
+  },
+
+  /**
+   * List customer organizations belonging to a reseller.
+   */
+  async listOrganizations(
+    id: string,
+    params?: {
+      limit?: number;
+      cursor?: string;
+      sort?: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<ResellerOrganizationView>> {
+    const query = new URLSearchParams();
+    if (params?.limit) query.set('limit', String(params.limit));
+    if (params?.cursor) query.set('cursor', params.cursor);
+    if (params?.sort) query.set('sort', params.sort);
+
+    const qs = query.toString();
+    return apiFetch<ApiPagedResponse<ResellerOrganizationView>>(
+      `/resellers/${encodeURIComponent(id)}/organizations${qs ? `?${qs}` : ''}`,
+      {
+        method: 'GET',
+        skipTenant: true,
+        signal,
+      },
+    );
   },
 };

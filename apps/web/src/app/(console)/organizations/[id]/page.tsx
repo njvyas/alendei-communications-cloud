@@ -2,7 +2,7 @@
 
 import { use, useState } from 'react';
 import Link from 'next/link';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, organizationsApi, type OrganizationStatus } from '@/lib/api-client';
 import {
   useCanManagePlatformTenants,
@@ -18,6 +18,7 @@ import {
 import { ProviderAssignmentsCard } from '@/components/organizations/provider-assignments-card';
 import { DomainListCard } from '@/components/domains/domain-list-card';
 import { BrandingSettingsCard } from '@/components/domains/branding-settings-card';
+import { OrganizationLifecycleHistoryCard } from '@/components/organizations/organization-lifecycle-history-card';
 
 const STATUS_TONES: Record<OrganizationStatus, StatusTone> = {
   active: 'ok',
@@ -27,6 +28,7 @@ const STATUS_TONES: Record<OrganizationStatus, StatusTone> = {
 
 export default function OrganizationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const queryClient = useQueryClient();
   const canReadOrganizations = useCanReadOrganizations();
   const canManagePlatformTenants = useCanManagePlatformTenants();
   const isPlatformAdmin = useSession((state) => state.authorization?.isPlatformAdmin ?? false);
@@ -307,6 +309,9 @@ export default function OrganizationDetailPage({ params }: { params: Promise<{ i
       {/* Organization Branding & Customization (Phase 4, U12) */}
       <BrandingSettingsCard orgId={id} canManage={canUpdate} />
 
+      {/* Lifecycle & Suspension History (Phase 4, U13.2) */}
+      <OrganizationLifecycleHistoryCard organizationId={id} />
+
       {/* Edit Dialog */}
       <OrganizationEditDialog
         isOpen={isEditOpen}
@@ -326,6 +331,9 @@ export default function OrganizationDetailPage({ params }: { params: Promise<{ i
           onClose={() => setTransitionAction(null)}
           onSuccess={() => {
             void refetch();
+            void queryClient.invalidateQueries({
+              queryKey: ['organization-lifecycle-history', id],
+            });
           }}
         />
       )}

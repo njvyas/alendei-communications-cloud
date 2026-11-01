@@ -1057,7 +1057,8 @@ describe('Phase 1C.4a development/test fixture', () => {
             scopeId: a1.id,
           }),
         () => call('patch', t, `/organizations/${a1.id}`).send({ name: 'nope' }),
-        () => call('post', t, `/organizations/${a1.id}/suspend`).send({}),
+        () =>
+          call('post', t, `/organizations/${a1.id}/suspend`).send({ reason: 'attempted suspend' }),
         () => call('post', t, `/users/${manifest.users.a1Admin.id}/disable`).send({}),
         () =>
           call('post', t, '/api-keys').send({

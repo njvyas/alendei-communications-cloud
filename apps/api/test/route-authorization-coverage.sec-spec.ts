@@ -283,8 +283,10 @@ describe('§6n case 30 — route authorization coverage', () => {
     // request organization under messages.read: 98 → 99.
     // Phase 4 U12 (31-Oct-2026) added 14 scoped routes (11 domains/branding/challenge,
     // 3 customer onboarding): 99 → 113 scoped; and 1 public route (`GET /domains/resolve`): 6 → 7 open.
-    // U13.3 (01-Nov-2026) added 5 read-only platform domain oversight routes: 113 → 118.
-    expect(scoped.length).toBe(118);
+    // Phase 4 U13.1 (01-Nov-2026) added 7 scoped reseller routes: 113 → 120 scoped.
+    // Phase 4 U13.2 (01-Nov-2026) added 1 scoped route (`GET /organizations/:id/lifecycle-history`): 120 → 121 scoped.
+    // U13.3 (01-Nov-2026) added 5 read-only platform domain oversight routes: 121 → 126.
+    expect(scoped.length).toBe(126);
     expect(exempt.length).toBe(7);
     expect(open.length).toBe(7);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
@@ -304,8 +306,10 @@ describe('§6n case 30 — route authorization coverage', () => {
     // UI readiness added `GET /messages`, deferred like them: 72 → 73.
     // Usage reporting added `GET /usage/messages`, deferred the same way: 73 → 74.
     // Phase 4 U12 added 14 scoped routes, all deferred: 74 → 88.
-    // U13.3 added 5, all deferred: each targets `platform`, like the catalogue: 88 → 93.
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(93);
+    // Phase 4 U13.1 added 7 scoped reseller routes, all deferred: 88 → 95.
+    // Phase 4 U13.2 added GET /organizations/:id/lifecycle-history, deferred: 95 → 96.
+    // U13.3 added 5, all deferred: each targets `platform`, like the catalogue: 96 → 101.
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(101);
   });
 });
 
