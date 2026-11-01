@@ -24,12 +24,13 @@ import {
   type DnsResolverResult,
   type PlatformDomainView,
 } from '@acc/contracts';
-import { schema, type Transaction } from '@acc/db';
+import { schema, type TenantSession, type Transaction } from '@acc/db';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import request from 'supertest';
 import { uuidv7 } from 'uuidv7';
 
 import { REDACTED } from '../src/audit/audit-redactor';
+import { TenantDatabase } from '../src/database/tenant-database.service';
 import { CredentialService } from '../src/iam/credential.service';
 import { DnsDiagnosticsProbe } from '../src/organizations/domains/oversight/dns-diagnostics.probe';
 import { TenantRoleProvisioner } from '../src/rbac/tenant-role-provisioner.service';
@@ -46,6 +47,7 @@ describe('U13.3 platform domain oversight', () => {
   const createdOrgs: string[] = [];
   const createdResellers: string[] = [];
   const tokens: Record<string, string> = {};
+  const userIds: Record<string, string> = {};
   const challenge = (n: number) => `acc-domain-verification=u133-${sfx}-${n}`;
   let orgA: { id: string; roles: Record<string, string> };
   let orgB: { id: string; roles: Record<string, string> };
@@ -245,6 +247,10 @@ describe('U13.3 platform domain oversight', () => {
       resellerA,
     );
 
+    userIds.super = superAdmin.userId;
+    userIds.support = support.userId;
+    userIds.tenant = tenantAdmin.userId;
+    userIds.reseller = resellerAdmin.userId;
     tokens.super = await login(superAdmin.email);
     tokens.support = await login(support.email);
     tokens.tenant = await login(tenantAdmin.email);
@@ -623,6 +629,121 @@ describe('U13.3 platform domain oversight', () => {
       .get(url(`/domains/resolve?hostname=${host('pending')}`))
       .expect(200);
     expect(pending.body.data.organization).toBeNull();
+  });
+
+  // --- the policy itself, at the database (acc_app), without the application ------------
+
+  /**
+   * Runs `work` as `acc_app` under exactly `session`, as the application would,
+   * and returns the fixture hostnames visible. Nothing here passes through
+   * AuthorizationService: this is the RLS backstop on its own.
+   */
+  const PLANTED = ['pending', 'expiring', 'expired', 'failed', 'sub', 'live'];
+  const visible = async (session: TenantSession): Promise<string[]> => {
+    const rows = await h.app.get(TenantDatabase).withTenant(session, (tx) =>
+      tx
+        .select({ domain: schema.organizationDomains.domain })
+        .from(schema.organizationDomains)
+        .where(inArray(schema.organizationDomains.domain, PLANTED.map(host))),
+    );
+    return rows.map((r) => r.domain).sort();
+  };
+  const ALL = PLANTED.map(host).sort();
+  const ORG_A = ['pending', 'expiring', 'expired', 'failed'].map(host).sort();
+  const base = { orgId: null, workspaceId: null, resellerId: null, isPlatformAdmin: false };
+
+  it('17. RLS alone: only an active platform-scope holder of platform.tenants.read reads across tenants', async () => {
+    // Support, no organization in context: every tenant's rows (the 0039 policy).
+    expect(await visible({ ...base, userId: userIds.support })).toEqual(ALL);
+    // No user in context — the shape of an API-key or unauthenticated transaction.
+    expect(await visible({ ...base, userId: null })).toEqual([]);
+    expect(await visible({ ...base, userId: null, apiKeyId: uuidv7() })).toEqual([]);
+    // A user id that does not exist.
+    expect(await visible({ ...base, userId: uuidv7() })).toEqual([]);
+    // A tenant administrator: nothing without its organization, only its own with it.
+    expect(await visible({ ...base, userId: userIds.tenant })).toEqual([]);
+    expect(await visible({ ...base, userId: userIds.tenant, orgId: orgA.id })).toEqual(ORG_A);
+    // A reseller administrator: only its reseller's organizations (the 0038 arm), never B's.
+    expect(await visible({ ...base, userId: userIds.reseller })).toEqual([]);
+    expect(await visible({ ...base, userId: userIds.reseller, resellerId: resellerA })).toEqual(
+      ORG_A,
+    );
+    // A forged platform-administrator flag for a non-administrator is not honoured (0010).
+    expect(await visible({ ...base, userId: userIds.tenant, isPlatformAdmin: true })).toEqual([]);
+  });
+
+  it('18. RLS alone: a disabled support user loses cross-tenant reads immediately', async () => {
+    await h.admin
+      .update(schema.users)
+      .set({ status: 'disabled' })
+      .where(eq(schema.users.id, userIds.support!));
+    try {
+      expect(await visible({ ...base, userId: userIds.support })).toEqual([]);
+    } finally {
+      await h.admin
+        .update(schema.users)
+        .set({ status: 'active' })
+        .where(eq(schema.users.id, userIds.support!));
+    }
+    expect(await visible({ ...base, userId: userIds.support })).toEqual(ALL);
+  });
+
+  it('19. RLS alone: the policy grants no write — support cannot insert, update or delete', async () => {
+    const tdb = h.app.get(TenantDatabase);
+    const session = { ...base, userId: userIds.support };
+
+    const updated = await tdb.withTenant(session, (tx) =>
+      tx
+        .update(schema.organizationDomains)
+        .set({ status: 'suspended' })
+        .where(eq(schema.organizationDomains.id, d.live!))
+        .returning({ id: schema.organizationDomains.id }),
+    );
+    expect(updated).toEqual([]);
+
+    const deleted = await tdb.withTenant(session, (tx) =>
+      tx
+        .delete(schema.organizationDomains)
+        .where(eq(schema.organizationDomains.id, d.pending!))
+        .returning({ id: schema.organizationDomains.id }),
+    );
+    expect(deleted).toEqual([]);
+
+    const inserted = await tdb
+      .withTenant(session, (tx) =>
+        tx.insert(schema.organizationDomains).values({
+          orgId: orgB.id,
+          domain: host('forged'),
+          verificationValue: challenge(99),
+        }),
+      )
+      .then(
+        () => 'inserted',
+        (err: { message?: string; cause?: { message?: string } }) =>
+          String(err.cause?.message ?? err.message),
+      );
+    expect(inserted).toMatch(/row-level security policy/);
+
+    const [live] = await h.admin
+      .select({ status: schema.organizationDomains.status })
+      .from(schema.organizationDomains)
+      .where(eq(schema.organizationDomains.id, d.live!));
+    expect(live!.status).toBe('active');
+    expect(
+      await h.admin
+        .select({ id: schema.organizationDomains.id })
+        .from(schema.organizationDomains)
+        .where(eq(schema.organizationDomains.id, d.pending!)),
+    ).toHaveLength(1);
+  });
+
+  it('20. the identity principal still reads only active, verified domains (U12 resolution unchanged)', async () => {
+    const rows = await h.app
+      .get(TenantDatabase)
+      .auth.select({ domain: schema.organizationDomains.domain })
+      .from(schema.organizationDomains)
+      .where(inArray(schema.organizationDomains.domain, PLANTED.map(host)));
+    expect(rows.map((r) => r.domain).sort()).toEqual([host('live'), host('sub')].sort());
   });
 
   it('16. responses conform to the OpenAPI document', async () => {
