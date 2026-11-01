@@ -64,7 +64,12 @@ export function AttemptHistoryCard({ message, isPolling }: AttemptHistoryCardPro
       </div>
 
       {/* Failure reason callout if failed */}
-      {message.failureReason && <FailureReasonAlert failureReason={message.failureReason} />}
+      {message.failureReason && (
+        <FailureReasonAlert
+          failureReason={message.failureReason}
+          attemptCount={message.attempts.length}
+        />
+      )}
 
       {/* Distinction Banner */}
       <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 p-3 text-[11px] text-[var(--color-ink-muted)]">

@@ -4,14 +4,22 @@ import { formatFailureReason, type FailureReasonDetails } from '../../lib/failur
 export interface FailureReasonAlertProps {
   readonly failureReason: string | null | undefined;
   readonly className?: string;
+  /** Recorded provider attempts; `0` keeps the guidance from pointing at attempt records. */
+  readonly attemptCount?: number;
 }
 
 /**
  * Renders a structured, actionable guidance card for message and attempt failure reasons (U5).
  * Replaces raw machine error codes with user-friendly explanations and next steps.
  */
-export function FailureReasonAlert({ failureReason, className = '' }: FailureReasonAlertProps) {
-  const formatted: FailureReasonDetails | null = formatFailureReason(failureReason);
+export function FailureReasonAlert({
+  failureReason,
+  className = '',
+  attemptCount,
+}: FailureReasonAlertProps) {
+  const formatted: FailureReasonDetails | null = formatFailureReason(failureReason, {
+    attemptCount,
+  });
 
   if (!formatted) {
     return null;

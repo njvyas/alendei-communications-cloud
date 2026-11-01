@@ -182,7 +182,12 @@ export function MessageDetailDialog({
         {message && !isLoading && (
           <div className="space-y-4 text-xs">
             {/* Failure Guidance Card (if failed) */}
-            {message.failureReason && <FailureReasonAlert failureReason={message.failureReason} />}
+            {message.failureReason && (
+              <FailureReasonAlert
+                failureReason={message.failureReason}
+                attemptCount={message.attempts.length}
+              />
+            )}
 
             {/* Core Metadata Grid */}
             <div className="grid grid-cols-1 gap-3 rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-3 sm:grid-cols-2">
