@@ -815,7 +815,9 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
     it('an unknown id: 404 (or the documented refusal) on every operation that addresses a resource by id', async () => {
       for (const { method, template, op } of operations()) {
         if (!template.includes('{')) continue;
-        const bearer = /^(Organizations|Domains|Providers|Channels)_/.test(String(op.operationId))
+        const bearer = /^(Organizations|Domains|Providers|Channels|Resellers)_/.test(
+          String(op.operationId),
+        )
           ? platform
           : admin;
         const res = await hit(method, concrete(template, uuidv7), {
@@ -879,7 +881,9 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
     it('an unknown body field or query parameter: 400', async () => {
       for (const { method, template, op } of operations()) {
         const path = concrete(template, uuidv7);
-        const bearer = /^(Organizations|Domains)_/.test(String(op.operationId)) ? platform : admin;
+        const bearer = /^(Organizations|Domains|Resellers)_/.test(String(op.operationId))
+          ? platform
+          : admin;
         if (op.requestBody) {
           const res = await hit(method, path, {
             ...(isPublic(op) ? {} : as.session(bearer)),
@@ -1082,7 +1086,8 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
       template.includes('/messages') ||
       template.includes('/domains') ||
       template.includes('/branding') ||
-      template.includes('/onboarding');
+      template.includes('/onboarding') ||
+      template.includes('/resellers');
 
     it('every operation succeeded with every credential its document declares', () => {
       const document = validator.document as { paths: Record<string, Record<string, Json>> };

@@ -11,6 +11,7 @@ import {
   bootstrapSession,
   useCanReadOrganizations,
   useCanReadProviders,
+  useCanReadResellers,
   useCanReadSuppressions,
   useHasPermission,
   useSession,
@@ -42,6 +43,7 @@ const SECTIONS = [
   { href: '/suppressions', label: 'Suppressions' },
   { href: '/channels', label: 'Channels' },
   { href: '/providers', label: 'Providers' },
+  { href: '/resellers', label: 'Resellers' },
   { href: '/organizations', label: 'Organizations' },
   { href: '/workspaces', label: 'Workspaces' },
   { href: '/teams', label: 'Teams' },
@@ -59,6 +61,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const clearSession = useSession((state) => state.clearSession);
   const canReadOrganizations = useCanReadOrganizations();
   const canReadProviders = useCanReadProviders();
+  const canReadResellers = useCanReadResellers();
   const canReadSuppressions = useCanReadSuppressions();
   const canReadUsers = useHasPermission('users.read');
   const canReadWorkspaces = useHasPermission('workspaces.read');
@@ -77,6 +80,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
     pathname.startsWith('/channels/') ||
     pathname === '/providers' ||
     pathname.startsWith('/providers/');
+  const isNavigatingResellers = pathname === '/resellers' || pathname.startsWith('/resellers/');
 
   useEffect(() => {
     if (status === 'idle') {
@@ -126,7 +130,8 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   if (status === 'zero_organizations') {
     const isPermittedNavigation =
       (isNavigatingOrganizations && canReadOrganizations) ||
-      (isNavigatingCatalogue && canReadProviders);
+      (isNavigatingCatalogue && canReadProviders) ||
+      (isNavigatingResellers && canReadResellers);
     if (!isPermittedNavigation) {
       return (
         <div className="mx-auto flex min-h-dvh max-w-6xl flex-col px-4 py-6 sm:px-6">
@@ -218,6 +223,8 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
                   case '/channels':
                   case '/providers':
                     return canReadProviders;
+                  case '/resellers':
+                    return canReadResellers;
                   default:
                     return false;
                 }
@@ -238,8 +245,11 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
                 case '/channels':
                 case '/providers':
                   return canReadProviders;
+                case '/resellers':
+                  return canReadResellers;
                 case '/organizations':
                   return canReadOrganizations;
+
                 case '/workspaces':
                   return canReadWorkspaces;
                 case '/teams':
