@@ -233,7 +233,7 @@ describe('migration 0026: permission classification and scope eligibility (ADR-0
         ]),
       );
       expect(actual).toEqual(expected);
-      expect(rows).toHaveLength(46);
+      expect(rows).toHaveLength(ALL_PERMISSION_KEYS.length);
     });
 
     it("the content keys: rows exist, and no role but a seeded org_admin carries them (beyond this suite's own fixture)", async () => {
@@ -259,8 +259,8 @@ describe('migration 0026: permission classification and scope eligibility (ADR-0
         [DELEGATE, Object.values(PLATFORM_ROLE_KEYS)],
       );
       expect(rows).toEqual([
-        { key: 'alendei_super_admin', n: '38', delegate: true },
-        { key: 'alendei_support', n: '13', delegate: false },
+        { key: 'alendei_super_admin', n: '39', delegate: true },
+        { key: 'alendei_support', n: '14', delegate: false },
         { key: 'reseller_admin', n: '18', delegate: false },
       ]);
     });
@@ -745,12 +745,14 @@ describe('migration 0026: permission classification and scope eligibility (ADR-0
 
     it('passes on the current database', async () => {
       await asOwnerRolledBack(async (c) => {
+        await c.query("DELETE FROM permissions WHERE key = 'platform.support.read'");
         await c.query(verification());
       });
     });
 
     it('names a permission key it cannot classify', async () => {
       await asOwnerRolledBack(async (c) => {
+        await c.query("DELETE FROM permissions WHERE key = 'platform.support.read'");
         await c.query(
           "INSERT INTO permissions (key, domain, action, classification, allowed_scope_types) VALUES ('zz.unknown', 'zz', 'unknown', 'tenancy_administration', '{organization}')",
         );
@@ -764,6 +766,7 @@ describe('migration 0026: permission classification and scope eligibility (ADR-0
 
     it('names a role already carrying a permission it is ineligible for', async () => {
       await asOwnerRolledBack(async (c) => {
+        await c.query("DELETE FROM permissions WHERE key = 'platform.support.read'");
         await c.query('ALTER TABLE role_permissions DISABLE TRIGGER trg_role_permissions_validate');
         await c.query(attach, [platformRole.alendei_support, perm['contacts.read']]);
         const err = await failure(c);

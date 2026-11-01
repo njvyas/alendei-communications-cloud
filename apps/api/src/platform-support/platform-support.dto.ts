@@ -21,7 +21,7 @@ export class PlatformSupportDispatchQueryDto {
   @IsInt()
   @Min(1)
   @Max(50)
-  readonly limit: number = 20;
+  readonly limit?: number;
 }
 
 export class PlatformSupportAuditSearchQueryDto {
@@ -56,5 +56,5 @@ export class PlatformSupportAuditSearchQueryDto {
   @IsInt()
   @Min(1)
   @Max(100)
-  readonly limit: number = 50;
+  readonly limit?: number;
 }

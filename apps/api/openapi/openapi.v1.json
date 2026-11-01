@@ -18614,9 +18614,8 @@
           {
             "in": "query",
             "name": "limit",
-            "required": true,
+            "required": false,
             "schema": {
-              "default": 50,
               "maximum": 100,
               "minimum": 1,
               "type": "number"
@@ -18874,9 +18873,8 @@
           {
             "in": "query",
             "name": "limit",
-            "required": true,
+            "required": false,
             "schema": {
-              "default": 20,
               "maximum": 50,
               "minimum": 1,
               "type": "number"

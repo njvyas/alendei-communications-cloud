@@ -672,6 +672,8 @@ describe('Phase 2.2 provider adapter test-send', () => {
         // Phase 3.2 (migration 0032): assignment audit policy
         'audit_logs_organization_provider_insert',
         'audit_logs_platform_self_denial_insert',
+        // Phase 4 U13.4 (migration 0040): platform support diagnostics audit policy
+        'audit_logs_platform_support_insert',
         // Gate D.3 remediation (migration 0023), pinned in provider-circuit-policy.sec-spec.ts.
         'audit_logs_provider_circuit_policy_insert',
         // Phase 2.3 (migration 0022), pinned in provider-health-circuit.sec-spec.ts.
