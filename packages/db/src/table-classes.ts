@@ -30,6 +30,7 @@
  */
 export const TENANCY_RECORD_TABLES = [
   'organizations',
+  'organization_domains',
   'workspaces',
   'teams',
   'roles',

@@ -91,6 +91,9 @@ export const organizations = pgTable(
      */
     statusChangedAt: timestamp('status_changed_at', { withTimezone: true }),
     statusReason: text('status_reason'),
+    brandConfig: jsonb('brand_config')
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     ...timestamps(),
   },
   (table) => [
@@ -189,3 +192,55 @@ export type Workspace = typeof workspaces.$inferSelect;
 export type NewWorkspace = typeof workspaces.$inferInsert;
 export type Team = typeof teams.$inferSelect;
 export type NewTeam = typeof teams.$inferInsert;
+
+export const domainType = pgEnum('domain_type', ['subdomain', 'custom']);
+export const domainStatus = pgEnum('domain_status', [
+  'pending_verification',
+  'active',
+  'suspended',
+  'revoked',
+]);
+export const domainVerificationMethod = pgEnum('domain_verification_method', [
+  'dns_txt',
+  'dns_cname',
+  'platform_subdomain',
+]);
+export const domainVerificationStatus = pgEnum('domain_verification_status', [
+  'pending',
+  'verified',
+  'failed',
+]);
+
+export const organizationDomains = pgTable(
+  'organization_domains',
+  {
+    id: primaryId(),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'restrict' }),
+    domain: text('domain').notNull(),
+    domainType: domainType('domain_type').notNull().default('subdomain'),
+    status: domainStatus('status').notNull().default('pending_verification'),
+    verificationMethod: domainVerificationMethod('verification_method')
+      .notNull()
+      .default('dns_txt'),
+    verificationValue: text('verification_value').notNull(),
+    verificationStatus: domainVerificationStatus('verification_status')
+      .notNull()
+      .default('pending'),
+    verifiedAt: timestamp('verified_at', { withTimezone: true }),
+    isPrimary: boolean('is_primary').notNull().default(false),
+    ...timestamps(),
+  },
+  (table) => [
+    uniqueIndex('organization_domains_domain_key').on(table.domain),
+    uniqueIndex('organization_domains_single_primary_per_org')
+      .on(table.orgId)
+      .where(sql`${table.isPrimary}`),
+    index('organization_domains_org_id_idx').on(table.orgId),
+    index('organization_domains_status_idx').on(table.status),
+  ],
+);
+
+export type OrganizationDomain = typeof organizationDomains.$inferSelect;
+export type NewOrganizationDomain = typeof organizationDomains.$inferInsert;

@@ -16,6 +16,7 @@ import {
 } from '@/lib/session-store';
 import { StatusDot, type StatusTone } from '@/components/ui/status-dot';
 import { OrganizationCreateDialog } from '@/components/organizations/organization-create-dialog';
+import { CustomerOnboardingDialog } from '@/components/onboarding/customer-onboarding-dialog';
 
 const STATUS_TONES: Record<OrganizationStatus, StatusTone> = {
   active: 'ok',
@@ -43,6 +44,7 @@ export default function OrganizationsPage() {
 
   // Create Modal State
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isOnboardOpen, setIsOnboardOpen] = useState(false);
 
   const queryParams: ListOrganizationsParams = {
     cursor: currentCursor,
@@ -94,13 +96,22 @@ export default function OrganizationsPage() {
         </div>
 
         {canCreateOrganizations && (
-          <button
-            type="button"
-            onClick={() => setIsCreateOpen(true)}
-            className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
-          >
-            + Create Organization
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsOnboardOpen(true)}
+              className="rounded-md border border-[var(--color-accent)] bg-[var(--color-accent)]/10 px-3 py-1.5 text-xs font-medium text-[var(--color-accent)] hover:bg-[var(--color-accent)]/20"
+            >
+              + Onboard Customer
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsCreateOpen(true)}
+              className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+            >
+              + Create Organization
+            </button>
+          </div>
         )}
       </div>
 
@@ -333,6 +344,17 @@ export default function OrganizationsPage() {
       <OrganizationCreateDialog
         isOpen={isCreateOpen}
         onClose={() => setIsCreateOpen(false)}
+        onSuccess={async () => {
+          void refetch();
+          void queryClient.invalidateQueries({ queryKey: ['organizations'] });
+          await refreshAuthorization();
+        }}
+      />
+
+      {/* Customer Onboarding Dialog (Phase 4, U12) */}
+      <CustomerOnboardingDialog
+        isOpen={isOnboardOpen}
+        onClose={() => setIsOnboardOpen(false)}
         onSuccess={async () => {
           void refetch();
           void queryClient.invalidateQueries({ queryKey: ['organizations'] });
