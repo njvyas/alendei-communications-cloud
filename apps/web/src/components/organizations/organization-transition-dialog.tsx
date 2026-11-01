@@ -48,10 +48,21 @@ export function OrganizationTransitionDialog({
   const isClose = action === 'close';
   const requiresSlugConfirmation = isClose;
   const isSlugConfirmed = !requiresSlugConfirmation || confirmSlug === organization.slug;
+  const isReasonRequired = action === 'suspend' || action === 'close';
+  const isReasonValid = !isReasonRequired || reason.trim().length > 0;
+  const canSubmit = !isSubmitting && isSlugConfirmed && isReasonValid;
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!isSlugConfirmed) return;
+
+    const trimmedReason = reason.trim();
+    if (isReasonRequired && !trimmedReason) {
+      setErrorMessage(
+        `A reason is required when an organization is ${action === 'suspend' ? 'suspended' : 'closed'}.`,
+      );
+      return;
+    }
 
     setErrorMessage(null);
     setIsSubmitting(true);
@@ -59,11 +70,11 @@ export function OrganizationTransitionDialog({
     try {
       let res;
       if (action === 'suspend') {
-        res = await organizationsApi.suspend(organization.id, reason.trim() || undefined);
+        res = await organizationsApi.suspend(organization.id, trimmedReason);
       } else if (action === 'reactivate') {
-        res = await organizationsApi.reactivate(organization.id, reason.trim() || undefined);
+        res = await organizationsApi.reactivate(organization.id, trimmedReason || undefined);
       } else {
-        res = await organizationsApi.close(organization.id, reason.trim() || undefined);
+        res = await organizationsApi.close(organization.id, trimmedReason);
       }
 
       onSuccess(res.data);
@@ -148,7 +159,12 @@ export function OrganizationTransitionDialog({
               htmlFor="transition-reason"
               className="block text-xs font-medium text-[var(--color-ink)]"
             >
-              Reason (Optional, max 500 characters)
+              Operator Reason{' '}
+              {isReasonRequired ? (
+                <span className="text-[var(--color-bad)]">* (Required, max 500 characters)</span>
+              ) : (
+                '(Optional, max 500 characters)'
+              )}
             </label>
             <textarea
               id="transition-reason"
@@ -156,8 +172,13 @@ export function OrganizationTransitionDialog({
               maxLength={500}
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              placeholder="Provide a rationale for this lifecycle transition for the audit trail…"
+              placeholder={
+                isReasonRequired
+                  ? 'Provide a mandatory rationale for this lifecycle transition…'
+                  : 'Provide an optional rationale for the audit trail…'
+              }
               disabled={isSubmitting}
+              required={isReasonRequired}
               className="mt-1 block w-full rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-2.5 text-xs text-[var(--color-ink)] placeholder-[var(--color-ink-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] disabled:opacity-50"
             />
           </div>
@@ -194,7 +215,7 @@ export function OrganizationTransitionDialog({
             </button>
             <button
               type="submit"
-              disabled={isSubmitting || !isSlugConfirmed}
+              disabled={!canSubmit}
               className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-white transition-opacity disabled:opacity-50 ${
                 isClose
                   ? 'bg-[var(--color-bad)] hover:opacity-90'

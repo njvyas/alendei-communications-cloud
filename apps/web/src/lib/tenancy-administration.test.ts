@@ -279,6 +279,36 @@ describe('Tenancy Administration API Client (Organizations, Workspaces, Teams)',
       const closed = await organizationsApi.close(ORG_ID, 'Tenant requested closure');
       assert.equal(closed.data.status, 'closed');
     });
+
+    it('lifecycleHistory calls GET /organizations/:id/lifecycle-history and returns audit events', async () => {
+      const mockEvents = [
+        {
+          id: '01900000-0000-7000-8000-000000000001',
+          orgId: ORG_ID,
+          action: 'organization.suspended',
+          previousStatus: 'active',
+          newStatus: 'suspended',
+          reason: 'Regulatory compliance review',
+          actor: { type: 'user', id: 'usr-1', email: 'admin@alendei.com' },
+          occurredAt: '2026-11-01T12:00:00.000Z',
+        },
+      ];
+
+      mockHandlers.push({
+        match: (url) => url.endsWith(`/organizations/${ORG_ID}/lifecycle-history`),
+        handle: () =>
+          new Response(JSON.stringify({ data: mockEvents }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+      });
+
+      const res = await organizationsApi.lifecycleHistory(ORG_ID);
+      assert.equal(res.data.length, 1);
+      assert.equal(res.data[0]?.action, 'organization.suspended');
+      assert.equal(res.data[0]?.reason, 'Regulatory compliance review');
+      assert.equal(res.data[0]?.actor.email, 'admin@alendei.com');
+    });
   });
 
   // ---------------------------------------------------------------------------

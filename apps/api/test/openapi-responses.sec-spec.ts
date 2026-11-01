@@ -420,6 +420,11 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
         expectStatus(await hit('GET', 'organizations', credential), 200, 'list');
         expectStatus(await hit('GET', `organizations/${orgId}`, credential), 200, 'get');
         expectStatus(
+          await hit('GET', `organizations/${orgId}/lifecycle-history`, credential),
+          200,
+          'lifecycle-history',
+        );
+        expectStatus(
           await hit('PATCH', `organizations/${orgId}`, {
             ...credential,
             body: { name: `OA org ${suffix()}` },
@@ -846,7 +851,10 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
                             channelId: uuidv7(),
                             rawAddress: '+15551234567',
                           }
-                        : template.endsWith('/lift') && method === 'POST'
+                        : (template.endsWith('/lift') ||
+                              template.endsWith('/suspend') ||
+                              template.endsWith('/close')) &&
+                            method === 'POST'
                           ? { reason: 'test' }
                           : template.endsWith('/simulate-approval') && method === 'POST'
                             ? { targetStatus: 'approved' }

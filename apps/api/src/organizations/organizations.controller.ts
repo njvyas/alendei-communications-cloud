@@ -23,14 +23,16 @@ import { IdempotencyKey } from '../idempotency/idempotency.decorator';
 import {
   CreateOrganizationDto,
   ListOrganizationsQueryDto,
-  OrganizationTransitionDto,
+  OrganizationCloseDto,
+  OrganizationReactivateDto,
+  OrganizationSuspendDto,
   UpdateOrganizationDto,
 } from './organization.dto';
 import { OrganizationAdministrationService } from './organization-administration.service';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AcceptedCredentials } from '../openapi/accepted-credentials.decorator';
 import { ApiData, ApiErrors, ApiIdempotencyKey, ApiPaged } from '../openapi/openapi-responses';
-import { OrganizationSchema } from '../openapi/openapi-schemas';
+import { OrganizationLifecycleEventSchema, OrganizationSchema } from '../openapi/openapi-schemas';
 
 const BY_PATH =
   'the organization is named in the path, not selected by X-Acc-Organization; the service resolves and authorizes it from grants';
@@ -129,17 +131,9 @@ export class OrganizationsController {
   @ApiOperation({ summary: 'Suspend an organization' })
   @ApiData(OrganizationSchema)
   @ApiErrors(400, 401, 403, 404, 409, 429)
-  async suspend(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() dto: OrganizationTransitionDto,
-  ) {
+  async suspend(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: OrganizationSuspendDto) {
     return {
-      data: await this.organizations.transition(
-        this.principal(),
-        id,
-        'suspend',
-        dto.reason ?? null,
-      ),
+      data: await this.organizations.transition(this.principal(), id, 'suspend', dto.reason),
     };
   }
 
@@ -153,7 +147,7 @@ export class OrganizationsController {
   @ApiErrors(400, 401, 403, 404, 409, 429)
   async reactivate(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() dto: OrganizationTransitionDto,
+    @Body() dto: OrganizationReactivateDto,
   ) {
     return {
       data: await this.organizations.transition(
@@ -173,12 +167,22 @@ export class OrganizationsController {
   @ApiOperation({ summary: 'Close an organization' })
   @ApiData(OrganizationSchema)
   @ApiErrors(400, 401, 403, 404, 409, 429)
-  async close(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() dto: OrganizationTransitionDto,
-  ) {
+  async close(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: OrganizationCloseDto) {
     return {
-      data: await this.organizations.transition(this.principal(), id, 'close', dto.reason ?? null),
+      data: await this.organizations.transition(this.principal(), id, 'close', dto.reason),
+    };
+  }
+
+  @Get(':id/lifecycle-history')
+  @NoTenantContext()
+  @RequiresPermission(PERMISSIONS.ORGANIZATIONS_READ, { target: 'deferred', because: BY_PATH })
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Get organization lifecycle history' })
+  @ApiData(OrganizationLifecycleEventSchema, { isArray: true })
+  @ApiErrors(400, 401, 403, 404, 429)
+  async lifecycleHistory(@Param('id', new ParseUUIDPipe()) id: string) {
+    return {
+      data: await this.organizations.lifecycleHistory(this.principal(), id),
     };
   }
 }

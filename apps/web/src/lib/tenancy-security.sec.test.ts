@@ -124,11 +124,12 @@ describe('Tenancy Administration Security Invariants & Boundary Enforcement', ()
     await organizationsApi.get(ORG_A);
     await organizationsApi.create({ name: 'New Org', slug: 'new-org' });
     await organizationsApi.update(ORG_A, { name: 'Updated Org' });
-    await organizationsApi.suspend(ORG_A);
+    await organizationsApi.suspend(ORG_A, 'Security test reason');
     await organizationsApi.reactivate(ORG_A);
-    await organizationsApi.close(ORG_A);
+    await organizationsApi.close(ORG_A, 'Security closure reason');
+    await organizationsApi.lifecycleHistory(ORG_A);
 
-    assert.equal(fetchCalls.length, 7);
+    assert.equal(fetchCalls.length, 8);
     for (const call of fetchCalls) {
       const headers = call.options.headers as Record<string, string>;
       assert.equal(

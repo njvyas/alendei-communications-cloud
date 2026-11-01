@@ -776,3 +776,25 @@ export class OnboardingResultSchema {
   @ApiProperty({ type: BrandConfigSchema }) branding!: BrandConfigSchema;
   @ApiProperty() portalUrl!: string;
 }
+
+// --- organization lifecycle history (Phase 4, U13.2) -----------------------
+
+@ApiSchema({ name: 'OrganizationLifecycleActor' })
+export class OrganizationLifecycleActorSchema {
+  @ApiProperty() type!: string;
+  @ApiProperty({ type: 'string', nullable: true }) id!: string | null;
+  @ApiProperty({ type: 'string', nullable: true }) email!: string | null;
+}
+
+@ApiSchema({ name: 'OrganizationLifecycleEvent' })
+export class OrganizationLifecycleEventSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty(uuid) orgId!: string;
+  @ApiProperty() action!: string;
+  @ApiProperty({ type: 'string', nullable: true, enum: ['active', 'suspended', 'closed'] })
+  previousStatus!: string | null;
+  @ApiProperty({ enum: ['active', 'suspended', 'closed'] }) newStatus!: string;
+  @ApiProperty({ type: 'string', nullable: true }) reason!: string | null;
+  @ApiProperty({ type: OrganizationLifecycleActorSchema }) actor!: OrganizationLifecycleActorSchema;
+  @ApiProperty(timestamp) occurredAt!: string;
+}

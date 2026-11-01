@@ -13,7 +13,13 @@
  * rollback cases inject a failure into the production services mid-transaction.
  */
 import { randomBytes } from 'node:crypto';
-import { AUDIT_ACTIONS, ERROR_CODES, PLATFORM_ROLE_KEYS, TENANT_ROLE_KEYS } from '@acc/contracts';
+import {
+  AUDIT_ACTIONS,
+  ERROR_CODES,
+  PLATFORM_ROLE_KEYS,
+  TENANT_ROLE_KEYS,
+  type OrganizationLifecycleEventView,
+} from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import request from 'supertest';
@@ -835,13 +841,15 @@ describe('organization administration and lifecycle (1C.1a)', () => {
     it('7–9. nobody without platform.tenants.manage can suspend, reactivate or close', async () => {
       for (const action of ['suspend', 'reactivate', 'close']) {
         for (const token of [tokens.a1!, tokens.resellerA!, tokens.support!]) {
-          const res = await call('post', token, `/organizations/${a1.orgId}/${action}`).send({});
+          const res = await call('post', token, `/organizations/${a1.orgId}/${action}`).send({
+            reason: 'attempted lifecycle action',
+          });
           expect(`${action}:${res.status}`).toBe(`${action}:403`);
         }
         const key = await request(h.app.getHttpServer())
           .post(url(`/organizations/${l1.orgId}/${action}`))
           .set('authorization', `Bearer ${l1Key}`)
-          .send({});
+          .send({ reason: 'attempted lifecycle action' });
         expect(key.status).toBe(403);
       }
       expect((await orgRow(a1.orgId))!.status).toBe('active');
@@ -849,7 +857,9 @@ describe('organization administration and lifecycle (1C.1a)', () => {
     });
 
     it('a refused lifecycle attempt by a connected principal is audited at the organization it addressed', async () => {
-      await call('post', tokens.a1!, `/organizations/${a1.orgId}/suspend`).send({}).expect(403);
+      await call('post', tokens.a1!, `/organizations/${a1.orgId}/suspend`)
+        .send({ reason: 'attempted suspension' })
+        .expect(403);
       const denied = (await auditFor(a1.orgId, AUDIT_ACTIONS.AUTHORIZATION_DENIED)).filter(
         (r) => r.actor_user_id === a1.admin.userId,
       );
@@ -867,7 +877,11 @@ describe('organization administration and lifecycle (1C.1a)', () => {
       const id = track(subject.body.data.id);
       const go = (action: string, reason?: string) =>
         call('post', tokens.platform!, `/organizations/${id}/${action}`).send(
-          reason ? { reason } : {},
+          reason !== undefined
+            ? { reason }
+            : action === 'reactivate'
+              ? {}
+              : { reason: 'operator transition' },
         );
 
       // active: reactivate illegal
@@ -927,11 +941,103 @@ describe('organization administration and lifecycle (1C.1a)', () => {
         .expect(201);
       const id = track(subject.body.data.id);
       const [a, b] = await Promise.all([
-        call('post', tokens.platform!, `/organizations/${id}/suspend`).send({}),
-        call('post', tokens.platform!, `/organizations/${id}/suspend`).send({}),
+        call('post', tokens.platform!, `/organizations/${id}/suspend`).send({
+          reason: 'concurrent test 1',
+        }),
+        call('post', tokens.platform!, `/organizations/${id}/suspend`).send({
+          reason: 'concurrent test 2',
+        }),
       ]);
       expect([a.status, b.status].sort()).toEqual([200, 409]);
       expect(await auditFor(id, AUDIT_ACTIONS.ORGANIZATION_SUSPENDED)).toHaveLength(1);
+    });
+
+    it('mandates a non-empty operator reason <= 500 chars for suspend and close', async () => {
+      const subject = await call('post', tokens.platform!, '/organizations')
+        .send({ name: 'ReasonTest', slug: `reason-${suffix()}` })
+        .expect(201);
+      const id = track(subject.body.data.id);
+
+      // Missing reason
+      await call('post', tokens.platform!, `/organizations/${id}/suspend`).send({}).expect(400);
+      await call('post', tokens.platform!, `/organizations/${id}/close`).send({}).expect(400);
+
+      // Whitespace only
+      await call('post', tokens.platform!, `/organizations/${id}/suspend`)
+        .send({ reason: '   ' })
+        .expect(400);
+      await call('post', tokens.platform!, `/organizations/${id}/close`)
+        .send({ reason: '   ' })
+        .expect(400);
+
+      // Exceeds 500 chars
+      const longReason = 'a'.repeat(501);
+      await call('post', tokens.platform!, `/organizations/${id}/suspend`)
+        .send({ reason: longReason })
+        .expect(400);
+      await call('post', tokens.platform!, `/organizations/${id}/close`)
+        .send({ reason: longReason })
+        .expect(400);
+      await call('post', tokens.platform!, `/organizations/${id}/reactivate`)
+        .send({ reason: longReason })
+        .expect(400);
+    });
+
+    it('returns lifecycle history with actor, timestamp, previous/new status and reason', async () => {
+      const subject = await call('post', tokens.platform!, '/organizations')
+        .send({ name: 'HistoryTest', slug: `history-${suffix()}` })
+        .expect(201);
+      const id = track(subject.body.data.id);
+
+      await call('post', tokens.platform!, `/organizations/${id}/suspend`)
+        .send({ reason: 'Suspended for payment investigation' })
+        .expect(200);
+
+      await call('post', tokens.platform!, `/organizations/${id}/reactivate`)
+        .send({ reason: 'Payment verified' })
+        .expect(200);
+
+      const historyRes = await call(
+        'get',
+        tokens.platform!,
+        `/organizations/${id}/lifecycle-history`,
+      ).expect(200);
+      const events: OrganizationLifecycleEventView[] = historyRes.body.data;
+      expect(events).toBeInstanceOf(Array);
+      expect(events.length).toBeGreaterThanOrEqual(3);
+
+      const reactivatedEvent = events.find(
+        (e) => e.action === AUDIT_ACTIONS.ORGANIZATION_REACTIVATED,
+      );
+      expect(reactivatedEvent).toMatchObject({
+        orgId: id,
+        previousStatus: 'suspended',
+        newStatus: 'active',
+        reason: 'Payment verified',
+        actor: {
+          type: 'user',
+          id: people.platform!.userId,
+        },
+      });
+
+      const suspendedEvent = events.find((e) => e.action === AUDIT_ACTIONS.ORGANIZATION_SUSPENDED);
+      expect(suspendedEvent).toMatchObject({
+        orgId: id,
+        previousStatus: 'active',
+        newStatus: 'suspended',
+        reason: 'Suspended for payment investigation',
+        actor: {
+          type: 'user',
+          id: people.platform!.userId,
+        },
+      });
+
+      const createdEvent = events.find((e) => e.action === AUDIT_ACTIONS.ORGANIZATION_CREATED);
+      expect(createdEvent).toMatchObject({
+        orgId: id,
+        previousStatus: null,
+        newStatus: 'active',
+      });
     });
   });
 

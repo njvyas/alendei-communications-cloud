@@ -760,6 +760,23 @@ export interface OrganizationView {
   readonly updatedAt: string;
 }
 
+export interface OrganizationLifecycleActorView {
+  readonly type: string;
+  readonly id: string | null;
+  readonly email: string | null;
+}
+
+export interface OrganizationLifecycleEventView {
+  readonly id: string;
+  readonly orgId: string;
+  readonly action: string;
+  readonly previousStatus: string | null;
+  readonly newStatus: string;
+  readonly reason: string | null;
+  readonly actor: OrganizationLifecycleActorView;
+  readonly occurredAt: string;
+}
+
 export interface ListOrganizationsParams {
   readonly status?: OrganizationStatus;
   readonly resellerId?: string;
@@ -1163,14 +1180,14 @@ export const organizationsApi = {
 
   async suspend(
     id: string,
-    reason?: string,
+    reason: string,
     signal?: AbortSignal,
   ): Promise<ApiDataResponse<OrganizationView>> {
     return apiFetch<ApiDataResponse<OrganizationView>>(
       `/organizations/${encodeURIComponent(id)}/suspend`,
       {
         method: 'POST',
-        body: reason ? { reason } : {},
+        body: { reason },
         signal,
         skipTenant: true,
       },
@@ -1195,14 +1212,28 @@ export const organizationsApi = {
 
   async close(
     id: string,
-    reason?: string,
+    reason: string,
     signal?: AbortSignal,
   ): Promise<ApiDataResponse<OrganizationView>> {
     return apiFetch<ApiDataResponse<OrganizationView>>(
       `/organizations/${encodeURIComponent(id)}/close`,
       {
         method: 'POST',
-        body: reason ? { reason } : {},
+        body: { reason },
+        signal,
+        skipTenant: true,
+      },
+    );
+  },
+
+  async lifecycleHistory(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<OrganizationLifecycleEventView[]>> {
+    return apiFetch<ApiDataResponse<OrganizationLifecycleEventView[]>>(
+      `/organizations/${encodeURIComponent(id)}/lifecycle-history`,
+      {
+        method: 'GET',
         signal,
         skipTenant: true,
       },
