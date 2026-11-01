@@ -55,6 +55,13 @@ import type {
   ResellerTransitionInput,
   ResellerView,
   UpdateResellerInput,
+  PlatformSupportOrgOverview,
+  PlatformSupportRoutingDiagnostics,
+  PlatformSupportDispatchDiagnostics,
+  PlatformSupportDispatchFailure,
+  PlatformSupportDispatchAttempt,
+  PlatformSupportAuditItem,
+  PlatformSupportAuditSearchResponse,
 } from '@acc/contracts';
 import {
   ASSIGNMENT_STATUS,
@@ -104,6 +111,13 @@ export type {
   UpdateOrganizationProviderAssignmentInput,
   UpdateResellerInput,
   WhiteLabelCustomerOnboardingDto,
+  PlatformSupportOrgOverview,
+  PlatformSupportRoutingDiagnostics,
+  PlatformSupportDispatchDiagnostics,
+  PlatformSupportDispatchFailure,
+  PlatformSupportDispatchAttempt,
+  PlatformSupportAuditItem,
+  PlatformSupportAuditSearchResponse,
 };
 export {
   ASSIGNMENT_STATUS,
@@ -3097,5 +3111,99 @@ export const resellersApi = {
         signal,
       },
     );
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Platform Support & Operations API (Phase 4, U13.4)
+// -----------------------------------------------------------------------------
+export const platformSupportApi = {
+  /**
+   * Diagnostic overview for an organization.
+   */
+  async getOverview(
+    orgId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<PlatformSupportOrgOverview>> {
+    return apiFetch<ApiDataResponse<PlatformSupportOrgOverview>>(
+      `/platform/support/organizations/${encodeURIComponent(orgId)}/overview`,
+      {
+        method: 'GET',
+        skipTenant: true,
+        signal,
+      },
+    );
+  },
+
+  /**
+   * Routing & Provider Assignment Diagnostics.
+   */
+  async getRouting(
+    orgId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<PlatformSupportRoutingDiagnostics>> {
+    return apiFetch<ApiDataResponse<PlatformSupportRoutingDiagnostics>>(
+      `/platform/support/organizations/${encodeURIComponent(orgId)}/routing`,
+      {
+        method: 'GET',
+        skipTenant: true,
+        signal,
+      },
+    );
+  },
+
+  /**
+   * Dispatch Troubleshooting Diagnostics.
+   */
+  async getDispatch(
+    orgId: string,
+    params?: { limit?: number; status?: string; failureCategory?: string },
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<PlatformSupportDispatchDiagnostics>> {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set('limit', String(params.limit));
+    if (params?.status) search.set('status', params.status);
+    if (params?.failureCategory) search.set('failureCategory', params.failureCategory);
+    const queryString = search.toString();
+    const endpoint = `/platform/support/organizations/${encodeURIComponent(orgId)}/dispatch${queryString ? `?${queryString}` : ''}`;
+
+    return apiFetch<ApiDataResponse<PlatformSupportDispatchDiagnostics>>(endpoint, {
+      method: 'GET',
+      skipTenant: true,
+      signal,
+    });
+  },
+
+  /**
+   * Cross-Tenant Audit Search.
+   */
+  async searchAudit(
+    params?: {
+      orgId?: string;
+      action?: string;
+      actorUserId?: string;
+      since?: string;
+      until?: string;
+      limit?: number;
+      cursor?: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<PlatformSupportAuditItem>> {
+    const search = new URLSearchParams();
+    if (params?.orgId) search.set('orgId', params.orgId);
+    if (params?.action) search.set('action', params.action);
+    if (params?.actorUserId) search.set('actorUserId', params.actorUserId);
+    if (params?.since) search.set('since', params.since);
+    if (params?.until) search.set('until', params.until);
+    if (params?.limit) search.set('limit', String(params.limit));
+    if (params?.cursor) search.set('cursor', params.cursor);
+    const queryString = search.toString();
+    const endpoint = `/platform/support/audit${queryString ? `?${queryString}` : ''}`;
+
+    return apiFetch<ApiPagedResponse<PlatformSupportAuditItem>>(endpoint, {
+      method: 'GET',
+      skipTenant: true,
+      signal,
+    });
   },
 };
