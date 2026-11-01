@@ -40,7 +40,8 @@ function downloadCsv(report: MessageUsageReportResponse) {
   document.body.appendChild(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(href);
+  // Revoking on the same tick can cancel the download in some browsers.
+  setTimeout(() => URL.revokeObjectURL(href), 1000);
 }
 
 const card =
