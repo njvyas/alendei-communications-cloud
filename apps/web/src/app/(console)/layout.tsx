@@ -7,6 +7,7 @@ import { useEffect, type ReactNode } from 'react';
 
 import { authApi } from '@/lib/api-client';
 import { cn } from '@/lib/cn';
+import { useCanReadPlatformDomains } from '@/lib/platform-domains';
 import {
   bootstrapSession,
   useCanReadOrganizations,
@@ -45,6 +46,7 @@ const SECTIONS = [
   { href: '/providers', label: 'Providers' },
   { href: '/resellers', label: 'Resellers' },
   { href: '/organizations', label: 'Organizations' },
+  { href: '/domains', label: 'Domains' },
   { href: '/workspaces', label: 'Workspaces' },
   { href: '/teams', label: 'Teams' },
   { href: '/users', label: 'Users' },
@@ -61,6 +63,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const clearSession = useSession((state) => state.clearSession);
   const canReadOrganizations = useCanReadOrganizations();
   const canReadProviders = useCanReadProviders();
+  const canReadPlatformDomains = useCanReadPlatformDomains();
   const canReadResellers = useCanReadResellers();
   const canReadSuppressions = useCanReadSuppressions();
   const canReadUsers = useHasPermission('users.read');
@@ -75,6 +78,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const canSendMessages = useHasPermission('messages.send');
   const isNavigatingOrganizations =
     pathname === '/organizations' || pathname.startsWith('/organizations/');
+  const isNavigatingDomains = pathname === '/domains' || pathname.startsWith('/domains/');
   const isNavigatingCatalogue =
     pathname === '/channels' ||
     pathname.startsWith('/channels/') ||
@@ -131,6 +135,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
     const isPermittedNavigation =
       (isNavigatingOrganizations && canReadOrganizations) ||
       (isNavigatingCatalogue && canReadProviders) ||
+      (isNavigatingDomains && canReadPlatformDomains) ||
       (isNavigatingResellers && canReadResellers);
     if (!isPermittedNavigation) {
       return (
@@ -220,6 +225,8 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
                 switch (section.href) {
                   case '/organizations':
                     return canReadOrganizations;
+                  case '/domains':
+                    return canReadPlatformDomains;
                   case '/channels':
                   case '/providers':
                     return canReadProviders;
@@ -249,6 +256,8 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
                   return canReadResellers;
                 case '/organizations':
                   return canReadOrganizations;
+                case '/domains':
+                  return canReadPlatformDomains;
 
                 case '/workspaces':
                   return canReadWorkspaces;

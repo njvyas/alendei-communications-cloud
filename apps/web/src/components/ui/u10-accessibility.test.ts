@@ -244,7 +244,7 @@ describe('U10 source sweep', () => {
     assert.deepEqual(problems, []);
   });
 
-  it('all 42 custom dialog panels are programmatically focusable (tabIndex={-1})', () => {
+  it('all 43 custom dialog panels are programmatically focusable (tabIndex={-1})', () => {
     const panels: string[] = [];
     const missing: string[] = [];
     for (const { file, text } of SOURCES) {
@@ -255,7 +255,7 @@ describe('U10 source sweep', () => {
         if (!/tabIndex=\{-1\}/.test(tag)) missing.push(`${file}:${line}`);
       }
     }
-    assert.equal(panels.length, 42);
+    assert.equal(panels.length, 43); // 42 after U13.1 + 1 U13.3 domain oversight dialog
     assert.deepEqual(missing, []);
   });
 

@@ -33,6 +33,21 @@ describe('audit redactor', () => {
     });
   });
 
+  describe('domain ownership challenge (U13.3)', () => {
+    it('removes a domain verification value from an audit image, keeping the rest', () => {
+      const result = redact({
+        domain: 'console.example.com',
+        verificationValue: 'acc-domain-verification=0190-example',
+        verificationStatus: 'pending',
+      }) as Record<string, unknown>;
+      expect(result.verificationValue).toBe(REDACTED);
+      expect(result.verificationStatus).toBe('pending');
+      expect(result.domain).toBe('console.example.com');
+      expect(isSensitiveKey('verification_value')).toBe(true);
+      expect(isSensitiveKey('verificationMethod')).toBe(false);
+    });
+  });
+
   describe('the secret/token catch-all', () => {
     it.each([
       'secret',

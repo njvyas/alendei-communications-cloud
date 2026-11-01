@@ -63,6 +63,38 @@ The request organization's message consumption over a period, for the console's 
 - **Not included:** reseller-wide or platform-wide aggregation. Counting across organizations needs an RLS and authorization decision (Phase 9 "reseller reporting").
 - **Export:** the console exports the daily breakdown as CSV client-side, with formula-injection protection.
 
+### 2c. `/platform/domains` — platform domain oversight (U13.3, 01-Nov-2026)
+
+A read-only, cross-tenant view of every organization domain registered through U12, for the console's platform **Domains** page.
+
+- **Routes (all `GET`):**
+  - `/platform/domains`: the registry, paged. Optional filters: `status`, `domainType`, `verificationStatus`, `challengeState`, `orgId`, `resellerId`, and `q` (hostname substring; letters, digits, dots and hyphens only). Sort: `domain` (default) or `createdAt`.
+  - `/platform/domains/summary`: counts by status, type and challenge state, plus `needsAttention` (`expiring_soon` + `expired` + `failed`).
+  - `/platform/domains/{domainId}`: one registry row.
+  - `/platform/domains/{domainId}/dns-diagnostics`: looks up `_alendei-challenge.<domain>` on the platform resolver (the one U12 verification uses) and on Cloudflare, Google and Quad9, 3-second timeout each.
+  - `/platform/domains/{domainId}/history`: the domain's `domain.*` audit events, newest first, at most 100.
+- **Authorization:**
+  - `platform.tenants.read` at platform scope for the registry, summary and diagnostics; `platform.audit.read` for history. `alendei_super_admin` and `alendei_support` hold both.
+  - Tenant and reseller administrators are refused with `403` and an audited denial. API keys are refused.
+  - Rows are read as `acc_app` under RLS. Migration `0039` adds the read-only policy `organization_domains_platform_read` (`app_current_user_id() IS NOT NULL AND app_has_platform_permission('platform.tenants.read')`), without which `alendei_support` would see nothing. No write policy changed.
+- **Challenge state** (derived on read, from U12's 72-hour TTL measured from the row's last update):
+  - `not_required`: platform subdomains.
+  - `verified`.
+  - `pending`.
+  - `expiring_soon`: under 24 hours left.
+  - `expired`: U12 refuses verification until the organization regenerates the challenge.
+  - `failed`: the last check found no matching record.
+- **Never returned:**
+  - the challenge value;
+  - TXT values observed in DNS (diagnostics return only an outcome and a record count per resolver);
+  - raw audit images (history returns allowlisted fields).
+  
+  The owning organization still reads its challenge through `GET /organizations/{id}/domains/{domainId}/verification`. Since U13.3, the audit redactor also removes `verificationValue` from new audit images.
+- **Writes:** none. Suspend, activate and verify remain the U12 routes under `/organizations/{id}/domains/{domainId}/…`, which the console calls. Diagnostics change nothing.
+- **Not included:**
+  - Ingress routing and TLS certificate provisioning for custom domains. ACC does not provision either; domain `status` reflects ownership verification only.
+  - Reseller-owned domains. U12 stores domains per organization only; resellers appear here as the owner of an organization's domains.
+
 ## 3. Authentication & request identity
 
 Every authenticated caller resolves to exactly one **identity type**, and `audit_logs.actor_type` (`DATABASE.md` §12) always records which:

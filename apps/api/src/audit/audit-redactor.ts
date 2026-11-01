@@ -35,6 +35,10 @@ const SENSITIVE_KEY_FRAGMENTS: readonly string[] = [
   'refreshtokenhash',
   'mfasecretref',
   'tickethash',
+  // U13.3: a domain's DNS ownership challenge (U12 `DomainView.verificationValue`).
+  // Not a credential, but whoever holds it can complete ownership verification
+  // for that domain, so it never belongs in an audit image.
+  'verificationvalue',
 ];
 
 /**

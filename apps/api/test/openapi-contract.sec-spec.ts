@@ -162,10 +162,11 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * Phase 4 U12, 31-Oct-2026: 12 domain/branding/challenge + 3 customer
      * onboarding operations: 111 → 126.
      * Phase 4 U13.1, 01-Nov-2026: 7 reseller administration and hierarchy
-     * operations: 126 → 133.)
+     * operations: 126 → 133. U13.2: 1 lifecycle-history operation: 133 → 134.
+     * U13.3, 01-Nov-2026: 5 read-only platform domain oversight operations
+     * under `/platform/domains`: 134 → 139.)
      */
-    // Combined after U13.1 + U13.2 (01-Nov-2026): 126 + 7 + 1 = 134.
-    const APPLICATION_OPERATIONS = 134;
+    const APPLICATION_OPERATIONS = 139;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 
