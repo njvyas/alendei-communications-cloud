@@ -160,9 +160,11 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * constant is authoritative. UI readiness, 20-Oct-2026: `GET /messages`,
      * 109 → 110. Usage reporting, 31-Oct-2026: `GET /usage/messages`, 110 → 111.
      * Phase 4 U12, 31-Oct-2026: 12 domain/branding/challenge + 3 customer
-     * onboarding operations: 111 → 126.)
+     * onboarding operations: 111 → 126.
+     * Phase 4 U13.1, 01-Nov-2026: 7 reseller administration and hierarchy
+     * operations: 126 → 133.)
      */
-    const APPLICATION_OPERATIONS = 126;
+    const APPLICATION_OPERATIONS = 133;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 
