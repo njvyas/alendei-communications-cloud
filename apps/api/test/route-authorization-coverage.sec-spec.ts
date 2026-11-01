@@ -51,6 +51,7 @@ interface RegisteredRoute {
 
 /** Paths deliberately reachable without authentication, listed once, here. */
 const PUBLIC_PATHS = new Set([
+  'GET /api/v1/domains/resolve',
   'POST /api/v1/auth/login',
   'POST /api/v1/auth/refresh',
   'GET /health',
@@ -280,9 +281,11 @@ describe('§6n case 30 — route authorization coverage', () => {
     // organization like the other message routes: 97 → 98.
     // Usage reporting (31-Oct-2026) added `GET /usage/messages`, scoped at the
     // request organization under messages.read: 98 → 99.
-    expect(scoped.length).toBe(99);
+    // Phase 4 U12 (31-Oct-2026) added 14 scoped routes (11 domains/branding/challenge,
+    // 3 customer onboarding): 99 → 113 scoped; and 1 public route (`GET /domains/resolve`): 6 → 7 open.
+    expect(scoped.length).toBe(113);
     expect(exempt.length).toBe(7);
-    expect(open.length).toBe(6);
+    expect(open.length).toBe(7);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
 
     // Of the scoped routes, exactly the two grant/revoke handlers defer their
@@ -299,7 +302,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 3.3 added 2 scoped routes, all deferred: 70 → 72.
     // UI readiness added `GET /messages`, deferred like them: 72 → 73.
     // Usage reporting added `GET /usage/messages`, deferred the same way: 73 → 74.
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(74);
+    // Phase 4 U12 added 14 scoped routes, all deferred: 74 → 88.
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(88);
   });
 });
 

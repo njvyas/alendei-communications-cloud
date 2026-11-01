@@ -158,9 +158,11 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * same change; the two tests below fail on any route or operation that
      * exists on only one side. (The figures above predate Phase 3; the
      * constant is authoritative. UI readiness, 20-Oct-2026: `GET /messages`,
-     * 109 → 110. Usage reporting, 31-Oct-2026: `GET /usage/messages`, 110 → 111.)
+     * 109 → 110. Usage reporting, 31-Oct-2026: `GET /usage/messages`, 110 → 111.
+     * Phase 4 U12, 31-Oct-2026: 12 domain/branding/challenge + 3 customer
+     * onboarding operations: 111 → 126.)
      */
-    const APPLICATION_OPERATIONS = 111;
+    const APPLICATION_OPERATIONS = 126;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 

@@ -815,7 +815,7 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
     it('an unknown id: 404 (or the documented refusal) on every operation that addresses a resource by id', async () => {
       for (const { method, template, op } of operations()) {
         if (!template.includes('{')) continue;
-        const bearer = /^(Organizations|Providers|Channels)_/.test(String(op.operationId))
+        const bearer = /^(Organizations|Domains|Providers|Channels)_/.test(String(op.operationId))
           ? platform
           : admin;
         const res = await hit(method, concrete(template, uuidv7), {
@@ -831,42 +831,46 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
                 ? { behavior: 'HEALTHY' }
                 : template.endsWith('/health') && method === 'POST'
                   ? { override: null }
-                  : template.endsWith('/consent-events') && method === 'POST'
-                    ? {
-                        channelId: uuidv7(),
-                        consentType: 'marketing',
-                        event: 'grant',
-                        occurredAt: new Date().toISOString(),
-                        source: 'test',
-                      }
-                    : template.endsWith('/identities') && method === 'POST'
+                  : template.endsWith('/domains') && method === 'POST'
+                    ? { domain: `d-${suffix()}.example.com` }
+                    : template.endsWith('/consent-events') && method === 'POST'
                       ? {
                           channelId: uuidv7(),
-                          rawAddress: '+15551234567',
+                          consentType: 'marketing',
+                          event: 'grant',
+                          occurredAt: new Date().toISOString(),
+                          source: 'test',
                         }
-                      : template.endsWith('/lift') && method === 'POST'
-                        ? { reason: 'test' }
-                        : template.endsWith('/simulate-approval') && method === 'POST'
-                          ? { targetStatus: 'approved' }
-                          : template.includes('/provider-assignments') &&
-                              method === 'POST' &&
-                              !template.endsWith('/enable') &&
-                              !template.endsWith('/disable')
-                            ? {
-                                providerId: uuidv7(),
-                                priority: 1,
-                              }
-                            : method !== 'PATCH'
-                              ? {}
-                              : template.includes('/users/')
-                                ? { phone: '+15551234567' }
-                                : template.includes('/contacts/')
-                                  ? { firstName: `x ${suffix()}` }
-                                  : template.includes('/identities/')
-                                    ? { isPrimary: true }
-                                    : template.includes('/provider-assignments/')
-                                      ? { priority: 2 }
-                                      : { name: `x ${suffix()}` },
+                      : template.endsWith('/identities') && method === 'POST'
+                        ? {
+                            channelId: uuidv7(),
+                            rawAddress: '+15551234567',
+                          }
+                        : template.endsWith('/lift') && method === 'POST'
+                          ? { reason: 'test' }
+                          : template.endsWith('/simulate-approval') && method === 'POST'
+                            ? { targetStatus: 'approved' }
+                            : template.includes('/provider-assignments') &&
+                                method === 'POST' &&
+                                !template.endsWith('/enable') &&
+                                !template.endsWith('/disable')
+                              ? {
+                                  providerId: uuidv7(),
+                                  priority: 1,
+                                }
+                              : method !== 'PATCH'
+                                ? {}
+                                : template.includes('/branding')
+                                  ? { brandName: `Brand ${suffix()}` }
+                                  : template.includes('/users/')
+                                    ? { phone: '+15551234567' }
+                                    : template.includes('/contacts/')
+                                      ? { firstName: `x ${suffix()}` }
+                                      : template.includes('/identities/')
+                                        ? { isPrimary: true }
+                                        : template.includes('/provider-assignments/')
+                                          ? { priority: 2 }
+                                          : { name: `x ${suffix()}` },
         });
         expect(`${method} ${template} → ${res.status}`).toMatch(/→ (404|403)$/);
       }
@@ -875,7 +879,7 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
     it('an unknown body field or query parameter: 400', async () => {
       for (const { method, template, op } of operations()) {
         const path = concrete(template, uuidv7);
-        const bearer = String(op.operationId).startsWith('Organizations_') ? platform : admin;
+        const bearer = /^(Organizations|Domains)_/.test(String(op.operationId)) ? platform : admin;
         if (op.requestBody) {
           const res = await hit(method, path, {
             ...(isPublic(op) ? {} : as.session(bearer)),
@@ -1075,7 +1079,10 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
       template.includes('/suppressions') ||
       template.includes('/identities') ||
       template.includes('/provider-assignments') ||
-      template.includes('/messages');
+      template.includes('/messages') ||
+      template.includes('/domains') ||
+      template.includes('/branding') ||
+      template.includes('/onboarding');
 
     it('every operation succeeded with every credential its document declares', () => {
       const document = validator.document as { paths: Record<string, Record<string, Json>> };

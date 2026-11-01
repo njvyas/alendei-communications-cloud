@@ -20,6 +20,7 @@
  */
 import { sql } from 'drizzle-orm';
 import { Pool } from 'pg';
+import { uuidv7 } from 'uuidv7';
 
 import { createDatabase, withTenantTransaction } from '../client';
 import { DB_ROLES } from '../constants';
@@ -50,6 +51,8 @@ const TABLES = [
   'message_dispatch_queue',
   'message_events',
   'messages',
+  // Phase 4 (migration 0038): organization domains (U12)
+  'organization_domains',
   // Phase 3.2 (migration 0032): organization provider assignments
   'organization_provider_assignments',
   'organizations',
@@ -97,6 +100,7 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
     message_dispatch_queue: 'DELETE,INSERT,SELECT,UPDATE',
     message_events: 'INSERT,SELECT',
     messages: 'INSERT,SELECT,UPDATE',
+    organization_domains: 'DELETE,INSERT,SELECT,UPDATE',
     organization_provider_assignments: 'INSERT,SELECT,UPDATE',
     organizations: 'INSERT,SELECT',
     permissions: 'SELECT',
@@ -123,6 +127,7 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
   acc_auth: {
     api_keys: 'SELECT',
     audit_logs: 'INSERT',
+    organization_domains: 'SELECT',
     organizations: 'SELECT',
     permissions: 'SELECT',
     resellers: 'SELECT',
@@ -651,6 +656,43 @@ describe('database principals and RLS coverage', () => {
         await restoreOwnership('teams', owner);
       }
       expect(await leakedFrom('teams', 'org_id')).toBe(0);
+    });
+
+    it('organization_domains_auth_read is load-bearing: acc_auth cannot read unverified domain challenge tokens', async () => {
+      const domainId = uuidv7();
+      const testToken = `acc-domain-verification=${uuidv7()}`;
+      await db.admin.execute(sql`
+        INSERT INTO organization_domains (id, org_id, domain, domain_type, status, verification_method, verification_value, verification_status)
+        VALUES (${domainId}, ${orgA.orgId}, 'pending.testbrand.com', 'custom', 'pending_verification', 'dns_txt', ${testToken}, 'pending')
+      `);
+
+      const authPool = new Pool({ connectionString: process.env.DATABASE_AUTH_URL!, max: 1 });
+      try {
+        // Query as acc_auth
+        const { rows } = await authPool.query<{ verification_value: string }>(
+          'SELECT verification_value FROM organization_domains WHERE id = $1',
+          [domainId],
+        );
+        // Under RLS, unverified pending domains are strictly invisible to acc_auth
+        expect(rows.length).toBe(0);
+
+        // Weakened policy exposes the verification token to acc_auth
+        await db.admin.execute(
+          sql`ALTER POLICY organization_domains_auth_read ON organization_domains USING (true)`,
+        );
+        const { rows: leaked } = await authPool.query<{ verification_value: string }>(
+          'SELECT verification_value FROM organization_domains WHERE id = $1',
+          [domainId],
+        );
+        expect(leaked.length).toBe(1);
+        expect(leaked[0]!.verification_value).toBe(testToken);
+      } finally {
+        await db.admin.execute(
+          sql`ALTER POLICY organization_domains_auth_read ON organization_domains USING (status = 'active' AND verification_status = 'verified')`,
+        );
+        await db.admin.execute(sql`DELETE FROM organization_domains WHERE id = ${domainId}`);
+        await authPool.end();
+      }
     });
 
     it('with no tenant context at all, acc_app sees no tenant row in any table', async () => {

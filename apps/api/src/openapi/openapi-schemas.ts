@@ -19,6 +19,10 @@ import {
   SIMULATOR_BEHAVIORS,
   SIMULATOR_HEALTH_BEHAVIORS,
   SUPPRESSION_STATUSES,
+  DOMAIN_TYPES,
+  DOMAIN_STATUSES,
+  DOMAIN_VERIFICATION_METHODS,
+  DOMAIN_VERIFICATION_STATUSES,
 } from '@acc/contracts';
 import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 
@@ -688,4 +692,87 @@ export class MessageUsageReportSchema {
   byDay!: MessageUsageDayRowSchema[];
   @ApiProperty({ type: MessageUsageFailureReasonSchema, isArray: true })
   topFailureReasons!: MessageUsageFailureReasonSchema[];
+}
+
+// --- domains, branding & onboarding (Phase 4, U12) --------------------------
+
+@ApiSchema({ name: 'BrandConfig' })
+export class BrandConfigSchema {
+  @ApiProperty({ nullable: true, required: false }) brandName?: string;
+  @ApiProperty({ nullable: true, required: false }) logoUrl?: string;
+  @ApiProperty({ nullable: true, required: false }) faviconUrl?: string;
+  @ApiProperty({ nullable: true, required: false }) primaryColor?: string;
+  @ApiProperty({ nullable: true, required: false }) accentColor?: string;
+  @ApiProperty({ nullable: true, required: false }) supportEmail?: string;
+  @ApiProperty({ nullable: true, required: false }) supportPhone?: string;
+  @ApiProperty({ nullable: true, required: false }) customCss?: string;
+  @ApiProperty({ nullable: true, required: false }) privacyPolicyUrl?: string;
+  @ApiProperty({ nullable: true, required: false }) termsOfServiceUrl?: string;
+}
+
+@ApiSchema({ name: 'ResolvedDomainOrganization' })
+export class ResolvedDomainOrganizationSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty() slug!: string;
+  @ApiProperty() name!: string;
+  @ApiProperty() status!: string;
+  @ApiProperty(nullableUuid) resellerId!: string | null;
+}
+
+@ApiSchema({ name: 'ResolvedDomain' })
+export class ResolvedDomainSchema {
+  @ApiProperty() matched!: boolean;
+  @ApiProperty() domain!: string;
+  @ApiProperty({ enum: ['platform', 'subdomain', 'custom', 'unrecognized'] }) domainType!: string;
+  @ApiProperty({ enum: ['admin', 'console', 'customer', 'reseller', 'default'] })
+  portalType!: string;
+  @ApiProperty({ type: ResolvedDomainOrganizationSchema, nullable: true })
+  organization!: ResolvedDomainOrganizationSchema | null;
+  @ApiProperty({ type: BrandConfigSchema }) branding!: BrandConfigSchema;
+}
+
+@ApiSchema({ name: 'DomainDnsRecord' })
+export class DomainDnsRecordSchema {
+  @ApiProperty({ enum: ['TXT', 'CNAME'] }) type!: string;
+  @ApiProperty() name!: string;
+  @ApiProperty() value!: string;
+  @ApiProperty({ type: 'integer' }) ttl!: number;
+}
+
+@ApiSchema({ name: 'DomainVerificationDetails' })
+export class DomainVerificationDetailsSchema {
+  @ApiProperty(uuid) domainId!: string;
+  @ApiProperty() domain!: string;
+  @ApiProperty({ enum: DOMAIN_VERIFICATION_METHODS }) method!: string;
+  @ApiProperty({ enum: DOMAIN_VERIFICATION_STATUSES }) status!: string;
+  @ApiProperty({ type: DomainDnsRecordSchema }) record!: DomainDnsRecordSchema;
+  @ApiProperty() instructions!: string;
+}
+
+@ApiSchema({ name: 'DomainView' })
+export class DomainViewSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty(uuid) orgId!: string;
+  @ApiProperty() domain!: string;
+  @ApiProperty({ enum: DOMAIN_TYPES }) domainType!: string;
+  @ApiProperty({ enum: DOMAIN_STATUSES }) status!: string;
+  @ApiProperty({ enum: DOMAIN_VERIFICATION_METHODS }) verificationMethod!: string;
+  @ApiProperty() verificationValue!: string;
+  @ApiProperty({ enum: DOMAIN_VERIFICATION_STATUSES }) verificationStatus!: string;
+  @ApiProperty(nullableTimestamp) verifiedAt!: string | null;
+  @ApiProperty() isPrimary!: boolean;
+  @ApiProperty(timestamp) createdAt!: string;
+  @ApiProperty(timestamp) updatedAt!: string;
+}
+
+@ApiSchema({ name: 'OnboardingResult' })
+export class OnboardingResultSchema {
+  @ApiProperty(uuid) organizationId!: string;
+  @ApiProperty() organizationSlug!: string;
+  @ApiProperty() organizationName!: string;
+  @ApiProperty(uuid) defaultWorkspaceId!: string;
+  @ApiProperty(uuid) adminUserId!: string;
+  @ApiProperty({ type: DomainViewSchema }) domain!: DomainViewSchema;
+  @ApiProperty({ type: BrandConfigSchema }) branding!: BrandConfigSchema;
+  @ApiProperty() portalUrl!: string;
 }
