@@ -798,3 +798,30 @@ export class OrganizationLifecycleEventSchema {
   @ApiProperty({ type: OrganizationLifecycleActorSchema }) actor!: OrganizationLifecycleActorSchema;
   @ApiProperty(timestamp) occurredAt!: string;
 }
+
+// --- resellers & hierarchy (Phase 4, U13) -----------------------------------
+
+@ApiSchema({ name: 'Reseller' })
+export class ResellerSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty() name!: string;
+  @ApiProperty() slug!: string;
+  @ApiProperty({ type: 'string', nullable: true }) domain!: string | null;
+  @ApiProperty({ type: BrandConfigSchema }) brandConfig!: BrandConfigSchema;
+  @ApiProperty({ example: '15.000' }) defaultMarkupPct!: string;
+  @ApiProperty({ enum: ['active', 'suspended', 'closed'] }) status!: string;
+  @ApiProperty() isPlatformDefault!: boolean;
+  @ApiProperty({ type: 'integer', minimum: 0, required: false }) customerCount?: number;
+  @ApiProperty(timestamp) createdAt!: string;
+  @ApiProperty(timestamp) updatedAt!: string;
+}
+
+@ApiSchema({ name: 'ResellerOrganization' })
+export class ResellerOrganizationSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty() name!: string;
+  @ApiProperty() slug!: string;
+  @ApiProperty() status!: string;
+  @ApiProperty(timestamp) createdAt!: string;
+  @ApiProperty(timestamp) updatedAt!: string;
+}

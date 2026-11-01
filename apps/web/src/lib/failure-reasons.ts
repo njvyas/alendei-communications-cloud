@@ -15,6 +15,20 @@ export interface FailureReasonDetails {
   readonly rawReason: string;
 }
 
+/** What the caller knows about the provider attempts behind a failure. */
+export interface FailureReasonContext {
+  /**
+   * Number of provider attempts recorded for the message. When it is `0`, no
+   * guidance refers the user to attempt records, because none exist. Omitted
+   * when the caller does not know.
+   */
+  readonly attemptCount?: number;
+}
+
+/** Next step for an unrecognised reason when no provider was attempted. */
+const NO_ATTEMPTS_FALLBACK_ACTION =
+  'No provider was attempted, so there are no attempt records to inspect. Check the channel and provider configuration for this organization before sending again.';
+
 export interface EmptyAttemptsDetails {
   readonly message: string;
   readonly action?: string;
@@ -22,7 +36,14 @@ export interface EmptyAttemptsDetails {
 
 const KNOWN_REASONS: Record<
   string,
-  { title: string; description: string; action: string; severity: FailureSeverity }
+  {
+    title: string;
+    description: string;
+    action: string;
+    /** Replaces `action` when no provider attempt was recorded. */
+    noAttemptsAction?: string;
+    severity: FailureSeverity;
+  }
 > = {
   NO_ELIGIBLE_PROVIDER: {
     title: 'No Available Provider',
@@ -110,6 +131,8 @@ const KNOWN_REASONS: Record<
       'Every attempted provider in the fallback chain encountered an error during submission.',
     action:
       'Inspect individual attempt error details below or verify provider adapter connectivity.',
+    noAttemptsAction:
+      'No attempt records were saved for this message. Verify provider adapter connectivity, and report the message to a platform administrator if this recurs.',
     severity: 'error',
   },
   ORGANIZATION_SUSPENDED: {
@@ -132,7 +155,9 @@ const KNOWN_REASONS: Record<
  */
 export function formatFailureReason(
   reason: string | null | undefined,
+  context: FailureReasonContext = {},
 ): FailureReasonDetails | null {
+  const noAttempts = context.attemptCount === 0;
   if (!reason || !reason.trim()) {
     return null;
   }
@@ -146,7 +171,7 @@ export function formatFailureReason(
       code: raw,
       title: entry.title,
       description: entry.description,
-      action: entry.action,
+      action: (noAttempts && entry.noAttemptsAction) || entry.action,
       severity: entry.severity,
       rawReason: raw,
     };
@@ -217,7 +242,9 @@ export function formatFailureReason(
     code: raw.split(/[:\s]/)[0] || 'DISPATCH_FAILED',
     title: 'Message Dispatch Failed',
     description: raw,
-    action: 'Inspect the attempt records below or check channel and provider configuration.',
+    action: noAttempts
+      ? NO_ATTEMPTS_FALLBACK_ACTION
+      : 'Inspect the attempt records below or check channel and provider configuration.',
     severity: 'error',
     rawReason: raw,
   };
@@ -250,7 +277,7 @@ export function emptyAttemptsGuidance(
             'Check the organization\u2019s provider assignments, or send the message again later.',
         };
       }
-      const formatted = formatFailureReason(failureReason);
+      const formatted = formatFailureReason(failureReason, { attemptCount: 0 });
       if (formatted) {
         return {
           message: `No provider was attempted before the message failed: ${formatted.title}.`,

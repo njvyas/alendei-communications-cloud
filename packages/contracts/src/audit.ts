@@ -84,6 +84,12 @@ export const AUDIT_ACTIONS = {
   BRANDING_UPDATED: 'branding.updated',
   CUSTOMER_ONBOARDED: 'customer.onboarded',
 
+  // Phase 4: Reseller Administration & Hierarchy (U13)
+  RESELLER_CREATED: 'reseller.created',
+  RESELLER_UPDATED: 'reseller.updated',
+  RESELLER_SUSPENDED: 'reseller.suspended',
+  RESELLER_REACTIVATED: 'reseller.reactivated',
+
   AUTHORIZATION_DENIED: 'authorization.denied',
 } as const;
 
@@ -227,6 +233,11 @@ export const SECURITY_SENSITIVE_AUDIT_ACTIONS: readonly AuditAction[] = Object.f
   AUDIT_ACTIONS.ORGANIZATION_PROVIDER_UPDATED,
   AUDIT_ACTIONS.ORGANIZATION_PROVIDER_DISABLED,
   AUDIT_ACTIONS.ORGANIZATION_PROVIDER_ENABLED,
+  // Phase 4 U13: reseller lifecycle administration
+  AUDIT_ACTIONS.RESELLER_CREATED,
+  AUDIT_ACTIONS.RESELLER_UPDATED,
+  AUDIT_ACTIONS.RESELLER_SUSPENDED,
+  AUDIT_ACTIONS.RESELLER_REACTIVATED,
 ]);
 
 export function isSecuritySensitiveAction(action: string): boolean {

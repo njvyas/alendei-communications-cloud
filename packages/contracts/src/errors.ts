@@ -254,6 +254,10 @@ export const ERROR_CODES = {
   DOMAIN_SUSPENDED: 'DOMAIN_SUSPENDED',
   DOMAIN_LIFECYCLE_CONFLICT: 'DOMAIN_LIFECYCLE_CONFLICT',
 
+  // --- Reseller Hierarchy & Administration (Phase 4, U13) --------------------
+  RESELLER_NOT_FOUND: 'RESELLER_NOT_FOUND',
+  RESELLER_LIFECYCLE_CONFLICT: 'RESELLER_LIFECYCLE_CONFLICT',
+
   // --- Generic -------------------------------------------------------------
 
   VALIDATION_FAILED: 'VALIDATION_FAILED',
