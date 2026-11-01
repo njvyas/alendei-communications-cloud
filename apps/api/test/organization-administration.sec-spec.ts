@@ -1039,6 +1039,33 @@ describe('organization administration and lifecycle (1C.1a)', () => {
         newStatus: 'active',
       });
     });
+
+    it('lifecycle-history negative security: unauthenticated, cross-tenant, and non-existent queries are refused', async () => {
+      const nonexistentId = uuidv7();
+
+      // 1. Unauthenticated -> 401
+      await request(h.app.getHttpServer())
+        .get(url(`/organizations/${a1.orgId}/lifecycle-history`))
+        .expect(401);
+
+      // 2. Cross-tenant access: A1 admin addressing A2 -> 404 (isolation without existence disclosure)
+      await call('get', tokens.a1!, `/organizations/${a2.orgId}/lifecycle-history`).expect(404);
+
+      // 3. Non-existent organization ID -> 404
+      await call(
+        'get',
+        tokens.platform!,
+        `/organizations/${nonexistentId}/lifecycle-history`,
+      ).expect(404);
+
+      // 4. Authorized tenant admin reading own organization -> 200
+      const a1History = await call(
+        'get',
+        tokens.a1!,
+        `/organizations/${a1.orgId}/lifecycle-history`,
+      ).expect(200);
+      expect(a1History.body.data).toBeInstanceOf(Array);
+    });
   });
 
   // ===========================================================================
