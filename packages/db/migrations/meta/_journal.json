@@ -274,6 +274,13 @@
       "when": 1792800000000,
       "tag": "0038_phase4_u12_organization_domains",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1792886400000,
+      "tag": "0039_u13_3_domain_platform_read",
+      "breakpoints": true
     }
   ]
 }

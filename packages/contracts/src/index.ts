@@ -17,3 +17,4 @@ export * from './messages';
 export * from './sms';
 export * from './rcs';
 export * from './domains';
+export * from './domain-oversight';
