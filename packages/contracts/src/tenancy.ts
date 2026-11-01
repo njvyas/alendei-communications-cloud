@@ -122,3 +122,22 @@ export interface RequestContext {
   readonly causationId: string | null;
   readonly principal: AuthPrincipal | null;
 }
+
+/** Organization lifecycle audit actor projection. */
+export interface OrganizationLifecycleActorView {
+  readonly type: string;
+  readonly id: string | null;
+  readonly email: string | null;
+}
+
+/** Organization lifecycle history event record (Phase 4, U13.2). */
+export interface OrganizationLifecycleEventView {
+  readonly id: string;
+  readonly orgId: string;
+  readonly action: string;
+  readonly previousStatus: string | null;
+  readonly newStatus: string;
+  readonly reason: string | null;
+  readonly actor: OrganizationLifecycleActorView;
+  readonly occurredAt: string;
+}

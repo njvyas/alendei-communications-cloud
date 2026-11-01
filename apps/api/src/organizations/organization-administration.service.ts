@@ -6,11 +6,18 @@ import {
   grantConfers,
   type AuditAction,
   type AuthPrincipal,
+  type OrganizationLifecycleEventView,
   type PageInfo,
   type TenantContext,
 } from '@acc/contracts';
-import { schema, tenantContextStatements, type TenantSession, type Transaction } from '@acc/db';
-import { and, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
+import {
+  ORG_LIFECYCLE_LOCK_CLASS,
+  schema,
+  tenantContextStatements,
+  type TenantSession,
+  type Transaction,
+} from '@acc/db';
+import { and, desc, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 
 import { actorFromPrincipal } from '../audit/audit-actor';
@@ -471,6 +478,33 @@ export class OrganizationAdministrationService {
         message: 'Organization lifecycle changes require a signed-in platform administrator',
       });
     }
+
+    const trimmedReason = reason?.trim() ? reason.trim() : null;
+    if (transition === 'suspend' || transition === 'close') {
+      if (!trimmedReason || trimmedReason.length === 0) {
+        throw new AppException({
+          status: HttpStatus.BAD_REQUEST,
+          code: ERROR_CODES.VALIDATION_FAILED,
+          message: `A reason is required when an organization is ${transition === 'suspend' ? 'suspended' : 'closed'} (max 500 characters)`,
+        });
+      }
+      if (trimmedReason.length > 500) {
+        throw new AppException({
+          status: HttpStatus.BAD_REQUEST,
+          code: ERROR_CODES.VALIDATION_FAILED,
+          message: 'Reason cannot exceed 500 characters',
+        });
+      }
+    } else if (transition === 'reactivate') {
+      if (trimmedReason && trimmedReason.length > 500) {
+        throw new AppException({
+          status: HttpStatus.BAD_REQUEST,
+          code: ERROR_CODES.VALIDATION_FAILED,
+          message: 'Reason cannot exceed 500 characters',
+        });
+      }
+    }
+
     const rule = TRANSITIONS[transition];
     const addressed = await this.address(principal, id);
 
@@ -482,9 +516,18 @@ export class OrganizationAdministrationService {
         resourceType: 'Organization',
       });
 
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(${ORG_LIFECYCLE_LOCK_CLASS}, hashtext(${id}))`,
+      );
+
+      const current = await this.load(tx, id, { forUpdate: true });
+      if (!rule.from.includes(current.status)) {
+        throw this.lifecycleConflict(current.status);
+      }
+
       const [row] = await tx
         .update(schema.organizations)
-        .set({ status: rule.to, statusChangedAt: new Date(), statusReason: reason })
+        .set({ status: rule.to, statusChangedAt: new Date(), statusReason: trimmedReason })
         .where(
           and(
             eq(schema.organizations.id, id),
@@ -494,7 +537,6 @@ export class OrganizationAdministrationService {
         .returning();
 
       if (!row) {
-        const current = await this.load(tx, id);
         throw this.lifecycleConflict(current.status);
       }
 
@@ -508,13 +550,105 @@ export class OrganizationAdministrationService {
           resourceType: 'Organization',
           resourceId: id,
           outcome: 'success',
-          before: { status: rule.from.length === 1 ? rule.from[0] : 'active|suspended' },
+          before: { status: current.status },
           after: { status: after.status },
-          metadata: reason ? { reason } : {},
+          metadata: trimmedReason ? { reason: trimmedReason } : {},
         },
         tx,
       );
       return after;
+    });
+  }
+
+  async lifecycleHistory(
+    principal: ResolvedPrincipal,
+    id: string,
+  ): Promise<OrganizationLifecycleEventView[]> {
+    const addressed = await this.address(principal, id);
+    const auditRows = await this.db.withTenant(addressed.session, async (tx) => {
+      await this.authorization.assert(tx, {
+        principal: addressed.actor,
+        permission: PERMISSIONS.ORGANIZATIONS_READ,
+        target: { scopeType: 'organization', scopeId: id },
+        resourceType: 'Organization',
+      });
+
+      return tx
+        .select({
+          id: schema.auditLogs.id,
+          action: schema.auditLogs.action,
+          before: schema.auditLogs.before,
+          after: schema.auditLogs.after,
+          metadata: schema.auditLogs.metadata,
+          actorType: schema.auditLogs.actorType,
+          actorUserId: schema.auditLogs.actorUserId,
+          actorApiKeyId: schema.auditLogs.actorApiKeyId,
+          actorLabel: schema.auditLogs.actorLabel,
+          occurredAt: schema.auditLogs.occurredAt,
+        })
+        .from(schema.auditLogs)
+        .where(
+          and(
+            eq(schema.auditLogs.resourceType, 'Organization'),
+            eq(schema.auditLogs.resourceId, id),
+            inArray(schema.auditLogs.action, [
+              AUDIT_ACTIONS.ORGANIZATION_CREATED,
+              AUDIT_ACTIONS.ORGANIZATION_SUSPENDED,
+              AUDIT_ACTIONS.ORGANIZATION_REACTIVATED,
+              AUDIT_ACTIONS.ORGANIZATION_CLOSED,
+            ]),
+            eq(schema.auditLogs.outcome, 'success'),
+          ),
+        )
+        .orderBy(desc(schema.auditLogs.occurredAt));
+    });
+
+    const userIds = [
+      ...new Set(
+        auditRows
+          .map((r) => r.actorUserId)
+          .filter((uid): uid is string => typeof uid === 'string' && uid.length > 0),
+      ),
+    ];
+
+    const emailMap = new Map<string, string>();
+    if (userIds.length > 0) {
+      const userRows = await this.db.auth
+        .select({ id: schema.users.id, email: schema.users.email })
+        .from(schema.users)
+        .where(inArray(schema.users.id, userIds));
+      for (const u of userRows) {
+        if (u.email) emailMap.set(u.id, u.email);
+      }
+    }
+
+    return auditRows.map((row) => {
+      const beforeObj = row.before as Record<string, unknown> | null;
+      const afterObj = row.after as Record<string, unknown> | null;
+      const metaObj = row.metadata as Record<string, unknown> | null;
+
+      const previousStatus = typeof beforeObj?.status === 'string' ? beforeObj.status : null;
+
+      const newStatus = typeof afterObj?.status === 'string' ? afterObj.status : 'active';
+
+      const reason = typeof metaObj?.reason === 'string' ? metaObj.reason : null;
+
+      const actorEmail = row.actorUserId ? (emailMap.get(row.actorUserId) ?? null) : null;
+
+      return {
+        id: row.id,
+        orgId: id,
+        action: row.action,
+        previousStatus,
+        newStatus,
+        reason,
+        actor: {
+          type: row.actorType,
+          id: row.actorUserId ?? row.actorApiKeyId ?? null,
+          email: actorEmail ?? (row.actorType === 'user' ? row.actorLabel : null),
+        },
+        occurredAt: row.occurredAt.toISOString(),
+      };
     });
   }
 

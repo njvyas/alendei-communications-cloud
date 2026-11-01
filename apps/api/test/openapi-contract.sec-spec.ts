@@ -164,7 +164,8 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * Phase 4 U13.1, 01-Nov-2026: 7 reseller administration and hierarchy
      * operations: 126 → 133.)
      */
-    const APPLICATION_OPERATIONS = 133;
+    // Combined after U13.1 + U13.2 (01-Nov-2026): 126 + 7 + 1 = 134.
+    const APPLICATION_OPERATIONS = 134;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 

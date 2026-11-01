@@ -284,7 +284,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 4 U12 (31-Oct-2026) added 14 scoped routes (11 domains/branding/challenge,
     // 3 customer onboarding): 99 → 113 scoped; and 1 public route (`GET /domains/resolve`): 6 → 7 open.
     // Phase 4 U13.1 (01-Nov-2026) added 7 scoped reseller routes: 113 → 120 scoped.
-    expect(scoped.length).toBe(120);
+    // Phase 4 U13.2 (01-Nov-2026) added 1 scoped route (`GET /organizations/:id/lifecycle-history`): 120 → 121 scoped.
+    expect(scoped.length).toBe(121);
     expect(exempt.length).toBe(7);
     expect(open.length).toBe(7);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
@@ -305,7 +306,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Usage reporting added `GET /usage/messages`, deferred the same way: 73 → 74.
     // Phase 4 U12 added 14 scoped routes, all deferred: 74 → 88.
     // Phase 4 U13.1 added 7 scoped reseller routes, all deferred: 88 → 95.
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(95);
+    // Phase 4 U13.2 added GET /organizations/:id/lifecycle-history, deferred: 95 → 96.
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(96);
   });
 });
 

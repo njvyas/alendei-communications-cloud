@@ -97,8 +97,40 @@ export class UpdateOrganizationDto {
   billingPolicy?: (typeof BILLING_POLICIES)[number];
 }
 
-/** Body of `POST /organizations/:id/suspend` · `/reactivate` · `/close`. */
+/** Body of `POST /organizations/:id/suspend`. Operator reason is mandatory (max 500 characters). */
+export class OrganizationSuspendDto {
+  @ApiProperty({ description: 'Operator reason for suspension', minLength: 1, maxLength: 500 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(500)
+  reason!: string;
+}
+
+/** Body of `POST /organizations/:id/close`. Operator reason is mandatory (max 500 characters). */
+export class OrganizationCloseDto {
+  @ApiProperty({
+    description: 'Operator reason for terminal closure',
+    minLength: 1,
+    maxLength: 500,
+  })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(500)
+  reason!: string;
+}
+
+/** Body of `POST /organizations/:id/reactivate`. Operator reason is optional (max 500 characters). */
+export class OrganizationReactivateDto {
+  @ApiPropertyOptional({ description: 'Operator reason for reactivation', maxLength: 500 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
+}
+
+/** Body of `POST /organizations/:id/suspend` · `/reactivate` · `/close` (backwards-compatibility alias). */
 export class OrganizationTransitionDto {
+  @ApiPropertyOptional({ description: 'Operator reason for transition', maxLength: 500 })
   @IsOptional()
   @IsString()
   @MaxLength(500)
