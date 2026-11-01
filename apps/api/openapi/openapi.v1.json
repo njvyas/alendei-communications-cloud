@@ -1709,6 +1709,238 @@
         ],
         "type": "object"
       },
+      "MessageUsageChannelRow": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted": {
+            "description": "A provider accepted the submission.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "channelCode": {
+            "enum": [
+              "whatsapp",
+              "rcs",
+              "sms",
+              "email",
+              "voice"
+            ],
+            "type": "string"
+          },
+          "failed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "outcomeUnknown": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pending": {
+            "description": "Not yet settled.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accepted",
+          "channelCode",
+          "failed",
+          "outcomeUnknown",
+          "pending",
+          "total"
+        ],
+        "type": "object"
+      },
+      "MessageUsageCounts": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted": {
+            "description": "A provider accepted the submission.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "outcomeUnknown": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pending": {
+            "description": "Not yet settled.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accepted",
+          "failed",
+          "outcomeUnknown",
+          "pending",
+          "total"
+        ],
+        "type": "object"
+      },
+      "MessageUsageDayRow": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted": {
+            "description": "A provider accepted the submission.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "channelCode": {
+            "enum": [
+              "whatsapp",
+              "rcs",
+              "sms",
+              "email",
+              "voice"
+            ],
+            "type": "string"
+          },
+          "day": {
+            "description": "Calendar day in the report time zone. Days with no messages are omitted.",
+            "format": "date",
+            "type": "string"
+          },
+          "failed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "outcomeUnknown": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pending": {
+            "description": "Not yet settled.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accepted",
+          "channelCode",
+          "day",
+          "failed",
+          "outcomeUnknown",
+          "pending",
+          "total"
+        ],
+        "type": "object"
+      },
+      "MessageUsageFailureReason": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "description": "The leading upper-case reason code, or OTHER for free text.",
+            "example": "NO_ELIGIBLE_PROVIDER",
+            "type": "string"
+          }
+        },
+        "required": [
+          "count",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "MessageUsageReport": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptanceRate": {
+            "description": "accepted / (accepted + failed + outcomeUnknown); null when nothing has settled.",
+            "maximum": 1,
+            "minimum": 0,
+            "nullable": true,
+            "type": "number"
+          },
+          "byChannel": {
+            "items": {
+              "$ref": "#/components/schemas/MessageUsageChannelRow"
+            },
+            "type": "array"
+          },
+          "byDay": {
+            "items": {
+              "$ref": "#/components/schemas/MessageUsageDayRow"
+            },
+            "type": "array"
+          },
+          "channelCode": {
+            "enum": [
+              "whatsapp",
+              "rcs",
+              "sms",
+              "email",
+              "voice",
+              null
+            ],
+            "nullable": true,
+            "type": "string"
+          },
+          "from": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "orgId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "timeZone": {
+            "example": "Asia/Kolkata",
+            "type": "string"
+          },
+          "to": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "topFailureReasons": {
+            "items": {
+              "$ref": "#/components/schemas/MessageUsageFailureReason"
+            },
+            "type": "array"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/MessageUsageCounts"
+          },
+          "workspaceId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "acceptanceRate",
+          "byChannel",
+          "byDay",
+          "channelCode",
+          "from",
+          "orgId",
+          "timeZone",
+          "to",
+          "topFailureReasons",
+          "totals",
+          "workspaceId"
+        ],
+        "type": "object"
+      },
       "Object": {
         "additionalProperties": false,
         "properties": {},
@@ -21204,6 +21436,227 @@
         "summary": "Get a workspace (deprecated alias)",
         "tags": [
           "tenancy (deprecated)"
+        ]
+      }
+    },
+    "/api/v1/usage/messages": {
+      "get": {
+        "description": "Counts of messages created in [from, to): totals, per channel, per day (in the requested time zone) and the top failure reason codes. At most 366 days. \"accepted\" means a provider accepted the submission.",
+        "operationId": "MessageUsage_report",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
+            "$ref": "#/components/parameters/X-Causation-Id"
+          },
+          {
+            "$ref": "#/components/parameters/X-Correlation-Id"
+          },
+          {
+            "in": "query",
+            "name": "channelCode",
+            "required": false,
+            "schema": {
+              "enum": [
+                "email",
+                "whatsapp",
+                "rcs",
+                "sms",
+                "voice"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "timeZone",
+            "required": false,
+            "schema": {
+              "maxLength": 64,
+              "pattern": "^[A-Za-z]+(?:[/_+-][A-Za-z0-9_+-]+)*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspaceId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/MessageUsageReport"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation failed (`VALIDATION_FAILED`, `details.issues`), or another request error named by `error.code`.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid credential (`AUTH_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authenticated, but not permitted here (`AUTHZ_*`, `TENANCY_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Rate limit exceeded (`RATE_LIMIT_EXCEEDED`); see `Retry-After`.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "userSession": []
+          }
+        ],
+        "summary": "Message usage report for the request organization",
+        "tags": [
+          "usage"
         ]
       }
     },

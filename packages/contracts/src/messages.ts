@@ -347,3 +347,51 @@ export function sanitizeRecipientData<T>(data: T, rawRecipient: string | null | 
   }
   return data;
 }
+
+/**
+ * `GET /usage/messages` — the organization's message consumption over a period
+ * (owner-directed usage reporting, 31-Oct-2026). Counts are computed from the
+ * messages the caller can already read; they are operational usage, not a
+ * metered or rated quantity. "Accepted" means a provider accepted the
+ * submission; no end-user receipt data exists yet.
+ */
+export const MESSAGE_USAGE_MAX_DAYS = 366;
+
+/** Message counts by outcome. `pending` is every message not yet settled. */
+export interface MessageUsageCounts {
+  readonly total: number;
+  readonly accepted: number;
+  readonly failed: number;
+  readonly outcomeUnknown: number;
+  readonly pending: number;
+}
+
+export interface MessageUsageChannelRow extends MessageUsageCounts {
+  readonly channelCode: string;
+}
+
+export interface MessageUsageDayRow extends MessageUsageChannelRow {
+  /** Calendar day in the report time zone, `YYYY-MM-DD`. Days with no messages are omitted. */
+  readonly day: string;
+}
+
+export interface MessageUsageFailureReason {
+  /** The leading upper-case reason code, or `OTHER` for free text (free text can hold personal data). */
+  readonly reason: string;
+  readonly count: number;
+}
+
+export interface MessageUsageReportResponse {
+  readonly orgId: string;
+  readonly from: string;
+  readonly to: string;
+  readonly timeZone: string;
+  readonly workspaceId: string | null;
+  readonly channelCode: string | null;
+  readonly totals: MessageUsageCounts;
+  /** accepted ÷ (accepted + failed + outcomeUnknown); null when nothing has settled. */
+  readonly acceptanceRate: number | null;
+  readonly byChannel: readonly MessageUsageChannelRow[];
+  readonly byDay: readonly MessageUsageDayRow[];
+  readonly topFailureReasons: readonly MessageUsageFailureReason[];
+}
