@@ -8,9 +8,12 @@ import { emptyAttemptsGuidance } from '@/lib/failure-reasons';
 import { emptyAttemptsMessage } from './message-detail-dialog';
 
 describe('QAF-026: wording when a message has no provider attempts', () => {
-  it('describes queued and routing messages as queued for dispatch', () => {
+  it('describes queued and routing messages as queued, and submitting as being dispatched', () => {
     assert.match(emptyAttemptsMessage('queued', null), /queued for dispatch/);
     assert.match(emptyAttemptsMessage('routing', null), /queued for dispatch/);
+    const submitting = emptyAttemptsMessage('submitting', null);
+    assert.match(submitting, /currently being dispatched/);
+    assert.doesNotMatch(submitting, /queued/i);
   });
 
   it('never describes a terminal message as queued', () => {
@@ -32,10 +35,12 @@ describe('QAF-026: wording when a message has no provider attempts', () => {
   });
 
   it('points other zero-attempt failures at the failure reason', () => {
-    assert.match(
-      emptyAttemptsMessage('failed', 'Organization is closed'),
-      /No provider was attempted before the message failed/,
-    );
+    // A free-text reason (formatted) and a missing reason (fallback) both give a next step.
+    for (const reason of ['Organization is closed', null]) {
+      const guidance = emptyAttemptsGuidance('failed', reason);
+      assert.match(guidance.message, /No provider was attempted before the message failed/);
+      assert.ok(guidance.action, `a zero-attempt failure must give a next step (${reason})`);
+    }
   });
 
   it('covers outcome_unknown and unexpected statuses without claiming a queue', () => {
@@ -46,6 +51,9 @@ describe('QAF-026: wording when a message has no provider attempts', () => {
   it('the dialog uses the shared guidance instead of the old hard-coded text', () => {
     const src = fs.readFileSync(path.join(__dirname, 'message-detail-dialog.tsx'), 'utf8');
     assert.doesNotMatch(src, /Message is currently queued\./);
-    assert.match(src, /emptyAttemptsGuidance\(message\.status, message\.failureReason\)/);
+    assert.match(src, /emptyAttemptsGuidance\(\s*message\.status,\s*message\.failureReason,?\s*\)/);
+    // Both parts of the guidance are rendered, not only computed.
+    assert.match(src, /\{\s*guidance\.message\s*\}/);
+    assert.match(src, /\{\s*guidance\.action\s*\}/);
   });
 });
