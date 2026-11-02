@@ -32,12 +32,7 @@
  * 4. Zero side effects on refused requests.
  */
 import request from 'supertest';
-import {
-  AUDIT_ACTIONS,
-  ERROR_CODES,
-  PLATFORM_ROLE_KEYS,
-  TENANT_ROLE_KEYS,
-} from '@acc/contracts';
+import { AUDIT_ACTIONS, ERROR_CODES, PLATFORM_ROLE_KEYS, TENANT_ROLE_KEYS } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { and, eq, sql } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
@@ -69,12 +64,27 @@ describe('D-3: Optional tenant context on four routes', () => {
 
     // 2. Single-org user: grant only in orgA
     singleOrgUser = await w.person('d3-single-user');
-    await w.grant(singleOrgUser.userId, orgA.roles[TENANT_ROLE_KEYS.READ_ONLY]!, 'organization', orgA.orgId);
+    await w.grant(
+      singleOrgUser.userId,
+      orgA.roles[TENANT_ROLE_KEYS.READ_ONLY]!,
+      'organization',
+      orgA.orgId,
+    );
 
     // 3. Multi-org user: grants in both orgA and orgB
     multiOrgUser = await w.person('d3-multi-user');
-    await w.grant(multiOrgUser.userId, orgA.roles[TENANT_ROLE_KEYS.READ_ONLY]!, 'organization', orgA.orgId);
-    await w.grant(multiOrgUser.userId, orgB.roles[TENANT_ROLE_KEYS.READ_ONLY]!, 'organization', orgB.orgId);
+    await w.grant(
+      multiOrgUser.userId,
+      orgA.roles[TENANT_ROLE_KEYS.READ_ONLY]!,
+      'organization',
+      orgA.orgId,
+    );
+    await w.grant(
+      multiOrgUser.userId,
+      orgB.roles[TENANT_ROLE_KEYS.READ_ONLY]!,
+      'organization',
+      orgB.orgId,
+    );
 
     // 4. Reseller admin
     resellerAdmin = await w.resellerAdmin(w.resellerId, 'd3-reseller-admin');
@@ -121,7 +131,10 @@ describe('D-3: Optional tenant context on four routes', () => {
       if (orgIds.length > 0) {
         await purgeAudit(
           h.admin,
-          sql`org_id IN (${sql.join(orgIds.map((id) => sql`${id}`), sql`, `)})`,
+          sql`org_id IN (${sql.join(
+            orgIds.map((id) => sql`${id}`),
+            sql`, `,
+          )})`,
         );
       }
       if (testResellerId) {
@@ -197,9 +210,7 @@ describe('D-3: Optional tenant context on four routes', () => {
   // ---------------------------------------------------------------------------
   describe('Unauthenticated callers', () => {
     it.each(TARGET_ROUTES)('$name refuses with 401 AUTH_CREDENTIAL_REQUIRED', async (route) => {
-      const res = await request(h.app.getHttpServer())
-        .post(url(route.path()))
-        .send(route.body);
+      const res = await request(h.app.getHttpServer()).post(url(route.path())).send(route.body);
 
       expect(res.status).toBe(401);
       expect(res.body.error?.code).toBe(ERROR_CODES.AUTH_CREDENTIAL_REQUIRED);
@@ -431,10 +442,14 @@ describe('D-3: Optional tenant context on four routes', () => {
         await tx.execute(sql`DELETE FROM role_permissions WHERE org_id = ${createdOrgId}`);
         await tx.execute(sql`DELETE FROM roles WHERE org_id = ${createdOrgId}`);
       });
-      await h.admin.delete(schema.organizationDomains).where(eq(schema.organizationDomains.orgId, createdOrgId));
+      await h.admin
+        .delete(schema.organizationDomains)
+        .where(eq(schema.organizationDomains.orgId, createdOrgId));
       await h.admin.delete(schema.workspaces).where(eq(schema.workspaces.orgId, createdOrgId));
       await h.admin.delete(schema.organizations).where(eq(schema.organizations.id, createdOrgId));
-      await h.admin.delete(schema.users).where(eq(schema.users.email, directPayload.adminUser.email));
+      await h.admin
+        .delete(schema.users)
+        .where(eq(schema.users.email, directPayload.adminUser.email));
     });
   });
 });

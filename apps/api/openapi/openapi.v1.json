@@ -11069,6 +11069,9 @@
         "operationId": "Onboarding_onboardDirect",
         "parameters": [
           {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
             "$ref": "#/components/parameters/X-Causation-Id"
           },
           {
@@ -22787,6 +22790,9 @@
         "operationId": "Resellers_create",
         "parameters": [
           {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
             "$ref": "#/components/parameters/X-Causation-Id"
           },
           {
@@ -23710,6 +23716,9 @@
         "operationId": "Resellers_reactivate",
         "parameters": [
           {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
             "$ref": "#/components/parameters/X-Causation-Id"
           },
           {
@@ -23943,6 +23952,9 @@
       "post": {
         "operationId": "Resellers_suspend",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
           {
             "$ref": "#/components/parameters/X-Causation-Id"
           },
