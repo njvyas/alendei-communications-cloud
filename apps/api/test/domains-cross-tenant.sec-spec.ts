@@ -13,12 +13,21 @@
  * connected to it is placed in it, so a refusal there is audited at the actor's own
  * scope. Every check runs over HTTP against the real database, with no stubbing.
  */
-import { AUDIT_ACTIONS, ERROR_CODES, PLATFORM_ROLE_KEYS, TENANT_ROLE_KEYS } from '@acc/contracts';
+import { randomBytes } from 'node:crypto';
+
+import {
+  AUDIT_ACTIONS,
+  ERROR_CODES,
+  PERMISSIONS,
+  PLATFORM_ROLE_KEYS,
+  TENANT_ROLE_KEYS,
+} from '@acc/contracts';
 import { schema } from '@acc/db';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import request from 'supertest';
 import { uuidv7 } from 'uuidv7';
 
+import { CredentialService } from '../src/iam/credential.service';
 import { purgeAudit, startHarness, type Harness } from './auth-harness';
 import { RevocationWorld, suffix, url, type Org, type Person } from './revocation-fixtures';
 
@@ -348,6 +357,58 @@ describe('U12 domains and branding — cross-tenant addressing (D-1)', () => {
         ),
       );
     expect(row).toEqual({ scopeType: 'organization', scopeId: B.orgId });
+  });
+
+  it('7. an API key and reseller administrators are bounded the same way', async () => {
+    // An organization API key of A, carrying organizations.read.
+    const prefix = `ak_test_${randomBytes(8).toString('hex')}`;
+    const secret = `s${randomBytes(16).toString('hex')}`;
+    await h.admin.insert(schema.apiKeys).values({
+      orgId: A.orgId,
+      name: `d1-${suffix()}`,
+      keyPrefix: prefix,
+      keyHash: await h.app.get(CredentialService).hash(secret),
+      scopes: [PERMISSIONS.ORGANIZATIONS_READ],
+      createdBy: adminA.userId,
+    });
+    const asKey = (p: string) =>
+      request(h.app.getHttpServer()).get(url(p)).set('authorization', `Bearer ${prefix}.${secret}`);
+    expect((await asKey(`/organizations/${A.orgId}/domains`)).status).toBe(200);
+    expect((await asKey(`/organizations/${A.orgId}/branding`)).status).toBe(200);
+    for (const p of [`/organizations/${B.orgId}/domains`, `/organizations/${B.orgId}/branding`]) {
+      const res = await asKey(p);
+      expect({ p, status: res.status, code: res.body.error?.code }).toEqual({
+        p,
+        status: 404,
+        code: ERROR_CODES.RESOURCE_NOT_FOUND,
+      });
+      for (const secret of [SECRET_BRAND, SECRET_DOMAIN, SECRET_CHALLENGE, domainB]) {
+        expect(JSON.stringify(res.body)).not.toContain(secret);
+      }
+    }
+
+    // A reseller administrator of B's reseller reads B; one of another reseller does not.
+    const own = await w.resellerAdmin(w.resellerId, 'd1-reseller-own');
+    const otherReseller = await w.reseller('d1-other');
+    const other = await w.resellerAdmin(otherReseller, 'd1-reseller-other');
+    const asUser = async (email: string, p: string) =>
+      request(h.app.getHttpServer())
+        .get(url(p))
+        .set('authorization', `Bearer ${await w.login(email)}`);
+    const ownRead = await asUser(own.email, `/organizations/${B.orgId}/domains`);
+    expect(ownRead.status).toBe(200);
+    expect(ownRead.body.data.map((d: { domain: string }) => d.domain)).toContain(SECRET_DOMAIN);
+    const otherRead = await asUser(other.email, `/organizations/${B.orgId}/domains`);
+    expect({ status: otherRead.status, code: otherRead.body.error?.code }).toEqual({
+      status: 404,
+      code: ERROR_CODES.RESOURCE_NOT_FOUND,
+    });
+    for (const secret of [SECRET_BRAND, SECRET_DOMAIN, SECRET_CHALLENGE, domainB]) {
+      expect(JSON.stringify(otherRead.body)).not.toContain(secret);
+    }
+    const otherBrand = await asUser(other.email, `/organizations/${B.orgId}/branding`);
+    expect(otherBrand.status).toBe(404);
+    expect(JSON.stringify(otherBrand.body)).not.toContain(SECRET_BRAND);
   });
 
   afterEach(async () => {
