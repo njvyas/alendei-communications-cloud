@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import React from 'react';
@@ -260,5 +262,65 @@ describe('U13.4 Platform Support & Operations Cockpit (Frontend Component & Secu
     assert.strictEqual(typeof platformSupportApi.getRouting, 'function');
     assert.strictEqual(typeof platformSupportApi.getDispatch, 'function');
     assert.strictEqual(typeof platformSupportApi.searchAudit, 'function');
+  });
+
+  // U13.4 review F-1, F-2, F-4: the support views have no recipient, message
+  // content, failure text, actor email, IP address or user agent to render,
+  // and must not grow one. Read as source so a field added later fails here.
+  it('support views render no recipient, content, failure text or personal audit fields', () => {
+    const dir = join(__dirname);
+    for (const file of [
+      'support-dispatch-tab.tsx',
+      'support-audit-tab.tsx',
+      'support-overview-tab.tsx',
+      'support-routing-tab.tsx',
+    ]) {
+      const source = readFileSync(join(dir, file), 'utf8');
+      for (const forbidden of [
+        /maskedRecipient|recipientAddress/,
+        /failureReason/,
+        /\.payload\b/,
+        /actorEmail/,
+        /\.userAgent\b/,
+        /\.ip\b/,
+      ]) {
+        assert.doesNotMatch(source, forbidden, `${file} references ${forbidden}`);
+      }
+    }
+  });
+
+  it('dispatch diagnostics send only parameters the API accepts', async () => {
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return new Response(
+        JSON.stringify({
+          data: {
+            queue: { pendingCount: 0, delayedCount: 0, claimedCount: 0 },
+            recentMessages: [],
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+    try {
+      await platformSupportApi.getDispatch('org-1', {
+        limit: 25,
+        status: 'failed',
+        channel: 'sms',
+      });
+    } catch {
+      // Session plumbing may refuse outside the browser; the request URL is what matters.
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    assert.ok(calls.length > 0, 'getDispatch issued no request');
+    for (const call of calls) {
+      const query = new URL(call, 'http://localhost').searchParams;
+      for (const key of query.keys()) {
+        assert.ok(['limit', 'status', 'channel'].includes(key), `unexpected parameter ${key}`);
+      }
+    }
   });
 });

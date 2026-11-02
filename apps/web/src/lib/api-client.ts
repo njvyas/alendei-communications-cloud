@@ -58,7 +58,7 @@ import type {
   PlatformSupportOrgOverview,
   PlatformSupportRoutingDiagnostics,
   PlatformSupportDispatchDiagnostics,
-  PlatformSupportDispatchFailure,
+  PlatformSupportDispatchMessage,
   PlatformSupportDispatchAttempt,
   PlatformSupportAuditItem,
   PlatformSupportAuditSearchResponse,
@@ -114,7 +114,7 @@ export type {
   PlatformSupportOrgOverview,
   PlatformSupportRoutingDiagnostics,
   PlatformSupportDispatchDiagnostics,
-  PlatformSupportDispatchFailure,
+  PlatformSupportDispatchMessage,
   PlatformSupportDispatchAttempt,
   PlatformSupportAuditItem,
   PlatformSupportAuditSearchResponse,
@@ -3157,13 +3157,13 @@ export const platformSupportApi = {
    */
   async getDispatch(
     orgId: string,
-    params?: { limit?: number; status?: string; failureCategory?: string },
+    params?: { limit?: number; status?: string; channel?: string },
     signal?: AbortSignal,
   ): Promise<ApiDataResponse<PlatformSupportDispatchDiagnostics>> {
     const search = new URLSearchParams();
     if (params?.limit) search.set('limit', String(params.limit));
     if (params?.status) search.set('status', params.status);
-    if (params?.failureCategory) search.set('failureCategory', params.failureCategory);
+    if (params?.channel) search.set('channel', params.channel);
     const queryString = search.toString();
     const endpoint = `/platform/support/organizations/${encodeURIComponent(orgId)}/dispatch${queryString ? `?${queryString}` : ''}`;
 

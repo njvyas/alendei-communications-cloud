@@ -166,9 +166,8 @@ describe('PlatformSupportService', () => {
                     name: 'Acme Corp',
                     slug: 'acme',
                     status: 'active',
-                    type: 'customer',
                     resellerId: null,
-                    brandConfig: null,
+                    brandConfig: { brandName: 'Acme' },
                     createdAt: '2026-01-01T00:00:00Z',
                     updatedAt: '2026-01-01T00:00:00Z',
                   },
@@ -199,6 +198,9 @@ describe('PlatformSupportService', () => {
       );
       expect(res.organization.id).toBe(orgId);
       expect(res.organization.name).toBe('Acme Corp');
+      expect(res.organization.brandConfig).toEqual({ brandName: 'Acme' });
+      expect(res.parentReseller).toBeNull();
+      expect(res).not.toHaveProperty('customerOrganizations');
       expect(mockAudit.record).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'platform.support.diagnostic_read',
@@ -261,9 +263,10 @@ describe('PlatformSupportService', () => {
                     channel: 'sms',
                     status: 'active',
                     healthState: 'healthy',
+                    healthChangedAt: null,
                     circuitState: 'closed',
-                    failureCount: 0,
-                    lastFailureAt: null,
+                    circuitGeneration: 0,
+                    circuitChangedAt: null,
                   },
                 ],
               });
@@ -292,7 +295,7 @@ describe('PlatformSupportService', () => {
   });
 
   describe('getOrganizationDispatch', () => {
-    it('masks recipient PII and returns recent failures with provider attempts', async () => {
+    it('builds the view field by field: unexpected fields are dropped and unknown codes become OTHER', async () => {
       const orgId = '33333333-3333-7333-8333-333333333333';
       const msgId = '44444444-4444-7444-8444-444444444444';
       mockDb.withTenant = jest.fn((_ctx, callback) => {
@@ -307,25 +310,28 @@ describe('PlatformSupportService', () => {
                 rows: [
                   {
                     diagnostics: {
-                      queue: { pendingCount: 2, claimedCount: 1, delayedCount: 0 },
-                      recentFailures: [
+                      queue: { pendingCount: 2, claimedCount: 1, delayedCount: 3 },
+                      recentMessages: [
                         {
                           messageId: msgId,
                           channel: 'sms',
                           status: 'failed',
-                          failureReason: 'provider timeout on submission',
-                          failureCategory: 'timeout',
+                          failureCode: 'NOT_IN_THE_LIST',
+                          // Fields the function must never return; even so, none reaches the view.
                           recipientAddress: '+15551234567',
+                          failureReason: 'TIMEOUT: echoed +15551234567',
+                          payload: { text: 'secret body' },
                           createdAt: '2026-01-01T00:00:00Z',
                           updatedAt: '2026-01-01T00:01:00Z',
-                          lastAttemptAt: '2026-01-01T00:00:30Z',
-                          providerAttempts: [
+                          completedAt: null,
+                          attempts: [
                             {
                               attemptNumber: 1,
                               providerId: 'p1',
-                              providerType: 'twilio',
-                              errorType: 'timeout',
-                              httpStatus: null,
+                              adapterKey: 'simulator',
+                              status: 'failed',
+                              failureCode: 'TIMEOUT',
+                              failureReason: 'raw provider text',
                               latencyMs: 3000,
                               attemptedAt: '2026-01-01T00:00:30Z',
                             },
@@ -345,16 +351,40 @@ describe('PlatformSupportService', () => {
 
       const res = await service.getOrganizationDispatch(mockPrincipal, orgId, { limit: 10 });
 
-      expect(res.queue.pendingCount).toBe(2);
-      expect(res.queue.claimedCount).toBe(1);
-      expect(res.recentFailures).toHaveLength(1);
-      const failure = res.recentFailures[0]!;
-      expect(failure.messageId).toBe(msgId);
-      expect(failure.maskedRecipient).not.toBe('+15551234567');
-      expect(failure.maskedRecipient).toContain('•');
-      expect(failure.failureCategory).toBe('timeout');
-      expect(failure.providerAttempts).toHaveLength(1);
-      expect(failure.providerAttempts[0]!.latencyMs).toBe(3000);
+      expect(res.queue).toEqual({ pendingCount: 2, delayedCount: 3, claimedCount: 1 });
+      expect(res.recentMessages).toHaveLength(1);
+      const message = res.recentMessages[0]!;
+      expect(Object.keys(message).sort()).toEqual(
+        [
+          'attemptCount',
+          'attempts',
+          'channel',
+          'completedAt',
+          'createdAt',
+          'failureCode',
+          'messageId',
+          'status',
+          'updatedAt',
+        ].sort(),
+      );
+      expect(message.failureCode).toBe('OTHER');
+      expect(message.attemptCount).toBe(1);
+      expect(Object.keys(message.attempts[0]!).sort()).toEqual(
+        [
+          'adapterKey',
+          'attemptNumber',
+          'attemptedAt',
+          'failureCode',
+          'latencyMs',
+          'providerId',
+          'status',
+        ].sort(),
+      );
+      expect(message.attempts[0]!.failureCode).toBe('TIMEOUT');
+      const text = JSON.stringify(res);
+      expect(text).not.toContain('5551234567');
+      expect(text).not.toContain('secret body');
+      expect(text).not.toContain('raw provider text');
     });
   });
 
@@ -379,9 +409,7 @@ describe('PlatformSupportService', () => {
               scopeType: 'organization',
               scopeId: 'org1',
               orgId: 'org1',
-              metadata: { ip: '127.0.0.1' },
-              ip: '127.0.0.1',
-              userAgent: 'test-agent',
+              metadata: { ip: '127.0.0.1', reason: 'r' },
             },
           ]),
         };
@@ -402,26 +430,49 @@ describe('PlatformSupportService', () => {
             scopeType: 'organization',
             scopeId: 'org1',
             orgId: 'org1',
-            metadata: { ip: '127.0.0.1' },
-            ip: '127.0.0.1',
-            userAgent: 'test-agent',
+            metadata: { ip: '127.0.0.1', reason: 'r', nested: { userAgent: 'x', email: 'e' } },
           },
         ],
         page: { nextCursor: null, hasMore: false, limit: 50 },
       });
 
-      const res = await service.searchAuditLogs(mockPrincipal, { limit: 50 });
+      const since = new Date('2026-01-01T00:00:00Z');
+      const until = new Date('2026-01-31T00:00:00Z');
+      const res = await service.searchAuditLogs(mockPrincipal, {
+        limit: 50,
+        actorUserId: '55555555-5555-7555-8555-555555555555',
+        since,
+        until,
+        cursor: 'opaque-cursor-value',
+      });
 
       expect(res.data).toHaveLength(1);
-      expect(res.data[0]!.id).toBe('log1');
+      const item = res.data[0]!;
+      expect(item.id).toBe('log1');
+      // F-4: no IP address, user agent or actor email, at the top level or in metadata.
+      expect(item).not.toHaveProperty('ip');
+      expect(item).not.toHaveProperty('userAgent');
+      expect(item).not.toHaveProperty('actorEmail');
+      expect(item.metadata).toEqual({ reason: 'r', nested: {} });
       expect(res.page.hasMore).toBe(false);
       expect(mockAudit.record).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'platform.support.diagnostic_read',
           resourceType: 'platform_support',
+          metadata: {
+            tool: 'audit_search',
+            orgId: null,
+            action: null,
+            actorUserId: '55555555-5555-7555-8555-555555555555',
+            since: since.toISOString(),
+            until: until.toISOString(),
+            limit: 50,
+            page: 'next',
+          },
         }),
         expect.anything(),
       );
+      expect(JSON.stringify(mockAudit.record.mock.calls)).not.toContain('opaque-cursor-value');
     });
   });
 });

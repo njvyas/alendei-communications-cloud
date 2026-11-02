@@ -3081,10 +3081,6 @@
           "action": {
             "type": "string"
           },
-          "actorEmail": {
-            "nullable": true,
-            "type": "string"
-          },
           "actorType": {
             "type": "string"
           },
@@ -3097,12 +3093,9 @@
             "format": "uuid",
             "type": "string"
           },
-          "ip": {
-            "nullable": true,
-            "type": "string"
-          },
           "metadata": {
             "additionalProperties": true,
+            "description": "Redacted. IP address, user agent and actor email are not returned.",
             "type": "object"
           },
           "occurredAt": {
@@ -3135,19 +3128,13 @@
           },
           "scopeType": {
             "type": "string"
-          },
-          "userAgent": {
-            "nullable": true,
-            "type": "string"
           }
         },
         "required": [
           "action",
-          "actorEmail",
           "actorType",
           "actorUserId",
           "id",
-          "ip",
           "metadata",
           "occurredAt",
           "orgId",
@@ -3156,23 +3143,27 @@
           "resourceId",
           "resourceType",
           "scopeId",
-          "scopeType",
-          "userAgent"
+          "scopeType"
         ],
         "type": "object"
       },
       "PlatformSupportDispatchDiagnostics": {
         "additionalProperties": false,
+        "description": "Dispatch metadata only (ADR-015 R-8): no recipient, payload, template, contact or failure text.",
         "properties": {
           "queue": {
+            "additionalProperties": false,
             "properties": {
               "claimedCount": {
+                "description": "Under a live dispatcher claim.",
                 "type": "integer"
               },
               "delayedCount": {
+                "description": "Waiting for a retry/backoff time.",
                 "type": "integer"
               },
               "pendingCount": {
+                "description": "Ready to be claimed by the dispatcher.",
                 "type": "integer"
               }
             },
@@ -3183,42 +3174,20 @@
             ],
             "type": "object"
           },
-          "recentFailures": {
+          "recentMessages": {
             "items": {
+              "additionalProperties": false,
               "properties": {
                 "attemptCount": {
                   "type": "integer"
                 },
-                "channel": {
-                  "type": "string"
-                },
-                "createdAt": {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                "failureCategory": {
-                  "nullable": true,
-                  "type": "string"
-                },
-                "failureReason": {
-                  "nullable": true,
-                  "type": "string"
-                },
-                "lastAttemptAt": {
-                  "format": "date-time",
-                  "nullable": true,
-                  "type": "string"
-                },
-                "maskedRecipient": {
-                  "type": "string"
-                },
-                "messageId": {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                "providerAttempts": {
+                "attempts": {
                   "items": {
+                    "additionalProperties": false,
                     "properties": {
+                      "adapterKey": {
+                        "type": "string"
+                      },
                       "attemptNumber": {
                         "type": "integer"
                       },
@@ -3226,13 +3195,32 @@
                         "format": "date-time",
                         "type": "string"
                       },
-                      "errorType": {
+                      "failureCode": {
+                        "description": "A fixed failure code (migration 0040, app_support_failure_code); OTHER for any unrecognised reason. Failure text is never returned.",
+                        "enum": [
+                          "TIMEOUT",
+                          "PROVIDER_ERROR",
+                          "RATE_LIMITED",
+                          "AUTH_ERROR",
+                          "INVALID_REQUEST",
+                          "INVALID_RECIPIENT",
+                          "UNSUPPORTED_CONTENT",
+                          "CONFIGURATION_ERROR",
+                          "UNKNOWN",
+                          "NO_ELIGIBLE_PROVIDER",
+                          "CHANNEL_UNSUPPORTED",
+                          "SMS_PAYLOAD_INVALID",
+                          "RCS_PAYLOAD_INVALID",
+                          "RECIPIENT_SUPPRESSED",
+                          "CONSENT_REVOKED",
+                          "ORGANIZATION_CLOSED",
+                          "ORGANIZATION_SUSPENDED",
+                          "NO_PROVIDER_ASSIGNMENT",
+                          "DISPATCH_LEASE_EXPIRED",
+                          "OTHER"
+                        ],
                         "nullable": true,
                         "type": "string"
-                      },
-                      "httpStatus": {
-                        "nullable": true,
-                        "type": "integer"
                       },
                       "latencyMs": {
                         "nullable": true,
@@ -3242,22 +3230,65 @@
                         "format": "uuid",
                         "type": "string"
                       },
-                      "providerType": {
+                      "status": {
                         "type": "string"
                       }
                     },
                     "required": [
+                      "adapterKey",
                       "attemptNumber",
                       "attemptedAt",
-                      "errorType",
-                      "httpStatus",
+                      "failureCode",
                       "latencyMs",
                       "providerId",
-                      "providerType"
+                      "status"
                     ],
                     "type": "object"
                   },
                   "type": "array"
+                },
+                "channel": {
+                  "type": "string"
+                },
+                "completedAt": {
+                  "format": "date-time",
+                  "nullable": true,
+                  "type": "string"
+                },
+                "createdAt": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "failureCode": {
+                  "description": "A fixed failure code (migration 0040, app_support_failure_code); OTHER for any unrecognised reason. Failure text is never returned.",
+                  "enum": [
+                    "TIMEOUT",
+                    "PROVIDER_ERROR",
+                    "RATE_LIMITED",
+                    "AUTH_ERROR",
+                    "INVALID_REQUEST",
+                    "INVALID_RECIPIENT",
+                    "UNSUPPORTED_CONTENT",
+                    "CONFIGURATION_ERROR",
+                    "UNKNOWN",
+                    "NO_ELIGIBLE_PROVIDER",
+                    "CHANNEL_UNSUPPORTED",
+                    "SMS_PAYLOAD_INVALID",
+                    "RCS_PAYLOAD_INVALID",
+                    "RECIPIENT_SUPPRESSED",
+                    "CONSENT_REVOKED",
+                    "ORGANIZATION_CLOSED",
+                    "ORGANIZATION_SUSPENDED",
+                    "NO_PROVIDER_ASSIGNMENT",
+                    "DISPATCH_LEASE_EXPIRED",
+                    "OTHER"
+                  ],
+                  "nullable": true,
+                  "type": "string"
+                },
+                "messageId": {
+                  "format": "uuid",
+                  "type": "string"
                 },
                 "status": {
                   "type": "string"
@@ -3269,14 +3300,12 @@
               },
               "required": [
                 "attemptCount",
+                "attempts",
                 "channel",
+                "completedAt",
                 "createdAt",
-                "failureCategory",
-                "failureReason",
-                "lastAttemptAt",
-                "maskedRecipient",
+                "failureCode",
                 "messageId",
-                "providerAttempts",
                 "status",
                 "updatedAt"
               ],
@@ -3286,40 +3315,13 @@
           }
         },
         "required": [
-          "recentFailures"
+          "recentMessages"
         ],
         "type": "object"
       },
       "PlatformSupportOrgOverview": {
         "additionalProperties": false,
         "properties": {
-          "customerOrganizations": {
-            "items": {
-              "properties": {
-                "id": {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                "name": {
-                  "type": "string"
-                },
-                "slug": {
-                  "type": "string"
-                },
-                "status": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "id",
-                "name",
-                "slug",
-                "status"
-              ],
-              "type": "object"
-            },
-            "type": "array"
-          },
           "metrics": {
             "properties": {
               "activeApiKeys": {
@@ -3355,7 +3357,6 @@
             "properties": {
               "brandConfig": {
                 "additionalProperties": true,
-                "nullable": true,
                 "type": "object"
               },
               "createdAt": {
@@ -3380,9 +3381,6 @@
               "status": {
                 "type": "string"
               },
-              "type": {
-                "type": "string"
-              },
               "updatedAt": {
                 "format": "date-time",
                 "type": "string"
@@ -3396,7 +3394,6 @@
               "resellerId",
               "slug",
               "status",
-              "type",
               "updatedAt"
             ],
             "type": "object"
@@ -3485,7 +3482,6 @@
           }
         },
         "required": [
-          "customerOrganizations",
           "teams",
           "workspaces"
         ],
@@ -3588,18 +3584,23 @@
                 "channel": {
                   "type": "string"
                 },
+                "circuitChangedAt": {
+                  "format": "date-time",
+                  "nullable": true,
+                  "type": "string"
+                },
+                "circuitGeneration": {
+                  "type": "integer"
+                },
                 "circuitState": {
                   "type": "string"
                 },
-                "failureCount": {
-                  "type": "integer"
-                },
-                "healthState": {
-                  "type": "string"
-                },
-                "lastFailureAt": {
+                "healthChangedAt": {
                   "format": "date-time",
                   "nullable": true,
+                  "type": "string"
+                },
+                "healthState": {
                   "type": "string"
                 },
                 "providerId": {
@@ -3615,10 +3616,11 @@
               },
               "required": [
                 "channel",
+                "circuitChangedAt",
+                "circuitGeneration",
                 "circuitState",
-                "failureCount",
+                "healthChangedAt",
                 "healthState",
-                "lastFailureAt",
                 "providerId",
                 "providerName",
                 "status"
@@ -18591,6 +18593,8 @@
             "name": "action",
             "required": false,
             "schema": {
+              "maxLength": 100,
+              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
               "type": "string"
             }
           },

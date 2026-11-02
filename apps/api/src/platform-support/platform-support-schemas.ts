@@ -1,3 +1,4 @@
+import { PLATFORM_SUPPORT_FAILURE_CODES } from '@acc/contracts';
 import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 
 const uuid = { type: 'string', format: 'uuid' } as const;
@@ -14,9 +15,8 @@ export class PlatformSupportOrgOverviewSchema {
       name: { type: 'string' },
       slug: { type: 'string' },
       status: { type: 'string' },
-      type: { type: 'string' },
       resellerId: nullableUuid,
-      brandConfig: { type: 'object', nullable: true, additionalProperties: true },
+      brandConfig: { type: 'object', additionalProperties: true },
       createdAt: timestamp,
       updatedAt: timestamp,
     },
@@ -25,7 +25,6 @@ export class PlatformSupportOrgOverviewSchema {
       'name',
       'slug',
       'status',
-      'type',
       'resellerId',
       'brandConfig',
       'createdAt',
@@ -45,21 +44,6 @@ export class PlatformSupportOrgOverviewSchema {
     required: ['id', 'name', 'slug'],
   })
   readonly parentReseller!: object | null;
-
-  @ApiProperty({
-    type: 'array',
-    items: {
-      type: 'object',
-      properties: {
-        id: uuid,
-        name: { type: 'string' },
-        slug: { type: 'string' },
-        status: { type: 'string' },
-      },
-      required: ['id', 'name', 'slug', 'status'],
-    },
-  })
-  readonly customerOrganizations!: object[];
 
   @ApiProperty({
     type: 'array',
@@ -173,9 +157,10 @@ export class PlatformSupportRoutingDiagnosticsSchema {
         channel: { type: 'string' },
         status: { type: 'string' },
         healthState: { type: 'string' },
+        healthChangedAt: nullableTimestamp,
         circuitState: { type: 'string' },
-        failureCount: { type: 'integer' },
-        lastFailureAt: nullableTimestamp,
+        circuitGeneration: { type: 'integer' },
+        circuitChangedAt: nullableTimestamp,
       },
       required: [
         'providerId',
@@ -183,25 +168,39 @@ export class PlatformSupportRoutingDiagnosticsSchema {
         'channel',
         'status',
         'healthState',
+        'healthChangedAt',
         'circuitState',
-        'failureCount',
-        'lastFailureAt',
+        'circuitGeneration',
+        'circuitChangedAt',
       ],
     },
   })
   readonly providerHealth!: object[];
 }
 
-@ApiSchema({ name: 'PlatformSupportDispatchDiagnostics' })
+const failureCode = {
+  type: 'string' as const,
+  enum: [...PLATFORM_SUPPORT_FAILURE_CODES],
+  nullable: true,
+  description:
+    'A fixed failure code (migration 0040, app_support_failure_code); OTHER for any unrecognised reason. Failure text is never returned.',
+};
+
+@ApiSchema({
+  name: 'PlatformSupportDispatchDiagnostics',
+  description:
+    'Dispatch metadata only (ADR-015 R-8): no recipient, payload, template, contact or failure text.',
+})
 export class PlatformSupportDispatchDiagnosticsSchema {
   @ApiProperty({
     type: 'object',
+    additionalProperties: false,
     properties: {
-      pendingCount: { type: 'integer' },
-      claimedCount: { type: 'integer' },
-      delayedCount: { type: 'integer' },
+      pendingCount: { type: 'integer', description: 'Ready to be claimed by the dispatcher.' },
+      delayedCount: { type: 'integer', description: 'Waiting for a retry/backoff time.' },
+      claimedCount: { type: 'integer', description: 'Under a live dispatcher claim.' },
     },
-    required: ['pendingCount', 'claimedCount', 'delayedCount'],
+    required: ['pendingCount', 'delayedCount', 'claimedCount'],
   })
   readonly queue!: object;
 
@@ -209,36 +208,36 @@ export class PlatformSupportDispatchDiagnosticsSchema {
     type: 'array',
     items: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         messageId: uuid,
         channel: { type: 'string' },
         status: { type: 'string' },
-        failureReason: { type: 'string', nullable: true },
-        failureCategory: { type: 'string', nullable: true },
-        attemptCount: { type: 'integer' },
+        failureCode,
         createdAt: timestamp,
         updatedAt: timestamp,
-        lastAttemptAt: nullableTimestamp,
-        maskedRecipient: { type: 'string' },
-        providerAttempts: {
+        completedAt: nullableTimestamp,
+        attemptCount: { type: 'integer' },
+        attempts: {
           type: 'array',
           items: {
             type: 'object',
+            additionalProperties: false,
             properties: {
               attemptNumber: { type: 'integer' },
               providerId: uuid,
-              providerType: { type: 'string' },
-              errorType: { type: 'string', nullable: true },
-              httpStatus: { type: 'integer', nullable: true },
+              adapterKey: { type: 'string' },
+              status: { type: 'string' },
+              failureCode,
               latencyMs: { type: 'integer', nullable: true },
               attemptedAt: timestamp,
             },
             required: [
               'attemptNumber',
               'providerId',
-              'providerType',
-              'errorType',
-              'httpStatus',
+              'adapterKey',
+              'status',
+              'failureCode',
               'latencyMs',
               'attemptedAt',
             ],
@@ -249,18 +248,16 @@ export class PlatformSupportDispatchDiagnosticsSchema {
         'messageId',
         'channel',
         'status',
-        'failureReason',
-        'failureCategory',
-        'attemptCount',
+        'failureCode',
         'createdAt',
         'updatedAt',
-        'lastAttemptAt',
-        'maskedRecipient',
-        'providerAttempts',
+        'completedAt',
+        'attemptCount',
+        'attempts',
       ],
     },
   })
-  readonly recentFailures!: object[];
+  readonly recentMessages!: object[];
 }
 
 @ApiSchema({ name: 'PlatformSupportAuditItem' })
@@ -283,9 +280,6 @@ export class PlatformSupportAuditItemSchema {
   @ApiProperty(nullableUuid)
   readonly actorUserId!: string | null;
 
-  @ApiProperty({ type: 'string', nullable: true })
-  readonly actorEmail!: string | null;
-
   @ApiProperty({ type: 'string' })
   readonly resourceType!: string;
 
@@ -304,12 +298,10 @@ export class PlatformSupportAuditItemSchema {
   @ApiProperty({ type: 'string', nullable: true })
   readonly orgName!: string | null;
 
-  @ApiProperty({ type: 'object', additionalProperties: true })
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    description: 'Redacted. IP address, user agent and actor email are not returned.',
+  })
   readonly metadata!: Record<string, unknown>;
-
-  @ApiProperty({ type: 'string', nullable: true })
-  readonly ip!: string | null;
-
-  @ApiProperty({ type: 'string', nullable: true })
-  readonly userAgent!: string | null;
 }

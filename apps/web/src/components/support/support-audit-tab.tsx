@@ -260,15 +260,9 @@ export function SupportAuditTab({ initialOrgId }: { initialOrgId?: string }) {
                       <StatusDot tone={getOutcomeTone(item.outcome)} label={item.outcome} />
                     </td>
                     <td className="py-2.5">
-                      {item.actorEmail ? (
-                        <span className="font-medium text-[var(--color-ink)]">
-                          {item.actorEmail}
-                        </span>
-                      ) : (
-                        <span className="font-mono text-2xs text-[var(--color-ink-muted)]">
-                          {item.actorUserId ?? item.actorType}
-                        </span>
-                      )}
+                      <span className="font-mono text-2xs text-[var(--color-ink-muted)]">
+                        {item.actorUserId ?? item.actorType}
+                      </span>
                     </td>
                     <td className="py-2.5">
                       {item.orgName ? (
@@ -373,9 +367,7 @@ export function SupportAuditTab({ initialOrgId }: { initialOrgId?: string }) {
                 <div>
                   <span className="text-[var(--color-ink-muted)]">Actor:</span>
                   <p className="font-medium">
-                    {selectedAuditItem.actorEmail ??
-                      selectedAuditItem.actorUserId ??
-                      selectedAuditItem.actorType}
+                    {selectedAuditItem.actorUserId ?? selectedAuditItem.actorType}
                   </p>
                 </div>
                 <div>

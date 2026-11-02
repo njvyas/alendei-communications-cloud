@@ -1,5 +1,16 @@
 import { Type } from 'class-transformer';
-import { IsDate, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
+import {
+  IsDate,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Matches,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 import {
   CHANNEL_CODES,
   MESSAGE_STATUSES,
@@ -29,8 +40,11 @@ export class PlatformSupportAuditSearchQueryDto {
   @IsUUID()
   readonly orgId?: string;
 
+  /** An audit action name (`domain.verb`); recorded verbatim in the diagnostic-read audit row. */
   @IsOptional()
   @IsString()
+  @MaxLength(100)
+  @Matches(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/)
   readonly action?: string;
 
   @IsOptional()

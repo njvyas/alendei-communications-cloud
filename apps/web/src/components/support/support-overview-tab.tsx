@@ -66,8 +66,7 @@ export function SupportOverviewTab({ orgId }: { orgId: string }) {
     return null;
   }
 
-  const { organization, parentReseller, customerOrganizations, workspaces, teams, metrics } =
-    overview;
+  const { organization, parentReseller, workspaces, teams, metrics } = overview;
 
   return (
     <div className="space-y-6" data-testid="support-overview-tab">
@@ -120,8 +119,8 @@ export function SupportOverviewTab({ orgId }: { orgId: string }) {
             </dd>
           </div>
           <div>
-            <dt className="text-[var(--color-ink-muted)]">Tenancy Type</dt>
-            <dd className="mt-0.5 capitalize">{organization.type}</dd>
+            <dt className="text-[var(--color-ink-muted)]">Reseller</dt>
+            <dd className="mt-0.5">{parentReseller ? parentReseller.name : 'None'}</dd>
           </div>
           <div>
             <dt className="text-[var(--color-ink-muted)]">Status</dt>
@@ -150,46 +149,6 @@ export function SupportOverviewTab({ orgId }: { orgId: string }) {
               <dd className="mt-0.5">{parentReseller.slug}</dd>
             </div>
           </dl>
-        </div>
-      )}
-
-      {customerOrganizations.length > 0 && (
-        <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-4">
-          <h3 className="text-sm font-semibold tracking-tight">
-            Child Customer Organizations ({customerOrganizations.length})
-          </h3>
-          <div className="mt-3 overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="border-b border-[var(--color-border-subtle)] text-[var(--color-ink-muted)]">
-                <tr>
-                  <th scope="col" className="pb-2 font-medium">
-                    Name
-                  </th>
-                  <th scope="col" className="pb-2 font-medium">
-                    Slug
-                  </th>
-                  <th scope="col" className="pb-2 font-medium">
-                    Status
-                  </th>
-                  <th scope="col" className="pb-2 font-medium">
-                    Org ID
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--color-border-subtle)]">
-                {customerOrganizations.map((cust) => (
-                  <tr key={cust.id}>
-                    <td className="py-2 font-medium">{cust.name}</td>
-                    <td className="py-2 text-[var(--color-ink-muted)]">{cust.slug}</td>
-                    <td className="py-2">
-                      <StatusDot tone={getStatusTone(cust.status)} label={cust.status} />
-                    </td>
-                    <td className="py-2 font-mono select-all">{cust.id}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
         </div>
       )}
 

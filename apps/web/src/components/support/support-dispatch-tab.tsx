@@ -5,42 +5,55 @@ import { useQuery } from '@tanstack/react-query';
 import {
   platformSupportApi,
   type PlatformSupportDispatchDiagnostics,
-  type PlatformSupportDispatchFailure,
+  type PlatformSupportDispatchMessage,
 } from '@/lib/api-client';
 import { StatusDot, type StatusTone } from '@/components/ui/status-dot';
 import { useModalDialog } from '@/components/ui/dialog';
 
-function getFailureTone(category: string): StatusTone {
-  switch (category.toLowerCase()) {
-    case 'timeout':
-    case 'rate_limit':
-      return 'warn';
-    case 'auth':
-    case 'provider_rejected':
-    case 'bad_request':
+/**
+ * Dispatch troubleshooting (U13.4). The API returns operational metadata only —
+ * identifiers, statuses, timings and fixed failure codes. No recipient, message
+ * content or provider error text exists in the response, so none is rendered.
+ */
+
+const STATUS_FILTERS = [
+  { value: 'all', label: 'Failed and in flight' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'outcome_unknown', label: 'Outcome unknown' },
+  { value: 'queued', label: 'Queued' },
+  { value: 'routing', label: 'Routing' },
+  { value: 'submitting', label: 'Submitting' },
+] as const;
+
+function statusTone(status: string): StatusTone {
+  switch (status) {
+    case 'failed':
       return 'bad';
+    case 'outcome_unknown':
+      return 'warn';
     default:
       return 'unknown';
   }
 }
 
+function codeTone(code: string | null): StatusTone {
+  if (!code) return 'unknown';
+  if (code === 'TIMEOUT' || code === 'RATE_LIMITED' || code === 'PROVIDER_ERROR') return 'warn';
+  return 'bad';
+}
+
 export function SupportDispatchTab({ orgId }: { orgId: string }) {
-  const [selectedFailure, setSelectedFailure] = useState<PlatformSupportDispatchFailure | null>(
-    null,
-  );
-  const [failureCategoryFilter, setFailureCategoryFilter] = useState<string>('all');
+  const [selected, setSelected] = useState<PlatformSupportDispatchMessage | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string>('all');
   const limit = 25;
-  const modal = useModalDialog(Boolean(selectedFailure));
+  const modal = useModalDialog(Boolean(selected));
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
-    queryKey: ['platform-support', 'dispatch', orgId, limit, failureCategoryFilter],
+    queryKey: ['platform-support', 'dispatch', orgId, limit, statusFilter],
     queryFn: ({ signal }) =>
       platformSupportApi.getDispatch(
         orgId,
-        {
-          limit,
-          failureCategory: failureCategoryFilter === 'all' ? undefined : failureCategoryFilter,
-        },
+        { limit, status: statusFilter === 'all' ? undefined : statusFilter },
         signal,
       ),
     enabled: Boolean(orgId),
@@ -81,80 +94,50 @@ export function SupportDispatchTab({ orgId }: { orgId: string }) {
   const dispatch: PlatformSupportDispatchDiagnostics | undefined = data?.data;
   if (!dispatch) return null;
 
-  const { queue, recentFailures } = dispatch;
+  const { queue, recentMessages } = dispatch;
 
   return (
     <div className="space-y-6" data-testid="support-dispatch-tab">
-      {/* Safeguard & Read-Only Banner */}
       <div className="flex items-center gap-3 rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-3.5 text-xs text-[var(--color-ink-muted)]">
-        <svg
-          className="size-4 shrink-0 text-[var(--color-ok)]"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-          />
-        </svg>
         <span>
           <strong className="font-semibold text-[var(--color-ink)]">
-            Read-Only Diagnostic Access:
+            Read-only dispatch metadata:
           </strong>{' '}
-          Platform support provides diagnostic inspection only. Recipient PII is masked, and no
-          write-capable impersonation or message mutation is permitted.
+          identifiers, statuses, timings and fixed failure codes only. Recipients, message content
+          and provider error text are not available to platform support.
         </span>
       </div>
 
-      {/* Queue State */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-4">
-          <p className="text-xs text-[var(--color-ink-muted)]">Live Pending Queue Count</p>
-          <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-2xl font-semibold tracking-tight">{queue.pendingCount}</span>
-            <span className="text-xs text-[var(--color-ink-muted)]">messages awaiting pickup</span>
-          </div>
-        </div>
-        <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-4">
-          <p className="text-xs text-[var(--color-ink-muted)]">Claimed / Submitting Count</p>
-          <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-2xl font-semibold tracking-tight">{queue.claimedCount}</span>
-            <span className="text-xs text-[var(--color-ink-muted)]">
-              actively in-flight to providers
-            </span>
-          </div>
-        </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <QueueCard label="Ready to dispatch" value={queue.pendingCount} hint="awaiting pickup" />
+        <QueueCard label="Delayed" value={queue.delayedCount} hint="waiting for a retry time" />
+        <QueueCard label="Claimed" value={queue.claimedCount} hint="under a dispatcher claim" />
       </div>
 
-      {/* Recent Failures & Troubleshooting */}
       <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-4">
         <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[var(--color-border-subtle)]">
           <div>
-            <h3 className="text-sm font-semibold tracking-tight">Recent Dispatch Failures</h3>
+            <h3 className="text-sm font-semibold tracking-tight">Recent messages</h3>
             <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
-              Diagnostic inspection of message failures and upstream provider attempts.
+              Failed and in-flight messages with their provider attempts.
             </p>
           </div>
 
           <div className="flex items-center gap-2 text-xs">
-            <label htmlFor="failureCategorySelect" className="text-[var(--color-ink-muted)]">
-              Category:
+            <label htmlFor="dispatchStatusSelect" className="text-[var(--color-ink-muted)]">
+              Status:
             </label>
             <select
-              id="failureCategorySelect"
-              value={failureCategoryFilter}
-              onChange={(e) => setFailureCategoryFilter(e.target.value)}
+              id="dispatchStatusSelect"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
               className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2 py-1 text-xs"
             >
-              <option value="all">All Categories</option>
-              <option value="timeout">Timeout</option>
-              <option value="provider_rejected">Provider Rejected</option>
-              <option value="rate_limit">Rate Limit</option>
-              <option value="auth">Auth / Bad Credentials</option>
-              <option value="circuit_open">Circuit Open</option>
+              {STATUS_FILTERS.map((f) => (
+                <option key={f.value} value={f.value}>
+                  {f.label}
+                </option>
+              ))}
             </select>
 
             <button
@@ -168,9 +151,9 @@ export function SupportDispatchTab({ orgId }: { orgId: string }) {
           </div>
         </div>
 
-        {recentFailures.length === 0 ? (
+        {recentMessages.length === 0 ? (
           <p className="py-6 text-center text-xs text-[var(--color-ink-muted)]">
-            No recent dispatch failures found matching current filters.
+            No messages match the current filter.
           </p>
         ) : (
           <div className="mt-3 overflow-x-auto">
@@ -181,19 +164,19 @@ export function SupportDispatchTab({ orgId }: { orgId: string }) {
                     Message ID
                   </th>
                   <th scope="col" className="pb-2 font-medium">
-                    Masked Recipient
+                    Channel
                   </th>
                   <th scope="col" className="pb-2 font-medium">
-                    Category
+                    Status
                   </th>
                   <th scope="col" className="pb-2 font-medium">
-                    Error Code / Reason
+                    Failure code
                   </th>
                   <th scope="col" className="pb-2 font-medium">
                     Attempts
                   </th>
                   <th scope="col" className="pb-2 font-medium">
-                    Timestamp
+                    Created
                   </th>
                   <th scope="col" className="pb-2 font-medium text-right">
                     Action
@@ -201,36 +184,28 @@ export function SupportDispatchTab({ orgId }: { orgId: string }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border-subtle)]">
-                {recentFailures.map((f) => (
-                  <tr key={f.messageId} className="hover:bg-[var(--color-surface)]/50">
-                    <td className="py-2.5 font-mono select-all font-medium">{f.messageId}</td>
-                    <td className="py-2.5 font-mono text-[var(--color-ink)]">
-                      {f.maskedRecipient}
-                    </td>
+                {recentMessages.map((m) => (
+                  <tr key={m.messageId} className="hover:bg-[var(--color-surface)]/50">
+                    <td className="py-2.5 font-mono select-all font-medium">{m.messageId}</td>
+                    <td className="py-2.5 uppercase">{m.channel}</td>
                     <td className="py-2.5">
-                      <StatusDot
-                        tone={getFailureTone(f.failureCategory ?? 'unknown')}
-                        label={f.failureCategory ?? 'Unknown'}
-                      />
+                      <StatusDot tone={statusTone(m.status)} label={m.status} />
                     </td>
-                    <td
-                      className="py-2.5 max-w-xs truncate text-[var(--color-ink-muted)]"
-                      title={f.failureReason ?? '—'}
-                    >
-                      {f.failureReason ?? '—'}
+                    <td className="py-2.5 font-mono">
+                      {m.failureCode ? (
+                        <StatusDot tone={codeTone(m.failureCode)} label={m.failureCode} />
+                      ) : (
+                        '—'
+                      )}
                     </td>
-                    <td className="py-2.5">{f.providerAttempts.length}</td>
+                    <td className="py-2.5">{m.attemptCount}</td>
                     <td className="py-2.5 text-[var(--color-ink-muted)]">
-                      {new Date(f.createdAt).toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        second: '2-digit',
-                      })}
+                      {new Date(m.createdAt).toLocaleString()}
                     </td>
                     <td className="py-2.5 text-right">
                       <button
                         type="button"
-                        onClick={() => setSelectedFailure(f)}
+                        onClick={() => setSelected(m)}
                         className="rounded-md border border-[var(--color-border-subtle)] px-2 py-0.5 text-2xs font-medium hover:bg-[var(--color-surface-raised)]"
                       >
                         Inspect
@@ -244,14 +219,13 @@ export function SupportDispatchTab({ orgId }: { orgId: string }) {
         )}
       </div>
 
-      {/* Failure Detail Inspector Modal */}
-      {selectedFailure && (
+      {selected && (
         <div
           role="dialog"
           aria-modal="true"
-          aria-labelledby="dispatch-failure-inspector-title"
+          aria-labelledby="dispatch-message-inspector-title"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 focus:outline-none"
-          {...modal.overlayProps(() => setSelectedFailure(null), true)}
+          {...modal.overlayProps(() => setSelected(null), true)}
           data-testid="failure-detail-modal"
         >
           <div
@@ -261,83 +235,77 @@ export function SupportDispatchTab({ orgId }: { orgId: string }) {
           >
             <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)] pb-3">
               <div>
-                <h4 id="dispatch-failure-inspector-title" className="text-sm font-semibold">
-                  Dispatch Failure Inspector
+                <h4 id="dispatch-message-inspector-title" className="text-sm font-semibold">
+                  Dispatch inspector
                 </h4>
                 <p className="mt-0.5 font-mono text-2xs text-[var(--color-ink-muted)]">
-                  {selectedFailure.messageId}
+                  {selected.messageId}
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => setSelectedFailure(null)}
+                onClick={() => setSelected(null)}
+                aria-label="Close"
                 className="rounded-md p-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
               >
                 ✕
               </button>
             </div>
 
-            <div className="mt-4 space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <span className="text-[var(--color-ink-muted)]">Recipient (Masked):</span>
-                  <p className="font-mono font-medium">{selectedFailure.maskedRecipient}</p>
-                </div>
-                <div>
-                  <span className="text-[var(--color-ink-muted)]">Failure Category:</span>
-                  <p className="capitalize font-medium">
-                    {selectedFailure.failureCategory ?? 'Unknown'}
-                  </p>
-                </div>
-              </div>
-
-              {selectedFailure.failureReason && (
-                <div className="rounded-md bg-[var(--color-surface-raised)] p-2.5 font-mono text-2xs text-[var(--color-bad)]">
-                  {selectedFailure.failureReason}
-                </div>
-              )}
-
+            <dl className="mt-4 grid grid-cols-2 gap-2 text-xs">
               <div>
-                <h5 className="font-semibold text-xs text-[var(--color-ink)]">
-                  Provider Submission Attempts
-                </h5>
-                {selectedFailure.providerAttempts.length === 0 ? (
-                  <p className="mt-1 text-2xs text-[var(--color-ink-muted)] italic">
-                    No upstream attempts recorded prior to failure.
-                  </p>
-                ) : (
-                  <div className="mt-2 space-y-2">
-                    {selectedFailure.providerAttempts.map((attempt) => (
-                      <div
-                        key={attempt.attemptNumber}
-                        className="rounded-md border border-[var(--color-border-subtle)] p-2.5 text-2xs"
-                      >
-                        <div className="flex items-center justify-between font-medium">
-                          <span>
-                            Attempt #{attempt.attemptNumber}: {attempt.providerId} (
-                            {attempt.providerType})
-                          </span>
-                          <span>
-                            HTTP {attempt.httpStatus ?? '—'} (
-                            {attempt.latencyMs !== null ? `${attempt.latencyMs}ms` : '—'})
-                          </span>
-                        </div>
-                        {attempt.errorType && (
-                          <p className="mt-1 font-mono text-[var(--color-bad)]">
-                            Error Type: {attempt.errorType}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <dt className="text-[var(--color-ink-muted)]">Status</dt>
+                <dd className="font-medium">{selected.status}</dd>
               </div>
+              <div>
+                <dt className="text-[var(--color-ink-muted)]">Failure code</dt>
+                <dd className="font-mono font-medium">{selected.failureCode ?? '—'}</dd>
+              </div>
+              <div>
+                <dt className="text-[var(--color-ink-muted)]">Created</dt>
+                <dd>{new Date(selected.createdAt).toLocaleString()}</dd>
+              </div>
+              <div>
+                <dt className="text-[var(--color-ink-muted)]">Completed</dt>
+                <dd>
+                  {selected.completedAt ? new Date(selected.completedAt).toLocaleString() : '—'}
+                </dd>
+              </div>
+            </dl>
+
+            <div className="mt-4 text-xs">
+              <h5 className="font-semibold text-[var(--color-ink)]">Provider attempts</h5>
+              {selected.attempts.length === 0 ? (
+                <p className="mt-1 text-2xs text-[var(--color-ink-muted)] italic">
+                  No provider attempt was recorded.
+                </p>
+              ) : (
+                <ul className="mt-2 space-y-2">
+                  {selected.attempts.map((attempt) => (
+                    <li
+                      key={attempt.attemptNumber}
+                      className="rounded-md border border-[var(--color-border-subtle)] p-2.5 text-2xs"
+                    >
+                      <div className="flex items-center justify-between font-medium">
+                        <span>
+                          Attempt #{attempt.attemptNumber}: {attempt.adapterKey} ({attempt.status})
+                        </span>
+                        <span>{attempt.latencyMs !== null ? `${attempt.latencyMs} ms` : '—'}</span>
+                      </div>
+                      <p className="mt-1 font-mono text-[var(--color-ink-muted)]">
+                        Provider {attempt.providerId}
+                        {attempt.failureCode ? ` · ${attempt.failureCode}` : ''}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
 
             <div className="mt-5 flex justify-end">
               <button
                 type="button"
-                onClick={() => setSelectedFailure(null)}
+                onClick={() => setSelected(null)}
                 className="rounded-md border border-[var(--color-border-subtle)] px-3 py-1 text-xs font-medium hover:bg-[var(--color-surface-raised)]"
               >
                 Close
@@ -346,6 +314,18 @@ export function SupportDispatchTab({ orgId }: { orgId: string }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function QueueCard({ label, value, hint }: { label: string; value: number; hint: string }) {
+  return (
+    <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-4">
+      <p className="text-xs text-[var(--color-ink-muted)]">{label}</p>
+      <div className="mt-2 flex items-baseline gap-2">
+        <span className="text-2xl font-semibold tracking-tight">{value}</span>
+        <span className="text-xs text-[var(--color-ink-muted)]">{hint}</span>
+      </div>
     </div>
   );
 }

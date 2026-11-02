@@ -2,8 +2,11 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   ERROR_CODES,
   PERMISSIONS,
-  maskRecipientAddress,
+  PLATFORM_SUPPORT_FAILURE_CODES,
   type AuthPrincipal,
+  type PlatformSupportDispatchAttempt,
+  type PlatformSupportDispatchMessage,
+  type PlatformSupportFailureCode,
   type PlatformSupportAuditItem,
   type PlatformSupportAuditSearchResponse,
   type PlatformSupportDispatchDiagnostics,
@@ -70,10 +73,11 @@ export class PlatformSupportService {
           slug: string;
           status: string;
           resellerId: string | null;
+          brandConfig: Record<string, unknown> | null;
           createdAt: string;
           updatedAt: string;
         }>(
-          sql`SELECT id, name, slug, status, reseller_id as "resellerId", created_at as "createdAt", updated_at as "updatedAt" FROM organizations WHERE id = ${orgId}`,
+          sql`SELECT id, name, slug, status, reseller_id as "resellerId", brand_config as "brandConfig", created_at as "createdAt", updated_at as "updatedAt" FROM organizations WHERE id = ${orgId}`,
         );
 
         const org = orgResult.rows[0];
@@ -85,47 +89,16 @@ export class PlatformSupportService {
           });
         }
 
-        let brandConfig: Record<string, unknown> | null = null;
-
-        // Parent reseller if applicable
+        // The reseller the organization belongs to (organizations.reseller_id).
         let parentReseller: { id: string; name: string; slug: string } | null = null;
         if (org.resellerId) {
-          const resResult = await tx.execute<{
-            id: string;
-            name: string;
-            slug: string;
-            brandConfig: Record<string, unknown> | null;
-          }>(
-            sql`SELECT id, name, slug, brand_config as "brandConfig" FROM resellers WHERE id = ${org.resellerId}`,
+          const resResult = await tx.execute<{ id: string; name: string; slug: string }>(
+            sql`SELECT id, name, slug FROM resellers WHERE id = ${org.resellerId}`,
           );
-          if (resResult.rows[0]) {
-            parentReseller = {
-              id: resResult.rows[0].id,
-              name: resResult.rows[0].name,
-              slug: resResult.rows[0].slug,
-            };
-            brandConfig = resResult.rows[0].brandConfig;
+          const reseller = resResult.rows[0];
+          if (reseller) {
+            parentReseller = { id: reseller.id, name: reseller.name, slug: reseller.slug };
           }
-        }
-
-        // Child customer organizations if organization is a reseller
-        let customerOrganizations: { id: string; name: string; slug: string; status: string }[] =
-          [];
-        const resOrgResult = await tx.execute<{
-          id: string;
-          brandConfig: Record<string, unknown> | null;
-        }>(sql`SELECT id, brand_config as "brandConfig" FROM resellers WHERE id = ${orgId}`);
-        if (resOrgResult.rows.length > 0) {
-          brandConfig = resOrgResult.rows[0]?.brandConfig ?? brandConfig;
-          const custResult = await tx.execute<{
-            id: string;
-            name: string;
-            slug: string;
-            status: string;
-          }>(
-            sql`SELECT id, name, slug, status FROM organizations WHERE reseller_id = ${orgId} ORDER BY name ASC`,
-          );
-          customerOrganizations = custResult.rows;
         }
 
         // Workspaces
@@ -224,14 +197,12 @@ export class PlatformSupportService {
             name: org.name,
             slug: org.slug,
             status: org.status,
-            type: org.resellerId ? 'customer' : 'direct',
             resellerId: org.resellerId,
-            brandConfig,
+            brandConfig: org.brandConfig ?? {},
             createdAt: org.createdAt,
             updatedAt: org.updatedAt,
           },
           parentReseller,
-          customerOrganizations,
           workspaces,
           teams,
           metrics: {
@@ -341,9 +312,10 @@ export class PlatformSupportService {
           channel: string;
           status: string;
           healthState: string;
+          healthChangedAt: string | null;
           circuitState: string;
-          failureCount: number;
-          lastFailureAt: string | null;
+          circuitGeneration: number;
+          circuitChangedAt: string | null;
         }>(
           sql`
             SELECT
@@ -352,9 +324,10 @@ export class PlatformSupportService {
               c.code as "channel",
               p.status,
               p.health_state as "healthState",
+              p.health_changed_at as "healthChangedAt",
               p.circuit_state as "circuitState",
-              coalesce(p.circuit_generation, 0)::int as "failureCount",
-              p.circuit_changed_at as "lastFailureAt"
+              p.circuit_generation::int as "circuitGeneration",
+              p.circuit_changed_at as "circuitChangedAt"
             FROM providers p
             JOIN channels c ON c.id = p.channel_id
             WHERE p.id IN (SELECT provider_id FROM organization_provider_assignments WHERE org_id = ${orgId})
@@ -423,36 +396,12 @@ export class PlatformSupportService {
           });
         }
 
+        // The database function is the content boundary (migration 0040): it
+        // returns identifiers, statuses, timings and allowlisted failure codes
+        // only. The view below is still built field by field, so nothing the
+        // function might add later reaches a response unreviewed.
         const limit = query.limit ?? 20;
-        const diagResult = await tx.execute<{
-          diagnostics: {
-            queue: {
-              pendingCount: number;
-              claimedCount: number;
-              delayedCount: number;
-            };
-            recentFailures: {
-              messageId: string;
-              channel: string;
-              status: string;
-              failureReason: string | null;
-              failureCategory: string | null;
-              recipientAddress: string;
-              createdAt: string;
-              updatedAt: string;
-              lastAttemptAt: string | null;
-              providerAttempts: {
-                attemptNumber: number;
-                providerId: string;
-                providerType: string;
-                errorType: string | null;
-                httpStatus: number | null;
-                latencyMs: number | null;
-                attemptedAt: string;
-              }[];
-            }[];
-          };
-        }>(
+        const diagResult = await tx.execute<{ diagnostics: RawDispatchDiagnostics | null }>(
           sql`SELECT app_platform_support_dispatch_diagnostics(
             ${orgId}::uuid,
             ${query.channel ?? null},
@@ -460,25 +409,13 @@ export class PlatformSupportService {
             ${limit}::integer
           ) AS diagnostics`,
         );
-
-        const data = diagResult.rows[0]?.diagnostics ?? {
-          queue: { pendingCount: 0, claimedCount: 0, delayedCount: 0 },
-          recentFailures: [],
+        const raw = diagResult.rows[0]?.diagnostics;
+        const queue = {
+          pendingCount: Number(raw?.queue?.pendingCount ?? 0),
+          delayedCount: Number(raw?.queue?.delayedCount ?? 0),
+          claimedCount: Number(raw?.queue?.claimedCount ?? 0),
         };
-
-        const recentFailures = (data.recentFailures ?? []).map((f) => ({
-          messageId: f.messageId,
-          channel: f.channel,
-          status: f.status,
-          failureReason: f.failureReason,
-          failureCategory: f.failureCategory,
-          attemptCount: f.providerAttempts?.length ?? 0,
-          createdAt: f.createdAt,
-          updatedAt: f.updatedAt,
-          lastAttemptAt: f.lastAttemptAt,
-          maskedRecipient: maskRecipientAddress(f.recipientAddress),
-          providerAttempts: f.providerAttempts ?? [],
-        }));
+        const recentMessages = (raw?.recentMessages ?? []).map(dispatchMessageView);
 
         // Audit log
         await this.audit.record(
@@ -493,7 +430,7 @@ export class PlatformSupportService {
               tool: 'dispatch',
               channel: query.channel ?? null,
               status: query.status ?? null,
-              limit: query.limit,
+              limit,
             },
             outcome: 'success',
             before: null,
@@ -502,10 +439,7 @@ export class PlatformSupportService {
           tx,
         );
 
-        return {
-          queue: data.queue,
-          recentFailures,
-        };
+        return { queue, recentMessages };
       },
     );
   }
@@ -589,8 +523,6 @@ export class PlatformSupportService {
             scopeId: schema.auditLogs.scopeId,
             orgId: schema.auditLogs.orgId,
             metadata: schema.auditLogs.metadata,
-            ip: schema.auditLogs.ip,
-            userAgent: schema.auditLogs.userAgent,
           })
           .from(schema.auditLogs)
           .where(predicates.length > 0 ? and(...predicates) : undefined)
@@ -613,12 +545,16 @@ export class PlatformSupportService {
             resourceId: query.orgId ?? null,
             scopeType: query.orgId ? 'organization' : 'platform',
             scopeId: query.orgId ?? null,
+            // The filters as applied; the opaque cursor is reduced to which page.
             metadata: {
               tool: 'audit_search',
               orgId: query.orgId ?? null,
               action: query.action ?? null,
-              limit: query.limit,
-              cursor: query.cursor ?? null,
+              actorUserId: query.actorUserId ?? null,
+              since: query.since ? query.since.toISOString() : null,
+              until: query.until ? query.until.toISOString() : null,
+              limit: resolved.limit,
+              page: query.cursor ? 'next' : 'first',
             },
             outcome: 'success',
             before: null,
@@ -644,35 +580,17 @@ export class PlatformSupportService {
       scopeId: string | null;
       orgId: string | null;
       metadata: unknown;
-      ip: string | null;
-      userAgent: string | null;
     }
 
     const auditRowsTyped = rawItems as unknown as RawAuditRow[];
 
-    // Released tenant transaction connection before querying auth database
-    const actorUserIds = [
-      ...new Set(
-        auditRowsTyped.map((r) => r.actorUserId).filter((id): id is string => Boolean(id)),
-      ),
-    ];
-    const emailMap = new Map<string, string>();
-
-    if (actorUserIds.length > 0) {
-      const usersResult = await this.db.auth
-        .select({ id: schema.users.id, email: schema.users.email })
-        .from(schema.users)
-        .where(inArray(schema.users.id, actorUserIds));
-      for (const u of usersResult) {
-        emailMap.set(u.id, u.email);
-      }
-    }
-
+    // Organization names, read after the tenant transaction has released its
+    // connection. Actor emails, IP addresses and user agents are not returned
+    // (data minimisation, U13.4 review F-4).
     const orgIds = [
       ...new Set(auditRowsTyped.map((r) => r.orgId).filter((id): id is string => Boolean(id))),
     ];
     const orgNameMap = new Map<string, string>();
-
     if (orgIds.length > 0) {
       const orgsResult = await this.db.auth
         .select({ id: schema.organizations.id, name: schema.organizations.name })
@@ -690,18 +608,115 @@ export class PlatformSupportService {
       outcome: String(r.outcome),
       actorType: String(r.actorType),
       actorUserId: r.actorUserId ? String(r.actorUserId) : null,
-      actorEmail: r.actorUserId ? (emailMap.get(String(r.actorUserId)) ?? null) : null,
       resourceType: String(r.resourceType),
       resourceId: r.resourceId ? String(r.resourceId) : null,
       scopeType: String(r.scopeType),
       scopeId: r.scopeId ? String(r.scopeId) : null,
       orgId: r.orgId ? String(r.orgId) : null,
       orgName: r.orgId ? (orgNameMap.get(String(r.orgId)) ?? null) : null,
-      metadata: (r.metadata ? redact(r.metadata) : {}) as Record<string, unknown>,
-      ip: r.ip ? String(r.ip) : null,
-      userAgent: r.userAgent ? String(r.userAgent) : null,
+      metadata: minimiseMetadata(r.metadata ? redact(r.metadata) : {}),
     }));
 
     return { data: items, page };
   }
+}
+
+/** The shape `app_platform_support_dispatch_diagnostics()` returns (migration 0040). */
+interface RawDispatchDiagnostics {
+  readonly queue?: { pendingCount?: number; delayedCount?: number; claimedCount?: number };
+  readonly recentMessages?: readonly RawDispatchMessage[];
+}
+interface RawDispatchMessage {
+  readonly messageId: string;
+  readonly channel: string;
+  readonly status: string;
+  readonly failureCode: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly completedAt: string | null;
+  readonly attempts?: readonly RawDispatchAttempt[];
+}
+interface RawDispatchAttempt {
+  readonly attemptNumber: number;
+  readonly providerId: string;
+  readonly adapterKey: string;
+  readonly status: string;
+  readonly failureCode: string | null;
+  readonly latencyMs: number | null;
+  readonly attemptedAt: string;
+}
+
+const FAILURE_CODES: ReadonlySet<string> = new Set(PLATFORM_SUPPORT_FAILURE_CODES);
+
+/** A code from the closed list, `OTHER` for anything else, `null` for none. */
+export function failureCodeView(
+  code: string | null | undefined,
+): PlatformSupportFailureCode | null {
+  if (code === null || code === undefined) return null;
+  return FAILURE_CODES.has(code) ? (code as PlatformSupportFailureCode) : 'OTHER';
+}
+
+function dispatchAttemptView(a: RawDispatchAttempt): PlatformSupportDispatchAttempt {
+  return {
+    attemptNumber: Number(a.attemptNumber),
+    providerId: String(a.providerId),
+    adapterKey: String(a.adapterKey),
+    status: String(a.status),
+    failureCode: failureCodeView(a.failureCode),
+    latencyMs: a.latencyMs === null || a.latencyMs === undefined ? null : Number(a.latencyMs),
+    attemptedAt: String(a.attemptedAt),
+  };
+}
+
+export function dispatchMessageView(m: RawDispatchMessage): PlatformSupportDispatchMessage {
+  const attempts = (m.attempts ?? []).map(dispatchAttemptView);
+  return {
+    messageId: String(m.messageId),
+    channel: String(m.channel),
+    status: String(m.status),
+    failureCode: failureCodeView(m.failureCode),
+    createdAt: String(m.createdAt),
+    updatedAt: String(m.updatedAt),
+    completedAt: m.completedAt ? String(m.completedAt) : null,
+    attemptCount: attempts.length,
+    attempts,
+  };
+}
+
+/**
+ * Personal-data keys removed from cross-tenant audit metadata (F-4), in
+ * addition to the credential redaction `redact` applies. Today's writers keep
+ * IP address and user agent in their own columns (not returned) and put no
+ * email or recipient in metadata; this holds that for any future writer.
+ */
+const PERSONAL_METADATA_KEYS: ReadonlySet<string> = new Set([
+  'ip',
+  'ipaddress',
+  'useragent',
+  'email',
+  'emailaddress',
+  'phone',
+  'phonenumber',
+  'recipient',
+  'recipientaddress',
+  'rawaddress',
+]);
+
+export function minimiseMetadata(value: unknown): Record<string, unknown> {
+  const walk = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(walk);
+    if (v && typeof v === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [k, inner] of Object.entries(v as Record<string, unknown>)) {
+        if (PERSONAL_METADATA_KEYS.has(k.toLowerCase().replace(/[^a-z]/g, ''))) continue;
+        out[k] = walk(inner);
+      }
+      return out;
+    }
+    return v;
+  };
+  const result = walk(value);
+  return result && typeof result === 'object' && !Array.isArray(result)
+    ? (result as Record<string, unknown>)
+    : {};
 }

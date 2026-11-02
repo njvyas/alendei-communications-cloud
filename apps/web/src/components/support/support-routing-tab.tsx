@@ -125,10 +125,10 @@ export function SupportRoutingTab({ orgId }: { orgId: string }) {
                     Health State
                   </th>
                   <th scope="col" className="pb-2 font-medium">
-                    Failure Count
+                    Circuit generation
                   </th>
                   <th scope="col" className="pb-2 font-medium">
-                    Last Failure
+                    Circuit changed
                   </th>
                 </tr>
               </thead>
@@ -147,9 +147,9 @@ export function SupportRoutingTab({ orgId }: { orgId: string }) {
                     <td className="py-2.5">
                       <StatusDot tone={getHealthTone(ph.healthState)} label={ph.healthState} />
                     </td>
-                    <td className="py-2.5">{ph.failureCount}</td>
+                    <td className="py-2.5">{ph.circuitGeneration}</td>
                     <td className="py-2.5">
-                      {ph.lastFailureAt ? new Date(ph.lastFailureAt).toLocaleString() : '—'}
+                      {ph.circuitChangedAt ? new Date(ph.circuitChangedAt).toLocaleString() : '—'}
                     </td>
                   </tr>
                 ))}

@@ -5,15 +5,19 @@
  * 2. Strict negative authorization: unauthenticated callers get 401, tenant admins get 403.
  * 3. Probing non-existent organizations fails closed with 403 (no existence oracle).
  * 4. Authorized platform support operators can inspect overview, routing, dispatch, and cross-tenant audit.
- * 5. Privacy: recipient addresses are masked; message bodies and provider credentials/secrets are omitted.
- * 6. Auditability: every diagnostic read is synchronously recorded in audit_logs.
+ * 5. Privacy (U13.4 review F-1, F-2, F-4): dispatch diagnostics carry no recipient, message
+ *    content or provider failure text — only fixed failure codes; audit search returns no IP
+ *    address, user agent or actor email.
+ * 6. Auditability: every diagnostic read is synchronously recorded in audit_logs, in the same
+ *    transaction — a read whose record cannot be written fails (500) and returns nothing.
  */
-import { ERROR_CODES, PLATFORM_ROLE_KEYS } from '@acc/contracts';
+import { ERROR_CODES, PLATFORM_ROLE_KEYS, PLATFORM_SUPPORT_FAILURE_CODES } from '@acc/contracts';
 import { schema } from '@acc/db';
 import { eq, sql } from 'drizzle-orm';
 import request from 'supertest';
 import { uuidv7 } from 'uuidv7';
 
+import { AuditWriter } from '../src/audit/audit-writer.service';
 import { purgeAudit, startHarness, type Harness } from './auth-harness';
 import { RevocationWorld, url, type Org, type Person } from './revocation-fixtures';
 
@@ -25,6 +29,12 @@ describe('Platform Support & Operations (U13.4 Security & RLS Spec)', () => {
   let supportToken: string;
   let tenantAdmin: Person;
   let tenantAdminToken: string;
+  let smsId: string;
+  let providerId: string;
+  let messageId: string;
+  const PLANTED_RECIPIENT = '+919800000077';
+  const PLANTED_BODY = 'PLANTED-SEC-BODY-5512';
+  const PLANTED_CREDENTIAL = 'sk_live_SECPLANT';
 
   beforeAll(async () => {
     h = await startHarness();
@@ -41,6 +51,50 @@ describe('Platform Support & Operations (U13.4 Security & RLS Spec)', () => {
     await w.grant(supportUser.userId, supportRole!.id, 'platform', null);
     supportToken = await w.login(supportUser.email);
 
+    // Synthetic dispatch data in the target organization: a failed message whose
+    // stored reason and attempt text echo the recipient, the body and a credential.
+    const [sms] = await h.admin
+      .select({ id: schema.channels.id })
+      .from(schema.channels)
+      .where(eq(schema.channels.code, 'sms'));
+    smsId = sms!.id;
+    providerId = uuidv7();
+    await h.admin.execute(
+      sql`INSERT INTO providers (id, channel_id, name, adapter_key, status)
+          VALUES (${providerId}, ${smsId}, ${`u134-sec-${providerId.slice(-8)}`}, 'simulator', 'active')`,
+    );
+    await h.admin.execute(
+      sql`INSERT INTO organization_provider_assignments (org_id, provider_id, channel_id, priority)
+          VALUES (${org.orgId}, ${providerId}, ${smsId}, 1)`,
+    );
+    const contactId = uuidv7();
+    await h.admin.execute(
+      sql`INSERT INTO contacts (id, org_id, workspace_id) VALUES (${contactId}, ${org.orgId}, ${org.workspaceId})`,
+    );
+    messageId = uuidv7();
+    await h.admin.execute(
+      sql`INSERT INTO messages (id, org_id, workspace_id, contact_id, channel_id, status, payload,
+                                recipient_address, failure_reason, correlation_id)
+          VALUES (${messageId}, ${org.orgId}, ${org.workspaceId}, ${contactId}, ${smsId}, 'failed',
+                  ${JSON.stringify({ text: PLANTED_BODY })}::jsonb, ${PLANTED_RECIPIENT},
+                  ${`INVALID_REQUEST: provider echoed ${PLANTED_RECIPIENT} body="${PLANTED_BODY}"`},
+                  ${uuidv7()})`,
+    );
+    await h.admin.execute(
+      sql`INSERT INTO message_attempts (message_id, org_id, provider_id, channel_id, attempt_number,
+                                        fencing_epoch, claim_token, status, failure_reason, latency_ms)
+          VALUES (${messageId}, ${org.orgId}, ${providerId}, ${smsId}, 1, 1, ${uuidv7()}, 'failed',
+                  ${`AUTH_ERROR: credential ${PLANTED_CREDENTIAL} rejected`}, 95)`,
+    );
+    // An audit row in the organization carrying an IP address and user agent.
+    await h.admin.execute(
+      sql`INSERT INTO audit_logs (correlation_id, actor_type, actor_user_id, action, resource_type, resource_id,
+                                  scope_type, scope_id, outcome, metadata, ip, user_agent)
+          VALUES (${uuidv7()}, 'user', ${supportUser.userId}, 'u134.sec.probe', 'Organization', ${org.orgId},
+                  'organization', ${org.orgId}, 'success', ${JSON.stringify({ ip: '198.51.100.9', note: 'kept' })}::jsonb,
+                  '198.51.100.9', 'u134-sec-agent')`,
+    );
+
     // Create a tenant admin user
     const adminPerson = await w.admin(org, 'tenant-admin');
     tenantAdmin = adminPerson;
@@ -48,6 +102,15 @@ describe('Platform Support & Operations (U13.4 Security & RLS Spec)', () => {
   }, 120_000);
 
   afterAll(async () => {
+    if (org) {
+      await h.admin.execute(sql`DELETE FROM message_attempts WHERE org_id = ${org.orgId}`);
+      await h.admin.execute(sql`DELETE FROM messages WHERE org_id = ${org.orgId}`);
+      await h.admin.execute(sql`DELETE FROM contacts WHERE org_id = ${org.orgId}`);
+      await h.admin.execute(
+        sql`DELETE FROM organization_provider_assignments WHERE org_id = ${org.orgId}`,
+      );
+    }
+    if (providerId) await h.admin.execute(sql`DELETE FROM providers WHERE id = ${providerId}`);
     await w.teardown();
     await h.close();
   }, 120_000);
@@ -175,25 +238,137 @@ describe('Platform Support & Operations (U13.4 Security & RLS Spec)', () => {
       expect(rawJson).not.toContain('token');
     });
 
-    it('allows support operator to inspect dispatch diagnostics and masks recipient PII', async () => {
+    it('dispatch diagnostics return metadata and fixed codes only — no recipient, content or provider text', async () => {
       const res = await request(h.app.getHttpServer())
         .get(url(`/platform/support/organizations/${org.orgId}/dispatch`))
         .set('authorization', `Bearer ${supportToken}`);
       expect(res.status).toBe(200);
-      expect(res.body.data.queue).toBeDefined();
-      expect(res.body.data.queue.pendingCount).toBeDefined();
-      expect(res.body.data.recentFailures).toBeDefined();
+      const raw = JSON.stringify(res.body);
+      for (const planted of [
+        PLANTED_RECIPIENT,
+        PLANTED_RECIPIENT.slice(3),
+        PLANTED_BODY,
+        PLANTED_CREDENTIAL,
+        'provider echoed',
+      ]) {
+        expect(raw).not.toContain(planted);
+      }
+      expect(raw).not.toMatch(/recipient|failureReason|payload/i);
+      expect(res.body.data.queue).toEqual({ pendingCount: 0, delayedCount: 0, claimedCount: 0 });
+      const message = res.body.data.recentMessages.find(
+        (m: { messageId: string }) => m.messageId === messageId,
+      );
+      expect(message).toEqual({
+        messageId,
+        channel: 'sms',
+        status: 'failed',
+        failureCode: 'INVALID_REQUEST',
+        createdAt: expect.any(String),
+        updatedAt: expect.any(String),
+        completedAt: null,
+        attemptCount: 1,
+        attempts: [
+          {
+            attemptNumber: 1,
+            providerId,
+            adapterKey: 'simulator',
+            status: 'failed',
+            failureCode: 'AUTH_ERROR',
+            latencyMs: 95,
+            attemptedAt: expect.any(String),
+          },
+        ],
+      });
+      expect(PLATFORM_SUPPORT_FAILURE_CODES).toContain(message.failureCode);
     });
 
-    it('allows support operator to execute cross-tenant audit search with cursor pagination', async () => {
+    it('cross-tenant audit search returns no IP address, user agent or actor email', async () => {
       const res = await request(h.app.getHttpServer())
-        .get(url('/platform/support/audit?limit=10'))
+        .get(url(`/platform/support/audit?limit=10&action=u134.sec.probe`))
         .set('authorization', `Bearer ${supportToken}`);
       expect(res.status).toBe(200);
-      expect(res.body.data).toBeDefined();
-      expect(Array.isArray(res.body.data)).toBe(true);
-      expect(res.body.page).toBeDefined();
       expect(res.body.page.limit).toBe(10);
+      expect(res.body.data).toHaveLength(1);
+      const item = res.body.data[0];
+      expect(item).not.toHaveProperty('ip');
+      expect(item).not.toHaveProperty('userAgent');
+      expect(item).not.toHaveProperty('actorEmail');
+      expect(item.metadata).toEqual({ note: 'kept' });
+      const raw = JSON.stringify(res.body);
+      expect(raw).not.toContain('198.51.100.9');
+      expect(raw).not.toContain('u134-sec-agent');
+      expect(raw).not.toContain(supportUser.email);
+    });
+
+    it('the search is recorded with its filters, and without the opaque cursor', async () => {
+      const since = '2026-01-01T00:00:00.000Z';
+      const res = await request(h.app.getHttpServer())
+        .get(
+          url(
+            `/platform/support/audit?orgId=${org.orgId}&action=u134.sec.probe&actorUserId=${supportUser.userId}&since=${since}&limit=5`,
+          ),
+        )
+        .set('authorization', `Bearer ${supportToken}`);
+      expect(res.status).toBe(200);
+      const [row] = await h.admin
+        .select()
+        .from(schema.auditLogs)
+        .where(
+          sql`action = 'platform.support.diagnostic_read' AND metadata->>'tool' = 'audit_search'`,
+        );
+      expect(row?.actorUserId).toBe(supportUser.userId);
+      expect(row?.metadata).toEqual({
+        tool: 'audit_search',
+        orgId: org.orgId,
+        action: 'u134.sec.probe',
+        actorUserId: supportUser.userId,
+        since,
+        until: null,
+        limit: 5,
+        page: 'first',
+      });
+    });
+
+    it('an action filter outside the audit-action vocabulary is refused (400)', async () => {
+      const res = await request(h.app.getHttpServer())
+        .get(url(`/platform/support/audit?action=${encodeURIComponent("x' OR 1=1 --")}`))
+        .set('authorization', `Bearer ${supportToken}`);
+      expect(res.status).toBe(400);
+    });
+
+    it('a diagnostic read whose audit record cannot be written fails (500) and returns no data', async () => {
+      const writer = h.app.get(AuditWriter);
+      const real = writer.record.bind(writer);
+      const spy = jest
+        .spyOn(writer, 'record')
+        .mockImplementation((input, tx) =>
+          input.action === 'platform.support.diagnostic_read'
+            ? Promise.reject(new Error('audit unavailable'))
+            : real(input, tx),
+        );
+      try {
+        for (const path of [
+          `/platform/support/organizations/${org.orgId}/overview`,
+          `/platform/support/organizations/${org.orgId}/routing`,
+          `/platform/support/organizations/${org.orgId}/dispatch`,
+          '/platform/support/audit?limit=5',
+        ]) {
+          const res = await request(h.app.getHttpServer())
+            .get(url(path))
+            .set('authorization', `Bearer ${supportToken}`);
+          expect({ path, status: res.status }).toEqual({ path, status: 500 });
+          expect(res.body.error?.code).toBe(ERROR_CODES.INTERNAL_ERROR);
+          expect(res.body.data).toBeUndefined();
+          expect(JSON.stringify(res.body)).not.toContain(messageId);
+        }
+      } finally {
+        spy.mockRestore();
+      }
+      const rows = await h.admin
+        .select()
+        .from(schema.auditLogs)
+        .where(eq(schema.auditLogs.action, 'platform.support.diagnostic_read'));
+      expect(rows).toEqual([]);
     });
   });
 });
