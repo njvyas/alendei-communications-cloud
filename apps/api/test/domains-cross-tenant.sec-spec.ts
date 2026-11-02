@@ -295,11 +295,8 @@ describe('U12 domains and branding — cross-tenant addressing (D-1)', () => {
     }
   });
 
-  // A same-tenant branding UPDATE is not asserted here: it fails for every caller
-  // with a database privilege error (QA defect D-2 — migration 0038 added
-  // `organizations.brand_config` without the column-level UPDATE grant `acc_app`
-  // needs since 0025). That is a separate defect, reported for owner direction.
-  it('5. legitimate same-tenant access still works: reads, a registration and a challenge rotation', async () => {
+  // QA defect D-2 fixed by migration 0041: acc_app holds UPDATE (brand_config) on organizations.
+  it('5. legitimate same-tenant access still works: reads, a registration, a challenge rotation and branding update', async () => {
     const get = (p: string) =>
       request(h.app.getHttpServer()).get(url(p)).set('authorization', `Bearer ${token.adminB}`);
     const list = await get(`/organizations/${B.orgId}/domains`);
@@ -323,10 +320,14 @@ describe('U12 domains and branding — cross-tenant addressing (D-1)', () => {
       .set('authorization', `Bearer ${token.adminA}`)
       .set('idempotency-key', `d1-${uuidv7()}`);
     expect(rotate.status).toBe(200);
-    const ownVerification = await request(h.app.getHttpServer())
-      .get(url(`/organizations/${A.orgId}/domains/${ownDomain}/verification`))
-      .set('authorization', `Bearer ${token.adminA}`);
-    expect(ownVerification.status).toBe(200);
+    // With D-2 resolved (migration 0041 granted UPDATE (brand_config) to acc_app),
+    // a same-tenant branding UPDATE now succeeds.
+    const brandPatch = await request(h.app.getHttpServer())
+      .patch(url(`/organizations/${A.orgId}/branding`))
+      .set('authorization', `Bearer ${token.adminA}`)
+      .send({ brandName: 'A New Brand Name' });
+    expect(brandPatch.status).toBe(200);
+    expect(brandPatch.body.data.brandName).toBe('A New Brand Name');
   });
 
   it('6. platform principals keep their reach: super admin and support read B; support cannot mutate', async () => {

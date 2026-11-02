@@ -14,7 +14,7 @@ PostgreSQL is the system of record for all transactional and financial data. Red
 
 ## 2. Domain: Tenancy & IAM
 
-**`organizations`** — the paying tenant ("Customer"). `id, reseller_id NULL FK resellers, name, legal_name, gstin NULL, billing_mode ENUM(prepaid,postpaid), billing_policy ENUM(charge_per_logical_message,charge_per_attempt) DEFAULT charge_per_logical_message, status ENUM(active,suspended,closed), created_at, updated_at`. `billing_policy` is the formal home of the fallback-charging decision — see `BILLING.md` §5.
+**`organizations`** — the paying tenant ("Customer"). `id, reseller_id NULL FK resellers, name, legal_name, gstin NULL, billing_mode ENUM(prepaid,postpaid), billing_policy ENUM(charge_per_logical_message,charge_per_attempt) DEFAULT charge_per_logical_message, status ENUM(active,suspended,closed), brand_config JSONB DEFAULT '{}'::jsonb NOT NULL, created_at, updated_at`. `billing_policy` is the formal home of the fallback-charging decision — see `BILLING.md` §5.
 
 **`resellers`** — `id, name, brand_config JSONB, domain, default_markup_pct, status`. The "Alendei Direct" row is seeded and used for organizations with no external reseller.
 
@@ -118,7 +118,7 @@ No table, column, index or RLS policy changes, and no grant is added.
   | `sessions` | `revoked_at`, `revoked_reason` (and no INSERT) | `family_id`, `rotated_at`, `replaced_by_session_id`, `reuse_detected_at`, `revoked_at`, `revoked_reason`, `last_used_at` (INSERT kept) |
   | `api_keys` | `revoked_at`, `revoked_reason`, `updated_at` | `last_used_at` |
   | `ws_tickets` | — (no UPDATE) | `consumed_at`, `consumed_ip` |
-  | `organizations` | `name`, `legal_name`, `gstin`, `billing_mode`, `billing_policy`, `status`, `status_changed_at`, `status_reason`, `reseller_id` (never `slug`) | — |
+  | `organizations` | `name`, `legal_name`, `gstin`, `billing_mode`, `billing_policy`, `status`, `status_changed_at`, `status_reason`, `reseller_id`, `brand_config` (never `slug`) | — |
   | `resellers` | `name`, `domain`, `brand_config`, `default_markup_pct`, `status`, `is_platform_default` (never `slug`) | — |
   | `roles` | `name`, `description`, `allowed_scope_types`, `updated_at` | — |
   | `workspaces`, `teams` | `name`, `status` | — |

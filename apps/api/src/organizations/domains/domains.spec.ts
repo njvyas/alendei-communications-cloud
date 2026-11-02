@@ -584,6 +584,7 @@ describe('DomainsService', () => {
       const orgId = mockPrincipal.tenant.orgId!;
       const existingOrg = {
         id: orgId,
+        status: 'active',
         brandConfig: { brandName: 'Old Name' },
       };
 
@@ -602,6 +603,42 @@ describe('DomainsService', () => {
         }),
         expect.anything(),
       );
+    });
+
+    it('rejects updating branding on a closed organization with 409 conflict', async () => {
+      const orgId = mockPrincipal.tenant.orgId!;
+      const closedOrg = {
+        id: orgId,
+        status: 'closed',
+        brandConfig: {},
+      };
+
+      mockDb.where.mockResolvedValueOnce([closedOrg]);
+
+      await expect(
+        service.updateBranding(mockPrincipal, orgId, { brandName: 'New Brand' }),
+      ).rejects.toMatchObject({
+        status: 409,
+        code: ERROR_CODES.ORGANIZATION_LIFECYCLE_CONFLICT,
+      });
+    });
+
+    it('rejects updating branding on a suspended organization with 409 conflict', async () => {
+      const orgId = mockPrincipal.tenant.orgId!;
+      const suspendedOrg = {
+        id: orgId,
+        status: 'suspended',
+        brandConfig: {},
+      };
+
+      mockDb.where.mockResolvedValueOnce([suspendedOrg]);
+
+      await expect(
+        service.updateBranding(mockPrincipal, orgId, { brandName: 'New Brand' }),
+      ).rejects.toMatchObject({
+        status: 409,
+        code: ERROR_CODES.ORGANIZATION_LIFECYCLE_CONFLICT,
+      });
     });
 
     it('validates branding URLs and rejects protocol-relative URLs', async () => {
