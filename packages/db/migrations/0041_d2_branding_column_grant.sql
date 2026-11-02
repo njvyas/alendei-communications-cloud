@@ -1,0 +1,21 @@
+-- =============================================================================
+-- Migration: 0041_d2_branding_column_grant
+-- Defect: QA D-2 (PATCH /organizations/:id/branding column-level UPDATE grant)
+--
+-- Grants acc_app UPDATE privilege on organizations.brand_config.
+--
+-- Why: Migration 0025 narrowed acc_app's UPDATE privilege on `organizations` to
+-- explicit columns (name, legal_name, gstin, billing_mode, billing_policy,
+-- status, status_changed_at, status_reason, reseller_id) to backstop lifecycle
+-- and slug immutability. Migration 0038 added `brand_config` JSONB to
+-- `organizations` without granting UPDATE (brand_config) to acc_app, causing
+-- PATCH /organizations/:id/branding to fail with 42501 insufficient_privilege.
+--
+-- Scope:
+--   - Narrow column UPDATE grant only: GRANT UPDATE (brand_config) ON organizations TO acc_app;
+--   - No table-level UPDATE grant is restored.
+--   - acc_auth and acc_relay remain without UPDATE privileges on organizations.
+--   - Existing RLS policies on organizations are untouched.
+-- =============================================================================
+
+GRANT UPDATE (brand_config) ON organizations TO acc_app;
