@@ -1086,16 +1086,27 @@ export class DomainsService {
         resourceType: 'Organization',
       });
 
-      const [org] = await tx
+      const query = tx
         .select()
         .from(schema.organizations)
         .where(eq(schema.organizations.id, orgId));
+      const [org] = typeof query.for === 'function' ? await query.for('update') : await query;
 
       if (!org) {
         throw new AppException({
           status: HttpStatus.NOT_FOUND,
           code: ERROR_CODES.RESOURCE_NOT_FOUND,
           message: 'Organization not found',
+        });
+      }
+
+      if (org.status !== 'active') {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.ORGANIZATION_LIFECYCLE_CONFLICT,
+          message: `This organization is ${org.status}; the operation is not permitted in that state`,
+          details: { status: org.status },
+          logContext: { refusedOrganizationStatus: org.status },
         });
       }
 

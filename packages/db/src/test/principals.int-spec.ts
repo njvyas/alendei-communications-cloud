@@ -176,6 +176,7 @@ const EXPECTED_COLUMN_GRANTS: Record<string, Record<string, Record<string, strin
       UPDATE: [
         'billing_mode',
         'billing_policy',
+        'brand_config',
         'gstin',
         'legal_name',
         'name',
