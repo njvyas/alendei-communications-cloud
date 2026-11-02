@@ -8,7 +8,6 @@ import {
   type AuthPrincipal,
   type OrganizationLifecycleEventView,
   type PageInfo,
-  type TenantContext,
 } from '@acc/contracts';
 import {
   ORG_LIFECYCLE_LOCK_CLASS,
@@ -24,13 +23,14 @@ import { actorFromPrincipal } from '../audit/audit-actor';
 import { AuditWriter } from '../audit/audit-writer.service';
 import type { ResolvedPrincipal } from '../auth/auth.guard';
 import { AuthorizationService } from '../auth/authorization.service';
-import { organizationInactiveError, type OrganizationStatus } from '../auth/scope-resolver.service';
+import { type OrganizationStatus } from '../auth/scope-resolver.service';
 import { RequestContext } from '../common/context/request-context';
 import { AppException } from '../common/errors/app.exception';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
 import { TenantDatabase } from '../database/tenant-database.service';
 import { IdempotencyService, type IdempotentOutcome } from '../idempotency/idempotency.service';
 import { TenantRoleProvisioner } from '../rbac/tenant-role-provisioner.service';
+import { addressOrganization } from './organization-address';
 import type { CreateOrganizationDto, UpdateOrganizationDto } from './organization.dto';
 
 /** The organization resource (`FRONTEND_API_CONTRACT.md` §31a). Exhaustive. */
@@ -662,36 +662,11 @@ export class OrganizationAdministrationService {
    * the caller addressed, which it is connected to (or, as a platform-grant
    * holder, may select).
    */
-  private async address(
+  private address(
     principal: ResolvedPrincipal,
     id: string,
   ): Promise<{ session: TenantSession; actor: AuthPrincipal }> {
-    const [org] = await this.db.auth
-      .select({ resellerId: schema.organizations.resellerId })
-      .from(schema.organizations)
-      .where(eq(schema.organizations.id, id));
-    if (!org) throw this.notFound(id);
-
-    const platformGrant = principal.roles.some((g) => g.scopeType === 'platform');
-    if (!platformGrant) {
-      const inactive = principal.inactiveOrganizations[id];
-      if (inactive) throw organizationInactiveError(id, inactive);
-      if (!principal.authorizedOrganizationIds.includes(id)) throw this.notFound(id);
-    }
-
-    const heldResellers = principal.roles
-      .filter((g) => g.scopeType === 'reseller' && g.scopeId)
-      .map((g) => g.scopeId!);
-    const tenant: TenantContext = {
-      orgId: id,
-      workspaceId: null,
-      resellerId: org.resellerId && heldResellers.includes(org.resellerId) ? org.resellerId : null,
-      isPlatformAdmin: principal.tenant.isPlatformAdmin,
-    };
-    return {
-      session: { ...tenant, userId: principal.userId },
-      actor: { ...principal, tenant },
-    };
+    return addressOrganization(this.db, principal, id);
   }
 
   /**

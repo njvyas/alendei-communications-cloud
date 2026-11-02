@@ -23,6 +23,7 @@ interface MockDb extends MockQueryBuilder {
   withTenant: jest.Mock;
   auth: {
     transaction: jest.Mock;
+    select: jest.Mock;
   };
 }
 
@@ -65,6 +66,10 @@ describe('DomainsService', () => {
       withTenant: jest.fn(async (_session, work) => work(mockDb)),
       auth: {
         transaction: jest.fn(async (work) => work(mockDb)),
+        // addressOrganization: the addressed organization exists (identity plane).
+        select: jest.fn(() => ({
+          from: () => ({ where: () => Promise.resolve([{ resellerId: null }]) }),
+        })),
       },
       select: jest.fn().mockReturnThis(),
       from: jest.fn().mockReturnThis(),
@@ -91,6 +96,58 @@ describe('DomainsService', () => {
       mockAuth as unknown as AuthorizationService,
       mockAudit as unknown as AuditWriter,
     );
+  });
+
+  describe('organization addressing (QA defect D-1)', () => {
+    const otherOrg = '01955b0a-7b3b-7411-9a4f-000000000099';
+
+    it('refuses an organization the principal is not connected to with 404, before any tenant session or authorization', async () => {
+      for (const work of [
+        () => service.listDomains(mockPrincipal, otherOrg),
+        () => service.getBranding(mockPrincipal, otherOrg),
+        () => service.updateBranding(mockPrincipal, otherOrg, { brandName: 'x' }),
+        () => service.removeDomain(mockPrincipal, otherOrg, '01955b0a-7b3b-7411-9a4f-000000000098'),
+      ]) {
+        await expect(work()).rejects.toMatchObject({
+          status: 404,
+          code: ERROR_CODES.RESOURCE_NOT_FOUND,
+        });
+      }
+      expect(mockDb.withTenant).not.toHaveBeenCalled();
+      expect(mockAuth.assert).not.toHaveBeenCalled();
+    });
+
+    it('refuses a nonexistent organization with the same 404', async () => {
+      mockDb.auth.select.mockReturnValueOnce({
+        from: () => ({ where: () => Promise.resolve([]) }),
+      });
+      await expect(service.listDomains(mockPrincipal, otherOrg)).rejects.toMatchObject({
+        status: 404,
+        code: ERROR_CODES.RESOURCE_NOT_FOUND,
+      });
+      expect(mockDb.withTenant).not.toHaveBeenCalled();
+    });
+
+    it('authorizes as the principal placed in the addressed organization, with a matching session', async () => {
+      const orgId = mockPrincipal.authorizedOrganizationIds[0]!;
+      mockDb.orderBy.mockResolvedValueOnce([]);
+      await service.listDomains(
+        { ...mockPrincipal, tenant: { ...mockPrincipal.tenant, orgId: null, workspaceId: null } },
+        orgId,
+      );
+      expect(mockDb.withTenant).toHaveBeenCalledWith(
+        expect.objectContaining({ orgId, userId: mockPrincipal.userId, resellerId: null }),
+        expect.any(Function),
+      );
+      expect(mockAuth.assert).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          principal: expect.objectContaining({
+            tenant: expect.objectContaining({ orgId, workspaceId: null }),
+          }),
+        }),
+      );
+    });
   });
 
   describe('normalizeHostname', () => {

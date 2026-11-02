@@ -12,7 +12,7 @@ import {
   type DomainView,
   type ResolvedDomainView,
 } from '@acc/contracts';
-import { schema, type TenantSession } from '@acc/db';
+import { schema } from '@acc/db';
 import { and, eq } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 
@@ -22,6 +22,7 @@ import type { ResolvedPrincipal } from '../../auth/auth.guard';
 import { AuthorizationService } from '../../auth/authorization.service';
 import { AppException } from '../../common/errors/app.exception';
 import { TenantDatabase } from '../../database/tenant-database.service';
+import { addressOrganization } from '../organization-address';
 import type { RegisterDomainDto, UpdateBrandingDto } from './domains.dto';
 
 export type DnsTxtResolver = (hostname: string) => Promise<string[][]>;
@@ -287,23 +288,14 @@ export class DomainsService {
     };
   }
 
-  private sessionFor(principal: ResolvedPrincipal, orgId: string): TenantSession {
-    return {
-      orgId,
-      workspaceId: null,
-      userId: principal.userId,
-      isPlatformAdmin: principal.tenant.isPlatformAdmin,
-      resellerId: null,
-    };
-  }
-
   /**
    * Lists domains registered for an organization.
    */
   async listDomains(principal: ResolvedPrincipal, orgId: string): Promise<DomainView[]> {
-    return this.db.withTenant(this.sessionFor(principal, orgId), async (tx) => {
+    const addressed = await addressOrganization(this.db, principal, orgId);
+    return this.db.withTenant(addressed.session, async (tx) => {
       await this.authorization.assert(tx, {
-        principal,
+        principal: addressed.actor,
         permission: PERMISSIONS.ORGANIZATIONS_READ,
         target: { scopeType: 'organization', scopeId: orgId },
         resourceType: 'Organization',
@@ -358,9 +350,10 @@ export class DomainsService {
 
     const domainType: DomainType = dto.domainType ?? (isSubdomain ? 'subdomain' : 'custom');
 
-    return this.db.withTenant(this.sessionFor(principal, orgId), async (tx) => {
+    const addressed = await addressOrganization(this.db, principal, orgId);
+    return this.db.withTenant(addressed.session, async (tx) => {
       await this.authorization.assert(tx, {
-        principal,
+        principal: addressed.actor,
         permission: PERMISSIONS.ORGANIZATIONS_UPDATE,
         target: { scopeType: 'organization', scopeId: orgId },
         resourceType: 'Organization',
@@ -473,9 +466,10 @@ export class DomainsService {
     orgId: string,
     domainId: string,
   ): Promise<DomainVerificationDetails> {
-    return this.db.withTenant(this.sessionFor(principal, orgId), async (tx) => {
+    const addressed = await addressOrganization(this.db, principal, orgId);
+    return this.db.withTenant(addressed.session, async (tx) => {
       await this.authorization.assert(tx, {
-        principal,
+        principal: addressed.actor,
         permission: PERMISSIONS.ORGANIZATIONS_READ,
         target: { scopeType: 'organization', scopeId: orgId },
         resourceType: 'Organization',
@@ -541,9 +535,10 @@ export class DomainsService {
     orgId: string,
     domainId: string,
   ): Promise<DomainVerificationDetails> {
-    return this.db.withTenant(this.sessionFor(principal, orgId), async (tx) => {
+    const addressed = await addressOrganization(this.db, principal, orgId);
+    return this.db.withTenant(addressed.session, async (tx) => {
       await this.authorization.assert(tx, {
-        principal,
+        principal: addressed.actor,
         permission: PERMISSIONS.ORGANIZATIONS_UPDATE,
         target: { scopeType: 'organization', scopeId: orgId },
         resourceType: 'Organization',
@@ -628,9 +623,10 @@ export class DomainsService {
     orgId: string,
     domainId: string,
   ): Promise<DomainView> {
-    return this.db.withTenant(this.sessionFor(principal, orgId), async (tx) => {
+    const addressed = await addressOrganization(this.db, principal, orgId);
+    return this.db.withTenant(addressed.session, async (tx) => {
       await this.authorization.assert(tx, {
-        principal,
+        principal: addressed.actor,
         permission: PERMISSIONS.ORGANIZATIONS_UPDATE,
         target: { scopeType: 'organization', scopeId: orgId },
         resourceType: 'Organization',
@@ -796,9 +792,10 @@ export class DomainsService {
     orgId: string,
     domainId: string,
   ): Promise<DomainView> {
-    return this.db.withTenant(this.sessionFor(principal, orgId), async (tx) => {
+    const addressed = await addressOrganization(this.db, principal, orgId);
+    return this.db.withTenant(addressed.session, async (tx) => {
       await this.authorization.assert(tx, {
-        principal,
+        principal: addressed.actor,
         permission: PERMISSIONS.ORGANIZATIONS_UPDATE,
         target: { scopeType: 'organization', scopeId: orgId },
         resourceType: 'Organization',
@@ -850,9 +847,10 @@ export class DomainsService {
    * Removes/revokes a domain.
    */
   async removeDomain(principal: ResolvedPrincipal, orgId: string, domainId: string): Promise<void> {
-    return this.db.withTenant(this.sessionFor(principal, orgId), async (tx) => {
+    const addressed = await addressOrganization(this.db, principal, orgId);
+    return this.db.withTenant(addressed.session, async (tx) => {
       await this.authorization.assert(tx, {
-        principal,
+        principal: addressed.actor,
         permission: PERMISSIONS.ORGANIZATIONS_UPDATE,
         target: { scopeType: 'organization', scopeId: orgId },
         resourceType: 'Organization',
@@ -907,9 +905,10 @@ export class DomainsService {
     domainId: string,
     reason?: string,
   ): Promise<DomainView> {
-    return this.db.withTenant(this.sessionFor(principal, orgId), async (tx) => {
+    const addressed = await addressOrganization(this.db, principal, orgId);
+    return this.db.withTenant(addressed.session, async (tx) => {
       await this.authorization.assert(tx, {
-        principal,
+        principal: addressed.actor,
         permission: PERMISSIONS.PLATFORM_TENANTS_MANAGE,
         target: { scopeType: 'platform', scopeId: null },
         resourceType: 'OrganizationDomain',
@@ -969,9 +968,10 @@ export class DomainsService {
     orgId: string,
     domainId: string,
   ): Promise<DomainView> {
-    return this.db.withTenant(this.sessionFor(principal, orgId), async (tx) => {
+    const addressed = await addressOrganization(this.db, principal, orgId);
+    return this.db.withTenant(addressed.session, async (tx) => {
       await this.authorization.assert(tx, {
-        principal,
+        principal: addressed.actor,
         permission: PERMISSIONS.PLATFORM_TENANTS_MANAGE,
         target: { scopeType: 'platform', scopeId: null },
         resourceType: 'OrganizationDomain',
@@ -1029,9 +1029,10 @@ export class DomainsService {
    * Retrieves organization branding with fallback hierarchy.
    */
   async getBranding(principal: ResolvedPrincipal, orgId: string): Promise<BrandConfig> {
-    return this.db.withTenant(this.sessionFor(principal, orgId), async (tx) => {
+    const addressed = await addressOrganization(this.db, principal, orgId);
+    return this.db.withTenant(addressed.session, async (tx) => {
       await this.authorization.assert(tx, {
-        principal,
+        principal: addressed.actor,
         permission: PERMISSIONS.ORGANIZATIONS_READ,
         target: { scopeType: 'organization', scopeId: orgId },
         resourceType: 'Organization',
@@ -1076,9 +1077,10 @@ export class DomainsService {
     orgId: string,
     dto: UpdateBrandingDto,
   ): Promise<BrandConfig> {
-    return this.db.withTenant(this.sessionFor(principal, orgId), async (tx) => {
+    const addressed = await addressOrganization(this.db, principal, orgId);
+    return this.db.withTenant(addressed.session, async (tx) => {
       await this.authorization.assert(tx, {
-        principal,
+        principal: addressed.actor,
         permission: PERMISSIONS.ORGANIZATIONS_UPDATE,
         target: { scopeType: 'organization', scopeId: orgId },
         resourceType: 'Organization',
