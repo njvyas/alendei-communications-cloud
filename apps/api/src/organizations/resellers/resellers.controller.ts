@@ -14,7 +14,7 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ERROR_CODES, PERMISSIONS } from '@acc/contracts';
 
 import type { ResolvedPrincipal } from '../../auth/auth.guard';
-import { NoTenantContext } from '../../auth/public.decorator';
+import { NoTenantContext, OptionalTenantContext } from '../../auth/public.decorator';
 import { RequiresPermission } from '../../auth/requires-permission.decorator';
 import { RequestContext } from '../../common/context/request-context';
 import { AppException } from '../../common/errors/app.exception';
@@ -77,7 +77,7 @@ export class ResellersController {
   }
 
   @Post()
-  @NoTenantContext()
+  @OptionalTenantContext()
   @RequiresPermission(PERMISSIONS.PLATFORM_TENANTS_MANAGE, {
     target: 'deferred',
     because: 'creating a reseller requires platform control-plane authority',
@@ -103,7 +103,7 @@ export class ResellersController {
   }
 
   @Post(':id/suspend')
-  @NoTenantContext()
+  @OptionalTenantContext()
   @RequiresPermission(PERMISSIONS.PLATFORM_TENANTS_MANAGE, { target: 'deferred', because: BY_PATH })
   @HttpCode(HttpStatus.OK)
   @AcceptedCredentials('userSession')
@@ -117,7 +117,7 @@ export class ResellersController {
   }
 
   @Post(':id/reactivate')
-  @NoTenantContext()
+  @OptionalTenantContext()
   @RequiresPermission(PERMISSIONS.PLATFORM_TENANTS_MANAGE, { target: 'deferred', because: BY_PATH })
   @HttpCode(HttpStatus.OK)
   @AcceptedCredentials('userSession')
