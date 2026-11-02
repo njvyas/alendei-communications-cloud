@@ -181,6 +181,20 @@ export class AuthorizationService {
     const { principal } = request;
     const actorScope = this.actorScope(principal);
 
+    if (!actorScope) {
+      // D3-Q1: Multi-org member with no organization header has no resolved tenant scope.
+      // Refusal is returned (403 AUTHZ_SCOPE_DENIED); no audit record is created because
+      // unambiguous tenant scope cannot be determined; emit structured API warning.
+      this.logger.warn({
+        msg: 'authorization denial not audited: unambiguous tenant scope cannot be determined',
+        userId: principal.userId,
+        permission: String(request.permission),
+        targetScopeType: request.target.scopeType,
+        targetScopeId: request.target.scopeId,
+      });
+      return;
+    }
+
     await this.db.whenReleased(async () => {
       try {
         await this.db.withTenant(
@@ -253,7 +267,7 @@ export class AuthorizationService {
    * the row regardless, so this fails closed and loudly rather than guessing;
    * routes that can reach such a principal refuse it before asserting.
    */
-  private actorScope(principal: AuthPrincipal): ScopeRef {
+  private actorScope(principal: AuthPrincipal): ScopeRef | null {
     const { orgId, workspaceId, resellerId, isPlatformAdmin } = principal.tenant;
 
     if (orgId && workspaceId) return { scopeType: 'workspace', scopeId: workspaceId };
@@ -269,9 +283,7 @@ export class AuthorizationService {
       return { scopeType: 'platform', scopeId: null };
     }
 
-    throw new Error(
-      'audit: cannot record authorization.denied — the principal has no resolved scope to attribute it to',
-    );
+    return null;
   }
 
   /**

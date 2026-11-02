@@ -64,7 +64,7 @@ export class OnboardingService {
     dto: DirectCustomerOnboardingDto,
   ): Promise<OnboardingResult> {
     const authSession: TenantSession = {
-      orgId: principal.tenant.orgId,
+      orgId: null,
       workspaceId: null,
       userId: principal.userId,
       isPlatformAdmin: principal.tenant.isPlatformAdmin,

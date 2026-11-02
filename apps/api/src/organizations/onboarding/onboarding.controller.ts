@@ -3,7 +3,7 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ERROR_CODES, PERMISSIONS } from '@acc/contracts';
 
 import type { ResolvedPrincipal } from '../../auth/auth.guard';
-import { NoTenantContext } from '../../auth/public.decorator';
+import { NoTenantContext, OptionalTenantContext } from '../../auth/public.decorator';
 import { RequiresPermission } from '../../auth/requires-permission.decorator';
 import { RequestContext } from '../../common/context/request-context';
 import { AppException } from '../../common/errors/app.exception';
@@ -35,7 +35,7 @@ export class OnboardingController {
   }
 
   @Post('direct')
-  @NoTenantContext()
+  @OptionalTenantContext()
   @RequiresPermission(PERMISSIONS.PLATFORM_TENANTS_MANAGE, {
     target: 'deferred',
     because: 'direct customer onboarding creates an organization beneath platform-default reseller',

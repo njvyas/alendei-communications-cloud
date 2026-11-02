@@ -465,7 +465,7 @@ export class ResellersService {
       orgId: null,
       workspaceId: null,
       userId: principal.userId,
-      isPlatformAdmin: true,
+      isPlatformAdmin: principal.tenant.isPlatformAdmin,
       resellerId: null,
     };
 
