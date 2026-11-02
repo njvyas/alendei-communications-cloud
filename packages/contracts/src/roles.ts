@@ -88,6 +88,7 @@ export const PLATFORM_ROLE_DEFINITIONS: readonly RoleDefinition[] = Object.freez
       P.RESELLERS_READ,
       P.PLATFORM_TENANTS_READ,
       P.PLATFORM_AUDIT_READ,
+      P.PLATFORM_SUPPORT_READ,
     ],
   },
   {

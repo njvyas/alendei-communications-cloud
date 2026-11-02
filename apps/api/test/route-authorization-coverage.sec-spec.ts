@@ -286,7 +286,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 4 U13.1 (01-Nov-2026) added 7 scoped reseller routes: 113 → 120 scoped.
     // Phase 4 U13.2 (01-Nov-2026) added 1 scoped route (`GET /organizations/:id/lifecycle-history`): 120 → 121 scoped.
     // U13.3 (01-Nov-2026) added 5 read-only platform domain oversight routes: 121 → 126.
-    expect(scoped.length).toBe(126);
+    // U13.4 (01-Nov-2026) added 4 platform operational support routes: 126 → 130.
+    expect(scoped.length).toBe(130);
     expect(exempt.length).toBe(7);
     expect(open.length).toBe(7);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
@@ -309,7 +310,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 4 U13.1 added 7 scoped reseller routes, all deferred: 88 → 95.
     // Phase 4 U13.2 added GET /organizations/:id/lifecycle-history, deferred: 95 → 96.
     // U13.3 added 5, all deferred: each targets `platform`, like the catalogue: 96 → 101.
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(101);
+    // U13.4 added 4 platform operational support routes, all deferred: 101 → 105.
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(105);
   });
 });
 

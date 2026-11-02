@@ -10,6 +10,7 @@ import { cn } from '@/lib/cn';
 import { useCanReadPlatformDomains } from '@/lib/platform-domains';
 import {
   bootstrapSession,
+  useCanAccessPlatformSupport,
   useCanReadOrganizations,
   useCanReadProviders,
   useCanReadResellers,
@@ -53,6 +54,7 @@ const SECTIONS = [
   { href: '/roles', label: 'Roles' },
   { href: '/api-keys', label: 'API Keys' },
   { href: '/audit-logs', label: 'Audit Logs' },
+  { href: '/support', label: 'Support & Ops' },
 ] as const;
 
 export default function ConsoleLayout({ children }: { children: ReactNode }) {
@@ -76,6 +78,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const canReadContacts = useHasPermission('contacts.read');
   const canReadMessages = useHasPermission('messages.read');
   const canSendMessages = useHasPermission('messages.send');
+  const canAccessSupport = useCanAccessPlatformSupport();
   const isNavigatingOrganizations =
     pathname === '/organizations' || pathname.startsWith('/organizations/');
   const isNavigatingDomains = pathname === '/domains' || pathname.startsWith('/domains/');
@@ -85,6 +88,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
     pathname === '/providers' ||
     pathname.startsWith('/providers/');
   const isNavigatingResellers = pathname === '/resellers' || pathname.startsWith('/resellers/');
+  const isNavigatingSupport = pathname === '/support' || pathname.startsWith('/support/');
 
   useEffect(() => {
     if (status === 'idle') {
@@ -136,7 +140,8 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
       (isNavigatingOrganizations && canReadOrganizations) ||
       (isNavigatingCatalogue && canReadProviders) ||
       (isNavigatingDomains && canReadPlatformDomains) ||
-      (isNavigatingResellers && canReadResellers);
+      (isNavigatingResellers && canReadResellers) ||
+      (isNavigatingSupport && canAccessSupport);
     if (!isPermittedNavigation) {
       return (
         <div className="mx-auto flex min-h-dvh max-w-6xl flex-col px-4 py-6 sm:px-6">
@@ -232,6 +237,8 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
                     return canReadProviders;
                   case '/resellers':
                     return canReadResellers;
+                  case '/support':
+                    return canAccessSupport;
                   default:
                     return false;
                 }
@@ -271,6 +278,8 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
                   return canReadApiKeys;
                 case '/audit-logs':
                   return canReadAudit;
+                case '/support':
+                  return canAccessSupport;
                 default:
                   return true;
               }

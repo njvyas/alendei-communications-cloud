@@ -553,6 +553,26 @@ export function useCanManageResellers(): boolean {
 }
 
 /**
+ * React hook evaluating whether the actor has platform support read authority
+ * (can access the Platform Support & Troubleshooting Cockpit).
+ */
+export function useCanAccessPlatformSupport(): boolean {
+  return useSession((state) => {
+    if (!state.authorization) return false;
+    if (state.authorization.isPlatformAdmin) return true;
+    return state.authorization.grants.some(
+      (g) =>
+        g.scopeType === 'platform' &&
+        (g.permissions.includes('platform.support.read') ||
+          grantConfers(
+            { scopeType: g.scopeType as ScopeType, permissions: g.permissions },
+            'platform.support.read',
+          )),
+    );
+  });
+}
+
+/**
  * Evaluates whether the actor can view the provider/channel catalogue.
  * Requires platform admin or holding `providers.read` at platform scope.
  */

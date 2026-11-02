@@ -30,6 +30,7 @@ import { ContactsModule } from './contacts/contacts.module';
 import { TemplatesModule } from './templates/templates.module';
 import { SuppressionsModule } from './suppressions/suppressions.module';
 import { MessagesModule } from './messages/messages.module';
+import { PlatformSupportModule } from './platform-support/platform-support.module';
 import { OPENAPI_MODULES } from './openapi/openapi.module';
 
 /**
@@ -67,6 +68,7 @@ import { OPENAPI_MODULES } from './openapi/openapi.module';
     TemplatesModule,
     SuppressionsModule,
     MessagesModule,
+    PlatformSupportModule,
     // The OpenAPI document route, when `OPENAPI_UI_ENABLED` is on (Phase 1C.3).
     ...OPENAPI_MODULES,
   ],

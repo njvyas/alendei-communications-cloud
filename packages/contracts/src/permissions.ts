@@ -102,6 +102,8 @@ export const PERMISSIONS = {
   PLATFORM_ROLES_DELEGATE_TENANT: 'platform.roles.delegate_tenant',
   /** Read any tenant's audit log from the control plane. */
   PLATFORM_AUDIT_READ: 'platform.audit.read',
+  /** Cross-tenant read access for platform support, routing diagnostics, configuration inspection, and dispatch troubleshooting. */
+  PLATFORM_SUPPORT_READ: 'platform.support.read',
 
   // --- Tenant content (ADR-014 §6, D09; ADR-015 R-5) -------------------------
   // INERT CATALOGUE ENTRIES (ADR-015 follow-up decision 6, 07-Oct-2026): they
@@ -132,6 +134,7 @@ export const PLATFORM_ONLY_PERMISSIONS: readonly PermissionKey[] = Object.freeze
   PERMISSIONS.PLATFORM_ROLES_ASSIGN,
   PERMISSIONS.PLATFORM_ROLES_DELEGATE_TENANT,
   PERMISSIONS.PLATFORM_AUDIT_READ,
+  PERMISSIONS.PLATFORM_SUPPORT_READ,
 ]);
 
 // --- Classification and allowed scopes (ADR-015 R-5, D-HIGH-4b) --------------
@@ -204,6 +207,7 @@ export const PERMISSION_CLASS: Readonly<Record<PermissionKey, PermissionClass>> 
   [P.PLATFORM_ROLES_ASSIGN]: 'platform',
   [P.PLATFORM_ROLES_DELEGATE_TENANT]: 'platform',
   [P.PLATFORM_AUDIT_READ]: 'platform',
+  [P.PLATFORM_SUPPORT_READ]: 'platform',
   [P.CONTACTS_READ]: 'tenant_content',
   [P.CONTACTS_MANAGE]: 'tenant_content',
   [P.TEMPLATES_READ]: 'tenant_content',
@@ -279,6 +283,7 @@ export const PERMISSION_ALLOWED_SCOPES: Readonly<Record<PermissionKey, readonly 
     [P.PLATFORM_ROLES_ASSIGN]: PLATFORM_ONLY_SCOPE,
     [P.PLATFORM_ROLES_DELEGATE_TENANT]: PLATFORM_ONLY_SCOPE,
     [P.PLATFORM_AUDIT_READ]: PLATFORM_ONLY_SCOPE,
+    [P.PLATFORM_SUPPORT_READ]: PLATFORM_ONLY_SCOPE,
     [P.CONTACTS_READ]: Object.freeze(['organization', 'workspace']),
     [P.CONTACTS_MANAGE]: Object.freeze(['organization', 'workspace']),
     [P.TEMPLATES_READ]: Object.freeze(['organization']),
