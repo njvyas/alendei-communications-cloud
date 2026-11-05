@@ -152,6 +152,8 @@ ACC is built as a modular monolith-first NestJS codebase organized into bounded 
 | `audit` | Immutable audit log — append-only, scope-aware, enforced at the database (`DATABASE.md` §12, `SECURITY.md` §4a, ADR-002) | all modules (write-only dependency) |
 | `admin-control` | Provider/routing/fallback live configuration UI+API | `provider-registry`, `provider-router` |
 
+**Owner-run commands are not modules and have no HTTP surface.** `bootstrap`, `user:activate` and `platform:support` (`apps/api/src/cli/`) run as one-off `ops` containers from the API image with the schema-owner connection; no controller or Nest module imports them (asserted by `apps/api/src/cli/platform-support.architecture.spec.ts`). They are the only paths that create platform-role grants (`RBAC.md` §5b, §5b.1).
+
 Module boundaries map to NestJS modules with explicit public interfaces (services/DTOs); no module reaches into another's repository/ORM layer directly.
 
 ## 5. Unified message model

@@ -107,6 +107,40 @@ export class UserLifecycleService {
   }
 
   /**
+   * `activate`, with the digest computed by the caller beforehand — so a caller
+   * holding a transaction open (the `platform:support` CLI) does not spend the
+   * Argon2 cost inside it. The digest must come from `CredentialService.hash`.
+   * Kept separate from `activate`, whose single write is pinned as part of the
+   * bootstrap owner write set (`dev-fixture.sec-spec.ts`).
+   */
+  async activateWithDigest(tx: Transaction, userId: string, digest: string): Promise<UserRecord> {
+    const [row] = await tx
+      .update(schema.users)
+      .set({ passwordHash: digest, passwordUpdatedAt: new Date(), status: 'active' })
+      .where(eq(schema.users.id, userId))
+      .returning({ id: schema.users.id, email: schema.users.email, status: schema.users.status });
+    if (!row) throw new Error(`user: ${userId} not found for activation`);
+    return row;
+  }
+
+  /**
+   * Disables a user **and removes every stored authentication factor**: the
+   * password digest and the MFA secret reference (ADR-015 Item 5 Amendment A-1,
+   * decision 10). Used by `platform:support revoke`, where a disabled identity
+   * must keep nothing a later reactivation could restore. Sessions are revoked
+   * by the caller in the same transaction, as for `disable`.
+   */
+  async disableAndClearCredentials(tx: Transaction, userId: string): Promise<UserRecord> {
+    const [row] = await tx
+      .update(schema.users)
+      .set({ status: 'disabled', passwordHash: null, mfaSecretRef: null, mfaEnabled: false })
+      .where(eq(schema.users.id, userId))
+      .returning({ id: schema.users.id, email: schema.users.email, status: schema.users.status });
+    if (!row) throw new Error(`user: ${userId} not found to disable`);
+    return row;
+  }
+
+  /**
    * Disables a user. Their sessions are revoked by the caller in the same
    * transaction — disabling an account that keeps live sessions is the bug this
    * separation exists to make visible rather than silent.

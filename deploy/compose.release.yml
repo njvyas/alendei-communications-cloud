@@ -15,6 +15,13 @@
 #   printf '%s\n' "$PW" | docker compose ... run --rm -T activate-user \
 #     --operator <platform admin email> --organization <id|slug> --email <user> --password-stdin
 #                                            first password of an invited tenant user (audited)
+#   printf '%s\n%s\n' "$OPW" "$NPW" | docker compose ... run --rm -T platform-support create \
+#     --operator <super admin email> --email <new address> --password-stdin --confirm-environment <APP_ENV>
+#   printf '%s\n' "$OPW" | docker compose ... run --rm -T platform-support revoke \
+#     --operator <super admin email> --email <address> --password-stdin --confirm-environment <APP_ENV>
+#   docker compose ... run --rm -T platform-support status --email <address>
+#                                            owner-run alendei_support provisioning (ADR-015 A-1;
+#                                            refused when APP_ENV=production)
 name: ${ACC_PROJECT:-acc}
 
 x-api: &api
@@ -95,6 +102,13 @@ services:
     profiles: [ops]
     # Arguments follow `run --rm -T activate-user`; the password arrives on stdin only.
     entrypoint: ['npm', 'run', '--silent', 'user:activate', '--workspace', '@acc/api', '--']
+    command: []
+
+  platform-support:
+    <<: *api
+    profiles: [ops]
+    # Arguments follow `run --rm -T platform-support`; passwords arrive on stdin only.
+    entrypoint: ['npm', 'run', '--silent', 'platform:support', '--workspace', '@acc/api', '--']
     command: []
 
 networks:
