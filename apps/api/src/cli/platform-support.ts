@@ -100,10 +100,13 @@ export function parseCommandLine(argv: readonly string[]): ParsedCommandLine {
   if (command !== 'status' && !passwordStdin) {
     throw new CommandLineError('--password-stdin is required: passwords are read from stdin');
   }
+  // Addresses lose surrounding whitespace here; they are validated (`isEmail`)
+  // by the provisioning functions. `--confirm-environment` is compared byte for
+  // byte with APP_ENV and is deliberately not trimmed.
   return {
     command,
-    operator: values.get('--operator') ?? null,
-    email: values.get('--email')!,
+    operator: values.get('--operator')?.trim() ?? null,
+    email: values.get('--email')!.trim(),
     confirmEnvironment: values.get('--confirm-environment') ?? null,
   };
 }

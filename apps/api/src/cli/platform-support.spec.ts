@@ -11,6 +11,7 @@ import {
   PLATFORM_SUPPORT_ALLOWED_ENVIRONMENTS,
   PlatformSupportRefusal,
   assertPlatformSupportEnvironment,
+  normaliseAddress,
 } from './platform-support-provisioning';
 
 /**
@@ -247,5 +248,56 @@ describe('platform:support failure output never carries statement parameters (N-
         new PlatformSupportRefusal('self_revocation', 'an operator cannot revoke themself'),
       ),
     ).toBe('platform support refused: an operator cannot revoke themself');
+  });
+});
+
+describe('platform:support addresses (A3)', () => {
+  it('the command line trims addresses but never the environment confirmation', () => {
+    const parsed = parseCommandLine([
+      'create',
+      '--operator',
+      '  op@example.test ',
+      '--email',
+      '\tsupport@example.test  ',
+      '--password-stdin',
+      '--confirm-environment',
+      ' staging',
+    ]);
+    expect([parsed.operator, parsed.email, parsed.confirmEnvironment]).toEqual([
+      'op@example.test',
+      'support@example.test',
+      ' staging',
+    ]);
+    expect(() =>
+      assertPlatformSupportEnvironment('staging', parsed.confirmEnvironment, {
+        requireConfirmation: true,
+      }),
+    ).toThrow(/must equal APP_ENV exactly/);
+  });
+
+  it('normaliseAddress trims, validates as the API does (isEmail) and preserves case', () => {
+    expect(normaliseAddress('  Support.User@Example.TEST \t', 'the address')).toBe(
+      'Support.User@Example.TEST',
+    );
+    for (const bad of [
+      '',
+      '  ',
+      'plain',
+      'a@b',
+      'two words@example.test',
+      'x@@example.test',
+      'x@example.test y',
+      '@example.test',
+    ]) {
+      expect(() => normaliseAddress(bad, 'the address')).toThrow(
+        /the address is not a valid email address/,
+      );
+      try {
+        normaliseAddress(bad, 'the operator address');
+      } catch (error) {
+        expect((error as PlatformSupportRefusal).code).toBe('invalid_address');
+        if (bad.trim()) expect((error as Error).message).not.toContain(bad.trim());
+      }
+    }
   });
 });

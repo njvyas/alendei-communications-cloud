@@ -27,6 +27,7 @@
  */
 import { AUDIT_ACTIONS, PLATFORM_ROLE_KEYS, type AuditAction } from '@acc/contracts';
 import { type Database, type Transaction } from '@acc/db';
+import { isEmail } from 'class-validator';
 import { sql } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 
@@ -37,6 +38,19 @@ import type { UserLifecycleService } from '../iam/user-lifecycle.service';
 import { passwordProblem } from './user-activation';
 
 export const PLATFORM_SUPPORT_ACTOR_LABEL = 'platform_support_cli';
+/**
+ * The actor label of a refusal whose operator never proved their identity (A-1
+ * decision 11 as amended 05-Nov-2026): recorded with `actor_type = 'system'` and
+ * no `actor_user_id`, the claimed operator kept in `metadata.unauthenticatedClaim`.
+ */
+export const PLATFORM_SUPPORT_UNAUTHENTICATED_ACTOR_LABEL = 'platform_support_cli_unauthenticated';
+/**
+ * The one message for every operator refusal before authentication succeeds —
+ * unknown address, wrong password, not an active super administrator — so the
+ * command's output never reveals which (A1, independent review 05-Nov-2026).
+ */
+export const OPERATOR_NOT_ACCEPTED =
+  "the operator was not accepted: an active platform administrator's address and current password are required";
 export const PLATFORM_SUPPORT_SESSION_REVOCATION_REASON = 'platform_support_revoked';
 
 /** The only role this module can grant or revoke. Not configurable, by design. */
@@ -51,6 +65,7 @@ export const PLATFORM_SUPPORT_ALLOWED_ENVIRONMENTS = ['staging', 'test', 'develo
 
 export type RefusalCode =
   | 'environment'
+  | 'invalid_address'
   | 'operator_unknown'
   | 'operator_not_eligible'
   | 'operator_authentication_failed'
@@ -72,6 +87,26 @@ export class PlatformSupportRefusal extends Error {
     super(`platform support refused: ${reason}`);
     this.name = 'PlatformSupportRefusal';
   }
+}
+
+/**
+ * An address as supplied on the command line, made comparable (A3, independent
+ * review 05-Nov-2026). Surrounding whitespace is removed — no stored address can
+ * contain whitespace (`users_email_format`), so this never changes which identity
+ * an address names — and the result must pass the same `isEmail` check the API's
+ * user and sign-in DTOs apply (`@IsEmail()`). Case is preserved, as the API
+ * preserves it; every lookup compares `lower(email)`, as `users_email_key` does.
+ * The rejected value is not echoed.
+ */
+export function normaliseAddress(
+  raw: string,
+  what: 'the operator address' | 'the address',
+): string {
+  const trimmed = typeof raw === 'string' ? raw.trim() : '';
+  if (!isEmail(trimmed)) {
+    throw new PlatformSupportRefusal('invalid_address', `${what} is not a valid email address`);
+  }
+  return trimmed;
 }
 
 /**
@@ -209,21 +244,40 @@ interface Operator {
 }
 
 /**
- * Who is acting, and whether they proved it. Set as soon as an operator
- * identity is found, so a refusal after that point is attributable.
+ * Who is acting, and whether they proved it. `claimedOperatorId` is set when the
+ * claimed operator address matches an identity; `passwordVerified` only once that
+ * identity's own password has been verified. A refusal is attributed to the
+ * identity only in the second case (A-1 decision 11 as amended).
  */
 interface RunContext {
   readonly command: 'create' | 'revoke';
   readonly correlationId: string;
   readonly targetEmail: string;
-  operatorId?: string;
+  readonly claimedOperatorEmail: string;
+  claimedOperatorId?: string;
+  passwordVerified: boolean;
   operatorAuthenticated: boolean;
   targetUserId?: string;
+}
+
+/** The authenticated operator's id: only defined once authentication has fully succeeded. */
+function operatorIdOf(ctx: RunContext): string {
+  if (!ctx.operatorAuthenticated || !ctx.claimedOperatorId) {
+    throw new Error('platform support: no authenticated operator');
+  }
+  return ctx.claimedOperatorId;
 }
 
 /**
  * Fresh authentication: an active `alendei_super_admin` at platform scope whose
  * stored digest matches the password presented now. One attempt per run.
+ *
+ * The password is verified first — against a dummy digest when the address is
+ * unknown or has none, so every path spends one verification — and every refusal
+ * carries the same message (`OPERATOR_NOT_ACCEPTED`). Eligibility is judged only
+ * after the password has been verified, so a wrong password reveals nothing about
+ * whether the address belongs to a super administrator (A1). The refusal code,
+ * which is recorded but never printed, still says which check failed.
  */
 async function authenticateOperator(
   db: Database,
@@ -233,29 +287,17 @@ async function authenticateOperator(
   password: string,
 ): Promise<Operator> {
   const row = await loadOperator(db, email, false);
-  if (!row) {
-    // Spend the same verification cost, so an unknown address is not cheaper.
-    await deps.credentials.verifyDummy(password);
-    throw new PlatformSupportRefusal(
-      'operator_unknown',
-      'the operator must be an active platform administrator',
-    );
-  }
-  ctx.operatorId = row.id;
-  const verified = row.passwordHash
+  const verified = row?.passwordHash
     ? await deps.credentials.verify(row.passwordHash, password)
     : await deps.credentials.verifyDummy(password);
-  if (row.status !== 'active' || !row.superAdmin) {
-    throw new PlatformSupportRefusal(
-      'operator_not_eligible',
-      'the operator must be an active platform administrator',
-    );
-  }
+  if (!row) throw new PlatformSupportRefusal('operator_unknown', OPERATOR_NOT_ACCEPTED);
+  ctx.claimedOperatorId = row.id;
   if (!verified || !row.passwordHash) {
-    throw new PlatformSupportRefusal(
-      'operator_authentication_failed',
-      'the operator password was not accepted',
-    );
+    throw new PlatformSupportRefusal('operator_authentication_failed', OPERATOR_NOT_ACCEPTED);
+  }
+  ctx.passwordVerified = true;
+  if (row.status !== 'active' || !row.superAdmin) {
+    throw new PlatformSupportRefusal('operator_not_eligible', OPERATOR_NOT_ACCEPTED);
   }
   ctx.operatorAuthenticated = true;
   return { id: row.id, passwordHash: row.passwordHash };
@@ -320,7 +362,7 @@ function audit(
       scopeType: 'platform',
       scopeId: null,
       actorType: 'user',
-      actorUserId: ctx.operatorId!,
+      actorUserId: operatorIdOf(ctx),
       actorApiKeyId: null,
       actorLabel: PLATFORM_SUPPORT_ACTOR_LABEL,
       action: entry.action,
@@ -341,32 +383,69 @@ function audit(
   );
 }
 
-/** A refusal by a known operator, recorded after the failed transaction rolled back. */
+/**
+ * A refusal whose claimed operator address matches an identity, recorded after
+ * the failed transaction rolled back (A-1 decision 11 as amended 05-Nov-2026):
+ *
+ *   - the identity's password was verified → `actor_type 'user'`, actor = that
+ *     identity (`operatorAuthenticated: true`, `operatorEligible` says whether it
+ *     is an active super administrator);
+ *   - it was not → `actor_type 'system'`, no `actor_user_id`, the label
+ *     `PLATFORM_SUPPORT_UNAUTHENTICATED_ACTOR_LABEL`, and the claim in
+ *     `metadata.unauthenticatedClaim` — so nobody can make the trail say that a
+ *     real administrator acted by typing their address with a wrong password.
+ *
+ * An unknown address writes no row. No row carries credential material.
+ */
 async function recordRefusal(
   db: Database,
   deps: PlatformSupportDeps,
   ctx: RunContext,
   refusal: PlatformSupportRefusal,
 ): Promise<void> {
-  if (!ctx.operatorId) return;
+  if (!ctx.claimedOperatorId) return;
+  const authenticated = ctx.passwordVerified;
   await db.transaction((tx) =>
-    audit(deps, tx, ctx, {
-      action:
-        ctx.command === 'create'
-          ? AUDIT_ACTIONS.USER_ROLE_GRANTED
-          : AUDIT_ACTIONS.USER_ROLE_REVOKED,
-      resourceType: 'user',
-      resourceId: ctx.targetUserId ?? null,
-      outcome: 'denied',
-      before: null,
-      after: null,
-      metadata: {
-        reason: refusal.code,
-        detail: refusal.reason,
-        roleKey: SUPPORT_ROLE_KEY,
-        operatorAuthenticated: ctx.operatorAuthenticated,
+    deps.audit.record(
+      {
+        scopeType: 'platform',
+        scopeId: null,
+        actorType: authenticated ? 'user' : 'system',
+        actorUserId: authenticated ? ctx.claimedOperatorId! : null,
+        actorApiKeyId: null,
+        actorLabel: authenticated
+          ? PLATFORM_SUPPORT_ACTOR_LABEL
+          : PLATFORM_SUPPORT_UNAUTHENTICATED_ACTOR_LABEL,
+        action:
+          ctx.command === 'create'
+            ? AUDIT_ACTIONS.USER_ROLE_GRANTED
+            : AUDIT_ACTIONS.USER_ROLE_REVOKED,
+        resourceType: 'user',
+        resourceId: ctx.targetUserId ?? null,
+        outcome: 'denied',
+        before: null,
+        after: null,
+        metadata: {
+          via: 'platform-support-cli',
+          command: ctx.command,
+          email: ctx.targetEmail,
+          reason: refusal.code,
+          detail: refusal.reason,
+          roleKey: SUPPORT_ROLE_KEY,
+          operatorAuthenticated: authenticated,
+          ...(authenticated
+            ? { operatorEligible: ctx.operatorAuthenticated }
+            : {
+                unauthenticatedClaim: {
+                  operatorEmail: ctx.claimedOperatorEmail,
+                  operatorUserId: ctx.claimedOperatorId,
+                },
+              }),
+        },
+        correlationId: ctx.correlationId,
       },
-    }),
+      tx,
+    ),
   );
 }
 
@@ -446,10 +525,14 @@ export async function createPlatformSupportUser(
   // Defence in depth: the command checks the environment before connecting;
   // this function refuses on its own as well.
   assertPlatformSupportEnvironment(request.appEnv, null, { requireConfirmation: false });
+  const userEmail = normaliseAddress(request.userEmail, 'the address');
+  const operatorEmail = normaliseAddress(request.operatorEmail, 'the operator address');
   const ctx: RunContext = {
     command: 'create',
     correlationId: uuidv7(),
-    targetEmail: request.userEmail,
+    targetEmail: userEmail,
+    claimedOperatorEmail: operatorEmail,
+    passwordVerified: false,
     operatorAuthenticated: false,
   };
   const checkpoint = deps.checkpoint ?? (async () => {});
@@ -459,7 +542,7 @@ export async function createPlatformSupportUser(
       db,
       deps,
       ctx,
-      request.operatorEmail,
+      operatorEmail,
       request.operatorPassword,
     );
     const problem = passwordProblem(request.password);
@@ -476,11 +559,11 @@ export async function createPlatformSupportUser(
 
     return await db.transaction(async (tx) => {
       await elevate(tx, operator.id);
-      await lockAddress(tx, request.userEmail);
-      await revalidate(tx, operator, request.operatorEmail);
+      await lockAddress(tx, userEmail);
+      await revalidate(tx, operator, operatorEmail);
 
       const existing = await tx.execute(
-        sql`SELECT id, status::text AS status FROM users WHERE lower(email) = lower(${request.userEmail})`,
+        sql`SELECT id, status::text AS status FROM users WHERE lower(email) = lower(${userEmail})`,
       );
       const found = existing.rows[0] as { id: string; status: string } | undefined;
       if (found) {
@@ -491,7 +574,7 @@ export async function createPlatformSupportUser(
         );
       }
 
-      const invited = await deps.users.invite(tx, request.userEmail).catch((error: unknown) => {
+      const invited = await deps.users.invite(tx, userEmail).catch((error: unknown) => {
         const cause = (error as { cause?: { code?: string } }).cause ?? error;
         if ((cause as { code?: string }).code === '23505') {
           throw new PlatformSupportRefusal(
@@ -593,10 +676,14 @@ export async function revokePlatformSupportUser(
   request: RevokeRequest,
 ): Promise<RevokeResult> {
   assertPlatformSupportEnvironment(request.appEnv, null, { requireConfirmation: false });
+  const userEmail = normaliseAddress(request.userEmail, 'the address');
+  const operatorEmail = normaliseAddress(request.operatorEmail, 'the operator address');
   const ctx: RunContext = {
     command: 'revoke',
     correlationId: uuidv7(),
-    targetEmail: request.userEmail,
+    targetEmail: userEmail,
+    claimedOperatorEmail: operatorEmail,
+    passwordVerified: false,
     operatorAuthenticated: false,
   };
   const checkpoint = deps.checkpoint ?? (async () => {});
@@ -606,21 +693,21 @@ export async function revokePlatformSupportUser(
       db,
       deps,
       ctx,
-      request.operatorEmail,
+      operatorEmail,
       request.operatorPassword,
     );
     await checkpoint('before-transaction');
 
     return await db.transaction(async (tx) => {
       await elevate(tx, operator.id);
-      await lockAddress(tx, request.userEmail);
-      await revalidate(tx, operator, request.operatorEmail);
+      await lockAddress(tx, userEmail);
+      await revalidate(tx, operator, operatorEmail);
 
       // Row lock before the session advisory lock (`SessionService` lock order).
       const located = await tx.execute(sql`
         SELECT id, email, status::text AS status, (password_hash IS NOT NULL) AS "hasPassword",
                mfa_enabled AS "mfaEnabled"
-          FROM users WHERE lower(email) = lower(${request.userEmail}) FOR UPDATE`);
+          FROM users WHERE lower(email) = lower(${userEmail}) FOR UPDATE`);
       const target = located.rows[0] as
         | { id: string; email: string; status: string; hasPassword: boolean; mfaEnabled: boolean }
         | undefined;
@@ -727,10 +814,11 @@ export async function platformSupportStatus(
   email: string,
 ): Promise<StatusResult> {
   assertPlatformSupportEnvironment(appEnv, null, { requireConfirmation: false });
+  const address = normaliseAddress(email, 'the address');
   return db.transaction(
     async (tx) => {
       const found = await tx.execute(
-        sql`SELECT id FROM users WHERE lower(email) = lower(${email})`,
+        sql`SELECT id FROM users WHERE lower(email) = lower(${address})`,
       );
       const userId = (found.rows[0] as { id: string } | undefined)?.id ?? null;
       if (!userId) {
@@ -757,13 +845,28 @@ export async function platformSupportStatus(
             OR (after->>'userId') = ${userId} OR (before->>'userId') = ${userId}
          ORDER BY created_at DESC, id DESC
          LIMIT 10`);
+      // `revoked` needs evidence, not just a matching state (B1, independent review
+      // 05-Nov-2026): a successful `user_role.revoked` row written by this command
+      // for an `alendei_support` grant of this identity. A disabled, grant-less,
+      // credential-less identity without that row is `other`.
+      const evidence = await tx.execute(sql`
+        SELECT 1 FROM audit_logs
+         WHERE action = ${AUDIT_ACTIONS.USER_ROLE_REVOKED}
+           AND outcome = 'success'
+           AND actor_label = ${PLATFORM_SUPPORT_ACTOR_LABEL}
+           AND metadata->>'command' = 'revoke'
+           AND before->>'roleKey' = ${SUPPORT_ROLE_KEY}
+           AND before->>'userId' = ${userId}
+         LIMIT 1`);
+      const revokedByThisCommand = evidence.rows.length > 0;
       const classification: IdentityClass =
         grants.length === 1 &&
         isSupportGrant(grants[0]!) &&
         state.status === 'active' &&
         state.hasPassword
           ? 'platform_support_active'
-          : grants.length === 0 &&
+          : revokedByThisCommand &&
+              grants.length === 0 &&
               state.status === 'disabled' &&
               !state.hasPassword &&
               !state.hasMfaSecretRef &&

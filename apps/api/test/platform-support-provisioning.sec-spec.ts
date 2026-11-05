@@ -10,8 +10,10 @@ import { uuidv7 } from 'uuidv7';
 
 import { ownerAuditWriter, runBootstrap } from '../src/cli/bootstrap';
 import {
+  OPERATOR_NOT_ACCEPTED,
   PLATFORM_SUPPORT_ACTOR_LABEL,
   PLATFORM_SUPPORT_SESSION_REVOCATION_REASON,
+  PLATFORM_SUPPORT_UNAUTHENTICATED_ACTOR_LABEL,
   PlatformSupportRefusal,
   createPlatformSupportUser,
   platformSupportStatus,
@@ -353,28 +355,103 @@ describe('platform:support provisioning (ADR-015 A-1)', () => {
       expect(reseller!.status).toBe('active');
     });
 
-    it('P-05 (QA U13.4/C2) the support cockpit answers 200 with no sensitive data', async () => {
-      const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
-      const PROHIBITED =
-        /^(email|ip|ipaddress|useragent|recipient|recipients|payload|body|content|text|password|token|phone)$/;
-      const keys = (v: unknown, out: string[] = []): string[] => {
-        if (Array.isArray(v)) v.forEach((x) => keys(x, out));
-        else if (v && typeof v === 'object')
-          for (const [k, x] of Object.entries(v)) {
-            out.push(k.toLowerCase().replace(/[^a-z]/g, ''));
-            keys(x, out);
+    it('P-05 (QA U13.4/C2) the support cockpit, on a populated organization, answers 200 with no sensitive data', async () => {
+      // Representative data in organization A, as the U13.4 spec seeds it: an SMS
+      // provider assignment, a failed message and attempt whose stored text echoes
+      // a recipient, a body (with an address) and a credential, and an audit row
+      // carrying an IP address and a user agent. Every planted value is synthetic.
+      const PLANTED_RECIPIENT = '+15550100777';
+      const PLANTED_BODY = 'psp planted body for psp-planted@example.test';
+      const PLANTED_CREDENTIAL = 'psp-planted-credential-9f3a';
+      const PLANTED_IP = '198.51.100.77';
+      const PLANTED_AGENT = 'psp-planted-agent/1.0';
+      const [sms] = await h.admin
+        .select({ id: schema.channels.id })
+        .from(schema.channels)
+        .where(eq(schema.channels.code, 'sms'));
+      const providerId = uuidv7();
+      const contactId = uuidv7();
+      const messageId = uuidv7();
+      await h.admin.execute(
+        sql`INSERT INTO providers (id, channel_id, name, adapter_key, status)
+            VALUES (${providerId}, ${sms!.id}, ${`psp-sec-${providerId.slice(-8)}`}, 'simulator', 'active')`,
+      );
+      try {
+        await h.admin.execute(
+          sql`INSERT INTO organization_provider_assignments (org_id, provider_id, channel_id, priority)
+              VALUES (${a.orgId}, ${providerId}, ${sms!.id}, 1)`,
+        );
+        await h.admin.execute(
+          sql`INSERT INTO contacts (id, org_id, workspace_id) VALUES (${contactId}, ${a.orgId}, ${a.workspaceId})`,
+        );
+        await h.admin.execute(
+          sql`INSERT INTO messages (id, org_id, workspace_id, contact_id, channel_id, status, payload,
+                                    recipient_address, failure_reason, correlation_id)
+              VALUES (${messageId}, ${a.orgId}, ${a.workspaceId}, ${contactId}, ${sms!.id}, 'failed',
+                      ${JSON.stringify({ text: PLANTED_BODY })}::jsonb, ${PLANTED_RECIPIENT},
+                      ${`INVALID_REQUEST: provider echoed ${PLANTED_RECIPIENT} body="${PLANTED_BODY}"`}, ${uuidv7()})`,
+        );
+        await h.admin.execute(
+          sql`INSERT INTO message_attempts (message_id, org_id, provider_id, channel_id, attempt_number,
+                                            fencing_epoch, claim_token, status, failure_reason, latency_ms)
+              VALUES (${messageId}, ${a.orgId}, ${providerId}, ${sms!.id}, 1, 1, ${uuidv7()}, 'failed',
+                      ${`AUTH_ERROR: credential ${PLANTED_CREDENTIAL} rejected`}, 95)`,
+        );
+        await h.admin.execute(
+          sql`INSERT INTO audit_logs (correlation_id, actor_type, actor_user_id, action, resource_type, resource_id,
+                                      scope_type, scope_id, outcome, metadata, ip, user_agent)
+              VALUES (${uuidv7()}, 'user', ${operator.userId}, 'psp.sec.probe', 'Organization', ${a.orgId},
+                      'organization', ${a.orgId}, 'success', ${JSON.stringify({ note: 'kept' })}::jsonb,
+                      ${PLANTED_IP}, ${PLANTED_AGENT})`,
+        );
+
+        const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+        const PROHIBITED =
+          /^(email|ip|ipaddress|useragent|recipient|recipients|payload|body|content|text|password|token|phone)$/;
+        const keys = (v: unknown, out: string[] = []): string[] => {
+          if (Array.isArray(v)) v.forEach((x) => keys(x, out));
+          else if (v && typeof v === 'object')
+            for (const [k, x] of Object.entries(v)) {
+              out.push(k.toLowerCase().replace(/[^a-z]/g, ''));
+              keys(x, out);
+            }
+          return out;
+        };
+        const bodies: Record<string, string> = {};
+        for (const path of [
+          `/platform/support/organizations/${a.orgId}/overview`,
+          `/platform/support/organizations/${a.orgId}/routing`,
+          `/platform/support/organizations/${a.orgId}/dispatch`,
+          `/platform/support/audit`,
+        ]) {
+          const res = await api().get(url(path)).set('authorization', `Bearer ${token}`);
+          expect([path, res.status]).toEqual([path, 200]);
+          const text = JSON.stringify(res.body);
+          bodies[path] = text;
+          expect([path, keys(res.body).filter((k) => PROHIBITED.test(k))]).toEqual([path, []]);
+          expect([path, EMAIL.test(text)]).toEqual([path, false]);
+          for (const planted of [
+            PLANTED_RECIPIENT,
+            PLANTED_BODY,
+            PLANTED_CREDENTIAL,
+            PLANTED_IP,
+            PLANTED_AGENT,
+            '0100777',
+          ]) {
+            expect([path, planted, text.includes(planted)]).toEqual([path, planted, false]);
           }
-        return out;
-      };
-      for (const path of [
-        `/platform/support/organizations/${a.orgId}/overview`,
-        `/platform/support/organizations/${a.orgId}/routing`,
-        `/platform/support/organizations/${a.orgId}/dispatch`,
-      ]) {
-        const res = await api().get(url(path)).set('authorization', `Bearer ${token}`);
-        expect([path, res.status]).toEqual([path, 200]);
-        expect([path, keys(res.body).filter((k) => PROHIBITED.test(k))]).toEqual([path, []]);
-        expect([path, EMAIL.test(JSON.stringify(res.body))]).toEqual([path, false]);
+        }
+        // The scans examined populated responses, not empty ones.
+        expect(bodies[`/platform/support/organizations/${a.orgId}/routing`]).toContain(providerId);
+        expect(bodies[`/platform/support/organizations/${a.orgId}/dispatch`]).toContain(messageId);
+      } finally {
+        await h.admin.execute(sql`DELETE FROM message_attempts WHERE org_id = ${a.orgId}`);
+        await h.admin.execute(sql`DELETE FROM messages WHERE org_id = ${a.orgId}`);
+        await h.admin.execute(sql`DELETE FROM contacts WHERE org_id = ${a.orgId}`);
+        await h.admin.execute(
+          sql`DELETE FROM organization_provider_assignments WHERE org_id = ${a.orgId}`,
+        );
+        await h.admin.execute(sql`DELETE FROM providers WHERE id = ${providerId}`);
       }
     });
 
@@ -394,7 +471,8 @@ describe('platform:support provisioning (ADR-015 A-1)', () => {
           scopeType: 'organization',
           scopeId: a.orgId,
         });
-      expect([400, 403]).toContain(grant.status);
+      // Guard 1: support holds no `role_assignments.grant` (RoleAssignmentService.grant).
+      expect([grant.status, grant.body.error?.code]).toEqual([403, ERROR_CODES.AUTHZ_SCOPE_DENIED]);
       expect(await grantsOf(s.userId)).toHaveLength(1);
     });
 
@@ -618,7 +696,12 @@ describe('platform:support provisioning (ADR-015 A-1)', () => {
           scopeType: 'organization',
           scopeId: a.orgId,
         });
-      expect([403, 404, 409, 422]).toContain(tenantGrant.status);
+      // Guard 5: a grant-less identity is unreachable from the organization (404), before
+      // the disabled check (409) could apply.
+      expect([tenantGrant.status, tenantGrant.body.error?.code]).toEqual([
+        404,
+        ERROR_CODES.RESOURCE_NOT_FOUND,
+      ]);
       const platformGrant = await api()
         .post(url('/role-assignments'))
         .set('authorization', `Bearer ${opToken}`)
@@ -629,7 +712,11 @@ describe('platform:support provisioning (ADR-015 A-1)', () => {
           scopeType: 'organization',
           scopeId: a.orgId,
         });
-      expect([400, 403, 422]).toContain(platformGrant.status);
+      // Guard 2: a platform role is never granted through tenant administration.
+      expect([platformGrant.status, platformGrant.body.error?.code]).toEqual([
+        403,
+        ERROR_CODES.AUTHZ_PLATFORM_ROLE_REQUIRED,
+      ]);
 
       // C-04e bootstrap is a no-op on an already-bootstrapped database.
       const outcome = await h.admin.transaction((tx) =>
@@ -747,7 +834,7 @@ describe('platform:support provisioning (ADR-015 A-1)', () => {
   // --- N: refusals --------------------------------------------------------------------------------
 
   describe('N — refusals change nothing', () => {
-    it('N-01…N-06 operator: unknown, support, org admin, reseller admin, disabled super admin, wrong password', async () => {
+    it('N-01…N-06 operator refusals, attributed only to an identity whose password was verified (A-1 decision 11 as amended)', async () => {
       const supportOp = await newSupport('as-operator');
       const orgAdmin = await w.admin(a, 'psp-n-orgadmin');
       const resellerAdmin = await w.resellerAdmin(w.resellerId, 'psp-n-reselleradmin');
@@ -756,60 +843,114 @@ describe('platform:support provisioning (ADR-015 A-1)', () => {
         .update(schema.users)
         .set({ status: 'disabled' })
         .where(eq(schema.users.id, disabledOp.userId));
+      const WRONG = 'not-the-operator-password-1';
 
-      const cases: { op: string; password: string; code: string; actor: string | null }[] = [
-        { op: address('nobody'), password: PASSWORD, code: 'operator_unknown', actor: null },
-        {
-          op: supportOp.email,
-          password: SUPPORT_PASSWORD,
-          code: 'operator_not_eligible',
-          actor: supportOp.userId,
-        },
-        {
-          op: orgAdmin.email,
-          password: PASSWORD,
-          code: 'operator_not_eligible',
-          actor: orgAdmin.userId,
-        },
-        {
-          op: resellerAdmin.email,
-          password: PASSWORD,
-          code: 'operator_not_eligible',
-          actor: resellerAdmin.userId,
-        },
-        {
-          op: disabledOp.email,
-          password: PASSWORD,
-          code: 'operator_not_eligible',
-          actor: disabledOp.userId,
-        },
-        {
-          op: operator.email,
-          password: 'not-the-operator-password-1',
-          code: 'operator_authentication_failed',
-          actor: operator.userId,
-        },
-      ];
+      type Expect =
+        { kind: 'none' } | { kind: 'user'; id: string } | { kind: 'system'; id: string };
+      const cases: { label: string; op: string; password: string; code: string; actor: Expect }[] =
+        [
+          {
+            label: 'unknown',
+            op: address('nobody'),
+            password: PASSWORD,
+            code: 'operator_unknown',
+            actor: { kind: 'none' },
+          },
+          {
+            label: 'support, right password',
+            op: supportOp.email,
+            password: SUPPORT_PASSWORD,
+            code: 'operator_not_eligible',
+            actor: { kind: 'user', id: supportOp.userId },
+          },
+          {
+            label: 'org admin, right password',
+            op: orgAdmin.email,
+            password: PASSWORD,
+            code: 'operator_not_eligible',
+            actor: { kind: 'user', id: orgAdmin.userId },
+          },
+          {
+            label: 'reseller admin, right password',
+            op: resellerAdmin.email,
+            password: PASSWORD,
+            code: 'operator_not_eligible',
+            actor: { kind: 'user', id: resellerAdmin.userId },
+          },
+          {
+            label: 'disabled super admin, right password',
+            op: disabledOp.email,
+            password: PASSWORD,
+            code: 'operator_not_eligible',
+            actor: { kind: 'user', id: disabledOp.userId },
+          },
+          {
+            label: 'super admin, wrong password',
+            op: operator.email,
+            password: WRONG,
+            code: 'operator_authentication_failed',
+            actor: { kind: 'system', id: operator.userId },
+          },
+          {
+            label: 'org admin, wrong password',
+            op: orgAdmin.email,
+            password: WRONG,
+            code: 'operator_authentication_failed',
+            actor: { kind: 'system', id: orgAdmin.userId },
+          },
+        ];
       for (const c of cases) {
         const target = address('n-op-target');
-        await refused(
+        const error = await refused(
           create(target, { operatorEmail: c.op, operatorPassword: c.password }),
           c.code,
         );
+        // A1: one message for every operator refusal.
+        expect([c.label, error.reason]).toEqual([c.label, OPERATOR_NOT_ACCEPTED]);
         expect(await userByEmail(target)).toBeNull();
         const rows = await auditByEmail(target);
-        if (c.actor === null) {
-          expect(rows).toEqual([]);
+        expectNoCredentialMaterial(rows, [WRONG]);
+        if (c.actor.kind === 'none') {
+          expect([c.label, rows]).toEqual([c.label, []]);
+          continue;
+        }
+        expect([c.label, rows.length]).toEqual([c.label, 1]);
+        const [row] = rows;
+        const meta = row!.metadata as Record<string, unknown>;
+        expect([c.label, row!.outcome, meta.reason, meta.email]).toEqual([
+          c.label,
+          'denied',
+          c.code,
+          target,
+        ]);
+        if (c.actor.kind === 'user') {
+          // The identity proved itself with its own password, so it is the actor.
+          expect([c.label, row!.actor_type, row!.actor_user_id, row!.actor_label]).toEqual([
+            c.label,
+            'user',
+            c.actor.id,
+            PLATFORM_SUPPORT_ACTOR_LABEL,
+          ]);
+          expect([c.label, meta.operatorAuthenticated, meta.operatorEligible]).toEqual([
+            c.label,
+            true,
+            false,
+          ]);
+          expect([c.label, meta.unauthenticatedClaim]).toEqual([c.label, undefined]);
         } else {
-          expect(
-            rows.map((r) => [
-              r.outcome,
-              r.actor_user_id,
-              (r.metadata as Record<string, unknown>).reason,
-            ]),
-          ).toEqual([['denied', c.actor, c.code]]);
-          expect((rows[0]!.metadata as Record<string, unknown>).operatorAuthenticated).toBe(false);
-          expectNoCredentialMaterial(rows, ['not-the-operator-password-1']);
+          // A2: a failed authentication is never attributed to the claimed identity.
+          expect([c.label, row!.actor_type, row!.actor_user_id, row!.actor_label]).toEqual([
+            c.label,
+            'system',
+            null,
+            PLATFORM_SUPPORT_UNAUTHENTICATED_ACTOR_LABEL,
+          ]);
+          expect([c.label, meta.operatorAuthenticated, meta.unauthenticatedClaim]).toEqual([
+            c.label,
+            false,
+            { operatorEmail: c.op, operatorUserId: c.actor.id },
+          ]);
+          expect([c.label, 'operatorEligible' in meta]).toEqual([c.label, false]);
         }
       }
       // The same refusals apply to revoke.
@@ -819,10 +960,106 @@ describe('platform:support provisioning (ADR-015 A-1)', () => {
         'operator_not_eligible',
       );
       await refused(
-        revoke(victim.email, { operatorPassword: 'not-the-operator-password-1' }),
+        revoke(victim.email, { operatorPassword: WRONG }),
         'operator_authentication_failed',
       );
       expect(await grantsOf(victim.userId)).toHaveLength(1);
+      const revokeDenials = await auditByEmail(victim.email);
+      expect(
+        revokeDenials.filter((r) => r.outcome === 'denied').map((r) => [r.actor_type, r.action]),
+      ).toEqual([
+        ['user', AUDIT_ACTIONS.USER_ROLE_REVOKED],
+        ['system', AUDIT_ACTIONS.USER_ROLE_REVOKED],
+      ]);
+    });
+
+    it('A1 a wrong password reveals nothing about the address: unknown, super admin and non-admin are indistinguishable', async () => {
+      const orgAdmin = await w.admin(a, 'psp-a1-orgadmin');
+      const WRONG = 'not-the-operator-password-2';
+      const outcomes: [string, string][] = [];
+      for (const op of [address('a1-unknown'), operator.email, orgAdmin.email]) {
+        const error = await create(address('a1-target'), {
+          operatorEmail: op,
+          operatorPassword: WRONG,
+        }).catch((e: unknown) => e as PlatformSupportRefusal);
+        expect(error).toBeInstanceOf(PlatformSupportRefusal);
+        outcomes.push([error.message, error.reason]);
+      }
+      expect(new Set(outcomes.map((o) => JSON.stringify(o))).size).toBe(1);
+      expect(outcomes[0]).toEqual([
+        `platform support refused: ${OPERATOR_NOT_ACCEPTED}`,
+        OPERATOR_NOT_ACCEPTED,
+      ]);
+    });
+
+    it('A3 addresses are trimmed and validated as the API validates them; case is preserved', async () => {
+      const label = `psp-a3-${suffix()}`;
+      const exact = `${label}@Example.test`;
+      const made = await create(`  ${exact}\t `, { operatorEmail: `  ${operator.email}  ` });
+      w.createdUsers.push(made.userId);
+      expect(made.email).toBe(exact);
+      const [stored] = await h.admin
+        .select({ email: schema.users.email })
+        .from(schema.users)
+        .where(eq(schema.users.id, made.userId));
+      expect(stored!.email).toBe(exact);
+      expect(
+        (await platformSupportStatus(h.admin, APP_ENV, ` ${exact.toLowerCase()} `)).userId,
+      ).toBe(made.userId);
+      await refused(create(` ${exact.toUpperCase()} `), 'duplicate_identity');
+
+      for (const bad of [
+        '',
+        '   ',
+        'not-an-address',
+        'a@b',
+        'two words@example.test',
+        'x@@example.test',
+        `${label}@example.test x`,
+      ]) {
+        await refused(create(bad), 'invalid_address');
+        await refused(create(address('a3-op'), { operatorEmail: bad }), 'invalid_address');
+        await refused(revoke(bad), 'invalid_address');
+        await expect(platformSupportStatus(h.admin, APP_ENV, bad)).rejects.toMatchObject({
+          code: 'invalid_address',
+        });
+      }
+      expect((await auditByEmail('not-an-address')).length).toBe(0);
+      const revoked = await revoke(` ${exact} `, { operatorEmail: ` ${operator.email} ` });
+      expect(revoked.userId).toBe(made.userId);
+    });
+
+    it('B1 status says "revoked" only with evidence that this command revoked a support grant of that identity', async () => {
+      // Negative: an arbitrary disabled identity with no grant and no credential.
+      const plain = await w.person('psp-b1-plain');
+      await h.admin
+        .update(schema.users)
+        .set({ status: 'disabled', passwordHash: null })
+        .where(eq(schema.users.id, plain.userId));
+      expect((await platformSupportStatus(h.admin, APP_ENV, plain.email)).classification).toBe(
+        'other',
+      );
+
+      // Negative: a former support identity whose grant was removed some other way.
+      const other = await newSupport('b1-other');
+      await h.admin.execute(sql`DELETE FROM user_roles WHERE user_id = ${other.userId}`);
+      await h.admin
+        .update(schema.users)
+        .set({ status: 'disabled', passwordHash: null })
+        .where(eq(schema.users.id, other.userId));
+      expect((await platformSupportStatus(h.admin, APP_ENV, other.email)).classification).toBe(
+        'other',
+      );
+
+      // Positive: revoked by the command.
+      const real = await newSupport('b1-real');
+      expect((await platformSupportStatus(h.admin, APP_ENV, real.email)).classification).toBe(
+        'platform_support_active',
+      );
+      await revoke(real.email);
+      expect((await platformSupportStatus(h.admin, APP_ENV, real.email)).classification).toBe(
+        'revoked',
+      );
     });
 
     it('N-07 the operator is re-validated inside the transaction (disabled, demoted or password changed meanwhile)', async () => {
@@ -1093,9 +1330,7 @@ describe('platform:support provisioning (ADR-015 A-1)', () => {
         { APP_ENV },
       );
       expect(refusedRun.status).toBe(1);
-      expect(refusedRun.stderr).toMatch(
-        /platform support refused: the operator password was not accepted/,
-      );
+      expect(refusedRun.stderr.trim()).toBe(`platform support refused: ${OPERATOR_NOT_ACCEPTED}`);
       expect(`${refusedRun.stdout}${refusedRun.stderr}`).not.toContain(
         'not-the-operator-password-1',
       );
