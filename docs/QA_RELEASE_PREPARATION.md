@@ -27,6 +27,24 @@ Infrastructure values (addresses, names, ranges, certificate details, operator i
 - The QA platform administrator was created by `bootstrap` from `AUTH_BOOTSTRAP_EMAIL`; read-only inspection (24-Oct-2026) found exactly one platform administrator, the bootstrap account. Its individual owner is recorded in an **access register outside Git**; no account identifier is written here.
 - Confirm that the account is used by that one person only and is not shared (`qa/INTERNAL_QA_DEPLOYMENT.md` §7).
 - Re-assigning the administrator after bootstrap is not covered by the runbook (`bootstrap` runs once); it needs an owner-approved procedure.
+- **Platform Support persona (ADR-015 Item 5 Amendment A-1).** An `alendei_support` login for the support-persona acceptance rows (D2-3 support half, D3-5, C2 support half) is created and later revoked only with the owner-run `platform:support` CLI (`RBAC.md` §5b.1), and only after the release containing it is deployed under separate authorisation. Operator workflow, in the owner's own SSH session on the QA host (`APP_ENV=staging`):
+
+  ```bash
+  cd ~/acc; C="docker compose -f deploy/compose.release.yml --env-file deploy/release.env --profile ops"
+  read -rs -p 'Operator (super admin) password: ' OPW; echo
+  read -rs -p 'New support user password: ' NPW; echo
+  printf '%s\n%s\n' "$OPW" "$NPW" | $C run --rm -T platform-support create \
+    --operator <super-admin email> --email <support address> --password-stdin --confirm-environment staging
+  unset OPW NPW
+  $C run --rm -T platform-support status --email <support address>
+  # after acceptance:
+  read -rs -p 'Operator password: ' OPW; echo
+  printf '%s\n' "$OPW" | $C run --rm -T platform-support revoke \
+    --operator <super-admin email> --email <support address> --password-stdin --confirm-environment staging
+  unset OPW
+  ```
+
+  `read -rs` keeps the values out of shell history and `printf` is a shell builtin, so they never appear in a process listing. Take a fresh backup before `create`. A revoked identity cannot be restored; use a new address if the persona is needed again.
 - `AUTH_BOOTSTRAP_PASSWORD` is used only by the `bootstrap` command. Removing it from `release.env` after bootstrap is to be reviewed and, if approved, done through an approved procedure by an authorized operator. It is not done as part of this preparation.
 
 ## 4. D5 — backup and recovery

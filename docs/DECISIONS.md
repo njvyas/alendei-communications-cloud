@@ -1602,6 +1602,38 @@ Implemented on `develop` (commits `8e36905` feat, `196baf9` and `10ac969` test, 
 4. The tests of principals that are not platform administrators establish the absence of a `user_role.revoked` row, not the absence of every possible audit event.
 5. CI has not run.
 
+### Item 5 — Amendment A-1: owner-run Platform Support provisioning (owner decision 05-Nov-2026; design and credential clearing **APPROVED**; implementation authorised 05-Nov-2026)
+
+**Context.** Item 5 (decided 08-Oct-2026, closed 09-Oct-2026) keeps platform-role grants off the API: they are created only by the bootstrap CLI and the seed. Bootstrap creates only `alendei_super_admin` and is idempotent once one exists; the seed creates no users; `user:activate` refuses any identity holding a platform grant. There was therefore no sanctioned way to create an `alendei_support` principal, and QA acceptance of RC 2709f1d (rows D2-3 support half, D3-5, C2 support half) requires one.
+
+**Decision.**
+1. **The HTTP asymmetry is unchanged.** No HTTP endpoint, API key, tenant console or any other network-reachable path may create, grant or elevate a platform-role grant. `POST /role-assignments` and `POST /users` keep refusing platform roles.
+2. **A third owner-run path is added** beside bootstrap and seed: the `platform:support` CLI, run only as a one-off `ops` container from the API release image with the schema-owner connection. It has exactly three operations and no others:
+   - `create` — a new identity, `active` with a password, holding exactly one grant: `alendei_support` at `platform` scope (`scope_id NULL`, `org_id NULL`);
+   - `revoke` — removes that grant, revokes every session of the identity immediately, removes its usable credential and sets it `disabled`;
+   - `status` — a read-only report of identity, grant and credential state.
+3. **No generic role-grant functionality.** The role key is a compile-time constant; the CLI accepts no role, scope, permission or SQL argument and exposes no arbitrary SQL interface. It can never grant `alendei_super_admin`, `reseller_admin`, a custom platform role or any tenant role.
+4. **Operator.** Every operation that changes state (`create`, `revoke`) requires an operator who is an active `alendei_super_admin` at platform scope **and** who authenticates freshly with their own password on that run. The operator's identity and active super-admin status are re-validated **inside** the transaction that performs the change.
+5. **Self-revocation is refused.** An operator cannot revoke themself, and `revoke` refuses any target holding anything other than exactly one `alendei_support`@platform grant (so it can never touch a super admin).
+6. **No identity reuse.** `create` refuses an address that already exists in any status (`invited`, `active`, `disabled`), compared case-insensitively; a disabled identity is never re-enabled by this CLI. A new address must be used.
+7. **No tenant membership.** A support identity created this way holds no organization, workspace, team or reseller grant.
+8. **Atomicity.** `create` (identity + grant + credential + audit) and `revoke` (grant + sessions + credential + status + audit) each commit in a single transaction or not at all.
+9. **Immediate session invalidation.** `revoke` revokes all sessions in the same transaction; because the auth guard re-reads the session, user status and grants on every request, existing access and refresh tokens stop working on their next use.
+10. **No usable credential survives revocation** (owner decision 05-Nov-2026). In one transaction `revoke` removes the `alendei_support` grant, revokes every session, sets the identity `disabled`, clears `password_hash`, clears `mfa_secret_ref` (and `mfa_enabled`), and verifies that no usable API key, session or authentication credential remains. Any failure rolls back the whole transaction. Required proofs: the previous password cannot authenticate; the previous MFA configuration cannot authenticate; existing access and refresh tokens are rejected immediately; no supported reactivation or identity-reuse path restores access; audit history remains intact and contains no credential material.
+11. **Audit.** Every change and every refusal by a known operator is recorded through the committed `AuditWriter`, inside the changing transaction, with existing actions (`user.invited`, `user_role.granted`, `user.activated`, `user_role.revoked`, `user.disabled`; `denied` outcome for refusals), at `platform` scope, actor = the operator. **Audit records include the target user's email address.** Audit history is append-only and is never modified or deleted by this CLI.
+12. **Environment.** The CLI enforces `APP_ENV` (never `NODE_ENV`). It fails closed: `APP_ENV` missing, empty, or not one of `staging`, `test`, `development` → refused before any database connection. `APP_ENV=production` → refused regardless of any confirmation flag or prompt. `--confirm-environment` must equal `APP_ENV` exactly. A missing schema-owner connection string is refused.
+13. **Secrets.** Passwords are read from a piped stdin only — never argv, environment, files, logs, output, audit images or error text. The CLI never reads, references or prints bootstrap credentials.
+
+**Known limitation, accepted.** The CLI runs as the database owner. Owner execution means `app_session_bypasses_rls()` is true, so `fn_validate_user_role_scope`'s platform-admin check is satisfied by the owner session itself: **the database does not provide an independent enforcement of the operator's super-admin status.** That status is enforced by the application-level checks in the CLI (before the transaction and again inside it), which must be independently reviewed. Database-level protections that do remain in force for owner execution: the role-scope trigger (platform role only at platform/reseller scope), `user_roles_unique_platform_grant`, `users_email_key`, `users_active_requires_credential`, and the audit append-only and no-truncate triggers.
+
+**Consequences.**
+- `RBAC.md` §5b/§8b and `API.md` §3c name the CLI as the third owner-run path.
+- `platform-role-asymmetry.sec-spec.ts` is unchanged and must still pass; an architecture test proves no HTTP module imports the CLI.
+- No migration, RLS, grant, OpenAPI, route or audit-action change.
+- Residuals: no lockout on failed operator authentication (one attempt per run); owner-level DB access is itself the outer trust boundary (as for bootstrap, seed and migrations).
+
+**Evidence when implemented:** tests C-01..C-06 (credential clearing and rollback) plus the full approved matrix; `TESTING.md` §6m.1; security spec `platform-support-provisioning.sec-spec.ts`; mutation results; independent review record.
+
 ### Required evidence (every remediation)
 
 Positive, negative security, direct database backstop, deterministic concurrency and mutation tests (every intended mutant caught); fresh migration, upgrade migration, rerun/no-op; disposable-clone regression; exact privilege catalogue; policy and trigger definition checks; full regression; CI green. HIGH-5 additionally: the full Model B matrix (organization grant, workspace/team grant allowed; sibling organization, reseller-only, platform-only, support-only, suspended user, revoked key, expired key, forged organization context denied; the `app.current_user_id` residual documented and tested exactly; `PUBLIC EXECUTE` on the helper impossible).
