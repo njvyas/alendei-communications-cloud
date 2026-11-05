@@ -2293,6 +2293,67 @@ Because migration `0019` granted EXECUTE on `app_has_platform_permission` only t
   6. Control: unstarted expired lease correctly dispatched once.
 - Verified in CI run `40067932448` (all 5 jobs passing) and local disposable clone verification.
 
+## 1zc. U14.1a: `messages (org_id, id DESC)` index, barrier-aware `db:migrate` (migration 0042): 05-Nov-2026
+
+Design approved by the owner on 05-Nov-2026 with conditions (Approach A; decisions U-1 to U-3). Design record: `U14.1a-DESIGN.md` in the local evidence folder `2026-11-05-u141a-design`.
+
+### 1zc.1 Decision
+- **Index.** `messages_org_id_id_desc_idx ON public.messages USING btree (org_id, id DESC)`, built `CONCURRENTLY`. `messages_org_id_idx` is kept. No API, DTO, OpenAPI, cursor, RLS or `ListQuery` change. The `listMessages` helper and its compound cursor predicate are unchanged.
+- **One entry point (Approach A).** `npm run db:migrate` stays the only migration command in every environment: CI, test clones, development, QA and production. drizzle 0.45 applies all pending migrations in one transaction, and `CREATE INDEX CONCURRENTLY` cannot run inside a transaction. `db:migrate` therefore splits the run at a *barrier*:
+  1. apply the migrations before `0042`;
+  2. build and verify the index outside any transaction;
+  3. apply `0042` and the rest.
+- **Migration `0042_messages_org_id_id_desc_guard` is a guard, not DDL.** Inside its transaction it re-checks the catalogue and raises unless the index exists exactly as specified and is valid. Its history row therefore exists only if the guard passed. Applied by plain drizzle without the barrier, it fails closed and the batch rolls back.
+- **Lock (condition 1).** One pinned connection holds a session-level advisory lock (`MIGRATION_LOCK_KEY`) for the whole run: history verification, prefix, build, catalogue verification, `0042` and final verification. The lock is re-asserted before each phase, and the CIC runs on that same connection. It is released explicitly on success and error. If the process or connection dies, the server releases it with the session (`client_connection_check_interval = 1000`).
+- **U-2.** The lock wait is bounded: 30 s by default, `ACC_MIGRATION_LOCK_WAIT_MS`, retry every 500 ms. On timeout `db:migrate` refuses and names the holder's pid, application and state. A malformed wait value is refused, never treated as unbounded.
+- **U-1.** An INVALID (interrupted) index is refused by default. Recovery requires `npm run db:index:messages-org-id-desc --workspace @acc/db -- --recover-invalid`. That command identifies the exact target (name, schema, table, definition). It never drops a valid index: it reports the index present and exits 0. It refuses:
+  - a differently defined index (even an invalid one);
+  - an equivalent index under another name;
+  - a build in progress in another session.
+  Otherwise it drops only that index (`DROP INDEX CONCURRENTLY`), rebuilds it, verifies it, and is safe to rerun.
+- **U-3.** On every run, once `0042` is recorded, the catalogue is verified immediately after the history check and before any further migration is applied. A missing, invalid or redefined index makes `db:migrate` exit non-zero with nothing further applied. The check runs again at the end as defence in depth. The journal is never proof.
+- **Exact catalogue verification.** All of the following must match:
+  - the relation is an index on `public.messages`, btree;
+  - 2 key columns and no INCLUDE columns: `indkey = (org_id, id)`, `indoption = (0, 3)`;
+  - the default uuid operator classes, no collations;
+  - not unique, primary, exclusion or deferred;
+  - no predicate or expressions; permanent; not constraint-backed;
+  - `pg_get_indexdef` text equal;
+  - valid, ready and live;
+  - no other index with the same definition under another name.
+  `pg_index` vectors are compared through `string_to_array(x::text, ' ')`, because a cast to an array keeps lower bound 0.
+- **Build settings.** The build and the recovery `DROP INDEX CONCURRENTLY` both run with `statement_timeout = 0` and `lock_timeout = 600000` ms (never 0, which would mean no bound). When the lock timeout expires, the result is an INVALID index (U-1), never a half-claimed journal.
+
+### 1zc.2 Accepted residual risks
+- **R-1.** The barrier calls `dialect.migrate` with a prefix of `readMigrationFiles`. This is drizzle's own `migrate()` minus the file read, but it is an internal-but-public API. drizzle is pinned at `0.45.2`, and the unit and integration suites fail on a behaviour change.
+- **R-2 (generic plans).** The driver sends unnamed statements, which are planned per execution with their values (custom plans). Under a cached generic plan (named prepared statements, `plan_cache_mode = force_generic_plan`, or a transaction pooler that prepares statements), the planner keeps the pre-U14.1a plan, a backward `messages_pkey` scan. That is no regression and no improvement (evidence below). Any change to statement preparation must re-run the plan evidence.
+- **R-3.** A dense tenant's listing keeps the backward `messages_pkey` scan, which is already optimal for it. A status-filtered view for dense tenants is U14.1b and out of scope. There is no migration `0043`.
+- **Build cost.** On a large `messages` table the CIC takes time and I/O, and it waits for older transactions. Plan it outside peak. An interruption leaves an INVALID index that the next run refuses until `--recover-invalid` is run.
+
+### 1zc.3 Verification (05-Nov-2026; every database run on a disposable `with-db-clone` copy of `acc_r015_base`)
+- **Unit tests.** `schema-migrate.spec.ts` covers:
+  - sequencing: lock, prefix, barrier, `0042`, invariant, unlock, on one connection;
+  - starting points `0024`, `0041`, up to date, and drift;
+  - interruptions at each checkpoint, then a rerun;
+  - bounded lock refusal;
+  - hash, orphan and short-prefix refusals.
+  `messages-org-id-id-desc.spec.ts` covers the exact index, an absent index, 21 single-attribute deviations, 3 invalid states, "a mismatch wins over validity flags", table preflight and runner arguments.
+- **Migration integration tests** (`packages/db/src/test/u141a-migration.int-spec.ts`, 31 cases on temporary `acc_tmp_u141a_*` databases):
+  - every starting point: fresh, `0024`, `0041`, index already present;
+  - wrong definitions and an equivalent name are refused with nothing dropped;
+  - plain drizzle bypass fails at the guard;
+  - interruptions before and after the barrier, during the CIC (the CIC pid is proven to be the lock holder), at lock timeout, during `0042` (connection terminated), and after `0042` with the index dropped, invalid or redefined;
+  - `--recover-invalid` refusals;
+  - concurrent `db:migrate`;
+  - with `0042` recorded and a later (test-only, temporary) migration pending, a missing, invalid or redefined index stops the run before that migration, the lock is released, and a rerun after repair applies it. Against the previous ordering these tests fail: the later migration was applied.
+- **API integration tests** (`apps/api/test/messages-list-index.int-spec.ts`):
+  - order, cursor continuation, page size, `hasMore` and UUIDv7 ids on a dense tenant (12,000 rows) and a sparse tenant (~400 rows), and tenant isolation;
+  - the exact `listMessages` statement, captured on the wire and explained on the same connection inside the request transaction, uses `messages_org_id_id_desc_idx` with no sort on the first page and on a cursor page, with the cursor folded into `Index Cond`.
+- **Plan evidence** (`EXPLAIN (ANALYZE, BUFFERS)`, PostgreSQL 17.11, 200,000 dense and 2,000 interleaved sparse rows, limit 50). The exact statements were run with the index present and dropped, under custom and generic plans, on the first page, page 2 and a deep page.
+  - Sparse tenant, custom plans: before, `messages_org_id_idx` read 1,000–2,000 rows and then a top-N sort (2,211 buffers); after, an index scan with no sort (262–263 buffers; the `messages` scan itself 59 buffers on the deep page).
+  - Dense tenant: unchanged (backward `messages_pkey` scan).
+  - Generic plans: unchanged before and after (R-2).
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

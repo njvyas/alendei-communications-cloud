@@ -18,6 +18,7 @@
     "db:roles:reconcile": "tsx src/cli/reconcile-roles.ts",
     "db:seed": "tsx src/cli/seed.ts",
     "db:reset": "tsx src/cli/reset.ts",
+    "db:index:messages-org-id-desc": "tsx src/cli/index-messages-org-id-desc.ts",
     "test": "npm run test:unit && npm run test:integration",
     "test:unit": "jest --selectProjects unit --passWithNoTests",
     "test:integration": "jest --selectProjects integration --runInBand --passWithNoTests",
