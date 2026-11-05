@@ -28,6 +28,11 @@ import {
 } from '../maintenance/messages-org-id-id-desc';
 import { acquireMigrationLock, releaseMigrationLock } from '../cli/migration-lock';
 import { loadExpectedMigrations } from '../cli/migration-history';
+import {
+  FOLLOWING_PROBE,
+  FOLLOWING_TAG,
+  migrationsWithFollowing,
+} from './following-migration-fixture';
 
 jest.setTimeout(300_000);
 
@@ -507,6 +512,59 @@ describe('U14.1a — interruption at every significant point; reruns converge', 
     await runIndexRunner(poolFor(db), 'recover-invalid');
     await expect(migrateSchema(poolFor(db), FOLDER)).resolves.toMatchObject({ pending: [] });
   });
+
+  it.each<['missing' | 'invalid' | 'redefined', RegExp]>([
+    ['missing', /recorded, but the index is not as required.*absent/],
+    ['invalid', /recorded, but the index is not as required.*not usable/],
+    ['redefined', /does not match the expected definition/],
+  ])(
+    'after 0042 with a LATER migration pending: a %s index stops db:migrate BEFORE the later migration; lock released; rerun after repair applies it',
+    async (state, refusal) => {
+      const fixture = migrationsWithFollowing();
+      try {
+        const db = await createDb(base41);
+        await migrateSchema(poolFor(db), FOLDER); // 0000…0042 recorded, index exact
+        await sql(db, 'DROP INDEX public.messages_org_id_id_desc_idx');
+        if (state === 'invalid') await makeInvalidIndex(db);
+        if (state === 'redefined') {
+          await sql(db, 'CREATE INDEX messages_org_id_id_desc_idx ON public.messages (org_id, id)');
+        }
+        const probe = async () => {
+          const c = await clientFor(db);
+          const { rows } = await c.query<{ present: boolean }>(
+            `SELECT to_regclass('${FOLLOWING_PROBE}') IS NOT NULL AS present`,
+          );
+          return rows[0]!.present;
+        };
+
+        // The test-only migration after 0042 is pending; the recorded barrier no longer holds.
+        await expect(migrateSchema(poolFor(db), fixture.folder)).rejects.toThrow(refusal);
+        expect(await history(db)).toBe(expected.length); // nothing after 0042 was recorded …
+        expect(await probe()).toBe(false); // … or executed
+        expect(await lockHolders(await clientFor(db))).toEqual([]); // the lock was released
+
+        // Repair through the supported path, then the same db:migrate applies the later migration.
+        if (state === 'redefined') {
+          await expect(runIndexRunner(poolFor(db), 'recover-invalid')).rejects.toThrow(
+            /Nothing was dropped/,
+          );
+          await sql(db, 'DROP INDEX public.messages_org_id_id_desc_idx'); // operator decision
+          await runIndexRunner(poolFor(db), 'ensure');
+        } else if (state === 'invalid') {
+          await runIndexRunner(poolFor(db), 'recover-invalid');
+        } else {
+          await runIndexRunner(poolFor(db), 'ensure');
+        }
+        const r = await migrateSchema(poolFor(db), fixture.folder);
+        expect(r.pending.map((m) => m.tag)).toEqual([FOLLOWING_TAG]);
+        expect(await history(db)).toBe(expected.length + 1);
+        expect(await probe()).toBe(true);
+        expect((await indexState(db)).state.kind).toBe('exact');
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
 
   it('after 0042: a redefined index makes db:migrate exit non-zero and the runner refuses to touch it', async () => {
     const db = await createDb(base41);

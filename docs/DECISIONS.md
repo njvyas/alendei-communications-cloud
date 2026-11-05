@@ -2311,7 +2311,7 @@ Design approved by the owner on 05-Nov-2026 with conditions (Approach A; decisio
   - an equivalent index under another name;
   - a build in progress in another session.
   Otherwise it drops only that index (`DROP INDEX CONCURRENTLY`), rebuilds it, verifies it, and is safe to rerun.
-- **U-3.** On every run, once `0042` is recorded, the catalogue is re-verified. A missing, invalid or redefined index makes `db:migrate` exit non-zero. The journal is never proof.
+- **U-3.** On every run, once `0042` is recorded, the catalogue is verified immediately after the history check and before any further migration is applied. A missing, invalid or redefined index makes `db:migrate` exit non-zero with nothing further applied. The check runs again at the end as defence in depth. The journal is never proof.
 - **Exact catalogue verification.** All of the following must match:
   - the relation is an index on `public.messages`, btree;
   - 2 key columns and no INCLUDE columns: `indkey = (org_id, id)`, `indoption = (0, 3)`;
@@ -2344,7 +2344,8 @@ Design approved by the owner on 05-Nov-2026 with conditions (Approach A; decisio
   - plain drizzle bypass fails at the guard;
   - interruptions before and after the barrier, during the CIC (the CIC pid is proven to be the lock holder), at lock timeout, during `0042` (connection terminated), and after `0042` with the index dropped, invalid or redefined;
   - `--recover-invalid` refusals;
-  - concurrent `db:migrate`.
+  - concurrent `db:migrate`;
+  - with `0042` recorded and a later (test-only, temporary) migration pending, a missing, invalid or redefined index stops the run before that migration, the lock is released, and a rerun after repair applies it. Against the previous ordering these tests fail: the later migration was applied.
 - **API integration tests** (`apps/api/test/messages-list-index.int-spec.ts`):
   - order, cursor continuation, page size, `hasMore` and UUIDv7 ids on a dense tenant (12,000 rows) and a sparse tenant (~400 rows), and tenant isolation;
   - the exact `listMessages` statement, captured on the wire and explained on the same connection inside the request transaction, uses `messages_org_id_id_desc_idx` with no sort on the first page and on a cursor page, with the cursor folded into `Index Cond`.

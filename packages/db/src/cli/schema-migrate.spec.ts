@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import type { MigrationMeta } from 'drizzle-orm/migrator';
 import type { ClientBase, Pool } from 'pg';
 
+import { migrationsWithFollowing } from '../test/following-migration-fixture';
 import { MigrationHistoryError, loadExpectedMigrations } from './migration-history';
 import { MigrationLockError, acquireMigrationLock, lockWaitFromEnv } from './migration-lock';
 import { migrateSchema, type Barrier, type Checkpoint } from './schema-migrate';
@@ -149,11 +150,45 @@ describe('migrateSchema — schema only, verified first, one locked session', ()
     ]);
   });
 
-  it('up to date: no apply, no build, but the recorded barrier is re-verified (U-3)', async () => {
+  it('up to date: no apply, no build; the recorded barrier is verified up front (U-3) and again at the end', async () => {
     const db = fakeDatabase(rowsFor(expected.length));
     const barrier = fakeBarrier(db.events);
     await migrateSchema(db.pool, REPO_MIGRATIONS, { apply: db.apply, barriers: [barrier] });
-    expect(db.events).toEqual(['lock', 'verify', 'unlock']);
+    expect(db.events).toEqual(['lock', 'verify', 'verify', 'unlock']);
+  });
+
+  it('recorded barrier drifted and a LATER migration pending: refuses before applying anything (U-3, fail closed)', async () => {
+    const fixture = migrationsWithFollowing();
+    try {
+      const db = fakeDatabase(rowsFor(expected.length)); // 0042 recorded; the fixture adds one after it
+      const barrier = fakeBarrier(db.events, {
+        verify: async () => {
+          throw new Error('index missing');
+        },
+      });
+      await expect(
+        migrateSchema(db.pool, fixture.folder, { apply: db.apply, barriers: [barrier] }),
+      ).rejects.toThrow('index missing');
+      expect(db.apply).not.toHaveBeenCalled();
+      expect(db.events).toEqual(['lock', 'verify', 'unlock']);
+      expect(db.history()).toHaveLength(expected.length);
+      expect(db.released).toEqual([true]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('recorded barrier holds and a later migration is pending: verify first, then apply, then verify again', async () => {
+    const fixture = migrationsWithFollowing();
+    try {
+      const db = fakeDatabase(rowsFor(expected.length));
+      const barrier = fakeBarrier(db.events);
+      await migrateSchema(db.pool, fixture.folder, { apply: db.apply, barriers: [barrier] });
+      expect(db.events).toEqual(['lock', 'verify', 'apply:1', 'verify', 'unlock']);
+      expect(barrier.prepare).not.toHaveBeenCalled();
+    } finally {
+      fixture.cleanup();
+    }
   });
 
   it('up to date but the index drifted: exits with the barrier error, lock released, connection discarded', async () => {

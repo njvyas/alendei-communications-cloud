@@ -6,7 +6,10 @@
  * U14.1a (barrier-aware, one entry point for every environment):
  *   1. one connection is pinned for the whole run and takes the session-level
  *      migration lock (bounded wait, owner decision U-2);
- *   2. the history is verified against the committed journal and files;
+ *   2. the history is verified against the committed journal and files, and every
+ *      barrier whose migration is ALREADY recorded is verified against the live
+ *      catalogue before anything is applied (owner decision U-3: the journal is
+ *      never proof; a drifted index stops the run here, nothing further applied);
  *   3. if a barrier migration is pending, every pending migration BEFORE it is
  *      applied first (drizzle's own `readMigrationFiles` + `dialect.migrate`, one
  *      transaction, on the pinned connection), the history is re-verified, and the
@@ -15,8 +18,8 @@
  *   4. the remaining migrations are applied — the barrier migration itself is a
  *      guard that re-checks the catalogue inside its transaction, so its history
  *      row exists only if the guard passed;
- *   5. on EVERY run, a barrier already recorded in the history is re-verified
- *      against the catalogue (owner decision U-3): the journal is never proof.
+ *   5. finally, every recorded barrier (including one recorded by this run) is
+ *      verified again — defence in depth.
  * The lock is released explicitly on success and error; if the process or the
  * connection dies, the server releases it when the session ends.
  *
@@ -92,6 +95,7 @@ const drizzleApply: ApplyMigrations = async (client, migrations, folder) => {
 export type Checkpoint =
   | 'locked'
   | 'verified'
+  | 'recorded-barriers-verified'
   | 'before-prefix'
   | 'after-prefix'
   | 'before-barrier'
@@ -179,6 +183,17 @@ export async function migrateSchema(
 
     const first = await verifiedHistory(client, expected);
     await checkpoint('verified');
+
+    // U-3, fail closed: a barrier whose migration is already recorded must still hold BEFORE anything
+    // further is applied. The journal is never proof; a drifted index stops the run here.
+    for (const barrier of barriers) {
+      const position = expected.findIndex((m) => m.tag === barrier.beforeTag);
+      if (position >= 0 && position < first.applied) {
+        await assertMigrationLockHeld(client, `recorded barrier ${barrier.label}`);
+        await barrier.verifyApplied(client);
+      }
+    }
+    await checkpoint('recorded-barriers-verified');
     let remaining = [...first.pending];
     const barrierResults: Array<{ tag: string; result: EnsureResult }> = [];
 
@@ -231,6 +246,7 @@ export async function migrateSchema(
       await checkpoint('after-remaining');
     }
 
+    // Defence in depth: every recorded barrier (including one recorded by this run) is verified again.
     await checkpoint('before-invariants');
     await assertMigrationLockHeld(client, 'final verification');
     const final = await readAppliedMigrations(client);
