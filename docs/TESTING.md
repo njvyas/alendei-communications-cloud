@@ -378,6 +378,10 @@ Re-executed after the remediation, each mutant on its own disposable clone (belo
   - `apps/api/test/messages-list-index.int-spec.ts` pins `GET /messages` behaviour and the structural plan of the exact statement.
   - The cost-based plan comparison is evidence, not a test: it depends on data volume and statistics.
   - Do not use `--testPathPatterns u141a` from a worktree whose path contains `u141a`; it matches every suite. Use `u141a-migration`.
+- **Second barrier (U14.1b, 05-Nov-2026).**
+  - `db:migrate` takes the clone from `0024` to `0043` through both barriers.
+  - `packages/db/src/test/u141b-migration.int-spec.ts` uses its own `acc_tmp_u141b_<run>_<n>` databases and covers the same matrix for `messages_org_id_created_at_idx` (`DECISIONS.md` §1zd.4).
+  - `apps/api/test/messages-created-at-index.int-spec.ts` pins date-window paging, usage totals and the structural plan of the exact statements.
 
 ### 6r. Phase 1C.4a — development/test fixture (IMPLEMENTED and CLOSED; Gate C.4a PASS, 30-Sep-2026, checkpoint `91607aa`)
 

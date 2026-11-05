@@ -521,6 +521,7 @@ Phase 0.2 strategic update (`ARCHITECTURE.md` §21, `ROADMAP.md` Phase 8A–8G):
 
 **Partition when the first of these becomes true**, and not before: (a) the retention/archival policy in `DECISIONS.md` §4 is agreed with the business; (b) the table exceeds roughly 50 million rows or 50 GB; or (c) Phase 7 (billing go-live) begins, whichever is earliest. Whoever does it must attach the append-only TRUNCATE guard to every partition and to the partition-creation routine.
 - `messages` has, as built (U14.1a, `DECISIONS.md` §1zc), `messages_org_id_idx (org_id)` and `messages_org_id_id_desc_idx (org_id, id DESC)`. The latter serves the tenant's newest-first listing (`GET /messages`, sort key `id`) as an ordered index range. It is built `CONCURRENTLY` by `db:migrate`'s barrier before the guard migration `0042`, and is verified exactly on every migration run. If it is missing or invalid, `db:migrate` refuses. The repair is `npm run db:index:messages-org-id-desc --workspace @acc/db -- --recover-invalid` (an INVALID index only) and then `db:migrate`. `--check` reports read-only.
+- Since U14.1b (`DECISIONS.md` §1zd) `messages` also has `messages_org_id_created_at_idx (org_id, created_at)`, which serves `created_at` ranges (`GET /messages` with `createdFrom`/`createdTo`, still ordered by `id`, and `GET /usage/messages`). It is built `CONCURRENTLY` by the second barrier before guard migration `0043` and repaired with `npm run db:index:messages-org-created-at --workspace @acc/db -- --recover-invalid`.
 - `messages` additionally indexed on `(org_id, conversation_id, created_at)`, `(org_id, campaign_id)`, `(org_id, journey_id)`, `(org_id, idempotency_key)` unique, `(current_provider_id, current_provider_message_id)`.
 - `message_attempts` additionally indexed on `(message_id, attempt_number)` unique, and a partial index `(status, deadline_at) WHERE status = 'provider_accepted'` — this is the index the DB-backed fallback timer poller scans (`FALLBACK_ENGINE.md` §4, `EVENTS.md` §6).
 - `usage_ledger` indexed on `(org_id, occurred_at)`, `(message_id)`.
@@ -533,11 +534,11 @@ Schema migrations are owned by each module (per `ARCHITECTURE.md` §4) but run t
 **Barrier-aware `db:migrate` (U14.1a, `DECISIONS.md` §1zc).**
 - `db:migrate` holds a session-level advisory lock on one pinned connection for the whole run. The wait is bounded (30 s, `ACC_MIGRATION_LOCK_WAIT_MS`); then it refuses and names the holder.
 - It verifies the history first.
-- A step that cannot run in a transaction (today only `CREATE INDEX CONCURRENTLY` for `messages_org_id_id_desc_idx`) runs as a *barrier*: it comes after the migrations before its guard migration and before the guard itself. The guard re-checks the catalogue inside its transaction.
+- A step that cannot run in a transaction (today `CREATE INDEX CONCURRENTLY` for `messages_org_id_id_desc_idx` before `0042` and for `messages_org_id_created_at_idx` before `0043`) runs as a *barrier*: it comes after the migrations before its guard migration and before the guard itself. The guard re-checks the catalogue inside its transaction.
 - Never apply the migrations with plain drizzle (`drizzle-kit migrate`); the guard refuses.
-- Never regenerate `0042` with `db:generate`: it is hand-written and has no DDL.
+- Never regenerate `0042` or `0043` with `db:generate`: they are hand-written and have no DDL. Barriers run in journal order, and each index spec lives in `packages/db/src/maintenance/` (shared logic in `concurrent-index.ts`).
 - The index is declared in the Drizzle schema as `(org_id, id DESC NULLS FIRST)`. drizzle-kit renders a bare `.desc()` as `DESC NULLS LAST`, whereas PostgreSQL's default for DESC is NULLS FIRST, so the explicit form keeps a future snapshot equal to the catalogue (`indoption = 3`).
-- Pre-existing and unchanged by U14.1a: the committed snapshots stop at `0037`, so `drizzle-kit generate` currently proposes the `0038`–`0041` objects and `messages_org_id_id_desc_idx`. Do not commit its output.
+- Pre-existing and unchanged by U14.1a: the committed snapshots stop at `0037`, so `drizzle-kit generate` currently proposes the `0038`–`0041` objects, `messages_org_id_id_desc_idx` and `messages_org_id_created_at_idx`. Do not commit its output.
 
 ### 14b. Snapshot hygiene (Phase 1B.7 prep)
 

@@ -311,6 +311,77 @@ describe('migrateSchema — schema only, verified first, one locked session', ()
   });
 });
 
+describe('two barriers (U14.1a 0042, U14.1b 0043) — journal order, one locked session', () => {
+  const G43 = '0043_messages_org_id_created_at_guard';
+  const at43 = expected.findIndex((m) => m.tag === G43);
+  const barrierFor = (events: string[], tag: string, name: string): Barrier => ({
+    beforeTag: tag,
+    label: name,
+    prepare: jest.fn(async () => {
+      events.push(`barrier:${name}`);
+      return 'created' as const;
+    }),
+    verifyApplied: jest.fn(async () => {
+      events.push(`verify:${name}`);
+    }),
+  });
+
+  // Pins 0043 as the newest migration at the time of U14.1b; update when a later migration is added.
+  it('0043 directly follows 0042 in the committed journal', () => {
+    expect(at43).toBe(guardAt + 1);
+    expect(expected).toHaveLength(at43 + 1);
+  });
+
+  it.each<[string, Row[] | null, string[]]>([
+    ['fresh database', null, [`apply:${guardAt}`, 'barrier:a', 'apply:1', 'barrier:b', 'apply:1']],
+    ['database at 0041', rowsFor(guardAt), ['barrier:a', 'apply:1', 'barrier:b', 'apply:1']],
+    [
+      'database at 0042 (U14.1a applied)',
+      rowsFor(guardAt + 1),
+      ['verify:a', 'barrier:b', 'apply:1'],
+    ],
+    ['up to date', rowsFor(expected.length), ['verify:a', 'verify:b']],
+  ])(
+    '%s: each barrier runs right before its own guard; given out of order, still journal order',
+    async (_label, rows, middle) => {
+      const db = fakeDatabase(rows);
+      const a = barrierFor(db.events, GUARD, 'a');
+      const b = barrierFor(db.events, G43, 'b');
+      await migrateSchema(db.pool, REPO_MIGRATIONS, { apply: db.apply, barriers: [b, a] });
+      expect(db.events).toEqual(['lock', ...middle, 'verify:a', 'verify:b', 'unlock']);
+      expect(db.history()).toHaveLength(expected.length);
+      expect(db.pool.connect).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('a refusal at the 0043 barrier leaves 0042 recorded and 0043 not recorded', async () => {
+    const db = fakeDatabase(rowsFor(guardAt));
+    const a = barrierFor(db.events, GUARD, 'a');
+    const b = barrierFor(db.events, G43, 'b');
+    (b.prepare as jest.Mock).mockImplementation(async () => {
+      db.events.push('barrier:b');
+      throw new Error('refused b');
+    });
+    await expect(
+      migrateSchema(db.pool, REPO_MIGRATIONS, { apply: db.apply, barriers: [a, b] }),
+    ).rejects.toThrow('refused b');
+    expect(db.events).toEqual(['lock', 'barrier:a', 'apply:1', 'barrier:b', 'unlock']);
+    expect(db.history()).toHaveLength(guardAt + 1);
+  });
+
+  it('with 0042 recorded, a drifted U14.1a index stops the run before the 0043 barrier', async () => {
+    const db = fakeDatabase(rowsFor(guardAt + 1));
+    const a = barrierFor(db.events, GUARD, 'a');
+    (a.verifyApplied as jest.Mock).mockRejectedValue(new Error('0042 index missing'));
+    const b = barrierFor(db.events, G43, 'b');
+    await expect(
+      migrateSchema(db.pool, REPO_MIGRATIONS, { apply: db.apply, barriers: [a, b] }),
+    ).rejects.toThrow('0042 index missing');
+    expect(b.prepare).not.toHaveBeenCalled();
+    expect(db.apply).not.toHaveBeenCalled();
+  });
+});
+
 describe('migration lock wait is always bounded (U-2)', () => {
   it('ACC_MIGRATION_LOCK_WAIT_MS: unset means the default; only a non-negative integer is accepted', () => {
     expect(lockWaitFromEnv(undefined)).toBeUndefined();

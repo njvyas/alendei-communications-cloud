@@ -87,6 +87,8 @@ export const messages = pgTable(
     // U14.1a: built CONCURRENTLY by db:migrate (barrier before migration 0042); 0042 only verifies it.
     // `.nullsFirst()` is PostgreSQL's default for DESC: the declared index is exactly (org_id, id DESC).
     index('messages_org_id_id_desc_idx').on(table.orgId, table.id.desc().nullsFirst()),
+    // U14.1b: built CONCURRENTLY by db:migrate (barrier before migration 0043); 0043 only verifies it.
+    index('messages_org_id_created_at_idx').on(table.orgId, table.createdAt),
     index('messages_workspace_id_idx').on(table.workspaceId),
     index('messages_contact_id_idx').on(table.contactId),
     index('messages_status_idx').on(table.status),

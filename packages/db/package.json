@@ -19,6 +19,7 @@
     "db:seed": "tsx src/cli/seed.ts",
     "db:reset": "tsx src/cli/reset.ts",
     "db:index:messages-org-id-desc": "tsx src/cli/index-messages-org-id-desc.ts",
+    "db:index:messages-org-created-at": "tsx src/cli/index-messages-org-created-at.ts",
     "test": "npm run test:unit && npm run test:integration",
     "test:unit": "jest --selectProjects unit --passWithNoTests",
     "test:integration": "jest --selectProjects integration --runInBand --passWithNoTests",

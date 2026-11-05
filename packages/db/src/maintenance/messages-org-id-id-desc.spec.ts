@@ -43,9 +43,11 @@ const snapshot = (
   extra: Partial<CatalogueSnapshot> = {},
 ): CatalogueSnapshot => ({
   tableExists: true,
-  orgId: { attnum: ORG, type: 'uuid', notNull: true },
-  id: { attnum: ID, type: 'uuid', notNull: true },
-  uuidOpclass: UUID_OPC,
+  columns: [
+    { attnum: ORG, type: 'uuid', notNull: true },
+    { attnum: ID, type: 'uuid', notNull: true },
+  ],
+  opclasses: [UUID_OPC, UUID_OPC],
   target,
   equivalents: [],
   buildInProgress: false,
@@ -72,7 +74,11 @@ describe('classifyIndex — exact catalogue verification (U14.1a)', () => {
     ['id ascending', { indoption: [0, 0] }, /sort options/],
     ['org_id descending', { indoption: [3, 3] }, /sort options/],
     ['NULLS LAST on id', { indoption: [0, 1] }, /sort options/],
-    ['non-default operator class', { indclass: [UUID_OPC, 99999] }, /operator classes/],
+    [
+      'non-default operator class',
+      { indclass: [UUID_OPC, 99999] },
+      /operator classes \[10073,99999\] are not the default uuid btree class$/,
+    ],
     ['collation set', { indcollation: [0, 100] }, /collations/],
     ['unique', { indisunique: true }, /UNIQUE/],
     ['primary key', { indisprimary: true }, /primary key/],
@@ -117,21 +123,36 @@ describe('classifyIndex — exact catalogue verification (U14.1a)', () => {
     expect(tableProblems(snapshot(null, { tableExists: false }))).toEqual([
       'public.messages does not exist',
     ]);
-    expect(tableProblems(snapshot(null, { id: null }))).toEqual([
-      'public.messages.id does not exist',
+    const org = (c: { type: string; notNull: boolean }) =>
+      snapshot(null, {
+        columns: [
+          { attnum: ORG, ...c },
+          { attnum: ID, type: 'uuid', notNull: true },
+        ],
+      });
+    const idCol = (c: { type: string; notNull: boolean } | null) =>
+      snapshot(null, {
+        columns: [{ attnum: ORG, type: 'uuid', notNull: true }, c && { attnum: ID, ...c }],
+      });
+    expect(tableProblems(idCol(null))).toEqual(['public.messages.id does not exist']);
+    expect(tableProblems(org({ type: 'text', notNull: true }))[0]).toMatch(
+      /expected uuid NOT NULL/,
+    );
+    expect(tableProblems(org({ type: 'uuid', notNull: false }))[0]).toMatch(
+      /expected uuid NOT NULL/,
+    );
+    expect(tableProblems(idCol({ type: 'text', notNull: true }))[0]).toMatch(
+      /public\.messages\.id .*expected uuid NOT NULL/,
+    );
+    expect(tableProblems(idCol({ type: 'uuid', notNull: false }))[0]).toMatch(
+      /public\.messages\.id .*expected uuid NOT NULL/,
+    );
+    expect(tableProblems(snapshot(null, { opclasses: [UUID_OPC, null] }))).toEqual([
+      'no default btree operator class for uuid',
     ]);
-    expect(
-      tableProblems(snapshot(null, { orgId: { attnum: ORG, type: 'text', notNull: true } }))[0],
-    ).toMatch(/expected uuid NOT NULL/);
-    expect(
-      tableProblems(snapshot(null, { orgId: { attnum: ORG, type: 'uuid', notNull: false } }))[0],
-    ).toMatch(/expected uuid NOT NULL/);
-    expect(
-      tableProblems(snapshot(null, { id: { attnum: ID, type: 'text', notNull: true } }))[0],
-    ).toMatch(/public\.messages\.id .*expected uuid NOT NULL/);
-    expect(
-      tableProblems(snapshot(null, { id: { attnum: ID, type: 'uuid', notNull: false } }))[0],
-    ).toMatch(/public\.messages\.id .*expected uuid NOT NULL/);
+    expect(tableProblems(snapshot(null, { opclasses: [null, null] }))).toEqual([
+      'no default btree operator class for uuid', // reported once, as before the generalisation
+    ]);
     expect(tableProblems(snapshot(null))).toEqual([]);
   });
 });

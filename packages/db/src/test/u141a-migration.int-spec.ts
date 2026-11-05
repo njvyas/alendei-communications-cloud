@@ -235,7 +235,10 @@ describe('U14.1a — one db:migrate for every starting point', () => {
     const db = await createDb();
     const r1 = await migrateSchema(poolFor(db), FOLDER);
     expect(r1.pending).toHaveLength(expected.length);
-    expect(r1.barriers).toEqual([{ tag: '0042_messages_org_id_id_desc_guard', result: 'created' }]);
+    expect(r1.barriers).toEqual([
+      { tag: '0042_messages_org_id_id_desc_guard', result: 'created' },
+      { tag: '0043_messages_org_id_created_at_guard', result: 'created' }, // U14.1b, the next barrier
+    ]);
     expect(await history(db)).toBe(expected.length);
     const s = await indexState(db);
     expect(s.state).toEqual({ kind: 'exact' });
@@ -383,8 +386,10 @@ describe('U14.1a — interruption at every significant point; reruns converge', 
     const db = await createDb(startAt === 25 ? base24 : base41);
     await expect(
       migrateSchema(poolFor(db), FOLDER, {
-        checkpoint: async (p) => {
-          if (p === point) throw new Error(`interrupted at ${p}`);
+        checkpoint: async (p, tag) => {
+          if (p === point && tag === '0042_messages_org_id_id_desc_guard') {
+            throw new Error(`interrupted at ${p}`);
+          }
         },
       }),
     ).rejects.toThrow('interrupted');
@@ -453,8 +458,9 @@ describe('U14.1a — interruption at every significant point; reruns converge', 
     const db = await createDb(base41);
     let holderClient: Client | undefined;
     const run = migrateSchema(poolFor(db), FOLDER, {
-      checkpoint: async (p) => {
-        if (p !== 'before-remaining') return;
+      checkpoint: async (p, tag) => {
+        // Since U14.1b, 0042 is applied as the prefix of the next barrier (0043): block exactly there.
+        if (p !== 'before-prefix' || tag !== '0043_messages_org_id_created_at_guard') return;
         // SHARE blocks drizzle's INSERT into the history (after the guard ran) but not its SELECT.
         holderClient = await clientFor(db, 'acc-u141a-history-lock');
         await holderClient.query('BEGIN');
@@ -703,7 +709,9 @@ describe('U14.1a — serialization: one migrator at a time, bounded wait', () =>
     await blocker.query('ROLLBACK');
     await blocker.end();
     await observer.end();
-    await expect(first).resolves.toMatchObject({ barriers: [{ result: 'created' }] });
+    await expect(first).resolves.toMatchObject({
+      barriers: [{ result: 'created' }, { result: 'created' }],
+    });
     expect(await history(db)).toBe(expected.length);
   });
 });

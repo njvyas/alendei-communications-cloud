@@ -2354,6 +2354,66 @@ Design approved by the owner on 05-Nov-2026 with conditions (Approach A; decisio
   - Dense tenant: unchanged (backward `messages_pkey` scan).
   - Generic plans: unchanged before and after (R-2).
 
+## 1zd. U14.1b: `messages (org_id, created_at)` index (migration 0043): 05-Nov-2026
+
+The task proposed `(org_id, created_at DESC, id DESC)`. After the plan evidence below, the owner approved `(org_id, created_at)` on 05-Nov-2026, with these conditions: API ordering and UUIDv7 cursor semantics preserved; a separate guarded migration 0043; `CREATE INDEX CONCURRENTLY` through the U14.1a barrier and recovery mechanism; migration, recovery and regression tests; tenant isolation, RLS and authorization unchanged; U14.1a history untouched.
+
+### 1zd.1 Rationale
+- **Statements that could use it.** Only two API statements have a `created_at` predicate, and neither orders by `created_at`:
+  - `GET /messages` with `createdFrom`/`createdTo` orders by `id DESC`, because the `createdAt` sort key is the UUIDv7 `id`;
+  - `GET /usage/messages` is a range aggregate.
+- **Why not the proposed shape.** A btree serves a range in either direction, so `DESC` adds nothing. The trailing `id` would only help an ordering by `(created_at, id)`, which would change cursor semantics and was not in scope.
+- **Measured (PostgreSQL 17.11, 200,000 dense and 2,000 sparse rows over 360 days, exact statements, custom plans):**
+  - `(org_id, created_at)` used the same access path as the proposed index in every case, with equal buffer counts;
+  - it is about 31% smaller: 7.9 MiB against 11.4 MiB per 202,000 rows.
+- **Benefit:**
+  - dense tenant, 1-day window 300 days back: 5,942 → 229 buffers (30 ms → 3 ms);
+  - sparse tenant, any window: about 2,100 → 37–203 buffers;
+  - usage report, 7 days 180 days back: a sequential scan (13,952 buffers) becomes an index scan (7,901 buffers), and failure reasons drop from 6,176 to 125 buffers.
+- **No change:** the default listing (U14.1a), recent windows on a dense tenant, and 366-day usage reports (a sequential scan either way).
+- **Residual planner limitation:** for a dense tenant's 7-day window 180 days back, the planner keeps a backward primary-key scan (3,743 buffers) with or without the index. It assumes `created_at` and `id` are independent, but in practice they are correlated. This is inferred from the plans and is accepted.
+
+### 1zd.2 Implementation
+- **Generic module.** The U14.1a index logic is now spec-driven in `maintenance/concurrent-index.ts`. It covers the exact catalogue verification, the classification, the bounded concurrent `CREATE`/`DROP`, the U-1 recovery policy and the lock assertions. U14.1a's spec, `CREATE`/`DROP` statements, messages, runner command and tests are unchanged in behaviour, and migration `0042` is byte-for-byte unchanged.
+- **U14.1b spec** (`maintenance/messages-org-id-created-at.ts`):
+  - definition `CREATE INDEX messages_org_id_created_at_idx ON public.messages USING btree (org_id, created_at)`;
+  - `indoption` `(0, 0)`;
+  - the default `uuid` and `timestamptz` btree operator classes;
+  - `created_at` must be `timestamptz NOT NULL`.
+- **Second barrier.** `db:migrate` builds the index before guard migration `0043_messages_org_id_created_at_guard`, under the same session lock on the same pinned connection. Barriers run in journal order: from `0041`, it builds the 0042 index, applies `0042`, builds the 0043 index, then applies `0043`.
+- **U-3 extended.** A recorded `0042` or `0043` is verified before anything further is applied, and again at the end.
+- **Runner.** `npm run db:index:messages-org-created-at --workspace @acc/db -- [--check | --recover-invalid]`, with the same semantics as U14.1a's runner.
+- **Unchanged:** no API, DTO, OpenAPI, cursor, RLS, grant or authorization change.
+
+### 1zd.3 Accepted residual risks
+- **Write and storage cost.** One more btree on an append-heavy table, about 40 bytes per row (7.9 MiB per 202,000 rows). Measured bulk-insert overhead was within noise (2.0 s against 2.2 s for 20,000 rows); this is indicative only.
+- **Build cost.** The same as U14.1a: a concurrent build waits for older transactions. Plan it outside peak; an interruption leaves an INVALID index that the next run refuses until `--recover-invalid` is run.
+- **Generic plans.** Under forced generic plans the index is chosen for every measured statement. It is better or equal everywhere except 366-day usage reports on the dense tenant, which are marginally worse (failure reasons 5,373 → 6,045 buffers, about 12%; grouped counts about equal). The driver sends unnamed statements, which get custom plans, as with R-2.
+- **Snapshot gap (pre-existing).** drizzle-kit snapshots stop at `0037`, so `generate` also proposes this index. Never commit its output.
+
+### 1zd.4 Verification (05-Nov-2026; disposable `with-db-clone` copies of `acc_r015_base` and temporary `acc_tmp_u141b_*` databases only)
+- **Unit tests:**
+  - the U14.1b classifier: 17 single-attribute deviations, including the originally proposed 3-column shape, plus invalid states and preflight;
+  - the guard file contains no DDL;
+  - the U14.1a `CREATE`/`DROP` statements are byte-identical to before;
+  - two-barrier sequencing from fresh, `0041`, `0042` and up to date, including barriers given out of order;
+  - a refusal at the 0043 barrier, and a drifted U14.1a index stopping the run before the U14.1b build.
+- **Migration integration tests** (`u141b-migration.int-spec.ts`, 27 cases):
+  - every starting point, with U14.1a's index keeping the same OID;
+  - adoption of an index already present;
+  - seven wrong definitions, an equivalent name and a table name refused, with nothing dropped;
+  - the plain-drizzle bypass failing at the guard;
+  - an interrupted build (the CIC runs on the lock holder's session), then recovery;
+  - an interruption after the barrier;
+  - runner refusals;
+  - a recorded `0043` with a missing, invalid or redefined index stopping the run before a later migration, the lock released, and a rerun after repair succeeding.
+- **U14.1a integration suite:** three assertions were updated for the second barrier (the barrier result list, and where `0042` is applied).
+- **API tests** (`messages-created-at-index.int-spec.ts`):
+  - date-window paging, newest first by `id`, with gap-free cursor walks on dense and sparse tenants;
+  - usage totals equal to the seeded rows of that tenant only;
+  - the exact list and usage statements using `messages_org_id_created_at_idx` for a sparse window, while the default listing still uses `messages_org_id_id_desc_idx`.
+- **History proof:** `44|d02a30795d21707f7e9b83563fa3500f`.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

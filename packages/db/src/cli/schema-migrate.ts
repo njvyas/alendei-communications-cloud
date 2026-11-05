@@ -30,10 +30,14 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { readMigrationFiles, type MigrationMeta } from 'drizzle-orm/migrator';
 import type { ClientBase, Pool, PoolClient } from 'pg';
 
+import type { EnsureResult } from '../maintenance/concurrent-index';
+import {
+  ensureMessagesOrgIdCreatedAtIndex,
+  verifyMessagesOrgIdCreatedAtIndex,
+} from '../maintenance/messages-org-id-created-at';
 import {
   ensureMessagesOrgIdIdDescIndex,
   verifyIndexExact,
-  type EnsureResult,
 } from '../maintenance/messages-org-id-id-desc';
 import {
   acquireMigrationLock,
@@ -70,7 +74,22 @@ export const MESSAGES_INDEX_BARRIER: Barrier = {
     ),
 };
 
-export const BARRIERS: readonly Barrier[] = [MESSAGES_INDEX_BARRIER];
+/** U14.1b: `messages_org_id_created_at_idx` before the guard migration 0043. */
+export const MESSAGES_CREATED_AT_INDEX_BARRIER: Barrier = {
+  beforeTag: '0043_messages_org_id_created_at_guard',
+  label: 'messages_org_id_created_at_idx',
+  prepare: (client, log) => ensureMessagesOrgIdCreatedAtIndex(client, { log }),
+  verifyApplied: (client) =>
+    verifyMessagesOrgIdCreatedAtIndex(
+      client,
+      'Refusing: migration 0043_messages_org_id_created_at_guard is recorded, but the index is not as required',
+    ),
+};
+
+export const BARRIERS: readonly Barrier[] = [
+  MESSAGES_INDEX_BARRIER,
+  MESSAGES_CREATED_AT_INDEX_BARRIER,
+];
 
 /** Applies the given migrations (drizzle semantics) on the pinned connection. */
 export type ApplyMigrations = (
@@ -149,12 +168,15 @@ export async function migrateSchema(
   migrationsFolder: string,
   options: MigrateOptions = {},
 ): Promise<SchemaMigrationResult> {
-  const barriers = options.barriers ?? BARRIERS;
+  const unordered = options.barriers ?? BARRIERS;
   const apply = options.apply ?? drizzleApply;
   const log = options.log ?? (() => {});
   const checkpoint = options.checkpoint ?? (async () => {});
   const expected = loadExpectedMigrations(migrationsFolder);
   const files = readMigrationFiles({ migrationsFolder });
+  // Barriers run in journal order (each one's prefix ends at its own guard migration).
+  const journalPosition = (b: Barrier) => expected.findIndex((m) => m.tag === b.beforeTag);
+  const barriers = [...unordered].sort((a, b) => journalPosition(a) - journalPosition(b));
   const fileFor = (tag: string): MigrationMeta => {
     const m = expected.find((e) => e.tag === tag);
     const f = files.find((x) => x.folderMillis === m?.when && x.hash === m?.hash);
