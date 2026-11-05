@@ -398,7 +398,7 @@ const isSupportGrant = (g: GrantRow) =>
   g.scopeId === null &&
   g.orgId === null;
 
-interface CredentialState {
+interface AccessState {
   readonly status: string;
   readonly hasPassword: boolean;
   readonly mfaEnabled: boolean;
@@ -408,10 +408,7 @@ interface CredentialState {
   readonly usableApiKeys: number;
 }
 
-async function credentialState(
-  q: Database | Transaction,
-  userId: string,
-): Promise<CredentialState> {
+async function accessState(q: Database | Transaction, userId: string): Promise<AccessState> {
   const result = await q.execute(sql`
     SELECT u.status::text AS status,
            (u.password_hash IS NOT NULL) AS "hasPassword",
@@ -426,7 +423,7 @@ async function credentialState(
              WHERE k.created_by = u.id AND k.revoked_at IS NULL
                AND (k.expires_at IS NULL OR k.expires_at > now())) AS "usableApiKeys"
       FROM users u WHERE u.id = ${userId}`);
-  const row = result.rows[0] as CredentialState | undefined;
+  const row = result.rows[0] as AccessState | undefined;
   if (!row) throw new PlatformSupportRefusal('postcondition', 'the identity disappeared');
   return row;
 }
@@ -562,7 +559,7 @@ export async function createPlatformSupportUser(
       );
       postcondition(!grants.some((g) => g.orgId !== null), 'no tenant membership');
       postcondition(!grants.some((g) => g.roleKey === OPERATOR_ROLE_KEY), 'no super-admin grant');
-      const state = await credentialState(tx, invited.id);
+      const state = await accessState(tx, invited.id);
       postcondition(state.status === 'active' && state.hasPassword, 'active with a password');
       postcondition(!state.mfaEnabled && !state.hasMfaSecretRef, 'no MFA factor');
       postcondition(state.unrevokedSessions === 0, 'no sessions');
@@ -648,7 +645,7 @@ export async function revokePlatformSupportUser(
           `the identity is ${target.status}`,
         );
       }
-      const before = await credentialState(tx, target.id);
+      const before = await accessState(tx, target.id);
       if (before.usableApiKeys > 0) {
         throw new PlatformSupportRefusal(
           'usable_api_key',
@@ -699,7 +696,7 @@ export async function revokePlatformSupportUser(
       });
 
       postcondition((await grantsOf(tx, target.id)).length === 0, 'no grant remains');
-      const after = await credentialState(tx, target.id);
+      const after = await accessState(tx, target.id);
       postcondition(after.status === 'disabled', 'the identity is disabled');
       postcondition(!after.hasPassword, 'no password digest remains');
       postcondition(!after.mfaEnabled && !after.hasMfaSecretRef, 'no MFA factor remains');
@@ -752,7 +749,7 @@ export async function platformSupportStatus(
         };
       }
       const grants = await grantsOf(tx, userId);
-      const state = await credentialState(tx, userId);
+      const state = await accessState(tx, userId);
       const auditRows = await tx.execute(sql`
         SELECT action, outcome::text AS outcome, created_at AS "createdAt"
           FROM audit_logs

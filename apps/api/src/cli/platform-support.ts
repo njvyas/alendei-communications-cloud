@@ -51,7 +51,7 @@ const VALUE_FLAGS: Record<PlatformSupportCommand, readonly string[]> = {
 };
 
 /** stdin lines each command reads, in order. `status` reads none. */
-export const SECRET_LINES: Record<PlatformSupportCommand, number> = {
+export const STDIN_LINES: Record<PlatformSupportCommand, number> = {
   create: 2, // operator password, new user's password
   revoke: 1, // operator password
   status: 0,
@@ -114,7 +114,7 @@ export function parseCommandLine(argv: readonly string[]): ParsedCommandLine {
  * line, and input larger than the limit. One trailing line ending is removed
  * from each line (`printf '%s\n'`), and a `\r` before it.
  */
-export async function readSecretLines(
+export async function readStdinLines(
   stream: NodeJS.ReadableStream,
   count: number,
 ): Promise<string[]> {
@@ -169,7 +169,7 @@ export async function main(
     );
   }
   const secrets =
-    parsed.command === 'status' ? [] : await readSecretLines(stdin, SECRET_LINES[parsed.command]);
+    parsed.command === 'status' ? [] : await readStdinLines(stdin, STDIN_LINES[parsed.command]);
 
   const credentials = credentialService();
   const deps = {

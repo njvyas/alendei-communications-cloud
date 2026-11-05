@@ -96,13 +96,22 @@ export class UserLifecycleService {
    * hold it only for the duration of this call.
    */
   async activate(tx: Transaction, userId: string, password: string): Promise<UserRecord> {
-    return this.activateWithDigest(tx, userId, await this.credentials.hash(password));
+    const digest = await this.credentials.hash(password);
+    const [row] = await tx
+      .update(schema.users)
+      .set({ passwordHash: digest, passwordUpdatedAt: new Date(), status: 'active' })
+      .where(eq(schema.users.id, userId))
+      .returning({ id: schema.users.id, email: schema.users.email, status: schema.users.status });
+    if (!row) throw new Error(`user: ${userId} not found for activation`);
+    return row;
   }
 
   /**
    * `activate`, with the digest computed by the caller beforehand — so a caller
    * holding a transaction open (the `platform:support` CLI) does not spend the
    * Argon2 cost inside it. The digest must come from `CredentialService.hash`.
+   * Kept separate from `activate`, whose single write is pinned as part of the
+   * bootstrap owner write set (`dev-fixture.sec-spec.ts`).
    */
   async activateWithDigest(tx: Transaction, userId: string, digest: string): Promise<UserRecord> {
     const [row] = await tx

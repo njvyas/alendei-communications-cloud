@@ -5,7 +5,7 @@ import {
   describeFailure,
   main,
   parseCommandLine,
-  readSecretLines,
+  readStdinLines,
 } from './platform-support';
 import {
   PLATFORM_SUPPORT_ALLOWED_ENVIRONMENTS,
@@ -130,22 +130,22 @@ describe('platform:support command line (N-16, N-20)', () => {
 
 describe('platform:support stdin (N-16)', () => {
   it('reads exactly the expected lines from a pipe', async () => {
-    await expect(readSecretLines(piped('one-password\ntwo-password\n'), 2)).resolves.toEqual([
+    await expect(readStdinLines(piped('one-password\ntwo-password\n'), 2)).resolves.toEqual([
       'one-password',
       'two-password',
     ]);
-    await expect(readSecretLines(piped('one-password\r\n'), 1)).resolves.toEqual(['one-password']);
-    await expect(readSecretLines(piped('no-newline'), 1)).resolves.toEqual(['no-newline']);
+    await expect(readStdinLines(piped('one-password\r\n'), 1)).resolves.toEqual(['one-password']);
+    await expect(readStdinLines(piped('no-newline'), 1)).resolves.toEqual(['no-newline']);
   });
 
   it('refuses a terminal, a wrong line count, an empty line and oversized input', async () => {
     const tty = Object.assign(piped('x\n'), { isTTY: true });
-    await expect(readSecretLines(tty, 1)).rejects.toThrow(/interactive entry is not supported/);
-    await expect(readSecretLines(piped(''), 1)).rejects.toThrow(/exactly 1 line/);
-    await expect(readSecretLines(piped('a\nb\nc\n'), 2)).rejects.toThrow(/exactly 2 line/);
-    await expect(readSecretLines(piped('only-one\n'), 2)).rejects.toThrow(/exactly 2 line/);
-    await expect(readSecretLines(piped('\nsecond\n'), 2)).rejects.toThrow(/empty line/);
-    await expect(readSecretLines(piped(`${'x'.repeat(5000)}\n`), 1)).rejects.toThrow(
+    await expect(readStdinLines(tty, 1)).rejects.toThrow(/interactive entry is not supported/);
+    await expect(readStdinLines(piped(''), 1)).rejects.toThrow(/exactly 1 line/);
+    await expect(readStdinLines(piped('a\nb\nc\n'), 2)).rejects.toThrow(/exactly 2 line/);
+    await expect(readStdinLines(piped('only-one\n'), 2)).rejects.toThrow(/exactly 2 line/);
+    await expect(readStdinLines(piped('\nsecond\n'), 2)).rejects.toThrow(/empty line/);
+    await expect(readStdinLines(piped(`${'x'.repeat(5000)}\n`), 1)).rejects.toThrow(
       /larger than expected/,
     );
   });
