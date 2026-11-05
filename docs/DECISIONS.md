@@ -2305,7 +2305,7 @@ Design approved by the owner on 05-Nov-2026 with conditions (Approach A; decisio
   3. apply `0042` and the rest.
 - **Migration `0042_messages_org_id_id_desc_guard` is a guard, not DDL.** Inside its transaction it re-checks the catalogue and raises unless the index exists exactly as specified and is valid. Its history row therefore exists only if the guard passed. Applied by plain drizzle without the barrier, it fails closed and the batch rolls back.
 - **Lock (condition 1).** One pinned connection holds a session-level advisory lock (`MIGRATION_LOCK_KEY`) for the whole run: history verification, prefix, build, catalogue verification, `0042` and final verification. The lock is re-asserted before each phase, and the CIC runs on that same connection. It is released explicitly on success and error. If the process or connection dies, the server releases it with the session (`client_connection_check_interval = 1000`).
-- **U-2.** The lock wait is bounded: 30 s by default, `ACC_MIGRATION_LOCK_WAIT_MS`, retry every 500 ms. On timeout `db:migrate` refuses and names the holder's pid, application and state.
+- **U-2.** The lock wait is bounded: 30 s by default, `ACC_MIGRATION_LOCK_WAIT_MS`, retry every 500 ms. On timeout `db:migrate` refuses and names the holder's pid, application and state. A malformed wait value is refused, never treated as unbounded.
 - **U-1.** An INVALID (interrupted) index is refused by default. Recovery requires `npm run db:index:messages-org-id-desc --workspace @acc/db -- --recover-invalid`. That command identifies the exact target (name, schema, table, definition). It never drops a valid index: it reports the index present and exits 0. It refuses:
   - a differently defined index (even an invalid one);
   - an equivalent index under another name;
@@ -2322,7 +2322,7 @@ Design approved by the owner on 05-Nov-2026 with conditions (Approach A; decisio
   - valid, ready and live;
   - no other index with the same definition under another name.
   `pg_index` vectors are compared through `string_to_array(x::text, ' ')`, because a cast to an array keeps lower bound 0.
-- **Build settings.** `statement_timeout = 0` and `lock_timeout = 600000` ms. When the lock timeout expires, the result is an INVALID index (U-1), never a half-claimed journal.
+- **Build settings.** The build and the recovery `DROP INDEX CONCURRENTLY` both run with `statement_timeout = 0` and `lock_timeout = 600000` ms (never 0, which would mean no bound). When the lock timeout expires, the result is an INVALID index (U-1), never a half-claimed journal.
 
 ### 1zc.2 Accepted residual risks
 - **R-1.** The barrier calls `dialect.migrate` with a prefix of `readMigrationFiles`. This is drizzle's own `migrate()` minus the file read, but it is an internal-but-public API. drizzle is pinned at `0.45.2`, and the unit and integration suites fail on a behaviour change.

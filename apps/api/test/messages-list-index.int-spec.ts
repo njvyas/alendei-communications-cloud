@@ -65,7 +65,6 @@ describe('U14.1a: GET /messages on (org_id, id DESC) — behaviour unchanged, pl
   let denseToken: string;
   let sparseToken: string;
   let channelId: string;
-  const roleIds: string[] = [];
   /** Expected listings, newest first (UUIDv7 order = creation order). */
   let denseIds: string[] = [];
   let sparseIds: string[] = [];
@@ -101,7 +100,6 @@ describe('U14.1a: GET /messages on (org_id, id DESC) — behaviour unchanged, pl
     const contactOf = new Map<string, string>();
     for (const tenant of [dense, sparse]) {
       const roleId = uuidv7();
-      roleIds.push(roleId);
       await h.admin.insert(schema.roles).values({
         id: roleId,
         orgId: tenant.orgId,
@@ -203,6 +201,7 @@ describe('U14.1a: GET /messages on (org_id, id DESC) — behaviour unchanged, pl
     });
   }, 120_000);
 
+  // destroyTenant deletes each organization; its roles, role permissions and grants cascade with it.
   afterAll(async () => {
     jest.restoreAllMocks();
     if (!h) return;

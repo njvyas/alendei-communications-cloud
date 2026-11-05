@@ -537,7 +537,7 @@ Schema migrations are owned by each module (per `ARCHITECTURE.md` §4) but run t
 - Never apply the migrations with plain drizzle (`drizzle-kit migrate`); the guard refuses.
 - Never regenerate `0042` with `db:generate`: it is hand-written and has no DDL.
 - The index is declared in the Drizzle schema as `(org_id, id DESC NULLS FIRST)`. drizzle-kit renders a bare `.desc()` as `DESC NULLS LAST`, whereas PostgreSQL's default for DESC is NULLS FIRST, so the explicit form keeps a future snapshot equal to the catalogue (`indoption = 3`).
-- Pre-existing and unchanged by U14.1a: the committed snapshots stop at `0037`, so `drizzle-kit generate` currently proposes the `0038`–`0041` objects as well.
+- Pre-existing and unchanged by U14.1a: the committed snapshots stop at `0037`, so `drizzle-kit generate` currently proposes the `0038`–`0041` objects and `messages_org_id_id_desc_idx`. Do not commit its output.
 
 ### 14b. Snapshot hygiene (Phase 1B.7 prep)
 

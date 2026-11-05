@@ -90,7 +90,7 @@ Set `ACC_VERSION=$VERSION` in `deploy/release.env`. The console image is built p
 | Step | Command | Pass criterion |
 |---|---|---|
 | 1. Data services | `$C up -d --wait postgres redis` | both healthy |
-| 2. Schema | `$C run --rm migrate` | `Applied 38 migration(s) after 0 verified` and `Roles were not changed` |
+| 2. Schema | `$C run --rm migrate` | `Barrier messages_org_id_id_desc_idx before 0042_messages_org_id_id_desc_guard: created`, `Applied 43 migration(s) after 0 verified` and `Roles were not changed` |
 | 3. History proof | `$C exec -T postgres psql -U postgres -d acc -Atc "SELECT count(*), md5(string_agg(hash \|\| ':' \|\| created_at, ',' ORDER BY id)) FROM drizzle.__drizzle_migrations"` | `43\|fbfdb9c50a8e1639595ea0a35f7dcea0` — exactly the committed migrations `0000`–`0042` (U14.1a) |
 | 4. Role logins | `$C run --rm roles` | `Roles reconciled … acc_app, acc_auth, acc_relay, acc_dispatch` |
 | 5. Seed | `$C run --rm seed` | completes (idempotent) |
@@ -105,7 +105,7 @@ Migrations run as a one-off container. `db:migrate` behaves as follows (U14.1a, 
 - Expected output lines include `Barrier messages_org_id_id_desc_idx before 0042_messages_org_id_id_desc_guard: created` (`present` on a rerun).
 
 **Index gate (U14.1a).** After `migrate`, before starting `api`, run `$C run --rm migrate npm run db:index:messages-org-id-desc --workspace @acc/db -- --check`. It must print `index public.messages_org_id_id_desc_idx is present, exact and valid` and exit 0. If `db:migrate` stops at the barrier:
-- An interrupted build leaves an INVALID index, refused by default. Run the same command with `-- --recover-invalid` instead of `--check`, then rerun `migrate`. It drops only that exact invalid index, concurrently, and rebuilds it.
+- An interrupted build leaves an INVALID index, refused by default. Replace `--check` with `--recover-invalid` (`$C run --rm migrate npm run db:index:messages-org-id-desc --workspace @acc/db -- --recover-invalid`), then rerun `migrate`. It drops only that exact invalid index, concurrently, and rebuilds it.
 - An index that is valid but defined differently, or an equivalent index under another name, is refused by both commands, and nothing is dropped. Stop and investigate.
 - Never apply the migrations with any other tool.
 
