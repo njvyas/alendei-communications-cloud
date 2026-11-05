@@ -323,13 +323,19 @@ async function concurrently(
   statement: string,
   lockTimeoutMs: number,
 ): Promise<void> {
-  await client.query('SET statement_timeout = 0');
-  await client.query(`SET lock_timeout = ${Math.max(1, Math.floor(lockTimeoutMs))}`);
+  if (!Number.isFinite(lockTimeoutMs)) {
+    throw new IndexMaintenanceError(
+      `invalid lock timeout for ${statement}: ${String(lockTimeoutMs)}`,
+    );
+  }
   try {
+    await client.query('SET statement_timeout = 0');
+    await client.query(`SET lock_timeout = ${Math.max(1, Math.floor(lockTimeoutMs))}`);
     await client.query(statement);
   } finally {
-    await client.query('RESET lock_timeout');
-    await client.query('RESET statement_timeout');
+    // Best effort: on a broken session these fail too, and the run discards the connection anyway.
+    await client.query('RESET lock_timeout').catch(() => undefined);
+    await client.query('RESET statement_timeout').catch(() => undefined);
   }
 }
 
