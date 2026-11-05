@@ -27,7 +27,7 @@ import {
   readIndexCatalogue,
 } from '../maintenance/messages-org-id-id-desc';
 import { loadCliEnv, requireEnv } from './_env';
-import { acquireMigrationLock, releaseMigrationLock } from './migration-lock';
+import { acquireMigrationLock, lockWaitFromEnv, releaseMigrationLock } from './migration-lock';
 import {
   MigrationHistoryError,
   loadExpectedMigrations,
@@ -120,13 +120,12 @@ async function main(): Promise<void> {
       console.error(
         `index runner interrupted by ${signal}; an interrupted build leaves an INVALID index (rerun with --recover-invalid).`,
       );
-      process.exit(130);
+      process.exit(signal === 'SIGINT' ? 130 : 143);
     });
   }
   try {
-    const raw = process.env.ACC_MIGRATION_LOCK_WAIT_MS;
     const { ok, summary } = await runIndexRunner(pool, mode, {
-      lockWaitMs: raw ? Number(raw) : undefined,
+      lockWaitMs: lockWaitFromEnv(),
       log: (line) => console.log(line),
     });
     console.log(summary);

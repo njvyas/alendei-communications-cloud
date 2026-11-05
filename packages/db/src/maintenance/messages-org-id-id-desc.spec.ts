@@ -126,6 +126,12 @@ describe('classifyIndex — exact catalogue verification (U14.1a)', () => {
     expect(
       tableProblems(snapshot(null, { orgId: { attnum: ORG, type: 'uuid', notNull: false } }))[0],
     ).toMatch(/expected uuid NOT NULL/);
+    expect(
+      tableProblems(snapshot(null, { id: { attnum: ID, type: 'text', notNull: true } }))[0],
+    ).toMatch(/public\.messages\.id .*expected uuid NOT NULL/);
+    expect(
+      tableProblems(snapshot(null, { id: { attnum: ID, type: 'uuid', notNull: false } }))[0],
+    ).toMatch(/public\.messages\.id .*expected uuid NOT NULL/);
     expect(tableProblems(snapshot(null))).toEqual([]);
   });
 });

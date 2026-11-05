@@ -314,20 +314,32 @@ export function describe(state: IndexState): string {
   }
 }
 
+/**
+ * Runs one concurrent DDL statement with no statement timeout and a bounded lock wait. `lock_timeout = 0`
+ * would mean "wait forever" in PostgreSQL, so the bound is at least 1 ms.
+ */
+async function concurrently(
+  client: ClientBase,
+  statement: string,
+  lockTimeoutMs: number,
+): Promise<void> {
+  await client.query('SET statement_timeout = 0');
+  await client.query(`SET lock_timeout = ${Math.max(1, Math.floor(lockTimeoutMs))}`);
+  try {
+    await client.query(statement);
+  } finally {
+    await client.query('RESET lock_timeout');
+    await client.query('RESET statement_timeout');
+  }
+}
+
 async function build(
   client: ClientBase,
   lockTimeoutMs: number,
   log: (l: string) => void,
 ): Promise<void> {
   log(`building ${MESSAGES_ORG_ID_ID_DESC.name} CONCURRENTLY (lock_timeout ${lockTimeoutMs} ms)`);
-  await client.query('SET statement_timeout = 0');
-  await client.query(`SET lock_timeout = ${Math.max(0, Math.floor(lockTimeoutMs))}`);
-  try {
-    await client.query(CREATE_SQL);
-  } finally {
-    await client.query('RESET lock_timeout');
-    await client.query('RESET statement_timeout');
-  }
+  await concurrently(client, CREATE_SQL, lockTimeoutMs);
 }
 
 /**
@@ -381,7 +393,7 @@ export async function ensureMessagesOrgIdIdDescIndex(
       );
     }
     log(`dropping the invalid ${MESSAGES_ORG_ID_ID_DESC.name} CONCURRENTLY (${recheck.flags})`);
-    await client.query(DROP_SQL);
+    await concurrently(client, DROP_SQL, lockTimeoutMs);
     if (classifyIndex(await readIndexCatalogue(client)).kind !== 'absent') {
       throw new IndexMaintenanceError(
         'Refusing: the invalid index is still present after DROP INDEX CONCURRENTLY.',

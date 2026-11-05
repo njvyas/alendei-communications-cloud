@@ -217,7 +217,11 @@ export async function migrateSchema(
     if (remaining.length > 0) {
       await checkpoint('before-remaining');
       await assertMigrationLockHeld(client, 'remaining migrations');
-      await apply(client, files, migrationsFolder);
+      await apply(
+        client,
+        remaining.map((m) => fileFor(m.tag)),
+        migrationsFolder,
+      );
       const done = await verifiedHistory(client, expected);
       if (done.pending.length > 0) {
         throw new MigrationHistoryError([

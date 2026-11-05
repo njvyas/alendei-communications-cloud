@@ -72,7 +72,23 @@ async function clientFor(db: string, app = 'acc-u141a-observer'): Promise<Client
   const c = new Client({ connectionString: urlFor(db), application_name: app });
   c.on('error', () => undefined);
   await c.connect();
+  openClients.push(c);
   return c;
+}
+/** Every client a scenario opened is closed after it, even when it failed midway (an open transaction rolls back). */
+const openClients: Client[] = [];
+afterEach(async () => {
+  const clients = openClients.splice(0);
+  await Promise.all(clients.map((c) => c.end().catch(() => undefined)));
+});
+/** Sessions holding the migration lock in this database, independent of any build. */
+async function lockHolders(observer: Client): Promise<number[]> {
+  const { rows } = await observer.query<{ pid: number }>(
+    `SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND classid = $1 AND objid = $2 AND objsubid = 1
+        AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
+    [MIGRATION_LOCK_IDENTITY.classid, MIGRATION_LOCK_IDENTITY.objid],
+  );
+  return rows.map((r) => Number(r.pid));
 }
 /** PostgreSQL's own message: drizzle wraps errors as "Failed query: <sql>" (which quotes the guard source) with the server error in `cause`. */
 async function serverError(attempt: Promise<unknown>): Promise<string> {
@@ -389,7 +405,7 @@ describe('U14.1a — interruption at every significant point; reruns converge', 
     expect(await history(db)).toBe(GUARD_AT);
     expect((await indexState(db)).state.kind).toBe('invalid');
     // the lock was released (the run ended): nobody holds it now
-    expect(await cicAndLockHolder(observer)).toBeUndefined();
+    expect(await lockHolders(observer)).toEqual([]);
     await observer.end();
     await expect(migrateSchema(poolFor(db), FOLDER)).rejects.toThrow(
       /interrupted concurrent build.*--recover-invalid/,
@@ -455,8 +471,9 @@ describe('U14.1a — interruption at every significant point; reruns converge', 
     const error = await run;
     expect(error).toBeInstanceOf(Error);
     await holderClient!.query('ROLLBACK');
-    await holderClient!.end();
-    await observer.end();
+    await waitFor('the terminated session to release the lock', async () =>
+      (await lockHolders(observer)).length === 0 ? true : undefined,
+    );
     expect(await history(db)).toBe(GUARD_AT);
     expect((await indexState(db)).state.kind).toBe('exact');
     const r = await migrateSchema(poolFor(db), FOLDER);
@@ -584,12 +601,28 @@ describe('U14.1a — --recover-invalid drops only the verified invalid target', 
   });
 
   it('the runner refuses on a database whose history predates public.messages', async () => {
-    const db = await createDb(base24);
-    const empty = await createDb();
-    await expect(runIndexRunner(poolFor(empty), 'check')).rejects.toThrow(
-      /public\.messages is created by 0033/,
-    );
-    expect(db).toBeDefined();
+    const db = await createDb(base24); // history 0000…0024: public.messages does not exist yet
+    const empty = await createDb(); // no history at all
+    for (const target of [db, empty]) {
+      for (const mode of ['check', 'ensure', 'recover-invalid'] as const) {
+        await expect(runIndexRunner(poolFor(target), mode)).rejects.toThrow(
+          /public\.messages is created by 0033/,
+        );
+      }
+    }
+    expect(await history(db)).toBe(25);
+  });
+
+  it('catalogue verification does not depend on search_path (pg_get_indexdef always qualifies the table)', async () => {
+    const db = await createDb(base41);
+    await migrateSchema(poolFor(db), FOLDER);
+    const c = await clientFor(db);
+    for (const path of ['public', '"$user", public', 'pg_catalog', 'pg_catalog, public']) {
+      await c.query(`SET search_path = ${path}`);
+      const snapshot = await readIndexCatalogue(c);
+      expect(snapshot.target?.definition).toBe(MESSAGES_ORG_ID_ID_DESC.definition);
+      expect(classifyIndex(snapshot)).toEqual({ kind: 'exact' });
+    }
   });
 });
 

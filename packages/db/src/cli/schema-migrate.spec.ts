@@ -3,7 +3,7 @@ import type { MigrationMeta } from 'drizzle-orm/migrator';
 import type { ClientBase, Pool } from 'pg';
 
 import { MigrationHistoryError, loadExpectedMigrations } from './migration-history';
-import { MigrationLockError } from './migration-lock';
+import { MigrationLockError, acquireMigrationLock, lockWaitFromEnv } from './migration-lock';
 import { migrateSchema, type Barrier, type Checkpoint } from './schema-migrate';
 
 const REPO_MIGRATIONS = resolve(__dirname, '../../migrations');
@@ -140,7 +140,13 @@ describe('migrateSchema — schema only, verified first, one locked session', ()
     const db = fakeDatabase(rowsFor(guardAt));
     const barrier = fakeBarrier(db.events);
     await migrateSchema(db.pool, REPO_MIGRATIONS, { apply: db.apply, barriers: [barrier] });
-    expect(db.events).toEqual(['lock', 'barrier', 'apply:1', 'verify', 'unlock']);
+    expect(db.events).toEqual([
+      'lock',
+      'barrier',
+      `apply:${expected.length - guardAt}`,
+      'verify',
+      'unlock',
+    ]);
   });
 
   it('up to date: no apply, no build, but the recorded barrier is re-verified (U-3)', async () => {
@@ -194,7 +200,7 @@ describe('migrateSchema — schema only, verified first, one locked session', ()
         }),
       ).rejects.toThrow('interrupted');
       expect(db.events[db.events.length - 1]).toBe('unlock');
-      expect([guardAt, 25]).toContain(db.history()!.length);
+      expect(db.history()).toHaveLength(guardAt); // every checkpoint here is after the committed prefix
       // Rerun on the same state:
       const again = fakeDatabase(db.history());
       const barrier2 = fakeBarrier(again.events);
@@ -268,4 +274,27 @@ describe('migrateSchema — schema only, verified first, one locked session', ()
     ).rejects.toThrow(/next pending migration is/);
     expect(db.events).not.toContain('barrier');
   });
+});
+
+describe('migration lock wait is always bounded (U-2)', () => {
+  it('ACC_MIGRATION_LOCK_WAIT_MS: unset means the default; only a non-negative integer is accepted', () => {
+    expect(lockWaitFromEnv(undefined)).toBeUndefined();
+    expect(lockWaitFromEnv('')).toBeUndefined();
+    expect(lockWaitFromEnv('0')).toBe(0);
+    expect(lockWaitFromEnv('45000')).toBe(45000);
+    for (const bad of ['10s', 'none', '-1', '1.5', ' 5', 'NaN', 'Infinity', '1e3']) {
+      expect(() => lockWaitFromEnv(bad)).toThrow(MigrationLockError);
+    }
+  });
+
+  it.each([Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY])(
+    'acquireMigrationLock refuses a wait of %s instead of looping without a deadline',
+    async (waitMs) => {
+      const client = { query: jest.fn(async () => ({ rows: [{ ok: false }] })) };
+      await expect(
+        acquireMigrationLock(client as unknown as ClientBase, { waitMs }),
+      ).rejects.toBeInstanceOf(MigrationLockError);
+      expect(client.query).not.toHaveBeenCalled();
+    },
+  );
 });

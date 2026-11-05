@@ -66,6 +66,10 @@ export async function acquireMigrationLock(
   options: LockWaitOptions = {},
 ): Promise<void> {
   const waitMs = options.waitMs ?? MIGRATION_LOCK_DEFAULT_WAIT_MS;
+  // A NaN or negative wait would make the deadline unreachable or meaningless: refuse instead (U-2).
+  if (!Number.isSafeInteger(waitMs) || waitMs < 0) {
+    throw new MigrationLockError(`invalid migration lock wait: ${String(waitMs)} ms`);
+  }
   const intervalMs = options.intervalMs ?? MIGRATION_LOCK_RETRY_INTERVAL_MS;
   const sleep = options.sleep ?? defaultSleep;
   const now = options.now ?? Date.now;
@@ -113,3 +117,17 @@ export async function releaseMigrationLock(client: ClientBase): Promise<boolean>
 
 /** For tests and diagnostics: the lock's identity in `pg_locks`. */
 export const MIGRATION_LOCK_IDENTITY = { classid: CLASSID, objid: OBJID, objsubid: 1 } as const;
+
+/** `ACC_MIGRATION_LOCK_WAIT_MS` for both CLIs: unset means the default; anything but a non-negative integer is refused. */
+export function lockWaitFromEnv(
+  raw: string | undefined = process.env.ACC_MIGRATION_LOCK_WAIT_MS,
+): number | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  const value = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value)) {
+    throw new MigrationLockError(
+      'ACC_MIGRATION_LOCK_WAIT_MS must be a non-negative integer number of milliseconds',
+    );
+  }
+  return value;
+}

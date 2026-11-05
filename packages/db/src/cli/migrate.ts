@@ -24,22 +24,10 @@ import { resolve } from 'node:path';
 import { Pool } from 'pg';
 
 import { loadCliEnv, requireEnv } from './_env';
+import { lockWaitFromEnv } from './migration-lock';
 import { migrateSchema } from './schema-migrate';
 
 const MIGRATIONS_FOLDER = resolve(__dirname, '../../migrations');
-
-/** Bounded wait for the migration lock (ms); `ACC_MIGRATION_LOCK_WAIT_MS` overrides the default. */
-function lockWaitMs(): number | undefined {
-  const raw = process.env.ACC_MIGRATION_LOCK_WAIT_MS;
-  if (raw === undefined || raw === '') return undefined;
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error(
-      'ACC_MIGRATION_LOCK_WAIT_MS must be a non-negative integer number of milliseconds',
-    );
-  }
-  return value;
-}
 
 async function main(): Promise<void> {
   loadCliEnv();
@@ -55,13 +43,13 @@ async function main(): Promise<void> {
       console.error(
         `db:migrate interrupted by ${signal}; the migration lock is released when the session closes.`,
       );
-      process.exit(130);
+      process.exit(signal === 'SIGINT' ? 130 : 143);
     });
   }
   try {
     console.log(`Verifying migration history, then applying migrations from ${MIGRATIONS_FOLDER}`);
     const result = await migrateSchema(pool, MIGRATIONS_FOLDER, {
-      lock: { waitMs: lockWaitMs() },
+      lock: { waitMs: lockWaitFromEnv() },
       log: (line) => console.log(line),
     });
     console.log(
