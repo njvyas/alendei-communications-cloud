@@ -372,6 +372,13 @@ Re-executed after the remediation, each mutant on its own disposable clone (belo
 
 **Regression:** the 1,215 Gate-B tests stay green and unweakened (any changed expectation recorded with its reason), including `principals`, `shared-reseller`, `tenant-context-trust` and `workspace-team-boundary`.
 
+- **Barrier-aware migration (U14.1a, 05-Nov-2026).**
+  - `db:migrate` takes the clone from `0024` to `0042` through the barrier: it applies 17 migrations, builds the index, then applies the rest.
+  - `packages/db/src/test/u141a-migration.int-spec.ts` creates and drops its own `acc_tmp_u141a_<run>_<n>` databases (a name-guarded `CREATE`/`DROP`, its own run prefix only). It covers every starting point, interruption and recovery path (`DECISIONS.md` §1zc.3).
+  - `apps/api/test/messages-list-index.int-spec.ts` pins `GET /messages` behaviour and the structural plan of the exact statement.
+  - The cost-based plan comparison is evidence, not a test: it depends on data volume and statistics.
+  - Do not use `--testPathPatterns u141a` from a worktree whose path contains `u141a`; it matches every suite. Use `u141a-migration`.
+
 ### 6r. Phase 1C.4a — development/test fixture (IMPLEMENTED and CLOSED; Gate C.4a PASS, 30-Sep-2026, checkpoint `91607aa`)
 
 **Purpose.** One idempotent command that builds the §6p topology on a development or test database through the real application paths, so the browser suite (1C.4b) and manual testing have organizations, users and grants that exercise authorization rather than an empty console. The fixture is itself a security test asset: `apps/api/test/dev-fixture.sec-spec.ts` proves that what it builds is isolated. **It must never be run against staging or production; it refuses to.**

@@ -520,6 +520,7 @@ Phase 0.2 strategic update (`ARCHITECTURE.md` §21, `ROADMAP.md` Phase 8A–8G):
 - The conversion stays cheap for as long as it is deferred, because **nothing holds a foreign key *to* `audit_logs`**. Converting is: create the partitioned table, copy, swap names in one transaction — not a schema rewrite that other tables depend on.
 
 **Partition when the first of these becomes true**, and not before: (a) the retention/archival policy in `DECISIONS.md` §4 is agreed with the business; (b) the table exceeds roughly 50 million rows or 50 GB; or (c) Phase 7 (billing go-live) begins, whichever is earliest. Whoever does it must attach the append-only TRUNCATE guard to every partition and to the partition-creation routine.
+- `messages` has, as built (U14.1a, `DECISIONS.md` §1zc), `messages_org_id_idx (org_id)` and `messages_org_id_id_desc_idx (org_id, id DESC)`. The latter serves the tenant's newest-first listing (`GET /messages`, sort key `id`) as an ordered index range. It is built `CONCURRENTLY` by `db:migrate`'s barrier before the guard migration `0042`, and is verified exactly on every migration run. If it is missing or invalid, `db:migrate` refuses. The repair is `npm run db:index:messages-org-id-desc --workspace @acc/db -- --recover-invalid` (an INVALID index only) and then `db:migrate`. `--check` reports read-only.
 - `messages` additionally indexed on `(org_id, conversation_id, created_at)`, `(org_id, campaign_id)`, `(org_id, journey_id)`, `(org_id, idempotency_key)` unique, `(current_provider_id, current_provider_message_id)`.
 - `message_attempts` additionally indexed on `(message_id, attempt_number)` unique, and a partial index `(status, deadline_at) WHERE status = 'provider_accepted'` — this is the index the DB-backed fallback timer poller scans (`FALLBACK_ENGINE.md` §4, `EVENTS.md` §6).
 - `usage_ledger` indexed on `(org_id, occurred_at)`, `(message_id)`.
@@ -528,6 +529,15 @@ Phase 0.2 strategic update (`ARCHITECTURE.md` §21, `ROADMAP.md` Phase 8A–8G):
 ## 14. Migration ownership & tooling
 
 Schema migrations are owned by each module (per `ARCHITECTURE.md` §4) but run through one shared migration tool/pipeline. **Resolved (Phase 1 blocker, `DECISIONS.md`)**: Drizzle ORM is the chosen schema/migration tool — its SQL-first, non-magic query builder gives explicit control over the `SET LOCAL` session-variable pattern RLS depends on (§1, §14a) and over the partitioned-table DDL in §13, both of which are awkward under a heavier active-record-style ORM. Raw SQL migrations remain an escape hatch for anything Drizzle's schema DSL can't express directly (e.g. RLS policies, partition attachment, the scope-integrity trigger in §2). In practice the generator emits the table DDL and the hand-written SQL is appended to **that same migration file**, which is what makes §1's "RLS ships with the table" rule mechanically true rather than a convention someone has to remember.
+
+**Barrier-aware `db:migrate` (U14.1a, `DECISIONS.md` §1zc).**
+- `db:migrate` holds a session-level advisory lock on one pinned connection for the whole run. The wait is bounded (30 s, `ACC_MIGRATION_LOCK_WAIT_MS`); then it refuses and names the holder.
+- It verifies the history first.
+- A step that cannot run in a transaction (today only `CREATE INDEX CONCURRENTLY` for `messages_org_id_id_desc_idx`) runs as a *barrier*: it comes after the migrations before its guard migration and before the guard itself. The guard re-checks the catalogue inside its transaction.
+- Never apply the migrations with plain drizzle (`drizzle-kit migrate`); the guard refuses.
+- Never regenerate `0042` with `db:generate`: it is hand-written and has no DDL.
+- The index is declared in the Drizzle schema as `(org_id, id DESC NULLS FIRST)`. drizzle-kit renders a bare `.desc()` as `DESC NULLS LAST`, whereas PostgreSQL's default for DESC is NULLS FIRST, so the explicit form keeps a future snapshot equal to the catalogue (`indoption = 3`).
+- Pre-existing and unchanged by U14.1a: the committed snapshots stop at `0037`, so `drizzle-kit generate` currently proposes the `0038`–`0041` objects as well.
 
 ### 14b. Snapshot hygiene (Phase 1B.7 prep)
 

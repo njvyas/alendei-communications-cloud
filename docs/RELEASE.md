@@ -91,14 +91,23 @@ Set `ACC_VERSION=$VERSION` in `deploy/release.env`. The console image is built p
 |---|---|---|
 | 1. Data services | `$C up -d --wait postgres redis` | both healthy |
 | 2. Schema | `$C run --rm migrate` | `Applied 38 migration(s) after 0 verified` and `Roles were not changed` |
-| 3. History proof | `$C exec -T postgres psql -U postgres -d acc -Atc "SELECT count(*), md5(string_agg(hash \|\| ':' \|\| created_at, ',' ORDER BY id)) FROM drizzle.__drizzle_migrations"` | `38\|04b0fac738f24476e76b88a84fd04850` — exactly the committed migrations `0000`–`0037` |
+| 3. History proof | `$C exec -T postgres psql -U postgres -d acc -Atc "SELECT count(*), md5(string_agg(hash \|\| ':' \|\| created_at, ',' ORDER BY id)) FROM drizzle.__drizzle_migrations"` | `43\|fbfdb9c50a8e1639595ea0a35f7dcea0` — exactly the committed migrations `0000`–`0042` (U14.1a) |
 | 4. Role logins | `$C run --rm roles` | `Roles reconciled … acc_app, acc_auth, acc_relay, acc_dispatch` |
 | 5. Seed | `$C run --rm seed` | completes (idempotent) |
 | 6. First operator | `$C run --rm bootstrap` | `Platform administrator created` (a re-run: `Already bootstrapped`) |
 | 7. Start | `$C up -d --wait api web` | both healthy; `$C logs api` shows `Database principals verified RLS-bound: acc_app, acc_auth, acc_dispatch` and `message dispatch started` |
 | 8. Acceptance | §9 | every item passes |
 
-Migrations run as a **single** one-off container: `db:migrate` verifies the full history against the committed files before applying anything and refuses on any mismatch, but takes no lock.
+Migrations run as a one-off container. `db:migrate` behaves as follows (U14.1a, `DECISIONS.md` §1zc):
+- It takes a session-level advisory lock for the whole run. A second `db:migrate` waits at most 30 s (`ACC_MIGRATION_LOCK_WAIT_MS`), then refuses and names the holder.
+- It verifies the full history against the committed files before applying anything, and refuses on any mismatch.
+- Before `0042`, it builds `messages_org_id_id_desc_idx` with `CREATE INDEX CONCURRENTLY`. This is the only long step. It does not block reads or writes, but it waits for older transactions; it has `lock_timeout` 10 min and no statement timeout.
+- Expected output lines include `Barrier messages_org_id_id_desc_idx before 0042_messages_org_id_id_desc_guard: created` (`present` on a rerun).
+
+**Index gate (U14.1a).** After `migrate`, before starting `api`, run `$C run --rm migrate npm run db:index:messages-org-id-desc --workspace @acc/db -- --check`. It must print `index public.messages_org_id_id_desc_idx is present, exact and valid` and exit 0. If `db:migrate` stops at the barrier:
+- An interrupted build leaves an INVALID index, refused by default. Run the same command with `-- --recover-invalid` instead of `--check`, then rerun `migrate`. It drops only that exact invalid index, concurrently, and rebuilds it.
+- An index that is valid but defined differently, or an equivalent index under another name, is refused by both commands, and nothing is dropped. Stop and investigate.
+- Never apply the migrations with any other tool.
 
 ### 5a. Activating a user (operator)
 
@@ -120,7 +129,7 @@ It refuses (exit 1, `user activation refused: <reason>`) unless the operator is 
 2. Back up: `$C exec -T postgres pg_dump -U postgres -d acc -Fc > acc-<date>-pre-<version>.dump`, copied off-host. Confirm the dump restores (§7) before continuing; without a tested restore there is no rollback after a migration.
 3. Record the current history with the §5.2 history query, before changing anything. Do not assume the entry count from earlier records or documentation; the recorded count decides how many migrations the release will apply.
 4. Set `ACC_VERSION=<new>`; `$C run --rm migrate` — refuses before applying anything if the recorded history does not match the committed files.
-5. **Mandatory history proof.** Before starting `api` or `web`, run the §5.2 history query again and compare it with the expected proof for the release commit (for the current 38-migration baseline, `0000`–`0037`: `38|04b0fac738f24476e76b88a84fd04850`). Record the actual result in the upgrade record. If the count or the hash differs, **stop**: do not start the new application; investigate, or restore the pre-upgrade dump (§7). A proof computed on a disposable database clone shows what the committed migrations produce; it is not evidence of the target database's state.
+5. **Mandatory history proof.** Before starting `api` or `web`, run the §5.2 history query again and compare it with the expected proof for the release commit (for the U14.1a 43-migration baseline, `0000`–`0042`: `43|fbfdb9c50a8e1639595ea0a35f7dcea0`; the previous baselines were `41|4231dbd6b96656ff71c2882214679ee3` (`0000`–`0040`) and `42|28f641d658abc3a41e5bfb91a09a284c` (`0000`–`0041`)). Record the actual result in the upgrade record. If the count or the hash differs, **stop**: do not start the new application; investigate, or restore the pre-upgrade dump (§7). A proof computed on a disposable database clone shows what the committed migrations produce; it is not evidence of the target database's state.
 6. `$C up -d --wait api web`; re-run §9.
 
 ## 7. Rollback and recovery
@@ -179,7 +188,7 @@ Automated equivalents run against disposable clones: `apps/api/test/org-admin-on
 | 4 | Firewall | only 443 (+80 for ACME) and restricted SSH inbound |
 | 5 | Secrets | `deploy/release.env` filled, mode 600, every secret generated for this host |
 | 6 | Images | both built (§5.1), IDs recorded, `ACC_VERSION` set |
-| 7 | Database | §5.2 steps 1–6 pass, history proof exact |
+| 7 | Database | §5.2 steps 1–6 pass, history proof exact, index gate `present, exact and valid` |
 | 8 | Start + health | §5.2 step 7 and §9.1 |
 | 9 | Acceptance | §9.2–9.10 pass |
 | 10 | Backups | first `pg_dump` taken and copied off-host; schedule set |
