@@ -104,3 +104,17 @@ export const RESELLER_ADMIN_LOCK_CLASS = 482_019_309;
  * `pg_advisory_xact_lock_shared(ORG_LIFECYCLE_LOCK_CLASS, hashtext(org_id::text))` (shared during dispatch claim)
  */
 export const ORG_LIFECYCLE_LOCK_CLASS = 482_019_310;
+
+/**
+ * The session-level advisory-lock key serialising every schema migration and
+ * every out-of-transaction schema maintenance step (U14.1a, ADR-015-adjacent
+ * decision record "U14.1a").
+ *
+ * Unlike the keys above it is taken with `pg_try_advisory_lock` (session scope),
+ * not `pg_advisory_xact_lock`: `db:migrate` must hold it across several
+ * transactions *and* across `CREATE INDEX CONCURRENTLY`, which cannot run in a
+ * transaction at all. It is held by one pinned connection for the whole run and
+ * released explicitly, or by the server when that session ends. `db:migrate` and
+ * the concurrent-index runner take the same key, so neither can overlap the other.
+ */
+export const MIGRATION_LOCK_KEY = 4_820_193_142n;

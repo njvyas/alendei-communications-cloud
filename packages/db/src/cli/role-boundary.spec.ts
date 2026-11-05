@@ -43,6 +43,9 @@ describe('role-change boundary', () => {
     'packages/db/src/cli/migration-history.ts',
     'packages/db/src/cli/reset.ts',
     'packages/db/src/cli/seed.ts',
+    'packages/db/src/cli/migration-lock.ts',
+    'packages/db/src/cli/index-messages-org-id-desc.ts',
+    'packages/db/src/maintenance/messages-org-id-id-desc.ts',
   ])('%s neither imports nor spawns role reconciliation', (path) => {
     // Mentions in comments or operator messages are fine; imports and spawns are not.
     const code = withoutComments(read(path));
