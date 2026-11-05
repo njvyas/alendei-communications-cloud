@@ -877,6 +877,11 @@ describe('platform:support provisioning (ADR-015 A-1)', () => {
         await refused(create(email), 'duplicate_identity');
         expect(await userByEmail(email)).toEqual(before);
         expect(await grantsOf(before!.id)).toEqual([]);
+        // The refusal is attributed to the identity that already holds the address.
+        const denied = (await auditByEmail(email)).filter(
+          (r) => (r.metadata as Record<string, unknown>).reason === 'duplicate_identity',
+        );
+        expect(denied.at(-1)).toMatchObject({ outcome: 'denied', resource_id: before!.id });
       }
     });
 
