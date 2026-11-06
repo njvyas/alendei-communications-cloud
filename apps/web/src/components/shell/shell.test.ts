@@ -240,11 +240,17 @@ describe('U15.2 Shell & Global Navigation (Unit & Accessibility Tests)', () => {
         }),
       );
 
-      assert.ok(fullHtml.includes('+ Send Message'), 'Must show + Send Message when authorized');
-      assert.ok(fullHtml.includes('+ Invite User'), 'Must show + Invite User when authorized');
       assert.ok(
-        fullHtml.includes('+ Create Template'),
-        'Must show + Create Template when authorized',
+        fullHtml.includes('Open Messages (Send message)'),
+        'Must show Open Messages (Send message) when authorized',
+      );
+      assert.ok(
+        fullHtml.includes('Open Users (Invite user)'),
+        'Must show Open Users (Invite user) when authorized',
+      );
+      assert.ok(
+        fullHtml.includes('Open Templates (Create template)'),
+        'Must show Open Templates (Create template) when authorized',
       );
 
       // Case 2: Restricted authority (no message sending, no user invite)
@@ -260,12 +266,39 @@ describe('U15.2 Shell & Global Navigation (Unit & Accessibility Tests)', () => {
       );
 
       assert.ok(
-        !restrictedHtml.includes('+ Send Message'),
-        'Must NOT show + Send Message without permission',
+        !restrictedHtml.includes('Open Messages (Send message)'),
+        'Must NOT show Open Messages (Send message) without permission',
       );
       assert.ok(
-        !restrictedHtml.includes('+ Invite User'),
-        'Must NOT show + Invite User without permission',
+        !restrictedHtml.includes('Open Users (Invite user)'),
+        'Must NOT show Open Users (Invite user) without permission',
+      );
+
+      // Case 3: Zero-organizations state: must NOT show organization-scoped quick actions
+      const zeroOrgHtml = renderWithRouter(
+        React.createElement(CommandPalette, {
+          isOpen: true,
+          onClose: () => {},
+          navContext: createNavContext({
+            status: 'zero_organizations',
+            canSendMessages: true,
+            canReadTemplates: true,
+            canReadUsers: true,
+          }),
+        }),
+      );
+
+      assert.ok(
+        !zeroOrgHtml.includes('Open Messages (Send message)'),
+        'Must NOT show Open Messages in zero_organizations state',
+      );
+      assert.ok(
+        !zeroOrgHtml.includes('Open Templates (Create template)'),
+        'Must NOT show Open Templates in zero_organizations state',
+      );
+      assert.ok(
+        !zeroOrgHtml.includes('Open Users (Invite user)'),
+        'Must NOT show Open Users in zero_organizations state',
       );
     });
   });

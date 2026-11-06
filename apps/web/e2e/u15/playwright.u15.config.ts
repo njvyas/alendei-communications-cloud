@@ -70,7 +70,7 @@ export default defineConfig({
         command: 'npx next dev --port 3156',
         cwd: path.resolve(__dirname, '../..'),
         url: `${baseURL}/login`,
-        reuseExistingServer: true,
+        reuseExistingServer: false,
         timeout: 180_000,
         env: { NEXT_PUBLIC_API_BASE_URL: 'http://api.u15.test/api/v1' },
       },

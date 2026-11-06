@@ -68,12 +68,13 @@ export function CommandPalette({ isOpen, onClose, navContext, onSignOut }: Comma
       });
     }
 
-    // 2. Capability-filtered quick actions
-    if (navContext.canSendMessages) {
+    // 2. Capability-filtered quick actions (navigate to page workflows, gated by tenancy & capability)
+    if (isNavItemVisible('/messages', navContext) && navContext.canSendMessages) {
       list.push({
         id: 'action-send-message',
-        label: '+ Send Message',
+        label: 'Open Messages (Send message)',
         category: 'Actions',
+        shortcut: '/messages',
         onSelect: () => {
           onClose();
           router.push('/messages' as Route);
@@ -81,11 +82,12 @@ export function CommandPalette({ isOpen, onClose, navContext, onSignOut }: Comma
       });
     }
 
-    if (navContext.canReadTemplates) {
+    if (isNavItemVisible('/templates', navContext) && navContext.canReadTemplates) {
       list.push({
         id: 'action-create-template',
-        label: '+ Create Template',
+        label: 'Open Templates (Create template)',
         category: 'Actions',
+        shortcut: '/templates',
         onSelect: () => {
           onClose();
           router.push('/templates' as Route);
@@ -93,11 +95,12 @@ export function CommandPalette({ isOpen, onClose, navContext, onSignOut }: Comma
       });
     }
 
-    if (navContext.canReadContacts) {
+    if (isNavItemVisible('/contacts', navContext) && navContext.canReadContacts) {
       list.push({
         id: 'action-add-contact',
-        label: '+ Add Contact',
+        label: 'Open Contacts (Add contact)',
         category: 'Actions',
+        shortcut: '/contacts',
         onSelect: () => {
           onClose();
           router.push('/contacts' as Route);
@@ -105,11 +108,12 @@ export function CommandPalette({ isOpen, onClose, navContext, onSignOut }: Comma
       });
     }
 
-    if (navContext.canReadUsers) {
+    if (isNavItemVisible('/users', navContext) && navContext.canReadUsers) {
       list.push({
         id: 'action-invite-user',
-        label: '+ Invite User',
+        label: 'Open Users (Invite user)',
         category: 'Actions',
+        shortcut: '/users',
         onSelect: () => {
           onClose();
           router.push('/users' as Route);
@@ -117,11 +121,12 @@ export function CommandPalette({ isOpen, onClose, navContext, onSignOut }: Comma
       });
     }
 
-    if (navContext.canReadWorkspaces) {
+    if (isNavItemVisible('/workspaces', navContext) && navContext.canReadWorkspaces) {
       list.push({
         id: 'action-create-workspace',
-        label: '+ Create Workspace',
+        label: 'Open Workspaces (Create workspace)',
         category: 'Actions',
+        shortcut: '/workspaces',
         onSelect: () => {
           onClose();
           router.push('/workspaces' as Route);

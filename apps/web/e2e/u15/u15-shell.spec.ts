@@ -160,7 +160,7 @@ test.describe('U15.2 Application Shell & Global Navigation (Browser E2E)', () =>
     await input.fill('Message');
     const results = dialog.getByRole('listbox');
     await expect(results.getByText('Go to Messages')).toBeVisible();
-    await expect(results.getByText('+ Send Message')).toBeVisible();
+    await expect(results.getByText('Open Messages (Send message)')).toBeVisible();
 
     // Press Escape to close
     await page.keyboard.press('Escape');
