@@ -16,11 +16,15 @@ import {
   readSidebarCollapsedCookie,
   sidebarCookie,
   writeSidebarCollapsedCookie,
+  serverSidebarCollapsed,
 } from './sidebar';
+import ConsoleLayout from '@/app/(console)/layout';
+import { ConsoleClientLayout } from '@/app/(console)/console-client-layout';
 import { CommandPalette } from './command-palette';
 import { MobileNav } from './mobile-nav';
 import { BreadcrumbBar } from './breadcrumb-bar';
 import type { NavVisibilityContext } from './types';
+import { useSession } from '@/lib/session-store';
 
 (globalThis as unknown as { React: typeof React }).React = React;
 React.useSyncExternalStore = (_subscribe, getSnapshot) => getSnapshot();
@@ -366,6 +370,168 @@ describe('U15.2 Shell & Global Navigation (Unit & Accessibility Tests)', () => {
         '/',
       );
       assert.ok(expandedHtml.includes('w-60'), 'Expanded sidebar must render w-60 in SSR');
+    });
+
+    it('SSR output with cookie value "1" renders collapsed and with "0" renders expanded', () => {
+      // Cookie value resolution
+      assert.equal(serverSidebarCollapsed('1'), true);
+      assert.equal(serverSidebarCollapsed('acc_sidebar_collapsed=1'), true);
+      assert.equal(serverSidebarCollapsed('0'), false);
+      assert.equal(serverSidebarCollapsed('acc_sidebar_collapsed=0'), false);
+      assert.equal(serverSidebarCollapsed(undefined), false);
+      assert.equal(serverSidebarCollapsed(null), false);
+      assert.equal(serverSidebarCollapsed('invalid'), false);
+
+      // 1. SSR output with cookie value '1' renders collapsed (w-16, Expand button, ACC monogram)
+      const collapsedSsrHtml = renderWithRouter(
+        React.createElement(Sidebar, {
+          navContext: createNavContext(),
+          defaultCollapsed: serverSidebarCollapsed('1'),
+        }),
+        '/',
+      );
+      assert.ok(collapsedSsrHtml.includes('w-16'), 'SSR with cookie 1 must render w-16');
+      assert.ok(!collapsedSsrHtml.includes('w-60'), 'SSR with cookie 1 must NOT render w-60');
+      assert.ok(
+        collapsedSsrHtml.includes('aria-label="Expand sidebar"'),
+        'SSR with cookie 1 must render Expand button',
+      );
+      assert.ok(
+        collapsedSsrHtml.includes('aria-expanded="false"'),
+        'SSR with cookie 1 must have aria-expanded="false"',
+      );
+      assert.ok(
+        collapsedSsrHtml.includes('>ACC</span>'),
+        'SSR with cookie 1 must render ACC brand monogram',
+      );
+
+      // 2. SSR output with cookie value '0' renders expanded (w-60, Collapse button, Alendei text)
+      const expandedSsrHtml = renderWithRouter(
+        React.createElement(Sidebar, {
+          navContext: createNavContext(),
+          defaultCollapsed: serverSidebarCollapsed('0'),
+        }),
+        '/',
+      );
+      assert.ok(expandedSsrHtml.includes('w-60'), 'SSR with cookie 0 must render w-60');
+      assert.ok(!expandedSsrHtml.includes('w-16'), 'SSR with cookie 0 must NOT render w-16');
+      assert.ok(
+        expandedSsrHtml.includes('aria-label="Collapse sidebar"'),
+        'SSR with cookie 0 must render Collapse button',
+      );
+      assert.ok(
+        expandedSsrHtml.includes('aria-expanded="true"'),
+        'SSR with cookie 0 must have aria-expanded="true"',
+      );
+      assert.ok(
+        expandedSsrHtml.includes('>Alendei</p>'),
+        'SSR with cookie 0 must render full brand text',
+      );
+
+      // 3. ConsoleLayout & ConsoleClientLayout SSR output with session in ready state
+      useSession.getState().setSession({
+        accessToken: 'test-token',
+        user: {
+          userId: 'test-user',
+          actorType: 'user',
+          authMethod: 'session',
+          sessionId: 'session-123',
+          authenticatedAt: '2026-09-23T00:00:00.000Z',
+          tenant: { orgId: 'org-1', workspaceId: null, resellerId: null, isPlatformAdmin: false },
+          roles: [
+            {
+              roleKey: 'org_admin',
+              scopeType: 'organization',
+              scopeId: 'org-1',
+              orgId: 'org-1',
+            },
+          ],
+          authorizedOrganizationIds: ['org-1'],
+          permissions: [],
+        },
+        authorization: {
+          actorType: 'user',
+          userId: 'test-user',
+          apiKeyId: null,
+          grants: [
+            {
+              roleId: 'role-1',
+              roleKey: 'org_admin',
+              scopeType: 'organization',
+              scopeId: 'org-1',
+              orgId: 'org-1',
+              permissions: ['messages.read'],
+            },
+          ],
+          organizationIds: ['org-1'],
+          isPlatformAdmin: false,
+        },
+      });
+
+      try {
+        const layoutCollapsedHtml = renderWithRouter(
+          React.createElement(
+            ConsoleLayout,
+            { initialCollapsed: serverSidebarCollapsed('1') },
+            React.createElement('div', null, 'Console Content'),
+          ),
+          '/',
+        );
+        assert.ok(
+          layoutCollapsedHtml.includes('w-16'),
+          'ConsoleLayout SSR with cookie 1 must render w-16 on sidebar',
+        );
+        assert.ok(
+          !layoutCollapsedHtml.includes('w-60'),
+          'ConsoleLayout SSR with cookie 1 must NOT render w-60 on sidebar',
+        );
+
+        const layoutExpandedHtml = renderWithRouter(
+          React.createElement(
+            ConsoleLayout,
+            { initialCollapsed: serverSidebarCollapsed('0') },
+            React.createElement('div', null, 'Console Content'),
+          ),
+          '/',
+        );
+        assert.ok(
+          layoutExpandedHtml.includes('w-60'),
+          'ConsoleLayout SSR with cookie 0 must render w-60 on sidebar',
+        );
+        assert.ok(
+          !layoutExpandedHtml.includes('w-16'),
+          'ConsoleLayout SSR with cookie 0 must NOT render w-16 on sidebar',
+        );
+
+        // 4. ConsoleClientLayout SSR output directly
+        const clientCollapsedHtml = renderWithRouter(
+          React.createElement(
+            ConsoleClientLayout,
+            { initialCollapsed: true },
+            React.createElement('div', null, 'Console Content'),
+          ),
+          '/',
+        );
+        assert.ok(
+          clientCollapsedHtml.includes('w-16'),
+          'ConsoleClientLayout SSR with initialCollapsed=true must render w-16',
+        );
+
+        const clientExpandedHtml = renderWithRouter(
+          React.createElement(
+            ConsoleClientLayout,
+            { initialCollapsed: false },
+            React.createElement('div', null, 'Console Content'),
+          ),
+          '/',
+        );
+        assert.ok(
+          clientExpandedHtml.includes('w-60'),
+          'ConsoleClientLayout SSR with initialCollapsed=false must render w-60',
+        );
+      } finally {
+        useSession.getState().clearSession();
+      }
     });
   });
 

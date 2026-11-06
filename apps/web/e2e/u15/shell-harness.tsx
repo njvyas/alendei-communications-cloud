@@ -7,6 +7,7 @@ import {
   BreadcrumbBar,
   CommandPalette,
   MobileNav,
+  readSidebarCollapsedCookie,
   type NavVisibilityContext,
 } from '../../src/components/shell';
 import { startThemeSync } from '../../src/lib/theme-store';
@@ -14,7 +15,7 @@ import { startThemeSync } from '../../src/lib/theme-store';
 function ShellHarness() {
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => readSidebarCollapsedCookie() ?? false);
   const [logs, setLogs] = useState<string[]>([]);
 
   const log = (msg: string) => setLogs((prev) => [...prev, msg]);

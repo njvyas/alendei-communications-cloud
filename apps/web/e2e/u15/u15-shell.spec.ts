@@ -139,12 +139,45 @@ test.describe('U15.2 Application Shell & Global Navigation (Browser E2E)', () =>
     expect(updatedCookie?.value).toBe('0');
   });
 
-  test('Hydration safety: sidebar initializes in collapsed state when cookie acc_sidebar_collapsed=1 is preset without mismatch', async ({
+  test('Hydration safety: sidebar initializes in collapsed state when cookie acc_sidebar_collapsed=1 is preset without mismatch and zero width transition', async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     // Preset collapsed cookie prior to navigation
     await page.context().addCookies([{ name: 'acc_sidebar_collapsed', value: '1', url: ORIGIN }]);
+
+    // Track every width mutation or frame from DOM insertion through hydration
+    await page.addInitScript(() => {
+      (window as unknown as { __sidebar_widths: number[] }).__sidebar_widths = [];
+      const record = () => {
+        const aside = document.querySelector('aside[aria-label="Sidebar"]');
+        if (aside) {
+          const w = (aside as HTMLElement).offsetWidth;
+          if (w > 0) {
+            (window as unknown as { __sidebar_widths: number[] }).__sidebar_widths.push(w);
+          }
+        }
+      };
+      const observer = new MutationObserver(record);
+      const start = () => {
+        const root = document.documentElement || document.body;
+        if (root) {
+          record();
+          observer.observe(root, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['class', 'style'],
+          });
+        }
+      };
+      if (document.documentElement) {
+        start();
+      } else {
+        document.addEventListener('DOMContentLoaded', start, { once: true });
+      }
+    });
+
     await open(page, 'light');
 
     const sidebar = page.locator('aside[aria-label="Sidebar"]');
@@ -160,6 +193,15 @@ test.describe('U15.2 Application Shell & Global Navigation (Browser E2E)', () =>
     const expandBtn = sidebar.getByRole('button', { name: 'Expand sidebar' });
     await expect(expandBtn).toBeVisible();
     await expect(expandBtn).toHaveAttribute('aria-expanded', 'false');
+
+    // Verify first-render and post-hydration width: must never have been expanded (>64px)
+    const observedWidths = await page.evaluate(() => {
+      return (window as unknown as { __sidebar_widths: number[] }).__sidebar_widths;
+    });
+    expect(observedWidths.length).toBeGreaterThan(0);
+    for (const w of observedWidths) {
+      expect(w).toBeLessThanOrEqual(64);
+    }
   });
 
   test('Header: theme preference control dynamically switches between light, dark, and system', async ({

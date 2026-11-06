@@ -12,6 +12,7 @@ import { NAV_ITEMS, isNavItemVisible, type NavVisibilityContext, type NavGroupKe
 export interface SidebarProps {
   readonly navContext: NavVisibilityContext;
   readonly defaultCollapsed?: boolean;
+  readonly initialCollapsed?: boolean;
   readonly onCollapsedChange?: (collapsed: boolean) => void;
   readonly className?: string;
 }
@@ -28,6 +29,18 @@ export function parseSidebarCollapsedCookie(cookieString?: string | null): boole
   const match = cookieString.match(new RegExp(`(?:^|;\\s*)${SIDEBAR_COOKIE_NAME}=([01])`));
   if (!match) return null;
   return match[1] === '1';
+}
+
+/**
+ * Resolves the initial sidebar collapsed state for server rendering.
+ * Returns true if the cookie specifies '1', false for '0', missing, or invalid.
+ * Accepts either bare cookie value ('1' | '0') or full cookie string ('acc_sidebar_collapsed=1').
+ */
+export function serverSidebarCollapsed(cookieValue?: string | null): boolean {
+  if (!cookieValue) return false;
+  if (cookieValue === '1') return true;
+  if (cookieValue === '0') return false;
+  return parseSidebarCollapsedCookie(cookieValue) ?? false;
 }
 
 /**
@@ -57,26 +70,18 @@ export function writeSidebarCollapsedCookie(collapsed: boolean): void {
 export function Sidebar({
   navContext,
   defaultCollapsed = false,
+  initialCollapsed,
   onCollapsedChange,
   className,
 }: SidebarProps) {
   const pathname = usePathname();
-  // Hydration-safe initialization: initial state matches SSR output (`defaultCollapsed`)
-  const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
+  // Saved preference determines initial rendered state with zero delayed useEffect or layout shift
+  const [isCollapsed, setIsCollapsed] = useState(initialCollapsed ?? defaultCollapsed);
   const onCollapsedChangeRef = useRef(onCollapsedChange);
 
   useEffect(() => {
     onCollapsedChangeRef.current = onCollapsedChange;
   }, [onCollapsedChange]);
-
-  // Synchronize with persisted client cookie post-mount without causing hydration mismatches
-  useEffect(() => {
-    const cookieVal = readSidebarCollapsedCookie();
-    if (cookieVal !== null && cookieVal !== defaultCollapsed) {
-      setIsCollapsed(cookieVal);
-      onCollapsedChangeRef.current?.(cookieVal);
-    }
-  }, [defaultCollapsed]);
 
   const handleToggle = () => {
     const next = !isCollapsed;
