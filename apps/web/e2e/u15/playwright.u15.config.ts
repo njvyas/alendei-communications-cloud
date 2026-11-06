@@ -44,6 +44,16 @@ export default defineConfig({
       use: { ...devices['Desktop Firefox'] },
     },
     {
+      name: 'shell-chromium',
+      testMatch: /u15-shell\.spec\.ts$/,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'shell-firefox',
+      testMatch: /u15-shell\.spec\.ts$/,
+      use: { ...devices['Desktop Firefox'] },
+    },
+    {
       name: 'theme-chromium',
       testMatch: /u15-theme\.spec\.ts$/,
       use: { ...devices['Desktop Chrome'], baseURL },

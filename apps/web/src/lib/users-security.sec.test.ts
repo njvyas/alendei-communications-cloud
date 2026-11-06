@@ -6,7 +6,7 @@ import { QueryClient, QueryClientProvider, QueryObserver } from '@tanstack/react
 import { AppRouterContext } from 'next/dist/shared/lib/app-router-context.shared-runtime';
 import { PathnameContext } from 'next/dist/shared/lib/hooks-client-context.shared-runtime';
 
-import ConsoleLayout from '@/app/(console)/layout';
+import { ConsoleClientLayout as ConsoleLayout } from '@/app/(console)/console-client-layout';
 import UsersPage from '@/app/(console)/users/page';
 import {
   apiFetch,

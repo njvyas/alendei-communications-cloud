@@ -2424,7 +2424,7 @@ Implements the owner-approved U15.1 specification v2.2.0, from baseline `4196c94
 - **Components.** The shared primitives in `src/components/ui`, including a server-driven `DataTable` and a theme preference control.
 - **CSP.** A per-request nonce CSP (`src/proxy.ts`). Before U15.1 the console sent **no** CSP; the specification assumed one existed.
 
-### 1ze.2 Deviations from the specification (owner confirmation requested)
+### 1ze.2 Deviations from the specification (confirmed by owner 06-Nov-2026)
 1. **WCAG AA gaps in pairings the specification's matrix omits.** All values below were computed from the CSS, and a unit test enforces them. The approved base palette is unchanged; refinement tokens were added, following the specification's own method:
    - **Light destructive button:** white on `#D6455D` is 4.31:1. It uses `--acc-destructive` `#B8354C` (5.75:1); hover `#9C2B40` (7.41:1).
    - **Dark destructive hover:** dark text on the specification's `#B8354C` is 3.24:1. Hover is `#EF7A8E` (6.96:1).
@@ -2440,6 +2440,18 @@ Implements the owner-approved U15.1 specification v2.2.0, from baseline `4196c94
 - **`style-src` allows `'unsafe-inline'`.** React `style` props cannot carry a nonce. Scripts have no `'unsafe-inline'`.
 - **`img-src` allows `https:`.** Organisation branding (logo, favicon) is an operator-supplied HTTPS URL; an `http:` branding image would now be blocked.
 - **Theme placement deferred.** The theme control exists, but its placement in the app shell is U15.2. Until then, a user's explicit preference can only be set by that control in a later release; the default `system` preference is fully functional.
+
+### 1ze.4 Owner design decisions and U15.2 entry (06-Nov-2026)
+Formal owner review of the U15.1 post-implementation design compliance audit resolved all six documented deviations:
+1. **Accessibility token refinements:** ACCEPTED. `--acc-border-input` (#7F89A0 light / #5E6D8D dark), `--acc-destructive` (#B8354C light / #E85D75 dark), `--acc-destructive-hover` (#9C2B40 light / #EF7A8E dark), and `--acc-on-*` tokens are confirmed as permanent system tokens ensuring WCAG 2.2 AA compliance across all components.
+2. **Password toggle keyboard accessibility:** ACCEPTED. The show/hide toggle remains in the tab order (WCAG 2.1.1) with `type="button"`, `aria-label` and `aria-pressed`.
+3. **Legacy body backgrounds retained:** ACCEPTED. `--color-surface` and `--color-ink` remain on `html, body` pending progressive migration of screens in U15.2–U15.4; existing screens maintain full visual fidelity.
+4. **Typography (Option A Approved for U15.2):** OPTION A APPROVED.
+   - Bundle self-hosted Inter and Geist Mono WOFF2 assets locally in `apps/web/public/fonts/` (or via `@next/font/local`) in U15.2.
+   - Serve fonts strictly from `'self'` under the existing CSP (`font-src 'self' data:`). Zero external font services or CDN network calls.
+   - Inter is the primary UI font; Geist Mono is preserved for technical identifiers, UUIDs, payload code, and telemetry numbers.
+5. **Standalone esbuild/Playwright test harness:** ACCEPTED. Production component bundling with esbuild and request-routed Playwright testing is approved as the standard component test harness pattern.
+6. **Top-aligned form labels:** ACCEPTED. Top-aligned labels are confirmed as the ACC form standard; floating label animations are not required.
 
 ## 1zf. Phase 4.2 (Gate F.2) acceptance closure: SMS encoding and segments at dispatch: 06-Nov-2026
 

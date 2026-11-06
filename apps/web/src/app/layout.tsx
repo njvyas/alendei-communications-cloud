@@ -6,6 +6,7 @@ import { Providers } from '@/components/providers';
 import { ThemePrePaintScript } from '@/components/theme/theme-pre-paint-script';
 import { ThemeSync } from '@/components/theme/theme-sync';
 import { RESOLVED_THEME_COOKIE, THEME_PREFERENCE_COOKIE, serverResolvedTheme } from '@/lib/theme';
+import { inter, geistMono } from './fonts';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -28,7 +29,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
       <head>
         <ThemePrePaintScript nonce={nonce} />
       </head>
-      <body className="min-h-dvh antialiased">
+      <body className={`${inter.variable} ${geistMono.variable} min-h-dvh antialiased font-sans`}>
         <ThemeSync />
         <Providers>{children}</Providers>
       </body>

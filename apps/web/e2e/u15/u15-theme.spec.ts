@@ -189,3 +189,209 @@ test('CSP: per-request nonce on every script, no unsafe-inline for scripts, fram
     expect(tag, 'every script carries the request nonce').toContain(`nonce="${nonce}"`);
   expect(html).toContain('acc_theme_preference');
 });
+
+async function instrumentAuthenticatedConsole(context: BrowserContext): Promise<Collected> {
+  const collected: Collected = { console: [] };
+  await context.route('http://api.u15.test/**', (route) => {
+    const url = route.request().url();
+    if (url.includes('/auth/refresh')) {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: { accessToken: 'mock-valid-token' } }),
+      });
+    }
+    if (url.includes('/auth/me/authorization')) {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: {
+            actorType: 'user',
+            userId: '01955b0a-0000-7000-8000-000000000001',
+            apiKeyId: null,
+            organizationIds: ['01955b0a-0000-7000-8000-000000000002'],
+            isPlatformAdmin: false,
+            grants: [
+              {
+                roleId: '01955b0a-0000-7000-8000-000000000003',
+                roleKey: 'org_admin',
+                scopeType: 'organization',
+                scopeId: '01955b0a-0000-7000-8000-000000000002',
+                orgId: '01955b0a-0000-7000-8000-000000000002',
+                permissions: ['messages.read'],
+              },
+            ],
+          },
+        }),
+      });
+    }
+    if (url.includes('/auth/me')) {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: {
+            userId: '01955b0a-0000-7000-8000-000000000001',
+            actorType: 'user',
+            authMethod: 'session',
+            sessionId: 'session-1',
+            authenticatedAt: new Date().toISOString(),
+            tenant: {
+              orgId: '01955b0a-0000-7000-8000-000000000002',
+              workspaceId: null,
+              resellerId: null,
+              isPlatformAdmin: false,
+            },
+            authorizedOrganizationIds: ['01955b0a-0000-7000-8000-000000000002'],
+            roles: [],
+            permissions: ['messages.read'],
+          },
+        }),
+      });
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: [] }),
+    });
+  });
+
+  await context.addInitScript(() => {
+    const w = window as unknown as {
+      __csp: string[];
+      __asideMutations: string[];
+    };
+    w.__csp = [];
+    w.__asideMutations = [];
+    document.addEventListener('securitypolicyviolation', (e) =>
+      w.__csp.push(`${e.violatedDirective} ${e.blockedURI}`),
+    );
+    const start = () => {
+      const target = document.documentElement;
+      if (!target) return;
+      const observer = new MutationObserver((mutations) => {
+        for (const m of mutations) {
+          if (m.type === 'attributes' && m.attributeName === 'class') {
+            const targetEl = m.target as HTMLElement;
+            if (targetEl.tagName === 'ASIDE') {
+              w.__asideMutations.push(targetEl.className);
+            }
+          }
+        }
+      });
+      observer.observe(target, {
+        attributes: true,
+        subtree: true,
+        attributeFilter: ['class'],
+      });
+    };
+    if (document.documentElement) {
+      start();
+    } else {
+      document.addEventListener('DOMContentLoaded', start, { once: true });
+    }
+  });
+
+  context.on('console', (m) => {
+    if (m.type() === 'error' || m.type() === 'warning') {
+      collected.console.push(`${m.type()}: ${m.text()}`);
+    }
+  });
+
+  return collected;
+}
+
+test('Next.js SSR request path: cookie acc_sidebar_collapsed=1 returns HTML with w-16 and collapsed toggle', async ({
+  request,
+}) => {
+  const res = await request.get('/', {
+    headers: { cookie: 'acc_sidebar_collapsed=1' },
+  });
+  expect(res.status()).toBe(200);
+  const raw = await res.text();
+  expect(raw).toMatch(/<aside[^>]*aria-label="Sidebar"[^>]*class="[^"]*\bw-16\b[^"]*"/);
+  expect(raw).not.toMatch(/<aside[^>]*aria-label="Sidebar"[^>]*class="[^"]*\bw-60\b[^"]*"/);
+  expect(raw).toContain('aria-label="Expand sidebar"');
+  expect(raw).toContain('aria-expanded="false"');
+});
+
+test('Next.js SSR request path: cookie acc_sidebar_collapsed=0 returns HTML with w-60 and expanded toggle', async ({
+  request,
+}) => {
+  const res = await request.get('/', {
+    headers: { cookie: 'acc_sidebar_collapsed=0' },
+  });
+  expect(res.status()).toBe(200);
+  const raw = await res.text();
+  expect(raw).toMatch(/<aside[^>]*aria-label="Sidebar"[^>]*class="[^"]*\bw-60\b[^"]*"/);
+  expect(raw).not.toMatch(/<aside[^>]*aria-label="Sidebar"[^>]*class="[^"]*\bw-16\b[^"]*"/);
+  expect(raw).toContain('aria-label="Collapse sidebar"');
+  expect(raw).toContain('aria-expanded="true"');
+});
+
+test('Next.js Real Application: browser first-render with acc_sidebar_collapsed=1 renders w-16 without hydration mismatch or width transition', async ({
+  browser,
+  baseURL,
+}) => {
+  const context = await browser.newContext();
+  const collected = await instrumentAuthenticatedConsole(context);
+  await context.addCookies([{ name: 'acc_sidebar_collapsed', value: '1', url: baseURL! }]);
+  const page = await context.newPage();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('/', { waitUntil: 'load' });
+
+  const sidebar = page.locator('aside[aria-label="Sidebar"]');
+  await expect(sidebar).toBeVisible();
+  await expect(sidebar).toHaveClass(/\bw-16\b/);
+  await expect(sidebar).not.toHaveClass(/\bw-60\b/);
+
+  const toggleBtn = sidebar.getByRole('button', { name: 'Expand sidebar' });
+  await expect(toggleBtn).toBeVisible();
+  await expect(toggleBtn).toHaveAttribute('aria-expanded', 'false');
+
+  await page.waitForLoadState('networkidle');
+
+  const mutations = await page.evaluate(() => {
+    const w = window as unknown as { __asideMutations: string[]; __csp: string[] };
+    return { asideMutations: w.__asideMutations, csp: w.__csp };
+  });
+
+  // Verify no mutation altered sidebar from w-60 to w-16 after load
+  expect(mutations.asideMutations.filter((c) => c.includes('w-60'))).toEqual([]);
+  assertClean(collected, mutations.csp);
+  await context.close();
+});
+
+test('Next.js Real Application: browser first-render with acc_sidebar_collapsed=0 renders w-60 without hydration mismatch or width transition', async ({
+  browser,
+  baseURL,
+}) => {
+  const context = await browser.newContext();
+  const collected = await instrumentAuthenticatedConsole(context);
+  await context.addCookies([{ name: 'acc_sidebar_collapsed', value: '0', url: baseURL! }]);
+  const page = await context.newPage();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('/', { waitUntil: 'load' });
+
+  const sidebar = page.locator('aside[aria-label="Sidebar"]');
+  await expect(sidebar).toBeVisible();
+  await expect(sidebar).toHaveClass(/\bw-60\b/);
+  await expect(sidebar).not.toHaveClass(/\bw-16\b/);
+
+  const toggleBtn = sidebar.getByRole('button', { name: 'Collapse sidebar' });
+  await expect(toggleBtn).toBeVisible();
+  await expect(toggleBtn).toHaveAttribute('aria-expanded', 'true');
+
+  await page.waitForLoadState('networkidle');
+
+  const mutations = await page.evaluate(() => {
+    const w = window as unknown as { __asideMutations: string[]; __csp: string[] };
+    return { asideMutations: w.__asideMutations, csp: w.__csp };
+  });
+
+  // Verify no mutation altered sidebar from w-16 to w-60 after load
+  expect(mutations.asideMutations.filter((c) => c.includes('w-16'))).toEqual([]);
+  assertClean(collected, mutations.csp);
+  await context.close();
+});
