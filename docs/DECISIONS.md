@@ -2414,6 +2414,33 @@ The task proposed `(org_id, created_at DESC, id DESC)`. After the plan evidence 
   - the exact list and usage statements using `messages_org_id_created_at_idx` for a sparse window, while the default listing still uses `messages_org_id_id_desc_idx`.
 - **History proof:** `44|d02a30795d21707f7e9b83563fa3500f`.
 
+## 1ze. U15.1: design system tokens, theme preference and CSP nonce (apps/web): 06-Nov-2026
+
+Implements the owner-approved U15.1 specification v2.2.0, from baseline `4196c94`. Details are in `DESIGN_SYSTEM.md`. There is no API, DTO, authorisation, RBAC, tenancy or database change, and the dashboard, app shell and feature screens are not touched (U15.2–U15.4).
+
+### 1ze.1 Implemented
+- **Tokens.** The `--acc-*` tokens are the single source of truth in `globals.css`, for light and dark.
+- **Theme.** Class-based theming with the three-state preference model and cookies. A nonce-authorised pre-paint script prevents a wrong-theme flash; the server renders the theme from the cookies; and the page follows a live OS change under the `system` preference.
+- **Components.** The shared primitives in `src/components/ui`, including a server-driven `DataTable` and a theme preference control.
+- **CSP.** A per-request nonce CSP (`src/proxy.ts`). Before U15.1 the console sent **no** CSP; the specification assumed one existed.
+
+### 1ze.2 Deviations from the specification (owner confirmation requested)
+1. **WCAG AA gaps in pairings the specification's matrix omits.** All values below were computed from the CSS, and a unit test enforces them. The approved base palette is unchanged; refinement tokens were added, following the specification's own method:
+   - **Light destructive button:** white on `#D6455D` is 4.31:1. It uses `--acc-destructive` `#B8354C` (5.75:1); hover `#9C2B40` (7.41:1).
+   - **Dark destructive hover:** dark text on the specification's `#B8354C` is 3.24:1. Hover is `#EF7A8E` (6.96:1).
+   - **Light input boundary:** `#D1D5E4` is 1.46:1 on a white card. This fails 1.4.11 and the specification's own §8 gate ("non-text UI boundaries ≥ 3.0:1"). Inputs, selects and outline buttons use `--acc-border-input` `#7F89A0` (3.51:1); `--acc-border-strong` keeps its approved value.
+   - **Light secondary text on the raised surface** is 4.44:1. The neutral badge and table headers use primary text there instead.
+2. **Password toggle focusable.** The specification's `tabIndex={-1}` would make the toggle unreachable by keyboard (WCAG 2.1.1). It stays in the tab order, with `aria-pressed`.
+3. **Existing pages keep their tokens and page background.** The specification's layout sample sets `body` to `--acc-bg`, which would restyle every current page. Pages move to the new tokens with U15.2 and U15.3.
+4. **Typography.** The token is `--font-sans: 'Inter', …, system-ui`, but no web font is loaded (no new external dependency). Inter is used only where it is installed locally.
+5. **Isolated harness.** Playwright component testing is not installed. The harness follows the U10 pattern instead: production sources bundled with esbuild, with the real `globals.css` compiled by Tailwind and served through request routing. The specification's fresh-session protocol runs against the real app on both a development and a production server.
+
+### 1ze.3 Accepted consequences
+- **All routes render dynamically.** This is required for per-request nonces.
+- **`style-src` allows `'unsafe-inline'`.** React `style` props cannot carry a nonce. Scripts have no `'unsafe-inline'`.
+- **`img-src` allows `https:`.** Organisation branding (logo, favicon) is an operator-supplied HTTPS URL; an `http:` branding image would now be blocked.
+- **Theme placement deferred.** The theme control exists, but its placement in the app shell is U15.2. Until then, a user's explicit preference can only be set by that control in a later release; the default `system` preference is fully functional.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

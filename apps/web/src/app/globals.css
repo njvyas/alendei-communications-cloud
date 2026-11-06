@@ -1,5 +1,17 @@
 @import 'tailwindcss';
 
+/*
+ * Theme switching is class-based (U15.1): the resolved theme is the `dark` class on
+ * <html>, set before first paint by the pre-paint script (src/lib/theme.ts) and kept
+ * in sync by the theme store. `dark:` utilities follow the same class.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ---------------------------------------------------------------------------
+ * Existing console tokens (pre-U15). Preserved unchanged so current pages keep
+ * their appearance; their dark values now follow the resolved theme class
+ * instead of the OS media query (identical under the default "system" preference).
+ * ------------------------------------------------------------------------- */
 @theme {
   --color-surface: oklch(99% 0.004 265);
   --color-surface-raised: oklch(100% 0 0);
@@ -12,18 +24,167 @@
   --color-bad: oklch(56% 0.19 25);
 }
 
-@media (prefers-color-scheme: dark) {
-  @theme {
-    --color-surface: oklch(19% 0.015 265);
-    --color-surface-raised: oklch(23% 0.016 265);
-    --color-border-subtle: oklch(32% 0.016 265);
-    --color-ink: oklch(96% 0.005 265);
-    --color-ink-muted: oklch(70% 0.015 265);
-  }
+.dark {
+  --color-surface: oklch(19% 0.015 265);
+  --color-surface-raised: oklch(23% 0.016 265);
+  --color-border-subtle: oklch(32% 0.016 265);
+  --color-ink: oklch(96% 0.005 265);
+  --color-ink-muted: oklch(70% 0.015 265);
+}
+
+/* ---------------------------------------------------------------------------
+ * U15.1 design system tokens (specification v2.2.0, §1). The `--acc-*` custom
+ * properties are the single source of truth; Tailwind utilities reference them.
+ * No colour value is duplicated in TypeScript.
+ * ------------------------------------------------------------------------- */
+/* `inline`: utilities reference the variables themselves, so a `.dark` subtree also switches. */
+@theme inline {
+  --color-acc-primary: var(--acc-primary);
+  --color-acc-primary-hover: var(--acc-primary-hover);
+  --color-acc-primary-subtle: var(--acc-primary-subtle);
+  --color-acc-on-primary: var(--acc-on-primary);
+
+  --color-acc-accent: var(--acc-accent);
+  --color-acc-accent-hover: var(--acc-accent-hover);
+  --color-acc-accent-subtle: var(--acc-accent-subtle);
+  --color-acc-on-accent: var(--acc-on-accent);
+
+  --color-acc-bg: var(--acc-bg);
+  --color-acc-sidebar: var(--acc-sidebar);
+  --color-acc-card: var(--acc-card);
+  --color-acc-surface-raised: var(--acc-surface-raised);
+
+  --color-acc-border: var(--acc-border);
+  --color-acc-border-strong: var(--acc-border-strong);
+  --color-acc-border-input: var(--acc-border-input);
+
+  --color-acc-text-primary: var(--acc-text-primary);
+  --color-acc-text-secondary: var(--acc-text-secondary);
+  --color-acc-text-muted: var(--acc-text-muted);
+
+  --color-acc-success: var(--acc-success);
+  --color-acc-success-subtle: var(--acc-success-subtle);
+  --color-acc-success-text: var(--acc-success-text);
+
+  --color-acc-warning: var(--acc-warning);
+  --color-acc-warning-subtle: var(--acc-warning-subtle);
+  --color-acc-warning-text: var(--acc-warning-text);
+
+  --color-acc-error: var(--acc-error);
+  --color-acc-error-subtle: var(--acc-error-subtle);
+  --color-acc-error-text: var(--acc-error-text);
+
+  --color-acc-destructive: var(--acc-destructive);
+  --color-acc-destructive-hover: var(--acc-destructive-hover);
+  --color-acc-on-destructive: var(--acc-on-destructive);
+
+  --font-sans: 'Inter', var(--font-inter), system-ui, -apple-system, sans-serif;
+  --font-mono: 'Geist Mono', var(--font-geist-mono), ui-monospace, monospace;
+}
+
+:root {
+  color-scheme: light;
+
+  /* Approved ACC light theme */
+  --acc-primary: #5b5ce2;
+  --acc-primary-hover: #4949c8;
+  --acc-primary-subtle: #eef0fc;
+  --acc-on-primary: #ffffff; /* 5.15:1 on #5B5CE2, 6.84:1 on hover */
+  --acc-accent: #20bfd0;
+  --acc-accent-hover: #1aa4b3;
+  --acc-accent-subtle: #e8f9fb;
+  --acc-on-accent: #171a2b; /* 7.73:1 on #20BFD0, 5.75:1 on hover */
+  --acc-bg: #f7f8fc;
+  --acc-sidebar: #ffffff;
+  --acc-card: #ffffff;
+  --acc-surface-raised: #f0f2f8;
+  --acc-border: #e6e8f0;
+  --acc-border-strong: #d1d5e4;
+  --acc-text-primary: #171a2b;
+  --acc-text-secondary: #667085;
+  --acc-text-muted: #9aa4b9; /* 2.50:1 — disabled or decorative only, never informative text */
+
+  /* Base semantic palette (icons, indicators, boundaries) */
+  --acc-success: #16865b;
+  --acc-success-subtle: #e7f5ef;
+  --acc-warning: #c47a16;
+  --acc-warning-subtle: #faf2e7;
+  --acc-error: #d6455d;
+  --acc-error-subtle: #fbecef;
+
+  /* Specification accessibility refinements: badge text >= 4.5:1 on subtle fills */
+  --acc-success-text: #13734e;
+  --acc-warning-text: #945705;
+  --acc-error-text: #b8354c;
+
+  /*
+   * U15.1 implementation refinements (WCAG 2.2 AA gaps in pairings the spec matrix
+   * omits; base palette unchanged — see the PR notes):
+   * - input boundary: #D1D5E4 is 1.46:1 on a white card (fails 1.4.11); #7F89A0 is 3.51:1
+   *   on the card and 3.30:1 on the canvas;
+   * - destructive button: white on #D6455D is 4.31:1 (fails 1.4.3); the approved
+   *   #B8354C gives 5.75:1, hover #9C2B40 7.41:1.
+   */
+  --acc-border-input: #7f89a0;
+  --acc-destructive: #b8354c;
+  --acc-destructive-hover: #9c2b40;
+  --acc-on-destructive: #ffffff;
+}
+
+.dark {
+  color-scheme: dark;
+
+  /* Approved ACC dark theme */
+  --acc-primary: #8585ff;
+  --acc-primary-hover: #7070ff;
+  --acc-primary-subtle: #1a2038;
+  --acc-on-primary: #0d1222; /* white is 3.09:1 (prohibited); dark text 6.03:1, 4.84:1 on hover */
+  --acc-accent: #36cbd8;
+  --acc-accent-hover: #2eb5c1;
+  --acc-accent-subtle: #132630;
+  --acc-on-accent: #0d1222; /* 9.49:1, 7.54:1 on hover */
+  --acc-bg: #0d1222;
+  --acc-sidebar: #11182a;
+  --acc-card: #171f33;
+  --acc-surface-raised: #1e2842;
+  --acc-border: #29344a;
+  --acc-border-strong: #5e6d8d; /* 3.16:1 on #171F33 (WCAG 1.4.11) */
+  --acc-text-primary: #f3f5fc;
+  --acc-text-secondary: #a6aec3;
+  --acc-text-muted: #687490; /* 3.51:1 — disabled or large text only */
+
+  --acc-success: #1eb379;
+  --acc-success-subtle: #0f291e;
+  --acc-warning: #e59220;
+  --acc-warning-subtle: #2b1f0c;
+  --acc-error: #e85d75;
+  --acc-error-subtle: #2d1217;
+
+  --acc-success-text: #1eb379;
+  --acc-warning-text: #e59220;
+  --acc-error-text: #e85d75;
+
+  /* U15.1 refinements: dark text on #B8354C (spec hover) is 3.24:1; #EF7A8E gives 6.96:1 */
+  --acc-border-input: #5e6d8d;
+  --acc-destructive: #e85d75;
+  --acc-destructive-hover: #ef7a8e;
+  --acc-on-destructive: #0d1222;
 }
 
 html,
 body {
   background-color: var(--color-surface);
   color: var(--color-ink);
+}
+
+/* Users who ask for reduced motion get no transform or transition animations. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
