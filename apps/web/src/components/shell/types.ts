@@ -9,7 +9,7 @@ import {
   IconMessages,
   IconOrganizations,
   IconOverview,
-  IconProps,
+  type IconProps,
   IconProviders,
   IconResellers,
   IconRoles,
@@ -36,33 +36,148 @@ export interface NavItemConfig {
 
 export const NAV_ITEMS: readonly NavItemConfig[] = [
   // 1. Operations
-  { href: '/', label: 'Overview', group: 'operations', groupLabel: 'Operations', icon: IconOverview, exact: true },
-  { href: '/messages', label: 'Messages', group: 'operations', groupLabel: 'Operations', icon: IconMessages },
-  { href: '/usage', label: 'Usage', group: 'operations', groupLabel: 'Operations', icon: IconUsage },
-  { href: '/whatsapp', label: 'WhatsApp', group: 'operations', groupLabel: 'Operations', icon: IconWhatsApp },
-  { href: '/templates', label: 'Templates', group: 'operations', groupLabel: 'Operations', icon: IconTemplates },
+  {
+    href: '/',
+    label: 'Overview',
+    group: 'operations',
+    groupLabel: 'Operations',
+    icon: IconOverview,
+    exact: true,
+  },
+  {
+    href: '/messages',
+    label: 'Messages',
+    group: 'operations',
+    groupLabel: 'Operations',
+    icon: IconMessages,
+  },
+  {
+    href: '/usage',
+    label: 'Usage',
+    group: 'operations',
+    groupLabel: 'Operations',
+    icon: IconUsage,
+  },
+  {
+    href: '/whatsapp',
+    label: 'WhatsApp',
+    group: 'operations',
+    groupLabel: 'Operations',
+    icon: IconWhatsApp,
+  },
+  {
+    href: '/templates',
+    label: 'Templates',
+    group: 'operations',
+    groupLabel: 'Operations',
+    icon: IconTemplates,
+  },
 
   // 2. Audience
-  { href: '/contacts', label: 'Contacts', group: 'audience', groupLabel: 'Audience', icon: IconContacts },
-  { href: '/suppressions', label: 'Suppressions', group: 'audience', groupLabel: 'Audience', icon: IconSuppressions },
+  {
+    href: '/contacts',
+    label: 'Contacts',
+    group: 'audience',
+    groupLabel: 'Audience',
+    icon: IconContacts,
+  },
+  {
+    href: '/suppressions',
+    label: 'Suppressions',
+    group: 'audience',
+    groupLabel: 'Audience',
+    icon: IconSuppressions,
+  },
 
   // 3. Platform & Infrastructure
-  { href: '/channels', label: 'Channels', group: 'platform', groupLabel: 'Infrastructure & Platform', icon: IconChannels },
-  { href: '/providers', label: 'Providers', group: 'platform', groupLabel: 'Infrastructure & Platform', icon: IconProviders },
-  { href: '/resellers', label: 'Resellers', group: 'platform', groupLabel: 'Infrastructure & Platform', icon: IconResellers },
-  { href: '/organizations', label: 'Organizations', group: 'platform', groupLabel: 'Infrastructure & Platform', icon: IconOrganizations },
-  { href: '/domains', label: 'Domains', group: 'platform', groupLabel: 'Infrastructure & Platform', icon: IconDomains },
+  {
+    href: '/channels',
+    label: 'Channels',
+    group: 'platform',
+    groupLabel: 'Infrastructure & Platform',
+    icon: IconChannels,
+  },
+  {
+    href: '/providers',
+    label: 'Providers',
+    group: 'platform',
+    groupLabel: 'Infrastructure & Platform',
+    icon: IconProviders,
+  },
+  {
+    href: '/resellers',
+    label: 'Resellers',
+    group: 'platform',
+    groupLabel: 'Infrastructure & Platform',
+    icon: IconResellers,
+  },
+  {
+    href: '/organizations',
+    label: 'Organizations',
+    group: 'platform',
+    groupLabel: 'Infrastructure & Platform',
+    icon: IconOrganizations,
+  },
+  {
+    href: '/domains',
+    label: 'Domains',
+    group: 'platform',
+    groupLabel: 'Infrastructure & Platform',
+    icon: IconDomains,
+  },
 
   // 4. Administration / Organization Settings
-  { href: '/workspaces', label: 'Workspaces', group: 'settings', groupLabel: 'Administration', icon: IconWorkspaces },
-  { href: '/teams', label: 'Teams', group: 'settings', groupLabel: 'Administration', icon: IconTeams },
-  { href: '/users', label: 'Users', group: 'settings', groupLabel: 'Administration', icon: IconUsers },
-  { href: '/roles', label: 'Roles', group: 'settings', groupLabel: 'Administration', icon: IconRoles },
-  { href: '/api-keys', label: 'API Keys', group: 'settings', groupLabel: 'Administration', icon: IconApiKeys },
-  { href: '/audit-logs', label: 'Audit Logs', group: 'settings', groupLabel: 'Administration', icon: IconAudit },
+  {
+    href: '/workspaces',
+    label: 'Workspaces',
+    group: 'settings',
+    groupLabel: 'Administration',
+    icon: IconWorkspaces,
+  },
+  {
+    href: '/teams',
+    label: 'Teams',
+    group: 'settings',
+    groupLabel: 'Administration',
+    icon: IconTeams,
+  },
+  {
+    href: '/users',
+    label: 'Users',
+    group: 'settings',
+    groupLabel: 'Administration',
+    icon: IconUsers,
+  },
+  {
+    href: '/roles',
+    label: 'Roles',
+    group: 'settings',
+    groupLabel: 'Administration',
+    icon: IconRoles,
+  },
+  {
+    href: '/api-keys',
+    label: 'API Keys',
+    group: 'settings',
+    groupLabel: 'Administration',
+    icon: IconApiKeys,
+  },
+  {
+    href: '/audit-logs',
+    label: 'Audit Logs',
+    group: 'settings',
+    groupLabel: 'Administration',
+    icon: IconAudit,
+  },
 
   // 5. Platform Support & Ops
-  { href: '/support', label: 'Support & Ops', group: 'support', groupLabel: 'Platform Support', icon: IconSupport },
+  {
+    href: '/support',
+    label: 'Support & Ops',
+    group: 'support',
+    groupLabel: 'Platform Support',
+    icon: IconSupport,
+  },
 ] as const;
 
 export interface NavVisibilityContext {

@@ -68,7 +68,10 @@ export function Sidebar({
       <div className="flex h-16 items-center justify-between border-b border-acc-border px-4">
         {isCollapsed ? (
           <div className="flex w-full items-center justify-center">
-            <span className="font-mono text-sm font-bold tracking-tight text-acc-primary" title="Alendei Communications Cloud">
+            <span
+              className="font-mono text-sm font-bold tracking-tight text-acc-primary"
+              title="Alendei Communications Cloud"
+            >
               ACC
             </span>
           </div>
@@ -120,7 +123,9 @@ export function Sidebar({
                   <Icon
                     className={cn(
                       'size-4 shrink-0 transition-colors',
-                      isActive ? 'text-acc-primary' : 'text-acc-text-secondary group-hover:text-acc-text-primary',
+                      isActive
+                        ? 'text-acc-primary'
+                        : 'text-acc-text-secondary group-hover:text-acc-text-primary',
                     )}
                   />
                   {!isCollapsed && <span className="truncate">{item.label}</span>}

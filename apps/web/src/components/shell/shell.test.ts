@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it } from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import React from 'react';
@@ -11,9 +11,7 @@ import { Sidebar } from './sidebar';
 import { CommandPalette } from './command-palette';
 import { MobileNav } from './mobile-nav';
 import { BreadcrumbBar } from './breadcrumb-bar';
-import { NAV_ITEMS, isNavItemVisible, type NavVisibilityContext } from './types';
-import { useSession } from '@/lib/session-store';
-import { useTheme } from '@/lib/theme-store';
+import type { NavVisibilityContext } from './types';
 
 (globalThis as unknown as { React: typeof React }).React = React;
 React.useSyncExternalStore = (_subscribe, getSnapshot) => getSnapshot();
@@ -28,7 +26,9 @@ describe('U15.2 Shell & Global Navigation (Unit & Accessibility Tests)', () => {
     prefetch: () => {},
   };
 
-  const createNavContext = (overrides: Partial<NavVisibilityContext> = {}): NavVisibilityContext => ({
+  const createNavContext = (
+    overrides: Partial<NavVisibilityContext> = {},
+  ): NavVisibilityContext => ({
     status: 'ready',
     canReadMessages: true,
     canSendMessages: true,

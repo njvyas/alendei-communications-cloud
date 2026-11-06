@@ -70,7 +70,10 @@ function ShellHarness() {
   };
 
   return (
-    <div className="flex min-h-dvh w-full bg-acc-bg text-acc-text-primary font-sans" id="shell-container">
+    <div
+      className="flex min-h-dvh w-full bg-acc-bg text-acc-text-primary font-sans"
+      id="shell-container"
+    >
       {/* Sidebar */}
       <Sidebar
         navContext={navContext}
@@ -95,7 +98,9 @@ function ShellHarness() {
         {/* Page Area */}
         <main className="min-w-0 flex-1 p-6" id="main-content">
           <div className="rounded-xl border border-acc-border bg-acc-card p-6 shadow-xs">
-            <h1 className="text-xl font-bold tracking-tight text-acc-text-primary">Console Content</h1>
+            <h1 className="text-xl font-bold tracking-tight text-acc-text-primary">
+              Console Content
+            </h1>
             <p className="mt-2 text-sm text-acc-text-secondary">
               Active shell state: {collapsed ? 'collapsed' : 'expanded'}
             </p>

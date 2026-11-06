@@ -84,7 +84,9 @@ export function MobileNav({ isOpen, onClose, navContext }: MobileNavProps) {
                   <Icon
                     className={cn(
                       'size-4 shrink-0 transition-colors',
-                      isActive ? 'text-acc-primary' : 'text-acc-text-secondary group-hover:text-acc-text-primary',
+                      isActive
+                        ? 'text-acc-primary'
+                        : 'text-acc-text-secondary group-hover:text-acc-text-primary',
                     )}
                   />
                   <span className="truncate">{item.label}</span>

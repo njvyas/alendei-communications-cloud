@@ -6,7 +6,11 @@ import { usePathname } from 'next/navigation';
 
 import { cn } from '@/lib/cn';
 import { useSession, type AuthStatus } from '@/lib/session-store';
-import { Breadcrumb, breadcrumbsFromPath, type BreadcrumbLinkProps } from '@/components/ui/breadcrumb';
+import {
+  Breadcrumb,
+  breadcrumbsFromPath,
+  type BreadcrumbLinkProps,
+} from '@/components/ui/breadcrumb';
 
 const ROUTE_LABELS: Record<string, string> = {
   '/': 'Overview',
@@ -47,7 +51,12 @@ export function BreadcrumbBar({
   }
 
   return (
-    <div className={cn('border-b border-acc-border bg-acc-card/40 px-6 py-2.5 backdrop-blur-xs', className)}>
+    <div
+      className={cn(
+        'border-b border-acc-border bg-acc-card/40 px-6 py-2.5 backdrop-blur-xs',
+        className,
+      )}
+    >
       <Breadcrumb
         items={items}
         renderLink={({ href, title, className: linkClass, children }: BreadcrumbLinkProps) => (

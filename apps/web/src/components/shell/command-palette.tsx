@@ -8,7 +8,7 @@ import { cn } from '@/lib/cn';
 import { useTheme } from '@/lib/theme-store';
 import { useModalDialog } from '@/components/ui/dialog';
 import { IconSearch, IconClose, IconOverview } from './icons';
-import { NAV_ITEMS, isNavItemVisible, type NavVisibilityContext, type NavItemConfig } from './types';
+import { NAV_ITEMS, isNavItemVisible, type NavVisibilityContext } from './types';
 
 export interface CommandPaletteProps {
   readonly isOpen: boolean;
@@ -197,11 +197,15 @@ export function CommandPalette({ isOpen, onClose, navContext, onSignOut }: Comma
     }
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setSelectedIndex((prev) => (filteredCommands.length > 0 ? (prev + 1) % filteredCommands.length : 0));
+      setSelectedIndex((prev) =>
+        filteredCommands.length > 0 ? (prev + 1) % filteredCommands.length : 0,
+      );
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       setSelectedIndex((prev) =>
-        filteredCommands.length > 0 ? (prev - 1 + filteredCommands.length) % filteredCommands.length : 0,
+        filteredCommands.length > 0
+          ? (prev - 1 + filteredCommands.length) % filteredCommands.length
+          : 0,
       );
     } else if (e.key === 'Enter') {
       e.preventDefault();
@@ -213,8 +217,9 @@ export function CommandPalette({ isOpen, onClose, navContext, onSignOut }: Comma
 
   if (!isOpen) return null;
 
-  const activeOptionId =
-    filteredCommands[selectedIndex] ? `command-item-${filteredCommands[selectedIndex].id}` : undefined;
+  const activeOptionId = filteredCommands[selectedIndex]
+    ? `command-item-${filteredCommands[selectedIndex].id}`
+    : undefined;
 
   return (
     <div
@@ -291,7 +296,12 @@ export function CommandPalette({ isOpen, onClose, navContext, onSignOut }: Comma
                     )}
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <Icon className={cn('size-4 shrink-0', isSelected ? 'text-acc-on-primary' : 'text-acc-text-secondary')} />
+                      <Icon
+                        className={cn(
+                          'size-4 shrink-0',
+                          isSelected ? 'text-acc-on-primary' : 'text-acc-text-secondary',
+                        )}
+                      />
                       <span className="truncate">{item.label}</span>
                     </div>
                     {item.shortcut && (
@@ -317,13 +327,22 @@ export function CommandPalette({ isOpen, onClose, navContext, onSignOut }: Comma
         <div className="flex items-center justify-between border-t border-acc-border px-4 py-2 text-[11px] text-acc-text-muted bg-acc-bg">
           <div className="flex items-center gap-3">
             <span>
-              <kbd className="rounded border border-acc-border bg-acc-card px-1 py-0.5 font-mono">↑↓</kbd> Navigate
+              <kbd className="rounded border border-acc-border bg-acc-card px-1 py-0.5 font-mono">
+                ↑↓
+              </kbd>{' '}
+              Navigate
             </span>
             <span>
-              <kbd className="rounded border border-acc-border bg-acc-card px-1 py-0.5 font-mono">↵</kbd> Select
+              <kbd className="rounded border border-acc-border bg-acc-card px-1 py-0.5 font-mono">
+                ↵
+              </kbd>{' '}
+              Select
             </span>
             <span>
-              <kbd className="rounded border border-acc-border bg-acc-card px-1 py-0.5 font-mono">Esc</kbd> Close
+              <kbd className="rounded border border-acc-border bg-acc-card px-1 py-0.5 font-mono">
+                Esc
+              </kbd>{' '}
+              Close
             </span>
           </div>
           <span>Alendei Command</span>
