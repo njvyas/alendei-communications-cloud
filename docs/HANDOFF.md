@@ -14,7 +14,7 @@ Naming: the **ADR-015 pre-Phase-3 remediation gate** (09-Oct-2026), **Gate C** (
 - **Phase 3.4 Fallback & Resilience is formally CLOSED** (Gate E.4 approved by project owner decision, 15-Oct-2026; `DECISIONS.md` §1u).
 - **Phase 3.5 WhatsApp Management Console is formally CLOSED** (Gate E.5 approved by project owner decision, 16-Oct-2026; `DECISIONS.md` §1v, `ROADMAP.md` §6a). **Phase 3 of Alendei Communications Cloud is formally CLOSED.**
 - **Phase 4.1 Data & Regulatory Foundation (Gate F.1)** is **APPROVED** (Gate F.1, project owner decision, 17-Oct-2026; ADR-016, `ROADMAP.md` §7, `DECISIONS.md` §1w). Uncommitted; commit only on explicit instruction. Recorded 17-Oct-2026: D-7 approved, voice E.164 acknowledged, interim variable limit, OpenAPI deferral, optional `headerId`, fixture delta assertion (`DECISIONS.md` §1w.10). Still open, each needing separate authorization: migration-history recovery, clone/process cleanup, migration-tooling separation. No migration `0035`+ may be written or applied until tooling separation and then history recovery are resolved.
-- **Phase 4.2 (Gate F.2):** this line was corrected 06-Nov-2026. Phase 4.2 is implemented and merged (PR #6, PR #7), and the F.2.2 SMS encoding and segment remediation is in its own PR. On `develop`, Gate F.2 acceptance is **PENDING** owner decision. **Phase 4.3 (Gate F.3)** is in progress by owner-authorized batches and is **NOT ACCEPTED**. `ROADMAP.md` §7 is authoritative, and the rest of this handoff is dated 17-Oct-2026.
+- **Phase 4.2 (Gate F.2):** this line was corrected 06-Nov-2026. Phase 4.2 is implemented and merged (PR #6, PR #7), and the F.2.2 SMS encoding and segment remediation was merged as PR #73 (`0a990eb`, 06-Nov-2026). Gate F.2 is **ACCEPTED WITH DOCUMENTED LIMITATIONS — 06-Nov-2026** by owner decision (`DECISIONS.md` §1zg); U15.2 was accepted the same day, with the same status. **Phase 4.3 (Gate F.3)** is in progress by owner-authorized batches and is **NOT ACCEPTED**. `ROADMAP.md` §7 is authoritative, and the rest of this handoff is dated 17-Oct-2026.
 - HIGH-6 and MEDIUM-7 were resolved in Phase 3.3 (`DECISIONS.md` §1t); other MEDIUM/LOW findings are deferred, not designed.
 
 ## 2. Repository state
@@ -417,7 +417,19 @@ All five review items are decided (`DECISIONS.md` §1o):
 
 1. Phase 3 is committed, pushed, and verified passing in CI on `develop` (`423d122297ec7cfc593d54cc923359196d4a3c71`).
 2. Gate F.1 is APPROVED (17-Oct-2026) and committed locally (`5a71f13`, 18-Oct-2026). Push only on explicit instruction; CI has not run on it.
-3. Phase 4.2 (Gate F.2), corrected 06-Nov-2026: implemented and merged. Acceptance is pending owner decision; see `ROADMAP.md` §7 and `DECISIONS.md` §1zf.
+3. Phase 4.2 (Gate F.2): implemented, merged and ACCEPTED WITH DOCUMENTED LIMITATIONS — 06-Nov-2026; see `ROADMAP.md` §7 and `DECISIONS.md` §1zf, §1zg. U15.2 was accepted the same day.
+   - **Open follow-ups from F.2:**
+     - F2-L1: simulator only, not live-SMS or regulatory approval;
+     - F2-L2: SMS capability key needs an owner decision;
+     - F2-L3: two safeguards verified in CI only;
+     - F2-L4: reconcile draft PR #50.
+   - **Open follow-ups from U15.2:**
+     - U152-F1: Chromium header shift;
+     - U152-F2: raw ID in the user-detail breadcrumb;
+     - U152-L1: Super Admin QA walkthrough;
+     - U152-L2: multi-organization switching;
+     - U152-L3: development-only tests.
+   - Gate F.3 stays parked and is not accepted.
 4. Separately authorized operational tasks (`DECISIONS.md` §1w.10): G, separate schema migration from shared-role reconciliation; E, migration-history recovery; F, evidence preservation and cleanup of `acc_clone_436072f90852` and the orphaned test process. No migration `0035`+ until G and then E are resolved.
 5. Items 1 and 3 stay deferred until the user schedules them.
 

@@ -481,7 +481,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 
 ## 7. Phase 4 — SMS + RCS
 
-**Status: Phase 4.1 (Gate F.1) APPROVED by project owner decision, 17-Oct-2026 (ADR-016, `DECISIONS.md` §1w). Phase 4.2 (Gate F.2) is IMPLEMENTED and merged to `develop` (Batches 1 and 2, 23–24-Oct-2026, below); Gate F.2 acceptance is PENDING owner review and is not approved. Phase 4.3 (Gate F.3) is IN PROGRESS by owner-authorized batches only (24-Oct-2026: F.3-1 email/voice channel gating; F.3-2/F.3-3 SMS/RCS regression and isolation tests); Gate F.3 is NOT ACCEPTED.** The 17-Oct-2026 migration prerequisite (`DECISIONS.md` §1w.10) is superseded: migration tooling (G) is resolved and history recovery (E) is closed for development (§1x.1); migration `0035` was approved on 21-Oct-2026 (§1x.3) and `0036` was merged with BE-DISPATCH-01 (§1y). Phase 4.2 added no migration.
+**Status: Phase 4.1 (Gate F.1) APPROVED by project owner decision, 17-Oct-2026 (ADR-016, `DECISIONS.md` §1w). Phase 4.2 (Gate F.2) is ACCEPTED WITH DOCUMENTED LIMITATIONS — 06-Nov-2026, by project owner decision (`DECISIONS.md` §1zg); it was implemented in Batches 1 and 2 (23–24-Oct-2026, below) and remediated by PR #73. Phase 4.3 (Gate F.3) is IN PROGRESS by owner-authorized batches only (24-Oct-2026: F.3-1 email/voice channel gating; F.3-2/F.3-3 SMS/RCS regression and isolation tests); Gate F.3 is NOT ACCEPTED.** The 17-Oct-2026 migration prerequisite (`DECISIONS.md` §1w.10) is superseded: migration tooling (G) is resolved and history recovery (E) is closed for development (§1x.1); migration `0035` was approved on 21-Oct-2026 (§1x.3) and `0036` was merged with BE-DISPATCH-01 (§1y). Phase 4.2 added no migration.
 - **Provider integrations**: simulator-only; no real credentials, vendor endpoints or external network calls.
 - **Delivery scope**: outbound submission outcomes only; webhooks, handset DLRs and delivery-status progression deferred.
 - **SMS DLT**: bound to the approved SMS template in `templates.variables` (`{ names, dlt }`; legacy arrays still read); a payload may restate it but never supply or override it; no migration.
@@ -495,7 +495,7 @@ Common to every backend increment: every route declares `@RequiresPermission` an
 | Increment | Scope | Deliverables | Status |
 |---|---|---|---|
 | **4.1** | Data & Regulatory Foundation (Gate F.1, ADR-016) | Typed SMS/RCS contracts, GSM-7/UCS-2 segmentation, DLT validation and template binding, template-content binding, RCS rich cards and safe URLs, canonical E.164 normalization, suppression alignment | ✅ APPROVED — Gate F.1, 17-Oct-2026 |
-| **4.2** | Provider Adapters & Eligibility (Gate F.2) | SMS/RCS simulator adapters, channel capability registration, provider assignments | 🟡 IMPLEMENTED — merged to `develop` (PR #6, PR #7); Gate F.2 acceptance PENDING |
+| **4.2** | Provider Adapters & Eligibility (Gate F.2) | SMS/RCS simulator adapters, channel capability registration, provider assignments | ✅ ACCEPTED WITH DOCUMENTED LIMITATIONS — 06-Nov-2026 (Gate F.2; PR #6, PR #7, PR #73; `DECISIONS.md` §1zg) |
 | **4.3** | End-to-End Multi-Channel Dispatch & Verification (Gate F.3) | End-to-end multi-channel dispatch, settlement, and full regression verification | 🟡 IN PROGRESS — owner-authorized batches only (24-Oct-2026); Gate F.3 NOT ACCEPTED |
 
 **Gate F.1 — Phase 4.1 Data & Regulatory Foundation acceptance.** Status: **APPROVED** (project owner decision, 17-Oct-2026; D-7 approved and voice E.164 acknowledged the same day). The authoritative record is `DECISIONS.md` §1w:
@@ -513,7 +513,7 @@ Evidence summary (17-Oct-2026, current working tree):
 - typecheck, lint, `format:check`, `openapi:check`, `npm run build` and `git diff --check` all pass.
 - No change under `packages/db`.
 
-**Phase 4.2 — Provider Adapters & Eligibility: implementation record.** Status: **IMPLEMENTED and merged to `develop`; Gate F.2 acceptance PENDING.** Merging is not gate acceptance: Gate F.2 needs a separate owner decision.
+**Phase 4.2 — Provider Adapters & Eligibility: implementation record.** Status: **IMPLEMENTED, merged, and ACCEPTED WITH DOCUMENTED LIMITATIONS — 06-Nov-2026** (project owner decision; limitations F2-L1 to F2-L4 in `DECISIONS.md` §1zg).
 
 - **Batch 1 — SMS dispatch** (PR #6, merge `fa9a5ed`, 23-Oct-2026; commits `244f985`, `5f08dfa`):
   - The dispatcher resolves the channel from the claimed message instead of assuming WhatsApp.
@@ -534,7 +534,7 @@ Evidence summary (17-Oct-2026, current working tree):
   - The requirement-by-requirement review against the owner-authorized F.2 scope (17-Oct-2026) found one implementation gap. SMS submissions did not carry the encoding and segment information F.2.2 requires, and dispatch did not re-check the segment ceiling.
   - Both are now in place: `sms.encoding` and `sms.segments` are carried, and a stored text above `min(maxSegments, 10)` fails permanently before any attempt.
   - The change is migration-free and simulator-only. It does not change the API or OpenAPI.
-  - Gate F.2 acceptance remains a separate owner decision.
+  - Gate F.2 was accepted on 06-Nov-2026 with documented limitations (`DECISIONS.md` §1zg).
 - **Evidence:** post-merge CI on `develop`:
   - run `40002661592` at `fa9a5ed`;
   - run `40053914870` at `eca81d0`, all five jobs successful — integration 198/198, security 1,589/1,589, database 222/222, `@acc/api` unit 702/702, dependency audit with 0 high.

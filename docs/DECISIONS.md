@@ -2456,7 +2456,7 @@ Formal owner review of the U15.1 post-implementation design compliance audit res
 ## 1zf. Phase 4.2 (Gate F.2) acceptance closure: SMS encoding and segments at dispatch: 06-Nov-2026
 
 ### 1zf.1 Status
-- Gate F.2 acceptance is **PENDING** an owner decision on `develop`. This section records an implementation gap and its remediation. It does not accept the gate.
+- Gate F.2 acceptance was **PENDING** when this section was written. This section records an implementation gap and its remediation. **Superseded 06-Nov-2026:** the owner accepted Gate F.2 with documented limitations (§1zg).
 - A record of an owner acceptance dated 30-Oct-2026 exists in commit `a511949`. That commit sits on draft PR #50, which is not merged, so it is not on `develop`. That record pre-dates the gap below, and the owner must reconcile it.
 
 ### 1zf.2 Gap found
@@ -2479,6 +2479,30 @@ Formal owner review of the U15.1 post-implementation design compliance audit res
 - **No SMS capability key.** None is defined, so every SMS provider is eligible for every valid SMS message. F.2.3 is met for RCS (`rcs_message_types`) and the simulator (`simulator_behavior`). SMS capability eligibility needs an owner decision before it is built.
 - **Simulator only; DLT format only.** DLT identifiers are checked for format only, not for registration or regulatory compliance. `headerId` stays optional for simulator-only operation.
 - **Provider assignments panel (F.2-3).** It was delivered by UI readiness Batch 1 (`fd9f13d`, 21-Oct-2026), not by the F.2 PRs. Its QA-host evidence is QA-D-08 (30-Oct-2026), recorded in PR #50, not on `develop`.
+
+## 1zg. Gate F.2 and U15.2 acceptance on QA: 06-Nov-2026
+
+### 1zg.1 Decision
+- The project owner accepted **Gate F.2 (Phase 4.2)** and **U15.2 (application shell)**. Both are recorded as **ACCEPTED WITH DOCUMENTED LIMITATIONS — 06-Nov-2026**.
+- The evidence is from QA release `2026.11.06-c92a8c4-rc` (commit `c92a8c4`), deployed 06-Nov-2026, with no migration. The owner's evidence store holds the closeout records; they are not in this repository.
+
+### 1zg.2 Gate F.2 limitations retained (follow-ups open)
+- **F2-L1: simulator-only verification.** DLT is checked for format only. This acceptance is **not** approval for live SMS provider connectivity, live traffic or regulatory readiness.
+- **F2-L2: no SMS capability key** (§1zf.4). Defining one needs an owner decision.
+- **F2-L3: two database-mutation safeguards verified in CI only.** These are the dispatch-time segment re-check and the rejection of an invalid stored message before any attempt or circuit admission. Evidence: the `phase4_2-sms-dispatch` integration test and CI run 42221421184.
+- **F2-L4: the 30-Oct-2026 acceptance record** (`a511949`) remains on draft PR #50. It pre-dates the §1zf remediation, and its §1zc numbering collides with this file.
+
+### 1zg.3 U15.2 findings and limitations retained (follow-ups open)
+- **U152-F1:** Chromium header indicator layout shift, a cumulative layout shift of about 0.009 after session load. It was not seen in Firefox.
+- **U152-F2:** the last breadcrumb on a user's detail page shows the raw user ID instead of a readable label.
+- **U152-L1:** the human-performed Super Admin QA walkthrough of the shell is outstanding.
+- **U152-L2:** multi-organization switching was not tested, because no multi-organization test persona exists.
+- **U152-L3:** four repository tests (the "Real Application first-render" tests, two per browser) depend on a development-only mocked API and do not apply to QA.
+
+### 1zg.4 Not changed
+- Gate F.3 remains parked and not accepted.
+- Phase 5 has not started.
+- Production is not deployed or authorised.
 
 ## 3. Risks explicitly accepted by design (not oversights)
 
