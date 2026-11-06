@@ -324,7 +324,7 @@ describe('Phase 4.3 F.3-2: SMS and RCS through dispatcher concurrency, fencing a
     expect(submission.channel).toBe(channel);
     if (channel === 'sms') {
       expect(submission.content.text).toBe('Your verification code is 424242.');
-      expect(submission.sms).toEqual({ dlt: TEMPLATE_DLT });
+      expect(submission.sms).toEqual({ dlt: TEMPLATE_DLT, encoding: 'GSM-7', segments: 1 });
       expect(submission.rcs).toBeUndefined();
     } else if (channel === 'rcs') {
       expect(submission.rcs).toEqual(CARD);

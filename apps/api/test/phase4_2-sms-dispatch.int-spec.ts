@@ -411,7 +411,8 @@ describe('Phase 4.2 Batch 1: SMS simulator dispatch, channel resolution and SMS 
       expect(submission.submissionId).toBe(messageId);
       expect(submission.recipient).toBe('+12025550161');
       expect(submission.content).toEqual({ text: 'Your verification code is 654321.' });
-      expect(submission.sms).toEqual({ dlt: TEMPLATE_DLT });
+      // Gate F.2 scope F.2.2: the encoding and segment count of the rendered text.
+      expect(submission.sms).toEqual({ dlt: TEMPLATE_DLT, encoding: 'GSM-7', segments: 1 });
 
       const message = await messageRow(messageId);
       expect(message.status).toBe('accepted');
@@ -585,6 +586,53 @@ describe('Phase 4.2 Batch 1: SMS simulator dispatch, channel resolution and SMS 
       expect(await attemptsOf(messageId)).toHaveLength(0);
       expect(calls()).toHaveLength(0);
       expect(await dispatcher.claimBatch(1)).toEqual([]);
+    });
+
+    it('a stored SMS text above the 10-segment ceiling fails permanently before any attempt, provider call or circuit change (Gate F.2 scope F.2.2)', async () => {
+      const t = await smsTenant('p42-long');
+      const provider = await createProvider(smsChannelId, 'long-sms');
+      await assign(t.tenant.orgId, smsChannelId, provider, 1);
+
+      const res = await sendSms(t, '+12025550165', '777777');
+      expect(res.status).toBe(202);
+      const messageId = res.body.data.id as string;
+
+      // Tamper with the stored row the send path wrote: valid DLT, but a text
+      // that needs 11 GSM-7 segments, which the send path would have refused.
+      const [stored] = await h.admin
+        .select({ payload: schema.messages.payload })
+        .from(schema.messages)
+        .where(eq(schema.messages.id, messageId));
+      await h.admin
+        .update(schema.messages)
+        .set({
+          payload: { ...(stored!.payload as Record<string, unknown>), text: 'a'.repeat(1531) },
+        })
+        .where(eq(schema.messages.id, messageId));
+
+      const outcome = await dispatchOnce(messageId);
+      expect(outcome.outcome).toBe('failed');
+      expect(outcome.error).toBe(
+        'SMS_PAYLOAD_INVALID: stored SMS text needs 11 segments, above the ceiling of 10',
+      );
+
+      const message = await messageRow(messageId);
+      expect(message.status).toBe('failed');
+      expect(message.failureReason).toBe(outcome.error);
+      expect(await attemptsOf(messageId)).toHaveLength(0);
+      expect(calls()).toHaveLength(0);
+      expect(await eventsOf(messageId)).toEqual(['message.queued', 'message.failed']);
+      // Permanent: nothing is left to claim, so there is no retry.
+      expect(await dispatcher.claimBatch(1)).toEqual([]);
+
+      // Neutral to provider health: the provider was never admitted or called.
+      const [p] = await h.admin
+        .select()
+        .from(schema.providers)
+        .where(eq(schema.providers.id, provider));
+      expect(p!.circuitState).toBe('closed');
+      expect(p!.healthState).toBe('healthy');
+      expect(Number(p!.circuitGeneration)).toBe(0);
     });
   });
 
