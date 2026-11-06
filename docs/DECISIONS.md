@@ -2500,7 +2500,7 @@ Formal owner review of the U15.1 post-implementation design compliance audit res
 - **U152-L3:** four repository tests (the "Real Application first-render" tests, two per browser) depend on a development-only mocked API and do not apply to QA.
 
 ### 1zg.4 Not changed
-- Gate F.3 remains parked and not accepted.
+- Gate F.3 (Phase 4.3): **PARKED — NOT ACCEPTED**. This is the current status as of 06-Nov-2026. The earlier F.3 batch decisions (§1z, §1za) stand as historical records.
 - Phase 5 has not started.
 - Production is not deployed or authorised.
 
