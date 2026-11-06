@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import type { ReactNode } from 'react';
 
 import { ConsoleClientLayout } from './console-client-layout';
-import { SIDEBAR_COOKIE_NAME, serverSidebarCollapsed } from '@/components/shell/sidebar';
+import { SIDEBAR_COOKIE_NAME, serverSidebarCollapsed } from '@/components/shell/sidebar-cookie';
 
 // Navigation section definitions and guards preserved for backward compatibility
 // and architectural regression assertions (e.g. platform-domains.sec.test.ts).
@@ -71,47 +71,18 @@ export interface ConsoleLayoutProps {
  * Runs on the server during SSR to derive initial sidebar collapsed preference
  * from the `acc_sidebar_collapsed` request cookie before first paint.
  *
- * Resilient to synchronous unit-test renderers (renderToStaticMarkup) by falling
- * back to synchronous client layout when outside Next.js request scope.
+ * Invokes server-safe cookie utilities without client module dependencies or
+ * broad error suppression.
  */
-export default function ConsoleLayout({
+export default async function ConsoleLayout({
   children,
   initialCollapsed: propCollapsed,
-}: ConsoleLayoutProps): ReactNode | Promise<ReactNode> {
-  if (propCollapsed !== undefined) {
-    return <ConsoleClientLayout initialCollapsed={propCollapsed}>{children}</ConsoleClientLayout>;
+}: ConsoleLayoutProps) {
+  let initialCollapsed = propCollapsed;
+  if (initialCollapsed === undefined) {
+    const cookieStore = await cookies();
+    initialCollapsed = serverSidebarCollapsed(cookieStore.get(SIDEBAR_COOKIE_NAME)?.value);
   }
 
-  try {
-    const cookiesResult = cookies();
-    if (
-      cookiesResult &&
-      typeof (cookiesResult as unknown as Promise<unknown>).then === 'function'
-    ) {
-      return (
-        cookiesResult as unknown as Promise<{
-          get: (name: string) => { value?: string } | undefined;
-        }>
-      ).then((store) => {
-        const initialCollapsed = serverSidebarCollapsed(store?.get(SIDEBAR_COOKIE_NAME)?.value);
-        return (
-          <ConsoleClientLayout initialCollapsed={initialCollapsed}>{children}</ConsoleClientLayout>
-        );
-      });
-    }
-
-    const initialCollapsed = serverSidebarCollapsed(
-      (
-        cookiesResult as unknown as {
-          get: (name: string) => { value?: string } | undefined;
-        }
-      )?.get(SIDEBAR_COOKIE_NAME)?.value,
-    );
-    return (
-      <ConsoleClientLayout initialCollapsed={initialCollapsed}>{children}</ConsoleClientLayout>
-    );
-  } catch {
-    // Outside Next.js request context (e.g. node:test synchronous renderToStaticMarkup)
-    return <ConsoleClientLayout initialCollapsed={false}>{children}</ConsoleClientLayout>;
-  }
+  return <ConsoleClientLayout initialCollapsed={initialCollapsed}>{children}</ConsoleClientLayout>;
 }

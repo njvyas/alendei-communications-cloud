@@ -17,31 +17,21 @@ export interface SidebarProps {
   readonly className?: string;
 }
 
-export const SIDEBAR_COOKIE_NAME = 'acc_sidebar_collapsed';
-export const SIDEBAR_COOKIE_MAX_AGE = 31_536_000; // 1 year in seconds
+import {
+  SIDEBAR_COOKIE_NAME,
+  SIDEBAR_COOKIE_MAX_AGE,
+  parseSidebarCollapsedCookie,
+  serverSidebarCollapsed,
+  sidebarCookie,
+} from './sidebar-cookie';
 
-/**
- * Parses the sidebar collapsed preference from a cookie string.
- * Returns `true` for '1', `false` for '0', and `null` for absent or malformed values.
- */
-export function parseSidebarCollapsedCookie(cookieString?: string | null): boolean | null {
-  if (!cookieString) return null;
-  const match = cookieString.match(new RegExp(`(?:^|;\\s*)${SIDEBAR_COOKIE_NAME}=([01])`));
-  if (!match) return null;
-  return match[1] === '1';
-}
-
-/**
- * Resolves the initial sidebar collapsed state for server rendering.
- * Returns true if the cookie specifies '1', false for '0', missing, or invalid.
- * Accepts either bare cookie value ('1' | '0') or full cookie string ('acc_sidebar_collapsed=1').
- */
-export function serverSidebarCollapsed(cookieValue?: string | null): boolean {
-  if (!cookieValue) return false;
-  if (cookieValue === '1') return true;
-  if (cookieValue === '0') return false;
-  return parseSidebarCollapsedCookie(cookieValue) ?? false;
-}
+export {
+  SIDEBAR_COOKIE_NAME,
+  SIDEBAR_COOKIE_MAX_AGE,
+  parseSidebarCollapsedCookie,
+  serverSidebarCollapsed,
+  sidebarCookie,
+};
 
 /**
  * Reads the sidebar collapsed preference from document.cookie in browser environments.
@@ -50,13 +40,6 @@ export function serverSidebarCollapsed(cookieValue?: string | null): boolean {
 export function readSidebarCollapsedCookie(): boolean | null {
   if (typeof document === 'undefined') return null;
   return parseSidebarCollapsedCookie(document.cookie);
-}
-
-/**
- * Builds a Set-Cookie style string for the sidebar collapsed preference.
- */
-export function sidebarCookie(collapsed: boolean): string {
-  return `${SIDEBAR_COOKIE_NAME}=${collapsed ? '1' : '0'}; Path=/; Max-Age=${SIDEBAR_COOKIE_MAX_AGE}; SameSite=Lax`;
 }
 
 /**

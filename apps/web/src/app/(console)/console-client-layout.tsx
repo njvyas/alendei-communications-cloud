@@ -221,26 +221,6 @@ export function ConsoleClientLayout({
     canAccessSupport,
   };
 
-  // 1. Initial authentication loading state (flash prevention)
-  if (status === 'idle' || status === 'authenticating') {
-    return (
-      <div className="mx-auto flex min-h-dvh max-w-6xl flex-col px-4 py-6 sm:px-6">
-        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-acc-border pb-4">
-          <div>
-            <p className="text-sm font-semibold tracking-tight text-acc-text-primary">
-              Alendei Communications Cloud
-            </p>
-            <p className="text-xs text-acc-text-secondary">Control plane</p>
-          </div>
-          <SessionBadge />
-        </header>
-        <div className="mt-8 flex justify-center">
-          <ConsoleLoading />
-        </div>
-      </div>
-    );
-  }
-
   // 2. Unauthenticated: Redirecting to login
   if (status === 'unauthenticated') {
     return (
@@ -336,7 +316,15 @@ export function ConsoleClientLayout({
         <BreadcrumbBar status={status} />
 
         {/* Interior Page Container */}
-        <main className="min-w-0 flex-1 p-4 sm:p-6 lg:p-8">{children}</main>
+        <main className="min-w-0 flex-1 p-4 sm:p-6 lg:p-8">
+          {status === 'idle' || status === 'authenticating' ? (
+            <div className="mt-8 flex justify-center">
+              <ConsoleLoading />
+            </div>
+          ) : (
+            children
+          )}
+        </main>
       </div>
 
       {/* Mobile Navigation Drawer */}

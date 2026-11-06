@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { AppRouterContext } from 'next/dist/shared/lib/app-router-context.shared-runtime';
 import { PathnameContext } from 'next/dist/shared/lib/hooks-client-context.shared-runtime';
 
-import ConsoleLayout from '../app/(console)/layout';
+import { ConsoleClientLayout as ConsoleLayout } from '../app/(console)/console-client-layout';
 import { type EffectiveAuthorization, type UserIdentity } from '../lib/api-client';
 import { useSession, hasPermission } from '../lib/session-store';
 

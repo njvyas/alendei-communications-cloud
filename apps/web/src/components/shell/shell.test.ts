@@ -372,7 +372,7 @@ describe('U15.2 Shell & Global Navigation (Unit & Accessibility Tests)', () => {
       assert.ok(expandedHtml.includes('w-60'), 'Expanded sidebar must render w-60 in SSR');
     });
 
-    it('SSR output with cookie value "1" renders collapsed and with "0" renders expanded', () => {
+    it('SSR output with cookie value "1" renders collapsed and with "0" renders expanded', async () => {
       // Cookie value resolution
       assert.equal(serverSidebarCollapsed('1'), true);
       assert.equal(serverSidebarCollapsed('acc_sidebar_collapsed=1'), true);
@@ -469,14 +469,11 @@ describe('U15.2 Shell & Global Navigation (Unit & Accessibility Tests)', () => {
       });
 
       try {
-        const layoutCollapsedHtml = renderWithRouter(
-          React.createElement(
-            ConsoleLayout,
-            { initialCollapsed: serverSidebarCollapsed('1') },
-            React.createElement('div', null, 'Console Content'),
-          ),
-          '/',
-        );
+        const layoutCollapsedEl = await ConsoleLayout({
+          initialCollapsed: serverSidebarCollapsed('1'),
+          children: React.createElement('div', null, 'Console Content'),
+        });
+        const layoutCollapsedHtml = renderWithRouter(layoutCollapsedEl, '/');
         assert.ok(
           layoutCollapsedHtml.includes('w-16'),
           'ConsoleLayout SSR with cookie 1 must render w-16 on sidebar',
@@ -486,14 +483,11 @@ describe('U15.2 Shell & Global Navigation (Unit & Accessibility Tests)', () => {
           'ConsoleLayout SSR with cookie 1 must NOT render w-60 on sidebar',
         );
 
-        const layoutExpandedHtml = renderWithRouter(
-          React.createElement(
-            ConsoleLayout,
-            { initialCollapsed: serverSidebarCollapsed('0') },
-            React.createElement('div', null, 'Console Content'),
-          ),
-          '/',
-        );
+        const layoutExpandedEl = await ConsoleLayout({
+          initialCollapsed: serverSidebarCollapsed('0'),
+          children: React.createElement('div', null, 'Console Content'),
+        });
+        const layoutExpandedHtml = renderWithRouter(layoutExpandedEl, '/');
         assert.ok(
           layoutExpandedHtml.includes('w-60'),
           'ConsoleLayout SSR with cookie 0 must render w-60 on sidebar',
