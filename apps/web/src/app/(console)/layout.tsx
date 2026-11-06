@@ -1,12 +1,9 @@
 'use client';
 
-import Link from 'next/link';
-import type { Route } from 'next';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 import { authApi } from '@/lib/api-client';
-import { cn } from '@/lib/cn';
 import { useCanReadPlatformDomains } from '@/lib/platform-domains';
 import {
   bootstrapSession,
@@ -19,21 +16,29 @@ import {
   useSession,
 } from '@/lib/session-store';
 import { OrgSelectionView } from '@/components/org-selection-view';
-import { OrgSwitcher } from '@/components/org-switcher';
 import { SessionBadge } from '@/components/session-badge';
 import { ZeroOrgView } from '@/components/zero-org-view';
 import { EnvironmentBadge } from '@/components/ui/environment-badge';
 import { ToastContainer } from '@/components/ui/toast';
+import {
+  Sidebar,
+  Header,
+  BreadcrumbBar,
+  CommandPalette,
+  MobileNav,
+  type NavVisibilityContext,
+} from '@/components/shell';
 import ConsoleLoading from './loading';
 
 /**
- * Authentication-aware console shell.
+ * Modern Application Shell & Navigation (U15.2).
  *
  * Implements protected-route invariant:
  * - Unauthenticated users are redirected to `/login` without flashing protected content.
  * - Authenticated users with zero organizations see an explicit access empty state, unless viewing /organizations or platform catalogue with appropriate read permissions.
  * - Authenticated users with multiple organizations must select an organization before accessing console views.
  * - Active organization is exposed in the shell header with switching capability.
+ * - Navigation links are strictly capability-gated: visual visibility does not confer authority.
  */
 const SECTIONS = [
   { href: '/', label: 'Overview' },
@@ -63,6 +68,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const status = useSession((state) => state.status);
   const user = useSession((state) => state.user);
   const clearSession = useSession((state) => state.clearSession);
+
   const canReadOrganizations = useCanReadOrganizations();
   const canReadProviders = useCanReadProviders();
   const canReadPlatformDomains = useCanReadPlatformDomains();
@@ -79,6 +85,69 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const canReadMessages = useHasPermission('messages.read');
   const canSendMessages = useHasPermission('messages.send');
   const canAccessSupport = useCanAccessPlatformSupport();
+
+  const isSectionVisible = (href: string) => {
+    if (status === 'zero_organizations') {
+      switch (href) {
+        case '/organizations':
+          return canReadOrganizations;
+        case '/domains':
+          return canReadPlatformDomains;
+        case '/channels':
+        case '/providers':
+          return canReadProviders;
+        case '/resellers':
+          return canReadResellers;
+        case '/support':
+          return canAccessSupport;
+        default:
+          return false;
+      }
+    }
+
+    switch (href) {
+      case '/messages':
+      case '/usage':
+        return canReadMessages;
+      case '/whatsapp':
+        return canReadMessages || canSendMessages;
+      case '/templates':
+        return canReadTemplates;
+      case '/contacts':
+        return canReadContacts;
+      case '/suppressions':
+        return canReadSuppressions;
+      case '/channels':
+      case '/providers':
+        return canReadProviders;
+      case '/resellers':
+        return canReadResellers;
+      case '/organizations':
+        return canReadOrganizations;
+      case '/domains':
+        return canReadPlatformDomains;
+      case '/workspaces':
+        return canReadWorkspaces;
+      case '/teams':
+        return canReadTeams;
+      case '/users':
+        return canReadUsers;
+      case '/roles':
+        return canReadRoles;
+      case '/api-keys':
+        return canReadApiKeys;
+      case '/audit-logs':
+        return canReadAudit;
+      case '/support':
+        return canAccessSupport;
+      default:
+        return true;
+    }
+  };
+
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+
   const isNavigatingOrganizations =
     pathname === '/organizations' || pathname.startsWith('/organizations/');
   const isNavigatingDomains = pathname === '/domains' || pathname.startsWith('/domains/');
@@ -98,6 +167,19 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
     }
   }, [status, router]);
 
+  // Global shortcut for Command Palette: Cmd+K / Ctrl+K
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleKeyDown = (e: globalThis.KeyboardEvent) => {
+      if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setIsCommandPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const handleSignOut = async () => {
     try {
       await authApi.logout();
@@ -107,14 +189,34 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
     }
   };
 
+  const navContext: NavVisibilityContext = {
+    status,
+    canReadMessages,
+    canSendMessages,
+    canReadTemplates,
+    canReadContacts,
+    canReadSuppressions,
+    canReadProviders,
+    canReadResellers,
+    canReadOrganizations,
+    canReadPlatformDomains,
+    canReadWorkspaces,
+    canReadTeams,
+    canReadUsers,
+    canReadRoles,
+    canReadApiKeys,
+    canReadAudit,
+    canAccessSupport,
+  };
+
   // 1. Initial authentication loading state (flash prevention)
   if (status === 'idle' || status === 'authenticating') {
     return (
       <div className="mx-auto flex min-h-dvh max-w-6xl flex-col px-4 py-6 sm:px-6">
-        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--color-border-subtle)] pb-4">
+        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-acc-border pb-4">
           <div>
-            <p className="text-sm font-semibold tracking-tight">Alendei Communications Cloud</p>
-            <p className="text-xs text-[var(--color-ink-muted)]">Control plane</p>
+            <p className="text-sm font-semibold tracking-tight text-acc-text-primary">Alendei Communications Cloud</p>
+            <p className="text-xs text-acc-text-secondary">Control plane</p>
           </div>
           <SessionBadge />
         </header>
@@ -145,15 +247,15 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
     if (!isPermittedNavigation) {
       return (
         <div className="mx-auto flex min-h-dvh max-w-6xl flex-col px-4 py-6 sm:px-6">
-          <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--color-border-subtle)] pb-4">
+          <header className="flex flex-wrap items-center justify-between gap-4 border-b border-acc-border pb-4">
             <div>
-              <p className="text-sm font-semibold tracking-tight">Alendei Communications Cloud</p>
-              <p className="text-xs text-[var(--color-ink-muted)]">Control plane</p>
+              <p className="text-sm font-semibold tracking-tight text-acc-text-primary">Alendei Communications Cloud</p>
+              <p className="text-xs text-acc-text-secondary">Control plane</p>
             </div>
             <div className="flex flex-wrap items-center gap-3 sm:gap-4">
               <SessionBadge />
               {user?.userId && (
-                <span className="hidden font-mono text-xs text-[var(--color-ink-muted)] sm:inline">
+                <span className="hidden font-mono text-xs text-acc-text-secondary sm:inline">
                   {user.email ?? `${user.userId.slice(0, 8)}…`}
                 </span>
               )}
@@ -169,18 +271,18 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   if (status === 'selecting_organization') {
     return (
       <div className="mx-auto flex min-h-dvh max-w-6xl flex-col px-4 py-6 sm:px-6">
-        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--color-border-subtle)] pb-4">
+        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-acc-border pb-4">
           <div>
             <div className="flex items-center gap-2">
-              <p className="text-sm font-semibold tracking-tight">Alendei Communications Cloud</p>
+              <p className="text-sm font-semibold tracking-tight text-acc-text-primary">Alendei Communications Cloud</p>
               <EnvironmentBadge />
             </div>
-            <p className="text-xs text-[var(--color-ink-muted)]">Control plane</p>
+            <p className="text-xs text-acc-text-secondary">Control plane</p>
           </div>
           <div className="flex flex-wrap items-center gap-3 sm:gap-4">
             <SessionBadge />
             {user?.userId && (
-              <span className="hidden font-mono text-xs text-[var(--color-ink-muted)] sm:inline">
+              <span className="hidden font-mono text-xs text-acc-text-secondary sm:inline">
                 {user.email ?? `${user.userId.slice(0, 8)}…`}
               </span>
             )}
@@ -192,124 +294,45 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
     );
   }
 
-  // 5. Authenticated and ready with valid organization context
+  // 5. Authenticated and ready with valid organization context (or permitted zero-org navigation)
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col px-4 py-6 sm:px-6">
-      <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--color-border-subtle)] pb-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <p className="text-sm font-semibold tracking-tight">Alendei Communications Cloud</p>
-            <EnvironmentBadge />
-          </div>
-          <p className="text-xs text-[var(--color-ink-muted)]">Control plane</p>
-        </div>
+    <div className="flex min-h-dvh w-full bg-acc-bg text-acc-text-primary">
+      {/* Persistent Collapsible Application Sidebar (Desktop) */}
+      <Sidebar navContext={navContext} className="hidden md:flex" />
 
-        <div className="flex flex-wrap items-center gap-3 sm:gap-4">
-          <OrgSwitcher />
-          <SessionBadge />
-          {user?.userId && (
-            <span className="hidden font-mono text-xs text-[var(--color-ink-muted)] sm:inline">
-              {user.email ?? `${user.userId.slice(0, 8)}…`}
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={handleSignOut}
-            className="rounded-md border border-[var(--color-border-subtle)] px-2.5 py-1 text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-raised)] hover:text-[var(--color-ink)]"
-          >
-            Sign out
-          </button>
-        </div>
-      </header>
+      {/* Main Content Area */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Universal Application Header */}
+        <Header
+          user={user}
+          onOpenMobileNav={() => setIsMobileNavOpen(true)}
+          onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+          onSignOut={handleSignOut}
+        />
 
-      <div className="flex flex-1 flex-col gap-6 pt-6 md:flex-row">
-        <nav aria-label="Sections" className="md:w-44 md:shrink-0">
-          <ul className="flex flex-wrap gap-1 md:flex-col">
-            {SECTIONS.filter((section) => {
-              if (status === 'zero_organizations') {
-                switch (section.href) {
-                  case '/organizations':
-                    return canReadOrganizations;
-                  case '/domains':
-                    return canReadPlatformDomains;
-                  case '/channels':
-                  case '/providers':
-                    return canReadProviders;
-                  case '/resellers':
-                    return canReadResellers;
-                  case '/support':
-                    return canAccessSupport;
-                  default:
-                    return false;
-                }
-              }
+        {/* Universal Breadcrumbs */}
+        <BreadcrumbBar status={status} />
 
-              switch (section.href) {
-                case '/messages':
-                case '/usage':
-                  return canReadMessages;
-                case '/whatsapp':
-                  return canReadMessages || canSendMessages;
-                case '/templates':
-                  return canReadTemplates;
-                case '/contacts':
-                  return canReadContacts;
-                case '/suppressions':
-                  return canReadSuppressions;
-                case '/channels':
-                case '/providers':
-                  return canReadProviders;
-                case '/resellers':
-                  return canReadResellers;
-                case '/organizations':
-                  return canReadOrganizations;
-                case '/domains':
-                  return canReadPlatformDomains;
-
-                case '/workspaces':
-                  return canReadWorkspaces;
-                case '/teams':
-                  return canReadTeams;
-                case '/users':
-                  return canReadUsers;
-                case '/roles':
-                  return canReadRoles;
-                case '/api-keys':
-                  return canReadApiKeys;
-                case '/audit-logs':
-                  return canReadAudit;
-                case '/support':
-                  return canAccessSupport;
-                default:
-                  return true;
-              }
-            }).map((section) => {
-              const isActive =
-                section.href === '/'
-                  ? pathname === '/'
-                  : pathname === section.href || pathname.startsWith(`${section.href}/`);
-              return (
-                <li key={section.href}>
-                  <Link
-                    href={section.href as Route}
-                    aria-current={isActive ? 'page' : undefined}
-                    className={cn(
-                      'block rounded-md px-3 py-1.5 text-sm transition-colors',
-                      isActive
-                        ? 'border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] font-medium text-[var(--color-ink)] shadow-xs'
-                        : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-raised)] hover:text-[var(--color-ink)]',
-                    )}
-                  >
-                    {section.label}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        </nav>
-
-        <main className="min-w-0 flex-1">{children}</main>
+        {/* Interior Page Container */}
+        <main className="min-w-0 flex-1 p-4 sm:p-6 lg:p-8">
+          {children}
+        </main>
       </div>
+
+      {/* Mobile Navigation Drawer */}
+      <MobileNav
+        isOpen={isMobileNavOpen}
+        onClose={() => setIsMobileNavOpen(false)}
+        navContext={navContext}
+      />
+
+      {/* Global Search & Command Palette */}
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        navContext={navContext}
+        onSignOut={handleSignOut}
+      />
 
       <ToastContainer />
     </div>

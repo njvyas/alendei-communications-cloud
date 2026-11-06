@@ -78,8 +78,8 @@
   --color-acc-destructive-hover: var(--acc-destructive-hover);
   --color-acc-on-destructive: var(--acc-on-destructive);
 
-  --font-sans: 'Inter', var(--font-inter), system-ui, -apple-system, sans-serif;
-  --font-mono: 'Geist Mono', var(--font-geist-mono), ui-monospace, monospace;
+  --font-sans: 'Inter', var(--font-inter, 'Inter'), system-ui, -apple-system, sans-serif;
+  --font-mono: 'Geist Mono', var(--font-geist-mono, 'Geist Mono'), ui-monospace, monospace;
 }
 
 :root {

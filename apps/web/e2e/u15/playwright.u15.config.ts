@@ -44,6 +44,16 @@ export default defineConfig({
       use: { ...devices['Desktop Firefox'] },
     },
     {
+      name: 'shell-chromium',
+      testMatch: /u15-shell\.spec\.ts$/,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'shell-firefox',
+      testMatch: /u15-shell\.spec\.ts$/,
+      use: { ...devices['Desktop Firefox'] },
+    },
+    {
       name: 'theme-chromium',
       testMatch: /u15-theme\.spec\.ts$/,
       use: { ...devices['Desktop Chrome'], baseURL },
@@ -60,7 +70,7 @@ export default defineConfig({
         command: 'npx next dev --port 3156',
         cwd: path.resolve(__dirname, '../..'),
         url: `${baseURL}/login`,
-        reuseExistingServer: false,
+        reuseExistingServer: true,
         timeout: 180_000,
         env: { NEXT_PUBLIC_API_BASE_URL: 'http://api.u15.test/api/v1' },
       },
