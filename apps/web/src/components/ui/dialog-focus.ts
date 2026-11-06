@@ -41,6 +41,8 @@ export interface DialogKeyEventLike {
   readonly shiftKey: boolean;
   /** The element the key was dispatched to (DOM and React events provide it). */
   readonly target?: unknown;
+  /** True when an inner component (for example an open listbox) already handled the key. */
+  readonly defaultPrevented?: boolean;
   preventDefault(): void;
   stopPropagation(): void;
 }
@@ -71,6 +73,16 @@ export function isExpandedNativeSelect(node: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * True when `node` is an expanded ARIA combobox (U15.1 Select): its Escape closes
+ * the listbox, not the dialog that contains it.
+ */
+export function isExpandedCombobox(node: unknown): boolean {
+  const el = node as { getAttribute?: (name: string) => string | null } | null;
+  if (!el || typeof el.getAttribute !== 'function') return false;
+  return el.getAttribute('role') === 'combobox' && el.getAttribute('aria-expanded') === 'true';
 }
 
 function isAvailable(el: FocusableLike): boolean {
@@ -126,6 +138,14 @@ export function handleDialogKeyDown(
   if (event.key === 'Escape') {
     // Let the browser collapse an expanded native picker; do not close the dialog.
     if (isExpandedNativeSelect(event.target) || isExpandedNativeSelect(activeElement)) {
+      return 'deferred-to-native-popup';
+    }
+    // An open custom listbox (U15.1 Select) consumes its own Escape.
+    if (
+      event.defaultPrevented ||
+      isExpandedCombobox(event.target) ||
+      isExpandedCombobox(activeElement)
+    ) {
       return 'deferred-to-native-popup';
     }
     event.stopPropagation();
