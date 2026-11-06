@@ -98,13 +98,28 @@ test.describe('U15.2 Application Shell & Global Navigation (Browser E2E)', () =>
     await expect(sidebar).toHaveClass(/w-60/);
     await expect(sidebar.getByText('Alendei')).toBeVisible();
 
+    // In expanded state: links have accessible names and visible text
+    await expect(sidebar.getByRole('link', { name: 'Messages' })).toBeVisible();
+    await expect(sidebar.getByRole('link', { name: 'Overview' })).toBeVisible();
+
     // Toggle collapse
     const collapseBtn = sidebar.getByRole('button', { name: 'Collapse sidebar' });
+    await expect(collapseBtn).toHaveAttribute('aria-expanded', 'true');
     await collapseBtn.click();
 
     // Verify collapsed state
     await expect(sidebar).toHaveClass(/w-16/);
     await expect(sidebar.getByText('ACC')).toBeVisible();
+    await expect(sidebar.getByLabel('Alendei Communications Cloud')).toBeVisible();
+
+    // Verify collapsed links retain accessible names for screen readers (WCAG 4.1.2 & 2.4.4)
+    await expect(sidebar.getByRole('link', { name: 'Messages' })).toBeVisible();
+    await expect(sidebar.getByRole('link', { name: 'Overview' })).toBeVisible();
+    await expect(sidebar.getByRole('link', { name: 'Templates' })).toBeVisible();
+
+    // Verify expand toggle button has aria-expanded="false"
+    const expandBtn = sidebar.getByRole('button', { name: 'Expand sidebar' });
+    await expect(expandBtn).toHaveAttribute('aria-expanded', 'false');
 
     // Verify cookie persisted
     const cookies = await page.context().cookies();
@@ -112,13 +127,39 @@ test.describe('U15.2 Application Shell & Global Navigation (Browser E2E)', () =>
     expect(cookie?.value).toBe('1');
 
     // Toggle expand
-    const expandBtn = sidebar.getByRole('button', { name: 'Expand sidebar' });
     await expandBtn.click();
     await expect(sidebar).toHaveClass(/w-60/);
+    await expect(sidebar.getByRole('button', { name: 'Collapse sidebar' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
 
     const updatedCookies = await page.context().cookies();
     const updatedCookie = updatedCookies.find((c) => c.name === 'acc_sidebar_collapsed');
     expect(updatedCookie?.value).toBe('0');
+  });
+
+  test('Hydration safety: sidebar initializes in collapsed state when cookie acc_sidebar_collapsed=1 is preset without mismatch', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    // Preset collapsed cookie prior to navigation
+    await page.context().addCookies([{ name: 'acc_sidebar_collapsed', value: '1', url: ORIGIN }]);
+    await open(page, 'light');
+
+    const sidebar = page.locator('aside[aria-label="Sidebar"]');
+    await expect(sidebar).toBeVisible();
+    await expect(sidebar).toHaveClass(/w-16/);
+    await expect(sidebar.getByText('ACC')).toBeVisible();
+    await expect(sidebar.getByLabel('Alendei Communications Cloud')).toBeVisible();
+
+    // Verify accessible names on links in pre-set collapsed state
+    await expect(sidebar.getByRole('link', { name: 'Messages' })).toBeVisible();
+    await expect(sidebar.getByRole('link', { name: 'Overview' })).toBeVisible();
+
+    const expandBtn = sidebar.getByRole('button', { name: 'Expand sidebar' });
+    await expect(expandBtn).toBeVisible();
+    await expect(expandBtn).toHaveAttribute('aria-expanded', 'false');
   });
 
   test('Header: theme preference control dynamically switches between light, dark, and system', async ({

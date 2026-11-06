@@ -7,7 +7,16 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { AppRouterContext } from 'next/dist/shared/lib/app-router-context.shared-runtime';
 import { PathnameContext } from 'next/dist/shared/lib/hooks-client-context.shared-runtime';
 
-import { Sidebar } from './sidebar';
+import {
+  Sidebar,
+  type SidebarProps,
+  SIDEBAR_COOKIE_NAME,
+  SIDEBAR_COOKIE_MAX_AGE,
+  parseSidebarCollapsedCookie,
+  readSidebarCollapsedCookie,
+  sidebarCookie,
+  writeSidebarCollapsedCookie,
+} from './sidebar';
 import { CommandPalette } from './command-palette';
 import { MobileNav } from './mobile-nav';
 import { BreadcrumbBar } from './breadcrumb-bar';
@@ -176,6 +185,187 @@ describe('U15.2 Shell & Global Navigation (Unit & Accessibility Tests)', () => {
       // Still visible: authorized sections
       assert.ok(html.includes('href="/"'), 'Overview must remain visible');
       assert.ok(html.includes('href="/workspaces"'), 'Workspaces must remain visible');
+    });
+
+    it('guarantees WCAG 2.2 AA accessible names and discernible text for all collapsed links, brand header, and toggle', () => {
+      const html = renderWithRouter(
+        React.createElement(Sidebar, {
+          navContext: createNavContext(),
+          defaultCollapsed: true,
+        }),
+        '/',
+      );
+
+      // 1. Brand header in collapsed mode
+      assert.ok(
+        html.includes('aria-label="Alendei Communications Cloud"'),
+        'Brand header in collapsed state must have explicit aria-label',
+      );
+      assert.ok(
+        html.includes('Alendei Communications Cloud</span>'),
+        'Brand header in collapsed state must have visually hidden accessible text for screen readers',
+      );
+      assert.ok(
+        html.includes('aria-hidden="true">ACC</span>'),
+        'Visual monogram must have aria-hidden to prevent redundant or confusing reading',
+      );
+
+      // 2. Navigation items
+      const expectedItems = [
+        { href: '/', label: 'Overview' },
+        { href: '/messages', label: 'Messages' },
+        { href: '/usage', label: 'Usage' },
+        { href: '/whatsapp', label: 'WhatsApp' },
+        { href: '/templates', label: 'Templates' },
+        { href: '/contacts', label: 'Contacts' },
+        { href: '/suppressions', label: 'Suppressions' },
+        { href: '/channels', label: 'Channels' },
+        { href: '/providers', label: 'Providers' },
+        { href: '/resellers', label: 'Resellers' },
+        { href: '/organizations', label: 'Organizations' },
+        { href: '/domains', label: 'Domains' },
+        { href: '/workspaces', label: 'Workspaces' },
+        { href: '/teams', label: 'Teams' },
+        { href: '/users', label: 'Users' },
+        { href: '/roles', label: 'Roles' },
+        { href: '/api-keys', label: 'API Keys' },
+        { href: '/audit-logs', label: 'Audit Logs' },
+        { href: '/support', label: 'Support & Ops' },
+      ];
+
+      for (const item of expectedItems) {
+        const escapedLabel = item.label.replace(/&/g, '&amp;');
+        // Must have aria-label on link
+        assert.ok(
+          html.includes(`aria-label="${escapedLabel}"`),
+          `Collapsed link for ${item.label} must have aria-label="${escapedLabel}"`,
+        );
+        // Must have discernible text node inside the link (via sr-only span)
+        assert.ok(
+          html.includes(`class="sr-only">${escapedLabel}</span>`),
+          `Collapsed link for ${item.label} must have <span class="sr-only">${escapedLabel}</span>`,
+        );
+        // Must maintain hover tooltip via title
+        assert.ok(
+          html.includes(`title="${escapedLabel}"`),
+          `Collapsed link for ${item.label} must have title="${escapedLabel}" for hover tooltip`,
+        );
+      }
+
+      // 3. Toggle button in collapsed mode
+      assert.ok(
+        html.includes('aria-label="Expand sidebar"'),
+        'Toggle button in collapsed mode must have aria-label="Expand sidebar"',
+      );
+      assert.ok(
+        html.includes('aria-expanded="false"'),
+        'Toggle button in collapsed mode must have aria-expanded="false"',
+      );
+      assert.ok(
+        html.includes('class="sr-only">Expand sidebar</span>'),
+        'Toggle button in collapsed mode must contain discernible sr-only text',
+      );
+
+      // 4. Expanded mode comparison
+      const expandedHtml = renderWithRouter(
+        React.createElement(Sidebar, {
+          navContext: createNavContext(),
+          defaultCollapsed: false,
+        }),
+        '/',
+      );
+
+      assert.ok(
+        expandedHtml.includes('aria-label="Collapse sidebar"'),
+        'Toggle button in expanded mode must have aria-label="Collapse sidebar"',
+      );
+      assert.ok(
+        expandedHtml.includes('aria-expanded="true"'),
+        'Toggle button in expanded mode must have aria-expanded="true"',
+      );
+      assert.ok(
+        expandedHtml.includes('<span>Collapse sidebar</span>'),
+        'Toggle button in expanded mode must display visible text',
+      );
+      assert.ok(
+        expandedHtml.includes('class="truncate">Overview</span>'),
+        'Expanded links must display visible truncated text',
+      );
+    });
+
+    it('supports hydration-safe cookie parsing, serialization, and SSR resilience', () => {
+      // 1. parseSidebarCollapsedCookie
+      assert.equal(parseSidebarCollapsedCookie('acc_sidebar_collapsed=1'), true);
+      assert.equal(parseSidebarCollapsedCookie('acc_sidebar_collapsed=0'), false);
+      assert.equal(
+        parseSidebarCollapsedCookie('session=abc; acc_sidebar_collapsed=1; theme=dark'),
+        true,
+      );
+      assert.equal(
+        parseSidebarCollapsedCookie('session=abc; acc_sidebar_collapsed=0; theme=dark'),
+        false,
+      );
+      assert.equal(parseSidebarCollapsedCookie(''), null);
+      assert.equal(parseSidebarCollapsedCookie(undefined), null);
+      assert.equal(parseSidebarCollapsedCookie(null), null);
+      assert.equal(parseSidebarCollapsedCookie('acc_sidebar_collapsed='), null);
+      assert.equal(parseSidebarCollapsedCookie('acc_sidebar_collapsed=2'), null);
+
+      // 2. sidebarCookie serialization
+      assert.equal(
+        sidebarCookie(true),
+        `${SIDEBAR_COOKIE_NAME}=1; Path=/; Max-Age=${SIDEBAR_COOKIE_MAX_AGE}; SameSite=Lax`,
+      );
+      assert.equal(
+        sidebarCookie(false),
+        `${SIDEBAR_COOKIE_NAME}=0; Path=/; Max-Age=${SIDEBAR_COOKIE_MAX_AGE}; SameSite=Lax`,
+      );
+
+      // 3. SSR environment resilience (Node.js where document is undefined)
+      assert.equal(readSidebarCollapsedCookie(), null);
+      // writeSidebarCollapsedCookie must safely be a no-op in SSR without throwing
+      assert.doesNotThrow(() => {
+        writeSidebarCollapsedCookie(true);
+        writeSidebarCollapsedCookie(false);
+      });
+
+      // 4. suppressHydrationWarning on <aside> element prop for SSR hydration safety
+      const capturedProps: { suppressHydrationWarning?: boolean } = {};
+      function Inspector() {
+        const vdom = (Sidebar as unknown as (props: SidebarProps) => React.ReactNode)({
+          navContext: createNavContext(),
+          defaultCollapsed: true,
+        });
+        if (React.isValidElement<{ suppressHydrationWarning?: boolean }>(vdom)) {
+          Object.assign(capturedProps, vdom.props);
+        }
+        return vdom;
+      }
+      renderWithRouter(React.createElement(Inspector), '/');
+      assert.equal(
+        capturedProps.suppressHydrationWarning,
+        true,
+        'Sidebar <aside> must include suppressHydrationWarning prop for SSR hydration safety',
+      );
+
+      // 5. SSR markup width classes
+      const collapsedHtml = renderWithRouter(
+        React.createElement(Sidebar, {
+          navContext: createNavContext(),
+          defaultCollapsed: true,
+        }),
+        '/',
+      );
+      assert.ok(collapsedHtml.includes('w-16'), 'Collapsed sidebar must render w-16 in SSR');
+
+      const expandedHtml = renderWithRouter(
+        React.createElement(Sidebar, {
+          navContext: createNavContext(),
+          defaultCollapsed: false,
+        }),
+        '/',
+      );
+      assert.ok(expandedHtml.includes('w-60'), 'Expanded sidebar must render w-60 in SSR');
     });
   });
 

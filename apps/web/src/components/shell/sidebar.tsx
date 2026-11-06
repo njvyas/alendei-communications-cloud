@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import type { Route } from 'next';
 import { usePathname } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 import { cn } from '@/lib/cn';
 import { IconChevronLeft, IconChevronRight } from './icons';
@@ -16,7 +16,43 @@ export interface SidebarProps {
   readonly className?: string;
 }
 
-const SIDEBAR_COOKIE_NAME = 'acc_sidebar_collapsed';
+export const SIDEBAR_COOKIE_NAME = 'acc_sidebar_collapsed';
+export const SIDEBAR_COOKIE_MAX_AGE = 31_536_000; // 1 year in seconds
+
+/**
+ * Parses the sidebar collapsed preference from a cookie string.
+ * Returns `true` for '1', `false` for '0', and `null` for absent or malformed values.
+ */
+export function parseSidebarCollapsedCookie(cookieString?: string | null): boolean | null {
+  if (!cookieString) return null;
+  const match = cookieString.match(new RegExp(`(?:^|;\\s*)${SIDEBAR_COOKIE_NAME}=([01])`));
+  if (!match) return null;
+  return match[1] === '1';
+}
+
+/**
+ * Reads the sidebar collapsed preference from document.cookie in browser environments.
+ * Returns null in SSR / Node.js or when the cookie is absent or invalid.
+ */
+export function readSidebarCollapsedCookie(): boolean | null {
+  if (typeof document === 'undefined') return null;
+  return parseSidebarCollapsedCookie(document.cookie);
+}
+
+/**
+ * Builds a Set-Cookie style string for the sidebar collapsed preference.
+ */
+export function sidebarCookie(collapsed: boolean): string {
+  return `${SIDEBAR_COOKIE_NAME}=${collapsed ? '1' : '0'}; Path=/; Max-Age=${SIDEBAR_COOKIE_MAX_AGE}; SameSite=Lax`;
+}
+
+/**
+ * Writes the sidebar collapsed preference to document.cookie in browser environments.
+ */
+export function writeSidebarCollapsedCookie(collapsed: boolean): void {
+  if (typeof document === 'undefined') return;
+  document.cookie = sidebarCookie(collapsed);
+}
 
 export function Sidebar({
   navContext,
@@ -25,29 +61,28 @@ export function Sidebar({
   className,
 }: SidebarProps) {
   const pathname = usePathname();
+  // Hydration-safe initialization: initial state matches SSR output (`defaultCollapsed`)
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
+  const onCollapsedChangeRef = useRef(onCollapsedChange);
 
-  // Sync from cookie on mount if available
   useEffect(() => {
-    if (typeof document !== 'undefined') {
-      const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${SIDEBAR_COOKIE_NAME}=([01])`));
-      if (match) {
-        const val = match[1] === '1';
-        setIsCollapsed(val);
-        onCollapsedChange?.(val);
-      }
-    }
+    onCollapsedChangeRef.current = onCollapsedChange;
   }, [onCollapsedChange]);
 
+  // Synchronize with persisted client cookie post-mount without causing hydration mismatches
+  useEffect(() => {
+    const cookieVal = readSidebarCollapsedCookie();
+    if (cookieVal !== null && cookieVal !== defaultCollapsed) {
+      setIsCollapsed(cookieVal);
+      onCollapsedChangeRef.current?.(cookieVal);
+    }
+  }, [defaultCollapsed]);
+
   const handleToggle = () => {
-    setIsCollapsed((prev) => {
-      const next = !prev;
-      if (typeof document !== 'undefined') {
-        document.cookie = `${SIDEBAR_COOKIE_NAME}=${next ? '1' : '0'}; Path=/; SameSite=Lax; Max-Age=31536000`;
-      }
-      onCollapsedChange?.(next);
-      return next;
-    });
+    const next = !isCollapsed;
+    setIsCollapsed(next);
+    writeSidebarCollapsedCookie(next);
+    onCollapsedChangeRef.current?.(next);
   };
 
   const visibleItems = NAV_ITEMS.filter((item) => isNavItemVisible(item.href, navContext));
@@ -58,6 +93,7 @@ export function Sidebar({
   return (
     <aside
       aria-label="Sidebar"
+      suppressHydrationWarning
       className={cn(
         'relative flex flex-col border-r border-acc-border bg-acc-sidebar text-acc-text-primary transition-all duration-200 select-none shrink-0',
         isCollapsed ? 'w-16' : 'w-60',
@@ -71,8 +107,10 @@ export function Sidebar({
             <span
               className="font-mono text-sm font-bold tracking-tight text-acc-primary"
               title="Alendei Communications Cloud"
+              aria-label="Alendei Communications Cloud"
             >
-              ACC
+              <span aria-hidden="true">ACC</span>
+              <span className="sr-only">Alendei Communications Cloud</span>
             </span>
           </div>
         ) : (
@@ -111,6 +149,7 @@ export function Sidebar({
                 <Link
                   href={item.href as Route}
                   aria-current={isActive ? 'page' : undefined}
+                  aria-label={item.label}
                   title={isCollapsed ? item.label : undefined}
                   className={cn(
                     'group relative flex items-center rounded-md text-sm font-medium transition-colors',
@@ -121,6 +160,7 @@ export function Sidebar({
                   )}
                 >
                   <Icon
+                    aria-hidden="true"
                     className={cn(
                       'size-4 shrink-0 transition-colors',
                       isActive
@@ -128,7 +168,7 @@ export function Sidebar({
                         : 'text-acc-text-secondary group-hover:text-acc-text-primary',
                     )}
                   />
-                  {!isCollapsed && <span className="truncate">{item.label}</span>}
+                  <span className={isCollapsed ? 'sr-only' : 'truncate'}>{item.label}</span>
                 </Link>
               </li>
             );
@@ -142,16 +182,20 @@ export function Sidebar({
           type="button"
           onClick={handleToggle}
           aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!isCollapsed}
           className={cn(
             'flex w-full items-center rounded-md p-2 text-xs text-acc-text-secondary transition-colors hover:bg-acc-surface-raised hover:text-acc-text-primary',
             isCollapsed ? 'justify-center' : 'gap-2 px-3',
           )}
         >
           {isCollapsed ? (
-            <IconChevronRight className="size-4 shrink-0" />
+            <>
+              <IconChevronRight className="size-4 shrink-0" aria-hidden="true" />
+              <span className="sr-only">Expand sidebar</span>
+            </>
           ) : (
             <>
-              <IconChevronLeft className="size-4 shrink-0" />
+              <IconChevronLeft className="size-4 shrink-0" aria-hidden="true" />
               <span>Collapse sidebar</span>
             </>
           )}
