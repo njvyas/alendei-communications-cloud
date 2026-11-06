@@ -420,7 +420,13 @@ describe('SimulatorAdapter — the seven submission-time behaviours, determinist
     });
 
     it('accepts an SMS submission with well-formed DLT metadata, and one without (a test-send)', async () => {
-      expect((await send({}, { sms: { dlt: DLT, maxSegments: 2 } })).outcome).toBe('accepted');
+      expect(
+        (await send({}, { sms: { dlt: DLT, encoding: 'GSM-7', segments: 1, maxSegments: 2 } }))
+          .outcome,
+      ).toBe('accepted');
+      expect((await send({}, { sms: { dlt: DLT, encoding: 'UCS-2', segments: 10 } })).outcome).toBe(
+        'accepted',
+      );
       expect((await send({}, {})).outcome).toBe('accepted');
       expect((await send({ channel: 'whatsapp' }, { channel: 'whatsapp' })).outcome).toBe(
         'accepted',
@@ -429,10 +435,18 @@ describe('SimulatorAdapter — the seven submission-time behaviours, determinist
 
     it('malformed SMS metadata, or SMS metadata on another channel, is INVALID_REQUEST / SIM-400', async () => {
       const cases: Partial<ProviderSubmission>[] = [
-        { sms: { dlt: { ...DLT, entityId: 'not-numeric' } } },
-        { sms: { dlt: { ...DLT, extra: 'x' } as never } },
-        { sms: { dlt: DLT, maxSegments: 0 } },
-        { sms: { dlt: DLT, maxSegments: 1.5 } },
+        { sms: { dlt: { ...DLT, entityId: 'not-numeric' }, encoding: 'GSM-7', segments: 1 } },
+        { sms: { dlt: { ...DLT, extra: 'x' } as never, encoding: 'GSM-7', segments: 1 } },
+        { sms: { dlt: DLT, encoding: 'GSM-7', segments: 1, maxSegments: 0 } },
+        { sms: { dlt: DLT, encoding: 'GSM-7', segments: 1, maxSegments: 1.5 } },
+        // Gate F.2 scope F.2.2: encoding and segment count are part of the submission.
+        { sms: { dlt: DLT } as never },
+        { sms: { dlt: DLT, segments: 1 } as never },
+        { sms: { dlt: DLT, encoding: 'UTF-8' as never, segments: 1 } },
+        { sms: { dlt: DLT, encoding: 'GSM-7', segments: 0 } },
+        { sms: { dlt: DLT, encoding: 'GSM-7', segments: 1.5 } },
+        { sms: { dlt: DLT, encoding: 'GSM-7', segments: 11 } },
+        { sms: { dlt: DLT, encoding: 'GSM-7', segments: 3, maxSegments: 2 } },
       ];
       for (const sub of cases) {
         const r = await send({}, sub);
@@ -440,7 +454,12 @@ describe('SimulatorAdapter — the seven submission-time behaviours, determinist
         expect(r.outcome === 'rejected' && r.failure.providerCode).toBe('SIM-400');
       }
       expect(
-        category(await send({ channel: 'whatsapp' }, { channel: 'whatsapp', sms: { dlt: DLT } })),
+        category(
+          await send(
+            { channel: 'whatsapp' },
+            { channel: 'whatsapp', sms: { dlt: DLT, encoding: 'GSM-7', segments: 1 } },
+          ),
+        ),
       ).toBe('INVALID_REQUEST');
     });
 

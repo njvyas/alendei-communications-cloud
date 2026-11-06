@@ -2441,6 +2441,33 @@ Implements the owner-approved U15.1 specification v2.2.0, from baseline `4196c94
 - **`img-src` allows `https:`.** Organisation branding (logo, favicon) is an operator-supplied HTTPS URL; an `http:` branding image would now be blocked.
 - **Theme placement deferred.** The theme control exists, but its placement in the app shell is U15.2. Until then, a user's explicit preference can only be set by that control in a later release; the default `system` preference is fully functional.
 
+## 1zf. Phase 4.2 (Gate F.2) acceptance closure: SMS encoding and segments at dispatch: 06-Nov-2026
+
+### 1zf.1 Status
+- Gate F.2 acceptance is **PENDING** an owner decision on `develop`. This section records an implementation gap and its remediation. It does not accept the gate.
+- A record of an owner acceptance dated 30-Oct-2026 exists in commit `a511949`. That commit sits on draft PR #50, which is not merged, so it is not on `develop`. That record pre-dates the gap below, and the owner must reconcile it.
+
+### 1zf.2 Gap found
+- The owner-authorized F.2 scope (17-Oct-2026), item F.2.2, reads: "SMS: use server-rendered template text, approved template DLT metadata, encoding and segment information", and "Revalidate stored SMS/RCS content before submission".
+- PR #6 submitted the text and DLT metadata, plus `maxSegments` only when the client lowered it. It never submitted the encoding or the segment count.
+- Dispatch re-validated the text and DLT but not the segment ceiling. A stored row with valid DLT and a text of any length would therefore have reached the provider.
+
+### 1zf.3 Remediation
+- `ProviderSmsSubmission` gains two required fields, `encoding` (`GSM-7` or `UCS-2`) and `segments`. Both are computed at dispatch from the rendered text by the Phase 4.1 segmenter.
+- `mapMessageForSubmission` refuses a stored text whose segment count exceeds `min(stored maxSegments, 10)`, with reason `SMS_PAYLOAD_INVALID: stored SMS text needs N segments, above the ceiling of C`. This runs before any attempt or circuit admission, so the failure is permanent and neutral to provider health (owner decision 3, 17-Oct-2026).
+- The simulator rejects SMS metadata whose encoding is unknown, or whose segment count is not a positive integer, exceeds 10 or exceeds `maxSegments` (`INVALID_REQUEST` / `SIM-400`).
+- **Not changed:**
+  - no migration;
+  - no API, DTO or OpenAPI change;
+  - no web console change;
+  - fencing, CircuitAdmission, fallback, authorization and tenant isolation are untouched;
+  - the send path (`MessagesService.send`) is unchanged.
+
+### 1zf.4 Limitations for the owner's decision
+- **No SMS capability key.** None is defined, so every SMS provider is eligible for every valid SMS message. F.2.3 is met for RCS (`rcs_message_types`) and the simulator (`simulator_behavior`). SMS capability eligibility needs an owner decision before it is built.
+- **Simulator only; DLT format only.** DLT identifiers are checked for format only, not for registration or regulatory compliance. `headerId` stays optional for simulator-only operation.
+- **Provider assignments panel (F.2-3).** It was delivered by UI readiness Batch 1 (`fd9f13d`, 21-Oct-2026), not by the F.2 PRs. Its QA-host evidence is QA-D-08 (30-Oct-2026), recorded in PR #50, not on `develop`.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

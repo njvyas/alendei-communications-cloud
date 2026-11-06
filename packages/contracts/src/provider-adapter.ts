@@ -12,7 +12,7 @@
  */
 import type { ChannelCode } from './providers';
 import type { RcsBasicPayload } from './rcs';
-import type { SmsDltMetadata } from './sms';
+import type { SmsDltMetadata, SmsEncodingAnalysis } from './sms';
 
 /**
  * The normalized failure taxonomy (`PROVIDER_ADAPTER.md` §2). Every adapter maps
@@ -91,11 +91,17 @@ export interface ProviderSubmission {
 
 /**
  * What an SMS submission carries besides its text: the DLT metadata bound to the
- * approved template (copied, never taken from the client) and the segment
- * ceiling the send path enforced, when the client lowered it.
+ * approved template (copied, never taken from the client), the encoding and
+ * segment count of the rendered text, computed at dispatch by the Phase 4.1
+ * segmenter (Gate F.2 scope F.2.2), and the segment ceiling the send path
+ * enforced, when the client lowered it.
  */
 export interface ProviderSmsSubmission {
   readonly dlt: SmsDltMetadata;
+  /** `GSM-7` or `UCS-2`, from the rendered text (`calculateSmsSegments`). */
+  readonly encoding: SmsEncodingAnalysis['encoding'];
+  /** Segments the rendered text needs; at least 1 and never above the ceiling. */
+  readonly segments: number;
   readonly maxSegments?: number;
 }
 

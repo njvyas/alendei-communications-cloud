@@ -150,7 +150,7 @@ describe('mapMessageForSubmission — SMS', () => {
     ).toEqual({
       ok: true,
       content: { text: 'Your verification code is 654321.' },
-      sms: { dlt: DLT },
+      sms: { dlt: DLT, encoding: 'GSM-7', segments: 1 },
     });
   });
 
@@ -158,7 +158,11 @@ describe('mapMessageForSubmission — SMS', () => {
     const noHeader = { entityId: DLT.entityId, templateId: DLT.templateId };
     expect(
       mapMessageForSubmission('sms', { text: 'Code 1', dlt: noHeader, maxSegments: 2 }),
-    ).toEqual({ ok: true, content: { text: 'Code 1' }, sms: { dlt: noHeader, maxSegments: 2 } });
+    ).toEqual({
+      ok: true,
+      content: { text: 'Code 1' },
+      sms: { dlt: noHeader, encoding: 'GSM-7', segments: 1, maxSegments: 2 },
+    });
   });
 
   it('copies only the three DLT fields, never anything else from the stored object', () => {
@@ -190,5 +194,58 @@ describe('mapMessageForSubmission — SMS', () => {
 
   it.each([null, 'text', ['a'], 7])('refuses a non-object SMS payload (%p)', (payload) => {
     expect(mapMessageForSubmission('sms', payload).ok).toBe(false);
+  });
+});
+
+describe('mapMessageForSubmission — SMS encoding, segments and the ceiling (Gate F.2 scope F.2.2)', () => {
+  const sms = (text: string, extra: Record<string, unknown> = {}) =>
+    mapMessageForSubmission('sms', { text, dlt: DLT, ...extra });
+
+  it('carries GSM-7 and the segment count of the rendered text', () => {
+    const single = sms('a'.repeat(160));
+    expect(single.ok && single.sms).toMatchObject({ encoding: 'GSM-7', segments: 1 });
+    const concatenated = sms('a'.repeat(161));
+    expect(concatenated.ok && concatenated.sms).toMatchObject({ encoding: 'GSM-7', segments: 2 });
+  });
+
+  it('carries UCS-2 when the text holds a character outside GSM-7', () => {
+    const single = sms('नमस्ते');
+    expect(single.ok && single.sms).toMatchObject({ encoding: 'UCS-2', segments: 1 });
+    const concatenated = sms('ক'.repeat(71));
+    expect(concatenated.ok && concatenated.sms).toMatchObject({ encoding: 'UCS-2', segments: 2 });
+  });
+
+  it('counts a GSM-7 extended character as two units', () => {
+    const mapped = sms('€'.repeat(80));
+    expect(mapped.ok && mapped.sms).toMatchObject({ encoding: 'GSM-7', segments: 1 });
+    const over = sms('€'.repeat(81));
+    expect(over.ok && over.sms).toMatchObject({ encoding: 'GSM-7', segments: 2 });
+  });
+
+  it('accepts a text at the server ceiling of 10 segments', () => {
+    const mapped = sms('a'.repeat(153 * 10));
+    expect(mapped.ok && mapped.sms).toMatchObject({ encoding: 'GSM-7', segments: 10 });
+  });
+
+  it('refuses a stored text above the server ceiling: tampered or written outside the send path', () => {
+    const mapped = sms('a'.repeat(153 * 10 + 1));
+    expect(mapped).toEqual({
+      ok: false,
+      reason: 'SMS_PAYLOAD_INVALID: stored SMS text needs 11 segments, above the ceiling of 10',
+    });
+  });
+
+  it('refuses a stored text above a lower stored maxSegments', () => {
+    expect(sms('a'.repeat(306), { maxSegments: 2 }).ok).toBe(true);
+    const mapped = sms('a'.repeat(307), { maxSegments: 2 });
+    expect(mapped).toEqual({
+      ok: false,
+      reason: 'SMS_PAYLOAD_INVALID: stored SMS text needs 3 segments, above the ceiling of 2',
+    });
+  });
+
+  it('a stored maxSegments above 10 never raises the server ceiling', () => {
+    const mapped = sms('a'.repeat(153 * 10 + 1), { maxSegments: 50 });
+    expect(!mapped.ok && mapped.reason).toMatch(/above the ceiling of 10$/);
   });
 });

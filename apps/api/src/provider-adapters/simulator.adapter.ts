@@ -4,6 +4,7 @@ import {
   RETRYABLE_FAILURE_CATEGORIES,
   SIMULATOR_BEHAVIORS,
   SIMULATOR_HEALTH_BEHAVIORS,
+  SMS_CONSTRAINTS,
   rcsProviderSupports,
   validateDltMetadata,
   validateRcsPayload,
@@ -200,11 +201,16 @@ export class SimulatorAdapter extends GuardedProviderAdapter {
     // A test-send carries none; every dispatched SMS does (Phase 4.2).
     if (submission.sms !== undefined) {
       const dltCheck = validateDltMetadata(submission.sms.dlt);
-      const maxSegments = submission.sms.maxSegments;
+      const { encoding, segments, maxSegments } = submission.sms;
       if (
         submission.channel !== 'sms' ||
         !dltCheck.valid ||
-        (maxSegments !== undefined && (!Number.isInteger(maxSegments) || maxSegments <= 0))
+        (encoding !== 'GSM-7' && encoding !== 'UCS-2') ||
+        !Number.isInteger(segments) ||
+        segments <= 0 ||
+        segments > SMS_CONSTRAINTS.DEFAULT_MAX_SEGMENTS ||
+        (maxSegments !== undefined &&
+          (!Number.isInteger(maxSegments) || maxSegments <= 0 || segments > maxSegments))
       ) {
         return this.reject(
           submission,
