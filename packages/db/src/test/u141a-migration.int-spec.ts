@@ -179,6 +179,26 @@ async function cicAndLockHolder(
   const r = rows[0];
   return r?.cic && r.holder ? { cic: Number(r.cic), holder: Number(r.holder) } : undefined;
 }
+/**
+ * The concurrent build has committed its catalogue entry (an INVALID index exists) and is blocked
+ * waiting for the blocker's transaction. Cancelling earlier — while the build is still in its first
+ * transaction — leaves no index at all, which made the INVALID-index scenarios flaky on CI.
+ */
+async function cicWaitingWithInvalidIndex(
+  observer: Client,
+  cicPid: number,
+): Promise<true | undefined> {
+  const { rows } = await observer.query<{
+    wait_event_type: string | null;
+    indisvalid: boolean | null;
+  }>(
+    `SELECT (SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1) AS wait_event_type,
+            (SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass('public.messages_org_id_id_desc_idx')) AS indisvalid`,
+    [cicPid],
+  );
+  const r = rows[0];
+  return r?.indisvalid === false && r.wait_event_type === 'Lock' ? true : undefined;
+}
 /** Holds a ROW EXCLUSIVE lock on messages in an open transaction, so a concurrent index build waits. */
 async function blockConcurrentBuild(db: string): Promise<Client> {
   const blocker = await clientFor(db, 'acc-u141a-blocker');
@@ -196,6 +216,9 @@ async function makeInvalidIndex(db: string): Promise<void> {
     const build = ensureMessagesOrgIdIdDescIndex(c).catch((e: unknown) => e);
     const observer = await clientFor(db);
     const pids = await waitFor('the concurrent build', () => cicAndLockHolder(observer));
+    await waitFor('the build to wait with an INVALID index', () =>
+      cicWaitingWithInvalidIndex(observer, pids.cic),
+    );
     await observer.query('SELECT pg_cancel_backend($1)', [pids.cic]);
     await observer.end();
     const error = await build;
@@ -407,6 +430,9 @@ describe('U14.1a — interruption at every significant point; reruns converge', 
     const observer = await clientFor(db);
     const pids = await waitFor('the concurrent build', () => cicAndLockHolder(observer));
     expect(pids.cic).toBe(pids.holder); // CREATE INDEX CONCURRENTLY runs on the session that holds the migration lock
+    await waitFor('the build to wait with an INVALID index', () =>
+      cicWaitingWithInvalidIndex(observer, pids.cic),
+    );
     await observer.query('SELECT pg_cancel_backend($1)', [pids.cic]);
     const error = await run;
     await blocker.query('ROLLBACK');
@@ -619,6 +645,9 @@ describe('U14.1a — --recover-invalid drops only the verified invalid target', 
       );
       return rows[0]?.pid;
     });
+    await waitFor('the manual build to wait with an INVALID index', () =>
+      cicWaitingWithInvalidIndex(observer, pid),
+    );
     await observer.query('SELECT pg_cancel_backend($1)', [pid]);
     await build;
     await c.end();
