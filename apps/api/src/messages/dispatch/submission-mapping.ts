@@ -1,5 +1,7 @@
 import {
   CHANNEL_CODES,
+  SMS_CONSTRAINTS,
+  calculateSmsSegments,
   isDispatchableChannel,
   validateDltMetadata,
   validateRcsPayload,
@@ -83,10 +85,29 @@ export function mapMessageForSubmission(channel: ChannelCode, payload: unknown):
     return invalid('stored SMS payload maxSegments is not a positive integer');
   }
 
+  // Re-check the segment ceiling the send path enforced (Gate F.2 scope F.2.2):
+  // a stored text that now needs more segments than the server ceiling, or than
+  // a lower stored maxSegments, was not written by the send path and is refused.
+  const ceiling = Math.min(
+    maxSegments ?? SMS_CONSTRAINTS.DEFAULT_MAX_SEGMENTS,
+    SMS_CONSTRAINTS.DEFAULT_MAX_SEGMENTS,
+  );
+  const analysis = calculateSmsSegments(text);
+  if (analysis.segmentCount > ceiling) {
+    return invalid(
+      `stored SMS text needs ${analysis.segmentCount} segments, above the ceiling of ${ceiling}`,
+    );
+  }
+
   return {
     ok: true,
     content: { text },
-    sms: { dlt, ...(maxSegments !== undefined ? { maxSegments } : {}) },
+    sms: {
+      dlt,
+      encoding: analysis.encoding,
+      segments: analysis.segmentCount,
+      ...(maxSegments !== undefined ? { maxSegments } : {}),
+    },
   };
 }
 

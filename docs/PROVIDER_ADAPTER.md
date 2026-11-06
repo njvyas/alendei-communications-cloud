@@ -428,6 +428,47 @@ What this contract deliberately does not define: routing weights, priorities, po
 
 A first-class adapter implementation (`SimulatorAdapter`) satisfies the same `ProviderAdapter` interface and is the *only* adapter permitted to run in Phase 0–2 (no real vendor adapters are built or connected until later phases per the roadmap, and never in this repository without explicit, separate authorization). Full behavior catalogue: `TESTING.md` §"Provider simulator". **Implemented in Phase 2.2** (`apps/api/src/provider-adapters/simulator.adapter.ts`): no network, no credential, deterministic. A behaviour is chosen explicitly per submission (`forBehavior`); without one, or with an unknown one, or for a channel it does not serve, the simulator answers `CONFIGURATION_ERROR`, never success. `SUCCESS` and `SLOW_RESPONSE` (300 ms, inside the 3000 ms timeout) are accepted with `providerMessageId = sim-<submissionId>`; `TIMEOUT` never answers and becomes `TIMEOUT` when the executor's timeout aborts it; `500` → `PROVIDER_ERROR` (`SIM-500`), `429` → `RATE_LIMITED` (`SIM-429`), `INVALID_CREDENTIALS` → `AUTH_ERROR` (`SIM-401`), `INVALID_REQUEST` → `INVALID_REQUEST` (`SIM-400`). It is reached only through `POST /providers/:id/test-send` (§4). **Phase 2 implements only the submission-time behaviours** (`SUCCESS`, `TIMEOUT`, `500`, `429`, `INVALID_CREDENTIALS`, `INVALID_REQUEST`, `SLOW_RESPONSE`) through the direct test-send; the delivery/webhook behaviours are Phase 3 (ADR-013 PD-3).
 
+## 7a. Channel submissions, dispatch-time validation and capability eligibility (Phase 4.2)
+
+Phase 4.2 (Gate F.2) made dispatch channel-correct for SMS and RCS. Everything below runs inside the dispatcher (`apps/api/src/messages/dispatch/`) and uses the simulator only: no real adapter, credential or network call exists.
+
+**One channel end to end (F.2.1).**
+- The dispatcher reads the channel from the claimed message (`messages.channel_id` → `channels.code`) and only considers assignments on that channel.
+- The database already forces an assignment's channel to equal its provider's channel (composite foreign key `(provider_id, channel_id)` → `providers(id, channel_id)`, migration `0032`).
+- The submission is labelled with the message's channel. The simulator refuses a submission whose channel differs from its provider's (`CONFIGURATION_ERROR`). WhatsApp keeps its Phase 3 mapping unchanged.
+
+**Typed submission content (F.2.2).** `ProviderSubmission` (`packages/contracts/src/provider-adapter.ts`) carries, in addition to `content.text`:
+
+| Channel | Field | Contents |
+|---|---|---|
+| SMS | `sms.dlt` | The DLT metadata bound to the approved template (`entityId`, `templateId`, optional `headerId`), copied from the stored row and never from the client |
+| SMS | `sms.encoding` | `GSM-7` or `UCS-2`, computed at dispatch from the rendered text by `calculateSmsSegments` |
+| SMS | `sms.segments` | The segment count of the rendered text: at least 1, never above the ceiling |
+| SMS | `sms.maxSegments` | Present only when the client lowered the ceiling on send |
+| RCS | `rcs` | The validated ADR-016 payload (text, media or one rich card), as a copy; `content.text` is its plain-text rendering |
+
+A provider test-send carries neither `sms` nor `rcs`.
+
+**Dispatch-time re-validation (F.2.2).**
+- The stored payload is mapped again on every claim, before any attempt, circuit admission or provider call.
+- SMS:
+  - the rendered text must be present;
+  - the DLT metadata must be valid;
+  - `maxSegments`, if stored, must be a positive integer;
+  - the text must fit the segment ceiling: `min(maxSegments, 10)`.
+- RCS: the payload must pass `validateRcsPayload`.
+- A failure settles the message `failed` with `SMS_PAYLOAD_INVALID: …`, `RCS_PAYLOAD_INVALID: …` or `CHANNEL_UNSUPPORTED: …`. The failure is permanent: zero attempts, the queue row removed, no retry and no fallback. It is neutral to provider health because no provider was admitted or called.
+
+**Capability keys (F.2.3).** These are stored in `provider_capabilities` and validated when saved through `PUT /providers/{id}/capabilities`:
+
+| Key | Values | Effect |
+|---|---|---|
+| `simulator_behavior` | One of `SUCCESS`, `TIMEOUT`, `500`, `429`, `INVALID_CREDENTIALS`, `INVALID_REQUEST`, `SLOW_RESPONSE` (`validateSimulatorBehaviorCapability`; QAF-003, #21) | Selects the simulator's deterministic answer (ADR-014 D19). Absent means `SUCCESS` |
+| `rcs_message_types` | A non-empty array, without duplicates, of `text`, `media` and `rich_card` (`validateRcsMessageTypesCapability`) | Before circuit admission, an RCS provider whose list excludes the message's type is skipped. With no eligible provider, the message settles `NO_ELIGIBLE_PROVIDER` without an attempt. An absent key means every type (owner decisions, 23-Oct-2026) |
+
+- **No SMS capability key is defined.** Every SMS provider is eligible for every valid SMS message. A `max_segments` value in a fixture (`apps/api/src/cli/provider-fixture/topology.ts`) is an inert label: nothing validates or enforces it.
+- **Same-channel fallback** counts only eligible providers and never changes the channel. Cross-channel fallback is Phase 5.
+
 ## 8. Related
 
 Routing decisions over eligible providers: `ROUTING_ENGINE.md`. Delivery-outcome escalation: `FALLBACK_ENGINE.md`. Credential storage: `SECURITY.md` §"Secrets management".

@@ -530,6 +530,11 @@ Evidence summary (17-Oct-2026, current working tree):
     - unsupported content is refused at dispatch, with no submission-API or OpenAPI change.
   - Fallback stays within the channel and counts only eligible providers.
 - **Scope kept:** simulator-only providers; same-channel provider-to-provider fallback only (cross-channel fallback remains Phase 5); outbound submission outcomes only; no migration.
+- **Acceptance-closure remediation** (06-Nov-2026, `DECISIONS.md` §1zf):
+  - The requirement-by-requirement review against the owner-authorized F.2 scope (17-Oct-2026) found one implementation gap. SMS submissions did not carry the encoding and segment information F.2.2 requires, and dispatch did not re-check the segment ceiling.
+  - Both are now in place: `sms.encoding` and `sms.segments` are carried, and a stored text above `min(maxSegments, 10)` fails permanently before any attempt.
+  - The change is migration-free and simulator-only. It does not change the API or OpenAPI.
+  - Gate F.2 acceptance remains a separate owner decision.
 - **Evidence:** post-merge CI on `develop`:
   - run `40002661592` at `fa9a5ed`;
   - run `40053914870` at `eca81d0`, all five jobs successful — integration 198/198, security 1,589/1,589, database 222/222, `@acc/api` unit 702/702, dependency audit with 0 high.

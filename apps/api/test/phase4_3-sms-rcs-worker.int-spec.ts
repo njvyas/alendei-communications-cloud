@@ -349,7 +349,7 @@ describe('Phase 4.3 F.3-2: SMS and RCS through the dispatch loop (ADR-014 D18)',
     expect(smsCall!.submission).toMatchObject({
       channel: 'sms',
       content: { text: 'Your verification code is 515151.' },
-      sms: { dlt: TEMPLATE_DLT },
+      sms: { dlt: TEMPLATE_DLT, encoding: 'GSM-7', segments: 1 },
     });
     const [rcsCall] = callsFor(rcsProvider);
     expect(callsFor(rcsProvider)).toHaveLength(1);

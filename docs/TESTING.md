@@ -1395,6 +1395,44 @@ The first case is the one the rest depend on: **the limiter actually engages**. 
 
 The first mutation is the keystone: it is the behaviour in production today, so a suite that stays green under it has not fixed anything.
 
+### 6z. Phase 4.2 (Gate F.2): SMS/RCS dispatch evidence
+
+**Where the evidence lives:**
+- **Unit:**
+  - `apps/api/src/messages/dispatch/submission-mapping.spec.ts`: channel mapping; SMS DLT, encoding, segments and ceiling; RCS re-validation; fail-closed channels.
+  - `apps/api/src/provider-adapters/provider-adapters.spec.ts`: simulator channel match, SMS metadata, RCS content and `rcs_message_types`.
+  - `apps/api/src/messages/dispatch/dispatcher.service.spec.ts`.
+- **Integration:**
+  - `apps/api/test/phase4_2-sms-dispatch.int-spec.ts` (SMS);
+  - `apps/api/test/phase4_2-rcs-dispatch.int-spec.ts` (RCS and eligibility);
+  - `apps/api/test/phase4_3-sms-rcs-worker.int-spec.ts` (through the worker);
+  - `apps/api/test/phase4_3-sms-rcs-dispatch-resilience.int-spec.ts`.
+- **Security:** `apps/api/test/phase4_3-sms-rcs-isolation.sec-spec.ts`.
+
+**What it proves:**
+- **Channel correctness:**
+  - each message is submitted on its own channel;
+  - the simulator refuses a mislabelled submission;
+  - WhatsApp output is unchanged.
+- **Content and re-validation:**
+  - SMS carries the rendered approved template, its bound DLT, encoding and segment count;
+  - RCS carries its re-validated payload;
+  - stored content that is invalid or tampered (missing DLT, a text above the segment ceiling, an invalid RCS payload) fails permanently before any attempt, provider call or circuit change.
+- **Eligibility and fallback:**
+  - incompatible RCS providers are skipped before admission;
+  - `NO_ELIGIBLE_PROVIDER` is reached with no attempt;
+  - fallback stays on the same channel.
+
+**Acceptance-closure remediation (06-Nov-2026):**
+- **Tests added:**
+  - the dispatcher now re-checks the SMS segment ceiling and submits `sms.encoding` and `sms.segments` (scope F.2.2);
+  - 7 mapping unit cases and 7 simulator cases;
+  - 1 integration case: a tampered stored text that needs 11 segments fails with zero attempts, its provider stays `closed`/`healthy` with circuit generation 0, and nothing is left to claim.
+- **Mutation checks (each run against the focused unit suites; all three killed):**
+  - removing the dispatch ceiling check fails 3 tests;
+  - dropping `encoding`/`segments` from the submission fails 6;
+  - removing the simulator's 10-segment check fails 1.
+
 ## 7. Billing tests
 
 - Concurrent wallet spending: N concurrent sends for one org, each individually within budget but collectively exceeding available balance → exactly the affordable subset is authorized via the `FOR UPDATE` reservation (`BILLING.md` §8, `DATABASE.md` §10a), never an overspend.
