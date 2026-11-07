@@ -1,8 +1,55 @@
-import { test, expect, type Page } from '@playwright/test';
-import { loginViaUi } from './helpers/auth';
+import { test, expect, type Page, type TestInfo } from '@playwright/test';
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
 
-const SCREENSHOT_DIR =
-  '/home/alendei-admin/.gemini/antigravity-cli/brain/936f4ad8-fcf8-487b-88f7-a46cc17adc12/screenshots';
+/**
+ * Portable screenshot output resolver:
+ * Uses Playwright's testInfo.outputPath(...) as the canonical portable destination,
+ * and additionally mirrors to process.env.ACC_SCREENSHOT_DIR if configured.
+ */
+async function captureScreenshot(
+  page: Page,
+  testInfo: TestInfo,
+  filename: string,
+  options?: { fullPage?: boolean },
+): Promise<string> {
+  const outputPath = testInfo.outputPath(filename);
+  await page.screenshot({ path: outputPath, fullPage: options?.fullPage });
+  await testInfo.attach(filename, { path: outputPath, contentType: 'image/png' });
+
+  const customDir = process.env.ACC_SCREENSHOT_DIR;
+  if (customDir) {
+    if (!existsSync(customDir)) {
+      mkdirSync(customDir, { recursive: true });
+    }
+    copyFileSync(outputPath, path.join(customDir, filename));
+  }
+  return outputPath;
+}
+
+/**
+ * Idempotent login helper for synthetic mock route sessions.
+ * Navigates directly to the console shell, handling both auto-refresh session bootstrap
+ * and fallback manual login if unauthenticated.
+ */
+async function loginToConsole(page: Page): Promise<void> {
+  await page.goto('/');
+  await page.waitForFunction(
+    () => window.location.pathname === '/' || window.location.pathname.startsWith('/login'),
+    { timeout: 10_000 },
+  );
+
+  if (page.url().includes('/login')) {
+    await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+    await page.getByLabel('Email address').fill('admin@alendei.test');
+    await page.getByLabel('Password').fill('any');
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await page.waitForURL((url) => url.pathname === '/', { timeout: 10_000 });
+  }
+
+  // Ensure the console shell and sidebar have loaded
+  await page.waitForSelector('nav[aria-label="Sections"]', { timeout: 10_000 });
+}
 
 const ORG_ID = '01955b0a-7b3b-7411-9a4f-9e67d4f91111';
 
@@ -430,12 +477,11 @@ async function setupRoutes(page: Page) {
 test.describe('ACC Phase 5.0 Visual Showcase & Screenshots', () => {
   test('1. Capture Desktop View of Dispatched Messages Table with Two-Axis Delivery Outcomes', async ({
     page,
-  }) => {
+  }, testInfo) => {
     await setupRoutes(page);
     await page.setViewportSize({ width: 1280, height: 800 });
 
-    await loginViaUi(page, 'admin@alendei.test', 'any');
-    await page.waitForURL((url) => url.pathname === '/', { timeout: 10_000 });
+    await loginToConsole(page);
 
     // Navigate to /messages via sidebar link
     await page.getByRole('link', { name: 'Messages' }).click();
@@ -444,10 +490,7 @@ test.describe('ACC Phase 5.0 Visual Showcase & Screenshots', () => {
     await page.waitForSelector('[data-testid="message-row-msg-p50-01"]');
 
     // Screenshot 1: Desktop Messages Table (Two-Axis Model)
-    await page.screenshot({
-      path: `${SCREENSHOT_DIR}/01-desktop-messages-table.png`,
-      fullPage: true,
-    });
+    await captureScreenshot(page, testInfo, '01-desktop-messages-table.png', { fullPage: true });
 
     // Filter by Delivery Status: "delivered"
     const deliveryFilter = page.locator('[data-testid="filter-delivery-status"]');
@@ -455,8 +498,7 @@ test.describe('ACC Phase 5.0 Visual Showcase & Screenshots', () => {
     await page.waitForTimeout(500);
 
     // Screenshot 2: Delivery Filter Applied (Delivered messages only)
-    await page.screenshot({
-      path: `${SCREENSHOT_DIR}/02-desktop-delivery-filter-delivered.png`,
+    await captureScreenshot(page, testInfo, '02-desktop-delivery-filter-delivered.png', {
       fullPage: true,
     });
 
@@ -470,9 +512,7 @@ test.describe('ACC Phase 5.0 Visual Showcase & Screenshots', () => {
     await page.waitForSelector('[data-testid="detail-header-badges"]');
 
     // Screenshot 3: Message Detail Dialog (Delivered + Read + Attempt Provider Message ID)
-    await page.screenshot({
-      path: `${SCREENSHOT_DIR}/03-desktop-message-detail-delivered-read.png`,
-    });
+    await captureScreenshot(page, testInfo, '03-desktop-message-detail-delivered-read.png');
 
     // Close modal
     await page.getByRole('button', { name: 'Close' }).click();
@@ -484,9 +524,7 @@ test.describe('ACC Phase 5.0 Visual Showcase & Screenshots', () => {
     await page.waitForSelector('[data-testid="detail-header-badges"]');
 
     // Screenshot 4: Message Detail Dialog (Failed Submission with Late Positive Delivery Outcome)
-    await page.screenshot({
-      path: `${SCREENSHOT_DIR}/04-desktop-message-detail-failed-late-delivery.png`,
-    });
+    await captureScreenshot(page, testInfo, '04-desktop-message-detail-failed-late-delivery.png');
 
     await page.getByRole('button', { name: 'Close' }).click();
     await page.waitForTimeout(300);
@@ -501,19 +539,17 @@ test.describe('ACC Phase 5.0 Visual Showcase & Screenshots', () => {
     await page.waitForTimeout(300);
 
     // Screenshot 5: Desktop WhatsApp Settlement Monitor Card
-    await page.screenshot({
-      path: `${SCREENSHOT_DIR}/05-desktop-whatsapp-settlement-monitor.png`,
+    await captureScreenshot(page, testInfo, '05-desktop-whatsapp-settlement-monitor.png', {
       fullPage: true,
     });
   });
 
-  test('2. Capture Tablet and Mobile Responsive Views', async ({ page }) => {
+  test('2. Capture Tablet and Mobile Responsive Views', async ({ page }, testInfo) => {
     await setupRoutes(page);
 
     // Tablet Viewport
     await page.setViewportSize({ width: 768, height: 1024 });
-    await loginViaUi(page, 'admin@alendei.test', 'any');
-    await page.waitForURL((url) => url.pathname === '/', { timeout: 10_000 });
+    await loginToConsole(page);
     await page.getByRole('link', { name: 'Messages' }).click();
     await page.waitForURL((url) => url.pathname === '/messages');
     await page.waitForSelector('[data-testid="messages-table"]');
@@ -523,10 +559,7 @@ test.describe('ACC Phase 5.0 Visual Showcase & Screenshots', () => {
     await expect(page.locator('[data-testid="delivery-cell-msg-p50-01"]')).toBeVisible();
 
     // Screenshot 6: Tablet Messages Table
-    await page.screenshot({
-      path: `${SCREENSHOT_DIR}/06-tablet-messages-table.png`,
-      fullPage: true,
-    });
+    await captureScreenshot(page, testInfo, '06-tablet-messages-table.png', { fullPage: true });
 
     // Mobile Viewport
     await page.setViewportSize({ width: 375, height: 812 });
@@ -545,9 +578,6 @@ test.describe('ACC Phase 5.0 Visual Showcase & Screenshots', () => {
     await page.waitForTimeout(300);
 
     // Screenshot 7: Mobile Messages Table
-    await page.screenshot({
-      path: `${SCREENSHOT_DIR}/07-mobile-messages-table.png`,
-      fullPage: true,
-    });
+    await captureScreenshot(page, testInfo, '07-mobile-messages-table.png', { fullPage: true });
   });
 });
