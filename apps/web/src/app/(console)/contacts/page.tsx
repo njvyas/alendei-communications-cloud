@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { ApiError, contactsApi, workspacesApi, type ListContactsParams } from '@/lib/api-client';
 import { useCanManageContacts, useCanReadContacts, useSession } from '@/lib/session-store';
@@ -20,6 +21,7 @@ import {
   resolveActiveWorkspaceId,
   type ContactsPager,
 } from '@/components/contacts/workspace-selection';
+import { extractContactTags } from '@/lib/cdp';
 import type { ContactResponse } from '@acc/contracts';
 
 export default function ContactsPage() {
@@ -45,6 +47,7 @@ export default function ContactsPage() {
   // Keyset cursor pagination history, bound to the workspace it was built for
   const [pager, setPager] = useState<ContactsPager>(EMPTY_PAGER);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [selectedTagFilter, setSelectedTagFilter] = useState<string>('');
 
   // Dialog states
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -63,6 +66,7 @@ export default function ContactsPage() {
     setSelectedWorkspaceId('');
     setPager(EMPTY_PAGER);
     setSearchQuery('');
+    setSelectedTagFilter('');
     setCreatedRecord(null);
     setConsentTargetContact(null);
     setDetailTargetContact(null);
@@ -84,6 +88,7 @@ export default function ContactsPage() {
     setSelectedWorkspaceId(newWsId);
     setPager(EMPTY_PAGER);
     setSearchQuery('');
+    setSelectedTagFilter('');
     setCreatedRecord(null);
   };
 
@@ -98,13 +103,33 @@ export default function ContactsPage() {
   });
 
   const rawContacts = data?.data ?? [];
-  const contacts = searchQuery.trim()
-    ? rawContacts.filter((c) => {
-        const q = searchQuery.trim().toLowerCase();
-        const fullName = `${c.firstName || ''} ${c.lastName || ''}`.toLowerCase();
-        return fullName.includes(q) || c.id.toLowerCase().includes(q);
-      })
-    : rawContacts;
+
+  // Collect unique tags on the current page for quick filtering
+  const availableTags = Array.from(
+    new Set(rawContacts.flatMap((c) => extractContactTags(c.metadata))),
+  ).sort();
+
+  const contacts = rawContacts.filter((c) => {
+    // 1. Tag filter
+    if (selectedTagFilter) {
+      const cTags = extractContactTags(c.metadata);
+      if (!cTags.some((t) => t.toLowerCase() === selectedTagFilter.toLowerCase())) {
+        return false;
+      }
+    }
+
+    // 2. Search query filter
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return true;
+
+    const fullName = `${c.firstName || ''} ${c.lastName || ''}`.toLowerCase();
+    const nameMatch = fullName.includes(q);
+    const idMatch = c.id.toLowerCase().includes(q);
+    const tagMatch = extractContactTags(c.metadata).some((t) => t.toLowerCase().includes(q));
+    const metaMatch = JSON.stringify(c.metadata).toLowerCase().includes(q);
+
+    return nameMatch || idMatch || tagMatch || metaMatch;
+  });
 
   const handleNextPage = () => {
     if (data?.page.nextCursor) {
@@ -190,34 +215,61 @@ export default function ContactsPage() {
           </div>
 
           {activeWorkspaceId && (
-            <div className="flex items-center gap-2">
-              <label
-                htmlFor="search-contacts"
-                className="text-xs font-medium text-[var(--color-ink-muted)]"
-              >
-                Search:
-              </label>
-              <div className="relative">
-                <input
-                  id="search-contacts"
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Filter name or ID…"
-                  className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] px-2.5 py-1 text-xs text-[var(--color-ink)] w-36 sm:w-48 pr-6"
-                />
-                {searchQuery && (
-                  <button
-                    type="button"
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
-                    aria-label="Clear contact search"
-                  >
-                    ✕
-                  </button>
-                )}
+            <>
+              <div className="flex items-center gap-2">
+                <label
+                  htmlFor="search-contacts"
+                  className="text-xs font-medium text-[var(--color-ink-muted)]"
+                >
+                  Search:
+                </label>
+                <div className="relative">
+                  <input
+                    id="search-contacts"
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Filter name, tag or ID…"
+                    className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] px-2.5 py-1 text-xs text-[var(--color-ink)] w-36 sm:w-48 pr-6"
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+                      aria-label="Clear contact search"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
+
+              {availableTags.length > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <label
+                    htmlFor="filter-tag"
+                    className="text-xs font-medium text-[var(--color-ink-muted)]"
+                  >
+                    Tag:
+                  </label>
+                  <select
+                    id="filter-tag"
+                    value={selectedTagFilter}
+                    onChange={(e) => setSelectedTagFilter(e.target.value)}
+                    data-testid="filter-contact-tag"
+                    className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] px-2 py-1 text-xs text-[var(--color-ink)]"
+                  >
+                    <option value="">All Tags ({availableTags.length})</option>
+                    {availableTags.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -289,6 +341,9 @@ export default function ContactsPage() {
                   <th scope="col" className="px-4 py-3 font-medium">
                     Contact ID
                   </th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    CDP Tags
+                  </th>
                   <th
                     scope="col"
                     className="px-4 py-3 font-medium"
@@ -305,15 +360,15 @@ export default function ContactsPage() {
               <tbody className="divide-y divide-[var(--color-border-subtle)]">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={4} className="px-4 py-8 text-center text-[var(--color-ink-muted)]">
+                    <td colSpan={5} className="px-4 py-8 text-center text-[var(--color-ink-muted)]">
                       Loading contacts…
                     </td>
                   </tr>
                 ) : contacts.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="px-4 py-8 text-center text-[var(--color-ink-muted)]">
-                      {searchQuery.trim()
-                        ? `No contacts matching "${searchQuery}".`
+                    <td colSpan={5} className="px-4 py-8 text-center text-[var(--color-ink-muted)]">
+                      {searchQuery.trim() || selectedTagFilter
+                        ? `No contacts matching current filter criteria.`
                         : 'No contacts found in this workspace.'}
                     </td>
                   </tr>
@@ -323,6 +378,8 @@ export default function ContactsPage() {
                       c.firstName || c.lastName
                         ? `${c.firstName ?? ''} ${c.lastName ?? ''}`.trim()
                         : 'Unnamed Contact';
+                    const cTags = extractContactTags(c.metadata);
+
                     return (
                       <tr
                         key={c.id}
@@ -330,16 +387,53 @@ export default function ContactsPage() {
                         className="hover:bg-[var(--color-surface-raised)]"
                       >
                         <td className="px-4 py-3 font-medium text-[var(--color-ink)]">
-                          {fullName}
+                          <Link
+                            href={`/contacts/${c.id}`}
+                            data-testid={`contact-link-${c.id}`}
+                            className="hover:text-indigo-400 transition-colors inline-flex items-center gap-2"
+                          >
+                            <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-indigo-600/10 text-indigo-400 font-mono text-[10px] font-bold">
+                              {c.firstName?.[0] || c.lastName?.[0] || 'C'}
+                            </span>
+                            <span>{fullName}</span>
+                          </Link>
                         </td>
                         <td className="px-4 py-3 font-mono text-[11px] text-[var(--color-ink-muted)]">
                           {c.id}
+                        </td>
+                        <td className="px-4 py-3">
+                          {cTags.length === 0 ? (
+                            <span className="text-[var(--color-ink-muted)] text-[11px]">—</span>
+                          ) : (
+                            <div className="flex flex-wrap items-center gap-1">
+                              {cTags.slice(0, 2).map((t) => (
+                                <span
+                                  key={t}
+                                  className="rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.2 font-mono text-[9px] uppercase font-semibold"
+                                >
+                                  {t}
+                                </span>
+                              ))}
+                              {cTags.length > 2 && (
+                                <span className="text-[10px] text-[var(--color-ink-muted)] font-mono">
+                                  +{cTags.length - 2}
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-[var(--color-ink-muted)]">
                           {new Date(c.createdAt).toLocaleDateString()}
                         </td>
                         <td className="px-4 py-3 text-right">
                           <div className="flex items-center justify-end gap-1.5">
+                            <Link
+                              href={`/contacts/${c.id}`}
+                              data-testid={`profile-contact-btn-${c.id}`}
+                              className="rounded-md bg-indigo-600/10 text-indigo-400 border border-indigo-500/20 px-2 py-1 text-[11px] font-medium hover:bg-indigo-600 hover:text-white transition-colors"
+                            >
+                              Profile
+                            </Link>
                             <button
                               type="button"
                               onClick={() => setDetailTargetContact(c)}

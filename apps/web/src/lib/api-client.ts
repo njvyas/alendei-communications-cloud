@@ -8,6 +8,7 @@ import type {
   ConsentEventResponse,
   ConsentEventType,
   ContactIdentityResponse,
+  ContactIdentityStatus,
   ContactResponse,
   CreateOrganizationProviderAssignmentInput,
   EffectiveConsentResponse,
@@ -2394,6 +2395,11 @@ export interface CreateContactIdentityParams {
   readonly isPrimary?: boolean;
 }
 
+export interface UpdateContactIdentityParams {
+  readonly isPrimary?: boolean;
+  readonly status?: ContactIdentityStatus;
+}
+
 export interface CreateConsentEventParams {
   readonly channelId: string;
   readonly consentType: string;
@@ -2528,6 +2534,34 @@ export const contactsApi = {
     search.set('consentType', params.consentType);
     return apiFetch<ApiDataResponse<EffectiveConsentResponse>>(
       `/contacts/${encodeURIComponent(contactId)}/consent-effective?${search.toString()}`,
+      {
+        method: 'GET',
+        signal,
+      },
+    );
+  },
+
+  async updateIdentity(
+    identityId: string,
+    params: UpdateContactIdentityParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<ContactIdentityResponse>> {
+    return apiFetch<ApiDataResponse<ContactIdentityResponse>>(
+      `/identities/${encodeURIComponent(identityId)}`,
+      {
+        method: 'PATCH',
+        body: params,
+        signal,
+      },
+    );
+  },
+
+  async listConsentEvents(
+    contactId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<readonly ConsentEventResponse[]>> {
+    return apiFetch<ApiDataResponse<readonly ConsentEventResponse[]>>(
+      `/contacts/${encodeURIComponent(contactId)}/consent-events`,
       {
         method: 'GET',
         signal,
