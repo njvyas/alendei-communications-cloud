@@ -182,108 +182,34 @@ export interface ActivityTimelineItem {
 }
 
 /**
- * Deterministic mock activity generator for contacts where historical message
- * or lifecycle data has not yet been populated by real backend events.
+ * Authentic Message Activity Record interface for message events.
+ * Only populated when real message records exist from API responses or persistence.
  */
-export function getDeterministicMockActivities(
-  contact: ContactResponse,
-  identities: readonly ContactIdentityResponse[] = [],
-): ActivityTimelineItem[] {
-  const activities: ActivityTimelineItem[] = [];
-  const baseTime = new Date(contact.createdAt).getTime();
-
-  // If the contact has identities, attach realistic messaging touchpoints
-  const primaryWa = identities.find(
-    (i) => i.isPrimary && (i.rawAddress.startsWith('+') || i.channelId.includes('wa')),
-  );
-  const primarySms = identities.find(
-    (i) =>
-      i.rawAddress.startsWith('+') &&
-      (!primaryWa || i.id !== primaryWa.id || i.channelId.includes('sms')),
-  );
-
-  if (primaryWa) {
-    const waSentTime = new Date(baseTime + 120_000).toISOString();
-    const waDeliveredTime = new Date(baseTime + 124_000).toISOString();
-    const waReadTime = new Date(baseTime + 360_000).toISOString();
-
-    activities.push({
-      id: `act-wa-read-${contact.id}`,
-      type: 'message_read',
-      category: 'message',
-      title: 'WhatsApp Message Read',
-      description: 'Recipient read order update template notification.',
-      timestamp: waReadTime,
-      channelCode: 'whatsapp',
-      statusTone: 'accent',
-      metadata: {
-        recipientAddress: primaryWa.normalizedAddress || primaryWa.rawAddress,
-        templateName: 'order_update',
-        providerMessageId: `wamid.HBgM${contact.id.slice(0, 8)}`,
-      },
-    });
-
-    activities.push({
-      id: `act-wa-deliv-${contact.id}`,
-      type: 'message_delivered',
-      category: 'message',
-      title: 'WhatsApp Delivered',
-      description: 'Carrier confirmed delivery receipt on WhatsApp Business Gateway.',
-      timestamp: waDeliveredTime,
-      channelCode: 'whatsapp',
-      statusTone: 'success',
-      metadata: {
-        recipientAddress: primaryWa.normalizedAddress || primaryWa.rawAddress,
-        deliveryOutcome: 'delivered',
-      },
-    });
-
-    activities.push({
-      id: `act-wa-send-${contact.id}`,
-      type: 'message_sent',
-      category: 'message',
-      title: 'WhatsApp Message Dispatched',
-      description: 'Outbound utility template dispatched via Meta Cloud API Direct.',
-      timestamp: waSentTime,
-      channelCode: 'whatsapp',
-      statusTone: 'neutral',
-      metadata: {
-        recipientAddress: primaryWa.normalizedAddress || primaryWa.rawAddress,
-        templateName: 'order_update',
-      },
-    });
-  }
-
-  if (primarySms) {
-    const smsTime = new Date(baseTime + 600_000).toISOString();
-    activities.push({
-      id: `act-sms-deliv-${contact.id}`,
-      type: 'message_delivered',
-      category: 'message',
-      title: 'SMS Notification Delivered',
-      description: 'Security authentication code delivered to cellular handset.',
-      timestamp: smsTime,
-      channelCode: 'sms',
-      statusTone: 'success',
-      metadata: {
-        recipientAddress: primarySms.normalizedAddress || primarySms.rawAddress,
-        segments: 1,
-      },
-    });
-  }
-
-  return activities;
+export interface ContactMessageActivityRecord {
+  readonly id: string;
+  readonly channelCode: 'whatsapp' | 'sms' | 'email' | 'rcs' | 'voice';
+  readonly recipientAddress: string;
+  readonly status: 'pending' | 'submitted' | 'failed';
+  readonly deliveryStatus?: 'pending' | 'delivered' | 'undelivered' | 'not_supported' | null;
+  readonly createdAt: string;
+  readonly deliveredAt?: string | null;
+  readonly readAt?: string | null;
+  readonly failureReason?: string | null;
+  readonly templateName?: string | null;
 }
 
 /**
- * Synthesizes chronological timeline items from contact metadata, identities, consent events,
- * and optional message history.
+ * Synthesizes chronological timeline items strictly from authentic contact metadata,
+ * identities, consent events, and genuine message records.
+ *
+ * NEVER fabricates synthetic messages, carrier delivery receipts, read receipts, or provider IDs.
+ * If message records are not supplied, zero message events are generated.
  */
 export function generateContactTimeline(
   contact: ContactResponse,
   identities: readonly ContactIdentityResponse[] = [],
   consentEvents: readonly ConsentEventResponse[] = [],
-  options?: { includeMockHistory?: boolean },
+  messages: readonly ContactMessageActivityRecord[] = [],
 ): ActivityTimelineItem[] {
   const items: ActivityTimelineItem[] = [];
 
@@ -358,10 +284,76 @@ export function generateContactTimeline(
     });
   }
 
-  // 5. Mock activity history if enabled or when no messages exist
-  if (options?.includeMockHistory ?? true) {
-    const mockEvents = getDeterministicMockActivities(contact, identities);
-    items.push(...mockEvents);
+  // 5. Authentic message events (only when real records are passed)
+  for (const msg of messages) {
+    if (msg.readAt) {
+      items.push({
+        id: `event-msg-read-${msg.id}`,
+        type: 'message_read',
+        category: 'message',
+        title: `${msg.channelCode.toUpperCase()} Message Read`,
+        description: `Recipient read notification at ${new Date(msg.readAt).toLocaleTimeString()}`,
+        timestamp: msg.readAt,
+        channelCode: msg.channelCode,
+        statusTone: 'accent',
+        metadata: {
+          messageId: msg.id,
+          recipientAddress: msg.recipientAddress,
+          templateName: msg.templateName,
+        },
+      });
+    }
+
+    if (msg.deliveredAt || msg.deliveryStatus === 'delivered') {
+      items.push({
+        id: `event-msg-deliv-${msg.id}`,
+        type: 'message_delivered',
+        category: 'message',
+        title: `${msg.channelCode.toUpperCase()} Delivered`,
+        description: `Confirmed delivered to recipient endpoint.`,
+        timestamp: msg.deliveredAt || msg.createdAt,
+        channelCode: msg.channelCode,
+        statusTone: 'success',
+        metadata: {
+          messageId: msg.id,
+          recipientAddress: msg.recipientAddress,
+          deliveryStatus: msg.deliveryStatus,
+        },
+      });
+    } else if (msg.deliveryStatus === 'undelivered' || msg.status === 'failed') {
+      items.push({
+        id: `event-msg-fail-${msg.id}`,
+        type: 'message_failed',
+        category: 'message',
+        title: `${msg.channelCode.toUpperCase()} Delivery Failed`,
+        description: msg.failureReason || 'Message failed or undelivered.',
+        timestamp: msg.createdAt,
+        channelCode: msg.channelCode,
+        statusTone: 'error',
+        metadata: {
+          messageId: msg.id,
+          recipientAddress: msg.recipientAddress,
+          failureReason: msg.failureReason,
+        },
+      });
+    }
+
+    items.push({
+      id: `event-msg-sent-${msg.id}`,
+      type: 'message_sent',
+      category: 'message',
+      title: `${msg.channelCode.toUpperCase()} Dispatched`,
+      description: `Outbound message dispatched to recipient ${msg.recipientAddress}.`,
+      timestamp: msg.createdAt,
+      channelCode: msg.channelCode,
+      statusTone: 'neutral',
+      metadata: {
+        messageId: msg.id,
+        recipientAddress: msg.recipientAddress,
+        templateName: msg.templateName,
+        status: msg.status,
+      },
+    });
   }
 
   // Sort descending: newest first

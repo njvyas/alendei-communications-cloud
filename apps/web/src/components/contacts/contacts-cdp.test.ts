@@ -10,6 +10,7 @@ import {
   setCustomField,
   removeCustomField,
   generateContactTimeline,
+  type ContactMessageActivityRecord,
 } from '@/lib/cdp';
 import { ContactTagsCard } from './contact-tags-card';
 import { ContactCustomFieldsCard } from './contact-custom-fields-card';
@@ -176,10 +177,8 @@ describe('Phase 8A Contacts / CDP Core & UI Components', () => {
   // ---------------------------------------------------------------------------
   // 3. Activity Timeline Synthesis
   // ---------------------------------------------------------------------------
-  it('5. generateContactTimeline creates chronologically ordered events across all categories', () => {
-    const timeline = generateContactTimeline(mockContact, mockIdentities, mockConsentEvents, {
-      includeMockHistory: true,
-    });
+  it('5. generateContactTimeline creates chronologically ordered events from authentic records without mock messages', () => {
+    const timeline = generateContactTimeline(mockContact, mockIdentities, mockConsentEvents);
 
     assert.ok(timeline.length >= 4);
 
@@ -190,12 +189,18 @@ describe('Phase 8A Contacts / CDP Core & UI Components', () => {
       assert.ok(current >= next, `Event at ${i} should be newer or equal to ${i + 1}`);
     }
 
-    // Verify presence of contact_created, identity_added, consent_granted
+    // Verify presence of authentic contact_created, identity_added, consent_granted, field_updated
     const types = new Set(timeline.map((e) => e.type));
     assert.ok(types.has('contact_created'));
     assert.ok(types.has('identity_added'));
     assert.ok(types.has('consent_granted'));
-    assert.ok(types.has('message_delivered'));
+    assert.ok(types.has('field_updated'));
+
+    // Verify absence of mock message events when no message records are supplied
+    assert.equal(timeline.filter((e) => e.category === 'message').length, 0);
+    assert.equal(types.has('message_delivered'), false);
+    assert.equal(types.has('message_sent'), false);
+    assert.equal(types.has('message_read'), false);
   });
 
   // ---------------------------------------------------------------------------
@@ -327,5 +332,134 @@ describe('Phase 8A Contacts / CDP Core & UI Components', () => {
 
     assert.ok(html.includes('Access Forbidden'));
     assert.ok(html.includes('contacts.read'));
+  });
+
+  // ---------------------------------------------------------------------------
+  // 8. Regression Tests for Zero Mock Message Generation (Safety & Integrity)
+  // ---------------------------------------------------------------------------
+  it('12. REGRESSION: Contact with WhatsApp and SMS identities but no message records produces 0 message activities and no synthetic provider artifacts', () => {
+    const contactWithIdentities: ContactResponse = {
+      id: '01955b0a-7b3b-7411-9a4f-ct-regression',
+      workspaceId: '01955b0a-7b3b-7411-9a4f-ws000000001',
+      firstName: 'Alice',
+      lastName: 'Smith',
+      metadata: { tags: ['VIP'] },
+      createdAt: '2026-11-05T08:00:00.000Z',
+      updatedAt: '2026-11-05T08:00:00.000Z',
+    };
+
+    const waAndSmsIdentities: ContactIdentityResponse[] = [
+      {
+        id: 'idnt-wa-01',
+        workspaceId: '01955b0a-7b3b-7411-9a4f-ws000000001',
+        contactId: contactWithIdentities.id,
+        channelId: 'ch-wa-01',
+        rawAddress: '+12025550177',
+        normalizedAddress: '+12025550177',
+        isPrimary: true,
+        status: 'active',
+        createdAt: '2026-11-05T08:05:00.000Z',
+        updatedAt: '2026-11-05T08:05:00.000Z',
+      },
+      {
+        id: 'idnt-sms-01',
+        workspaceId: '01955b0a-7b3b-7411-9a4f-ws000000001',
+        contactId: contactWithIdentities.id,
+        channelId: 'ch-sms-01',
+        rawAddress: '+12025550178',
+        normalizedAddress: '+12025550178',
+        isPrimary: false,
+        status: 'active',
+        createdAt: '2026-11-05T08:06:00.000Z',
+        updatedAt: '2026-11-05T08:06:00.000Z',
+      },
+    ];
+
+    // Generate timeline with NO message records
+    const timeline = generateContactTimeline(contactWithIdentities, waAndSmsIdentities, []);
+
+    // 1. Total events should ONLY be contact_created (1) and identity_added (2) = 3
+    assert.equal(timeline.length, 3);
+
+    // 2. ZERO message category events
+    const messageEvents = timeline.filter((e) => e.category === 'message');
+    assert.equal(messageEvents.length, 0);
+
+    // 3. No synthetic message types
+    const types = new Set(timeline.map((e) => e.type));
+    assert.equal(types.has('message_sent'), false);
+    assert.equal(types.has('message_delivered'), false);
+    assert.equal(types.has('message_read'), false);
+    assert.equal(types.has('message_failed'), false);
+
+    // 4. Verify no fabricated provider strings exist anywhere in output
+    const serialized = JSON.stringify(timeline);
+    assert.equal(serialized.includes('wamid'), false);
+    assert.equal(serialized.includes('Meta Cloud API'), false);
+    assert.equal(serialized.includes('delivery receipt'), false);
+    assert.equal(serialized.includes('Carrier confirmed'), false);
+    assert.equal(serialized.includes('WhatsApp Business Gateway'), false);
+    assert.equal(serialized.includes('Security authentication code'), false);
+
+    // 5. Render ContactTimelineCard and verify message count shows (0)
+    const html = renderWithClient(
+      React.createElement(ContactTimelineCard, {
+        contact: contactWithIdentities,
+        identities: waAndSmsIdentities,
+      }),
+    );
+    assert.ok(html.includes('data-testid="filter-timeline-message"'));
+    assert.ok(html.includes('(0)'));
+  });
+
+  it('13. generateContactTimeline correctly maps authentic message records into timeline events', () => {
+    const authenticMessages: ContactMessageActivityRecord[] = [
+      {
+        id: 'msg-real-001',
+        channelCode: 'whatsapp',
+        recipientAddress: '+12025550199',
+        status: 'submitted',
+        deliveryStatus: 'delivered',
+        createdAt: '2026-11-01T11:00:00.000Z',
+        deliveredAt: '2026-11-01T11:00:04.000Z',
+        readAt: '2026-11-01T11:05:00.000Z',
+        templateName: 'order_receipt',
+      },
+      {
+        id: 'msg-real-002',
+        channelCode: 'sms',
+        recipientAddress: '+12025550198',
+        status: 'failed',
+        deliveryStatus: 'undelivered',
+        createdAt: '2026-11-01T12:00:00.000Z',
+        failureReason: 'Carrier network timeout',
+      },
+    ];
+
+    const timeline = generateContactTimeline(
+      mockContact,
+      mockIdentities,
+      mockConsentEvents,
+      authenticMessages,
+    );
+
+    // Authentic message events are present
+    const messageEvents = timeline.filter((e) => e.category === 'message');
+    assert.ok(messageEvents.length >= 4); // msg-001: read, delivered, sent; msg-002: failed, sent
+
+    const msgTypes = new Set(messageEvents.map((e) => e.type));
+    assert.ok(msgTypes.has('message_read'));
+    assert.ok(msgTypes.has('message_delivered'));
+    assert.ok(msgTypes.has('message_sent'));
+    assert.ok(msgTypes.has('message_failed'));
+
+    // Check authentic metadata mapping
+    const readEvent = messageEvents.find((e) => e.type === 'message_read');
+    assert.equal(readEvent?.metadata?.messageId, 'msg-real-001');
+    assert.equal(readEvent?.metadata?.templateName, 'order_receipt');
+
+    const failEvent = messageEvents.find((e) => e.type === 'message_failed');
+    assert.equal(failEvent?.metadata?.messageId, 'msg-real-002');
+    assert.equal(failEvent?.metadata?.failureReason, 'Carrier network timeout');
   });
 });

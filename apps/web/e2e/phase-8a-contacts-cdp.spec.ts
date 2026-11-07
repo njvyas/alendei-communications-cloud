@@ -349,6 +349,17 @@ async function setupRoutes(page: Page) {
       });
     }
 
+    // Domain resolution: /domains/resolve
+    if (pathname.includes('/domains/resolve') && method === 'GET') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: { resolved: false, domain: null },
+        }),
+      });
+    }
+
     // Single contact: /contacts/:id
     const contactDetailMatch = pathname.match(/\/contacts\/([^/?]+)$/);
     if (contactDetailMatch && method === 'GET') {
@@ -362,17 +373,26 @@ async function setupRoutes(page: Page) {
     }
 
     if (contactDetailMatch && method === 'PATCH') {
+      const contactId = contactDetailMatch[1];
       const body = route.request().postDataJSON();
+      const idx = mockContacts.findIndex((c) => c.id === contactId);
+      const target = idx !== -1 ? mockContacts[idx]! : mockContacts[0]!;
+      const updated = {
+        ...target,
+        ...body,
+        metadata: {
+          ...(target.metadata ?? {}),
+          ...(body.metadata ?? {}),
+        },
+        updatedAt: new Date().toISOString(),
+      };
+      if (idx !== -1) {
+        mockContacts[idx] = updated;
+      }
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({
-          data: {
-            ...mockContacts[0],
-            ...body,
-            updatedAt: new Date().toISOString(),
-          },
-        }),
+        body: JSON.stringify({ data: updated }),
       });
     }
 
@@ -443,16 +463,62 @@ test.describe('Phase 8A — Contacts & CDP Frontend Vertical Slice', () => {
     // Switch to Activity Timeline tab
     await page.getByRole('tab', { name: 'Activity Timeline' }).click();
     await page.waitForSelector('[data-testid="activity-timeline"]');
+
+    // 1. Verify Message category filter has 0 count and shows honest empty state
+    const msgFilter = page.locator('[data-testid="filter-timeline-message"]');
+    await expect(msgFilter).toContainText('(0)');
+    await msgFilter.click();
+    await page.waitForSelector('[data-testid="timeline-empty-messages"]');
+    await expect(page.locator('[data-testid="timeline-empty-messages"]')).toContainText(
+      'Historical message activity not yet available',
+    );
+    await captureScreenshot(
+      page,
+      testInfo,
+      '04b-desktop-contact-profile-timeline-empty-messages.png',
+    );
+
+    // Return to All Activities tab
+    await page.locator('[data-testid="filter-timeline-all"]').click();
+    await page.waitForSelector('[data-testid="activity-timeline"]');
     await page.waitForTimeout(300);
 
-    // Screenshot 4: Contact Activity & Engagement Timeline with synthesized touchpoints
+    // Screenshot 4: Contact Activity & Engagement Timeline with authentic touchpoints
     await captureScreenshot(page, testInfo, '04-desktop-contact-profile-timeline.png', {
       fullPage: true,
     });
 
+    // 2. Test Tag and Custom-Field persistence across page reload
+    await page.getByRole('tab', { name: 'Overview' }).click();
+    await page.waitForSelector('[data-testid="contact-tags-card"]');
+    await page.waitForSelector('[data-testid="contact-custom-fields-card"]');
+
+    // Add a new tag: Wholesale-Partner
+    await page.locator('[data-testid="add-tag-input"]').fill('Wholesale-Partner');
+    await page.locator('[data-testid="add-tag-btn"]').click();
+    await expect(page.locator('[data-testid="contact-tag-wholesale-partner"]')).toBeVisible();
+
+    // Add a new custom field: securityClearance = Tier-4
+    await page.locator('[data-testid="add-custom-field-btn"]').click();
+    await page.locator('#cf-key-input').fill('securityClearance');
+    await page.locator('#cf-val-input').fill('Tier-4');
+    await page.locator('[data-testid="save-custom-field-btn"]').click();
+    const customFieldsCard = page.locator('[data-testid="contact-custom-fields-card"]');
+    await expect(customFieldsCard.getByText('securityClearance', { exact: true })).toBeVisible();
+    await expect(customFieldsCard.getByText('Tier-4', { exact: true })).toBeVisible();
+
+    // Reload the page and assert persistence through the existing APIs
+    await page.reload();
+    await page.waitForSelector('[data-testid="contact-profile-view"]');
+    await expect(page.locator('[data-testid="contact-tag-wholesale-partner"]')).toBeVisible();
+    const customFieldsCardAfterReload = page.locator('[data-testid="contact-custom-fields-card"]');
+    await expect(
+      customFieldsCardAfterReload.getByText('securityClearance', { exact: true }),
+    ).toBeVisible();
+    await expect(customFieldsCardAfterReload.getByText('Tier-4', { exact: true })).toBeVisible();
+
     // Mobile Viewport: 375x812
     await page.setViewportSize({ width: 375, height: 812 });
-    await page.getByRole('tab', { name: 'Overview' }).click();
     await page.waitForTimeout(300);
 
     // Screenshot 5: Responsive Mobile Contact Profile

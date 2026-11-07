@@ -8,15 +8,21 @@ import {
   generateContactTimeline,
   type ActivityCategory,
   type ActivityTimelineItem,
+  type ContactMessageActivityRecord,
 } from '@/lib/cdp';
 import type { ContactIdentityResponse, ContactResponse } from '@acc/contracts';
 
 interface ContactTimelineCardProps {
   readonly contact: ContactResponse;
   readonly identities?: readonly ContactIdentityResponse[];
+  readonly messages?: readonly ContactMessageActivityRecord[];
 }
 
-export function ContactTimelineCard({ contact, identities = [] }: ContactTimelineCardProps) {
+export function ContactTimelineCard({
+  contact,
+  identities = [],
+  messages = [],
+}: ContactTimelineCardProps) {
   const [selectedCategory, setSelectedCategory] = useState<ActivityCategory | 'all'>('all');
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({});
 
@@ -27,10 +33,8 @@ export function ContactTimelineCard({ contact, identities = [] }: ContactTimelin
   });
   const consentEvents = consentData?.data ?? [];
 
-  // Synthesize complete timeline
-  const timelineItems = generateContactTimeline(contact, identities, consentEvents, {
-    includeMockHistory: true,
-  });
+  // Synthesize complete timeline from authentic records
+  const timelineItems = generateContactTimeline(contact, identities, consentEvents, messages);
 
   const filteredItems =
     selectedCategory === 'all'
@@ -128,9 +132,30 @@ export function ContactTimelineCard({ contact, identities = [] }: ContactTimelin
 
       <CardContent>
         {filteredItems.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-[var(--color-border-subtle)] p-8 text-center text-xs text-[var(--color-ink-muted)]">
-            No activities recorded under the &quot;{selectedCategory}&quot; category.
-          </div>
+          selectedCategory === 'message' ? (
+            <div
+              className="rounded-lg border border-dashed border-[var(--color-border-subtle)] p-8 text-center"
+              data-testid="timeline-empty-messages"
+            >
+              <div className="mx-auto mb-2 flex size-9 items-center justify-center rounded-full bg-[var(--color-surface-raised)] border border-[var(--color-border-subtle)] text-sm text-[var(--color-ink-muted)]">
+                ✉
+              </div>
+              <p className="font-semibold text-xs text-[var(--color-ink)]">
+                Historical message activity not yet available
+              </p>
+              <p className="mt-1 max-w-sm mx-auto text-[11px] text-[var(--color-ink-muted)] leading-relaxed">
+                Message dispatch records, delivery receipts, and read outcomes will be displayed
+                here once contact message history is supported by the backend API.
+              </p>
+            </div>
+          ) : (
+            <div
+              className="rounded-lg border border-dashed border-[var(--color-border-subtle)] p-8 text-center text-xs text-[var(--color-ink-muted)]"
+              data-testid="timeline-empty-category"
+            >
+              No activities recorded under the &quot;{selectedCategory}&quot; category.
+            </div>
+          )
         ) : (
           <div
             className="relative pl-6 space-y-6 before:absolute before:left-2.5 before:top-3 before:bottom-3 before:w-0.5 before:bg-[var(--color-border-subtle)]"
