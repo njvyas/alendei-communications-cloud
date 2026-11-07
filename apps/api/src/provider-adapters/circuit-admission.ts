@@ -3,13 +3,17 @@ import {
   type ChannelCode,
   type ProviderAdapter,
   type ProviderAdapterCapabilities,
+  type ParsedWebhookRequest,
   type ProviderAdapterContext,
   type ProviderHealthCheckOptions,
   type ProviderHealthProbe,
   type ProviderSubmission,
   type ProviderSubmissionOptions,
   type ProviderSubmissionResult,
+  type RawWebhookRequest,
   type SubmissionPermit,
+  type VerifiedWebhook,
+  type WebhookVerification,
 } from '@acc/contracts';
 
 import type { SubmissionTimer } from './submission-timer';
@@ -474,7 +478,14 @@ export abstract class GuardedProviderAdapter implements ProviderAdapter {
     submission: ProviderSubmission,
   ): Promise<never>;
   abstract checkStatus(context: ProviderAdapterContext, providerMessageId: string): Promise<never>;
-  abstract parseWebhook(context: ProviderAdapterContext, raw: unknown): Promise<never>;
+  abstract verifyWebhook(
+    context: ProviderAdapterContext,
+    request: RawWebhookRequest,
+  ): Promise<WebhookVerification>;
+  abstract parseWebhook(
+    context: ProviderAdapterContext,
+    verified: VerifiedWebhook,
+  ): ParsedWebhookRequest;
 
   static {
     isGuardedInstance = (value) => isObject(value) && #guarded in value && value.#guarded;

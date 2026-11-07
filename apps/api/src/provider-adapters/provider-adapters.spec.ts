@@ -165,8 +165,11 @@ class FakeAdapter extends GuardedProviderAdapter {
     return Promise.reject(new Error('n/a'));
   }
 
-  parseWebhook(): Promise<never> {
+  verifyWebhook(): Promise<never> {
     return Promise.reject(new Error('n/a'));
+  }
+  parseWebhook(): never {
+    throw new Error('n/a');
   }
 }
 
@@ -234,6 +237,7 @@ describe('provider adapter contract (Phase 2.2)', () => {
       'send',
       'estimateCost',
       'checkStatus',
+      'verifyWebhook',
       'parseWebhook',
     ] as const) {
       expect(typeof adapter[member]).toBe('function');
@@ -242,7 +246,7 @@ describe('provider adapter contract (Phase 2.2)', () => {
     expect(adapter.capabilities().channels).toEqual(CHANNEL_CODES);
   });
 
-  it('the Phase 3/7 members exist and refuse explicitly, with no behaviour', async () => {
+  it('the members without behaviour (estimateCost, checkStatus) exist and refuse explicitly', async () => {
     const adapter = new SimulatorAdapter(new VirtualTimer());
     await expect(adapter.estimateCost()).rejects.toBeInstanceOf(
       ProviderAdapterUnsupportedOperation,
@@ -250,9 +254,15 @@ describe('provider adapter contract (Phase 2.2)', () => {
     await expect(adapter.checkStatus()).rejects.toThrow(
       'checkStatus is not implemented in Phase 2',
     );
-    await expect(adapter.parseWebhook()).rejects.toThrow(
-      'parseWebhook is not implemented in Phase 2',
-    );
+    // Phase 5.0: verifyWebhook/parseWebhook have behaviour (simulator-webhook.spec.ts);
+    // without a wired signing key, verification refuses as a configuration error.
+    await expect(
+      adapter.verifyWebhook(context(), {
+        headers: {},
+        rawBody: new Uint8Array(),
+        receivedAt: new Date(),
+      }),
+    ).rejects.toThrow('no webhook signing key is configured');
     const scenario: ProviderAdapter = adapter.forBehavior('SUCCESS');
     await expect(scenario.estimateCost(context(), submission())).rejects.toBeInstanceOf(
       ProviderAdapterUnsupportedOperation,
@@ -672,8 +682,11 @@ describe('ProviderAdapterRegistry', () => {
       checkStatus(): Promise<never> {
         return Promise.reject(new Error('n/a'));
       }
-      parseWebhook(): Promise<never> {
+      verifyWebhook(): Promise<never> {
         return Promise.reject(new Error('n/a'));
+      }
+      parseWebhook(): never {
+        throw new Error('n/a');
       }
     }
     expect(() => new ProviderAdapterRegistry([new Shadowing(true)])).toThrow('it overrides send()');
@@ -699,8 +712,11 @@ describe('ProviderAdapterRegistry', () => {
       checkStatus(): Promise<never> {
         return Promise.reject(new Error('n/a'));
       }
-      parseWebhook(): Promise<never> {
+      verifyWebhook(): Promise<never> {
         return Promise.reject(new Error('n/a'));
+      }
+      parseWebhook(): never {
+        throw new Error('n/a');
       }
     }
     expect(() => new ProviderAdapterRegistry([new Thawed()])).toThrow('it is not frozen');

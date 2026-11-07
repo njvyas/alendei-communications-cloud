@@ -408,7 +408,10 @@ describe('Phase 4.2 Batch 1: SMS simulator dispatch, channel resolution and SMS 
       expect(context.channel).toBe('sms');
       expect(context.providerId).toBe(sms);
       expect(submission.channel).toBe('sms');
-      expect(submission.submissionId).toBe(messageId);
+      // Phase 5.0 (OD-8): the submission reference is the attempt id, not the message id.
+      const [settledAttempt] = await attemptsOf(messageId);
+      expect(submission.submissionId).toBe(settledAttempt!.id);
+      expect(submission.submissionId).not.toBe(messageId);
       expect(submission.recipient).toBe('+12025550161');
       expect(submission.content).toEqual({ text: 'Your verification code is 654321.' });
       // Gate F.2 scope F.2.2: the encoding and segment count of the rendered text.

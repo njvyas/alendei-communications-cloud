@@ -187,9 +187,14 @@ export interface ProviderHealthCheckOptions {
 
 /**
  * The adapter port. `capabilities`, `healthCheck` and `send` are implemented in
- * Phase 2; `estimateCost` (billing, Phase 7), `checkStatus` and `parseWebhook`
- * (message lifecycle, Phase 3) are interface members only and carry no Phase 2
- * behaviour (ADR-013 PD-6).
+ * Phase 2; `verifyWebhook` and `parseWebhook` in Phase 5.0 (delivery receipts,
+ * design spec Rev 2 §D, §E.4; implementation plan §1.2). `estimateCost` (billing,
+ * Phase 7) and `checkStatus` are interface members only and carry no behaviour
+ * (ADR-013 PD-6).
+ *
+ * `verifyWebhook` checks the adapter-owned signature over the exact raw bytes;
+ * `parseWebhook` is pure — it normalises an already verified body into one result
+ * per element and never touches the database.
  */
 export interface ProviderAdapter {
   readonly adapterKey: string;
@@ -205,7 +210,11 @@ export interface ProviderAdapter {
   ): Promise<ProviderSubmissionResult>;
   estimateCost(context: ProviderAdapterContext, submission: ProviderSubmission): Promise<never>;
   checkStatus(context: ProviderAdapterContext, providerMessageId: string): Promise<never>;
-  parseWebhook(context: ProviderAdapterContext, raw: unknown): Promise<never>;
+  verifyWebhook(
+    context: ProviderAdapterContext,
+    request: RawWebhookRequest,
+  ): Promise<WebhookVerification>;
+  parseWebhook(context: ProviderAdapterContext, verified: VerifiedWebhook): ParsedWebhookRequest;
 }
 
 /** The submission-time behaviours the simulator reproduces on demand (ADR-013 PD-3). */
@@ -250,9 +259,10 @@ export const PROVIDER_SUBMISSION_DEFAULTS = {
 
 // =============================================================================
 // Phase 5.0 — delivery receipts (design spec Rev 2 §D–§F, implementation plan §1.1–§1.2).
-// Types and validators only: the `ProviderAdapter` port keeps its Phase 2 placeholders
-// until the simulator implements `verifyWebhook`/`parseWebhook` (PR-B).
 // =============================================================================
+
+/** Replay window for a webhook's signature timestamp, in seconds either side of now (OD-14). */
+export const WEBHOOK_REPLAY_WINDOW_SECONDS = 300;
 
 /** The raw inbound request an adapter verifies: exact bytes, never a re-serialised body. */
 export interface RawWebhookRequest {
@@ -322,6 +332,30 @@ export type ParsedWebhookElement =
 /** At most this many elements in one request; more is a request-level 413 (plan §1.2, OD-18). */
 export const WEBHOOK_MAX_EVENTS_PER_REQUEST = 100;
 
+/** A request whose signature `verifyWebhook` has accepted: the same exact bytes, never re-serialised. */
+export interface VerifiedWebhook {
+  readonly rawBody: Uint8Array;
+  readonly receivedAt: Date;
+  readonly signatureTimestamp?: Date;
+}
+
+/**
+ * Why a verified request is malformed as a whole (plan §1.2): no `webhook_events` row
+ * is written — a request-level metric and log line only. `too_many_events` is a 413,
+ * the others a 400.
+ */
+export const MALFORMED_WEBHOOK_REQUEST_REASONS = [
+  'not_json',
+  'bad_envelope',
+  'too_many_events',
+] as const;
+export type MalformedWebhookRequestReason = (typeof MALFORMED_WEBHOOK_REQUEST_REASONS)[number];
+
+/** The result of `parseWebhook`: one result per element, or a request-level refusal. */
+export type ParsedWebhookRequest =
+  | { readonly ok: true; readonly elements: readonly ParsedWebhookElement[] }
+  | { readonly ok: false; readonly reason: MalformedWebhookRequestReason };
+
 /** Provider capability declaring which delivery receipt types it sends (OD-3). Absent = none. */
 export const DELIVERY_RECEIPTS_CAPABILITY = 'delivery_receipts';
 export const DELIVERY_RECEIPT_TYPES = ['delivered', 'undelivered', 'read'] as const;
@@ -334,7 +368,8 @@ export type DeliveryReceiptType = (typeof DELIVERY_RECEIPT_TYPES)[number];
  */
 export function validateDeliveryReceiptsCapability(
   value: unknown,
-  channel: ChannelCode,
+  /** The provider's channel; `null` checks the shape only (the channel rule needs the provider). */
+  channel: ChannelCode | null,
 ): { readonly valid: boolean; readonly errors: readonly string[] } {
   if (!Array.isArray(value) || value.length === 0) {
     return { valid: false, errors: ['delivery_receipts must be a non-empty array'] };
@@ -361,6 +396,24 @@ export function validateDeliveryReceiptsCapability(
     errors.push('delivery_receipts read is not available on the sms channel');
   }
   return { valid: errors.length === 0, errors };
+}
+
+/**
+ * The receipt types a provider declares, read from its stored `delivery_receipts`
+ * capability (OD-3). Absent or unreadable means none: delivery is then `not_supported`.
+ */
+export function declaredDeliveryReceipts(value: unknown): ReadonlySet<DeliveryReceiptType> {
+  if (!Array.isArray(value)) return new Set();
+  return new Set(
+    value.filter((v): v is DeliveryReceiptType =>
+      (DELIVERY_RECEIPT_TYPES as readonly unknown[]).includes(v),
+    ),
+  );
+}
+
+/** Whether a provider declaring `receipts` reports delivery outcomes at all (`pending` vs `not_supported`). */
+export function reportsDeliveryOutcome(receipts: ReadonlySet<DeliveryReceiptType>): boolean {
+  return receipts.has('delivered') || receipts.has('undelivered');
 }
 
 /** Simulator capability scripting delivery events (design spec Rev 2 §F.1). Absent = no events. */

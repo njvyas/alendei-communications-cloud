@@ -806,7 +806,7 @@ describe('Phase 5.0 delivery foundation (migrations 0044–0046)', () => {
       });
     });
 
-    it('acc_dispatch sees only deferred/unmatched events of the provider of the message it holds a live claim on', async () => {
+    it('acc_dispatch sees only the held receipts of the message it holds a live claim on (0044, bound by 0047)', async () => {
       const m = await plantCommitted(A, {
         status: 'submitting',
         attempts: [{ provider: providerP, status: 'submitting' }],
@@ -819,10 +819,11 @@ describe('Phase 5.0 delivery foundation (migrations 0044–0046)', () => {
       );
       const pending = uuidv7();
       await admin(
-        `INSERT INTO webhook_events (id, provider_id, request_id, event_index, event_sha256, outcome) VALUES
-           ($1, $2, $3, 0, $4, 'deferred'),
-           ($5, $2, $3, 1, $6, 'applied'),
-           ($7, $8, $3, 2, $9, 'unmatched')`,
+        // 0047: a held receipt is attributable to the claimed message by its own reference.
+        `INSERT INTO webhook_events (id, provider_id, request_id, event_index, event_sha256, outcome, normalized) VALUES
+           ($1, $2, $3, 0, $4, 'deferred', jsonb_build_object('kind', 'delivered', 'clientReference', $10::text)),
+           ($5, $2, $3, 1, $6, 'applied', jsonb_build_object('kind', 'delivered', 'clientReference', gen_random_uuid()::text)),
+           ($7, $8, $3, 2, $9, 'unmatched', jsonb_build_object('kind', 'delivered', 'clientReference', $10::text))`,
         [
           pending,
           providerP,
@@ -833,6 +834,7 @@ describe('Phase 5.0 delivery foundation (migrations 0044–0046)', () => {
           uuidv7(),
           providerQ,
           randomBytes(32),
+          m.attemptIds[0],
         ],
       );
       const ids = await inTx(
@@ -856,6 +858,345 @@ describe('Phase 5.0 delivery foundation (migrations 0044–0046)', () => {
         async (c) => (await c.query(`SELECT count(*)::int AS n FROM webhook_events`)).rows[0].n,
       );
       expect(none).toBe(0);
+    });
+
+    describe('0047: acc_dispatch reaches only the receipts of the message it holds a live claim on', () => {
+      // Provider P serves message M (org A, claimed by acc_dispatch) and message N (org A — the
+      // hardest case: same organization, same provider) and message O (org B, same provider).
+      let M: { messageId: string; attemptIds: string[] };
+      let N: { messageId: string; attemptIds: string[] };
+      let O: { messageId: string; attemptIds: string[] };
+      let token: string;
+      const r: Record<string, string> = {};
+
+      const insertReceipt = async (
+        key: string,
+        provider: string,
+        outcome: string,
+        normalized: Record<string, unknown>,
+        matched: { attemptId: string; orgId: string } | null = null,
+      ) => {
+        r[key] = uuidv7();
+        await admin(
+          `INSERT INTO webhook_events (id, provider_id, request_id, event_index, event_sha256, outcome,
+                                       matched_attempt_id, matched_org_id, normalized)
+           VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8)`,
+          [
+            r[key],
+            provider,
+            uuidv7(),
+            randomBytes(32),
+            outcome,
+            matched?.attemptId ?? null,
+            matched?.orgId ?? null,
+            normalized,
+          ],
+        );
+      };
+
+      beforeAll(async () => {
+        M = await plantCommitted(A, {
+          status: 'submitting',
+          attempts: [
+            { provider: providerP, status: 'failed' },
+            { provider: providerP, status: 'submitting', pmid: `pm-M-${uuidv7()}` },
+          ],
+        });
+        N = await plantCommitted(A, {
+          attempts: [{ provider: providerP, status: 'accepted', pmid: `pm-N-${uuidv7()}` }],
+        });
+        O = await plantCommitted(B, { attempts: [{ provider: providerP, status: 'accepted' }] });
+        token = uuidv7();
+        await admin(
+          `INSERT INTO message_dispatch_queue (message_id, org_id, available_at, claim_token, claimed_until, claimed_by)
+           VALUES ($1, $2, now(), $3, now() + interval '5 minutes', 'p50-0047')`,
+          [M.messageId, A.orgId, token],
+        );
+        const [aM1, aM2] = M.attemptIds as [string, string];
+        const aN = N.attemptIds[0]!;
+        const aO = O.attemptIds[0]!;
+        const pmM = (
+          await admin(`SELECT provider_message_id FROM message_attempts WHERE id = $1`, [aM2])
+        ).rows[0].provider_message_id;
+        const pmN = (
+          await admin(`SELECT provider_message_id FROM message_attempts WHERE id = $1`, [aN])
+        ).rows[0].provider_message_id;
+        // Receipts of M — visible to the claim.
+        await insertReceipt(
+          'mDeferred',
+          providerP,
+          'deferred',
+          { kind: 'delivered', clientReference: aM2 },
+          { attemptId: aM2, orgId: A.orgId },
+        );
+        await insertReceipt('mByReference', providerP, 'unmatched', {
+          kind: 'delivered',
+          clientReference: aM2,
+        });
+        await insertReceipt('mByProviderId', providerP, 'unmatched', {
+          kind: 'read',
+          providerMessageId: pmM,
+        });
+        await insertReceipt('mAttempt1', providerP, 'unmatched', {
+          kind: 'undelivered',
+          clientReference: aM1,
+        });
+        await insertReceipt(
+          'mSettled',
+          providerP,
+          'applied',
+          { kind: 'delivered', clientReference: aM2 },
+          { attemptId: aM2, orgId: A.orgId },
+        );
+        // Receipts of other messages — invisible, matched or not.
+        await insertReceipt(
+          'nDeferredMatched',
+          providerP,
+          'deferred',
+          { kind: 'delivered', clientReference: aN },
+          { attemptId: aN, orgId: A.orgId },
+        );
+        await insertReceipt('nUnmatched', providerP, 'unmatched', {
+          kind: 'delivered',
+          providerMessageId: pmN,
+        });
+        await insertReceipt(
+          'nSettled',
+          providerP,
+          'applied',
+          { kind: 'delivered', clientReference: aN },
+          { attemptId: aN, orgId: A.orgId },
+        );
+        await insertReceipt('oUnmatched', providerP, 'unmatched', {
+          kind: 'delivered',
+          clientReference: aO,
+        });
+        await insertReceipt(
+          'oDeferredMatched',
+          providerP,
+          'deferred',
+          { kind: 'delivered', clientReference: aO },
+          { attemptId: aO, orgId: B.orgId },
+        );
+        // A reference to M's attempt under another provider, and a receipt naming nothing.
+        await insertReceipt('otherProvider', providerQ, 'unmatched', {
+          kind: 'delivered',
+          clientReference: aM2,
+        });
+        await insertReceipt('noReference', providerP, 'unmatched', { kind: 'delivered' });
+      });
+
+      const claimCtx = (claimToken: string) => ({
+        [SESSION_VARS.ORG_ID]: A.orgId,
+        [DISPATCH_SESSION_VARS.MESSAGE_ID]: M.messageId,
+        [DISPATCH_SESSION_VARS.CLAIM_TOKEN]: claimToken,
+      });
+      const visible = (c: PoolClient) =>
+        c
+          .query(`SELECT id FROM webhook_events`)
+          .then((res) => new Set(res.rows.map((x) => x.id as string)));
+      const name = (ids: Set<string>) =>
+        Object.keys(r)
+          .filter((k) => ids.has(r[k]!))
+          .sort();
+
+      it('sees exactly M’s receipts (held and settled); none of another message, organization or provider', async () => {
+        const ids = await inTx(dispatchPool, claimCtx(token), visible);
+        expect(name(ids)).toEqual([
+          'mAttempt1',
+          'mByProviderId',
+          'mByReference',
+          'mDeferred',
+          'mSettled',
+        ]);
+      });
+
+      it('settles each held receipt of M onto the attempt its own references name', async () => {
+        const [aM1, aM2] = M.attemptIds as [string, string];
+        await inTx(dispatchPool, claimCtx(token), async (c) => {
+          const settle = (key: string, attemptId: string) =>
+            c.query(
+              `UPDATE webhook_events SET outcome = 'applied', matched_attempt_id = $2, matched_org_id = $3, processed_at = now()
+                WHERE id = $1`,
+              [r[key], attemptId, A.orgId],
+            );
+          expect((await settle('mDeferred', aM2)).rowCount).toBe(1);
+          expect((await settle('mByReference', aM2)).rowCount).toBe(1);
+          expect((await settle('mByProviderId', aM2)).rowCount).toBe(1);
+          expect((await settle('mAttempt1', aM1)).rowCount).toBe(1);
+          // Still visible once settled (the defect 0047 fixes), and final: never settled again.
+          expect(name(await visible(c))).toEqual([
+            'mAttempt1',
+            'mByProviderId',
+            'mByReference',
+            'mDeferred',
+            'mSettled',
+          ]);
+          const again = await c.query(
+            `UPDATE webhook_events SET outcome = 'no_change' WHERE id = ANY($1::uuid[])`,
+            [[r.mDeferred, r.mSettled]],
+          );
+          expect(again.rowCount).toBe(0);
+        });
+      });
+
+      it('cannot settle a receipt of M onto another attempt, another message, unmatched, or another organization', async () => {
+        const [aM1] = M.attemptIds as [string, string];
+        const aN = N.attemptIds[0]!;
+        const attempt = (set: string, params: unknown[]) =>
+          inTx(dispatchPool, claimCtx(token), (c) =>
+            errorCode(c.query(`UPDATE webhook_events SET ${set} WHERE id = $1`, params)),
+          );
+        const rls = /new row violates row-level security policy/;
+        // A receipt naming attempt 2 cannot be matched to attempt 1 of the same message.
+        expect(
+          await attempt(`outcome = 'applied', matched_attempt_id = $2, matched_org_id = $3`, [
+            r.mByReference,
+            aM1,
+            A.orgId,
+          ]),
+        ).toMatch(rls);
+        // … nor to another message's attempt.
+        expect(
+          await attempt(`outcome = 'applied', matched_attempt_id = $2, matched_org_id = $3`, [
+            r.mByReference,
+            aN,
+            A.orgId,
+          ]),
+        ).toMatch(rls);
+        // … nor settled without a match, nor attributed to another organization.
+        expect(
+          await attempt(`outcome = 'applied', processed_at = now()`, [r.mByReference]),
+        ).toMatch(rls);
+        expect(
+          await attempt(`outcome = 'applied', matched_attempt_id = $2, matched_org_id = $3`, [
+            r.mByReference,
+            M.attemptIds[1],
+            B.orgId,
+          ]),
+        ).toMatch(rls);
+      });
+
+      it('cannot modify any receipt of another message, organization or provider — matched or not (0 rows)', async () => {
+        const aN = N.attemptIds[0]!;
+        const counts = await inTx(dispatchPool, claimCtx(token), async (c) => {
+          const out: Record<string, number> = {};
+          for (const key of [
+            'nDeferredMatched',
+            'nUnmatched',
+            'nSettled',
+            'oUnmatched',
+            'oDeferredMatched',
+            'otherProvider',
+            'noReference',
+          ]) {
+            const res = await c.query(
+              `UPDATE webhook_events SET outcome = 'applied', processed_at = now() WHERE id = $1`,
+              [r[key]],
+            );
+            out[key] = res.rowCount ?? -1;
+          }
+          // Also by a broad statement: nothing outside M's receipts is ever touched.
+          const broad = await c.query(
+            `UPDATE webhook_events SET processed_at = now() WHERE matched_attempt_id = $1 OR provider_id = $2`,
+            [aN, providerQ],
+          );
+          out.broad = broad.rowCount ?? -1;
+          return out;
+        });
+        expect(counts).toEqual({
+          nDeferredMatched: 0,
+          nUnmatched: 0,
+          nSettled: 0,
+          oUnmatched: 0,
+          oDeferredMatched: 0,
+          otherProvider: 0,
+          noReference: 0,
+          broad: 0,
+        });
+        const untouched = await admin(
+          `SELECT count(*)::int AS n FROM webhook_events WHERE id = ANY($1::uuid[]) AND processed_at IS NULL`,
+          [
+            [
+              r.nDeferredMatched,
+              r.nUnmatched,
+              r.oUnmatched,
+              r.oDeferredMatched,
+              r.otherProvider,
+              r.noReference,
+            ],
+          ],
+        );
+        expect(untouched.rows[0].n).toBe(6);
+      });
+
+      it('without a live claim (wrong token, expired lease) or under another organization context — sees and settles nothing', async () => {
+        expect((await inTx(dispatchPool, claimCtx(uuidv7()), visible)).size).toBe(0);
+        await admin(
+          `UPDATE message_dispatch_queue SET claimed_until = now() - interval '1 second' WHERE message_id = $1`,
+          [M.messageId],
+        );
+        try {
+          const res = await inTx(dispatchPool, claimCtx(token), async (c) => ({
+            seen: (await visible(c)).size,
+            updated: (
+              await c.query(
+                `UPDATE webhook_events SET outcome = 'applied', matched_attempt_id = $2, matched_org_id = $3 WHERE id = $1`,
+                [r.mByReference, M.attemptIds[1], A.orgId],
+              )
+            ).rowCount,
+          }));
+          expect(res).toEqual({ seen: 0, updated: 0 });
+        } finally {
+          await admin(
+            `UPDATE message_dispatch_queue SET claimed_until = now() + interval '5 minutes' WHERE message_id = $1`,
+            [M.messageId],
+          );
+        }
+        // A claim on M under another organization context sees nothing either.
+        const otherOrg = await inTx(
+          dispatchPool,
+          { ...claimCtx(token), [SESSION_VARS.ORG_ID]: B.orgId },
+          visible,
+        );
+        expect(otherOrg.size).toBe(0);
+      });
+
+      it('the predicate is an invoker function executable by acc_dispatch only; the policies are exactly 0047’s', async () => {
+        const fn = await admin(
+          `SELECT p.prosecdef,
+                  has_function_privilege('public', p.oid, 'EXECUTE') AS pub,
+                  has_function_privilege('acc_app', p.oid, 'EXECUTE') AS app,
+                  has_function_privilege('acc_delivery', p.oid, 'EXECUTE') AS delivery,
+                  has_function_privilege('acc_dispatch', p.oid, 'EXECUTE') AS dispatch
+             FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname = 'app_dispatch_owns_receipt'`,
+        );
+        expect(fn.rows).toEqual([
+          { prosecdef: false, pub: false, app: false, delivery: false, dispatch: true },
+        ]);
+        const pol = await admin(
+          `SELECT policyname, cmd, roles::text[] AS roles, qual, with_check FROM pg_policies
+            WHERE tablename = 'webhook_events' AND 'acc_dispatch' = ANY(roles) ORDER BY policyname`,
+        );
+        expect(pol.rows).toEqual([
+          {
+            policyname: 'webhook_events_dispatch_select',
+            cmd: 'SELECT',
+            roles: ['acc_dispatch'],
+            qual: 'app_dispatch_owns_receipt(provider_id, matched_attempt_id, normalized, false)',
+            with_check: null,
+          },
+          {
+            policyname: 'webhook_events_dispatch_update',
+            cmd: 'UPDATE',
+            roles: ['acc_dispatch'],
+            qual: "((outcome = ANY (ARRAY['deferred'::webhook_event_outcome, 'unmatched'::webhook_event_outcome])) AND app_dispatch_owns_receipt(provider_id, matched_attempt_id, normalized, false))",
+            with_check:
+              '((matched_attempt_id IS NOT NULL) AND (matched_org_id = app_current_org_id()) AND app_dispatch_owns_receipt(provider_id, matched_attempt_id, normalized, true))',
+          },
+        ]);
+      });
     });
   });
 

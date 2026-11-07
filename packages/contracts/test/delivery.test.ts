@@ -15,6 +15,9 @@ import {
   DELIVERY_RECEIPTS_CAPABILITY,
   SIMULATOR_DELIVERY_CAPABILITY,
   WEBHOOK_MAX_EVENTS_PER_REQUEST,
+  WEBHOOK_REPLAY_WINDOW_SECONDS,
+  declaredDeliveryReceipts,
+  reportsDeliveryOutcome,
   validateDeliveryReceiptsCapability,
   validateSimulatorDeliveryCapability,
 } from '../src/provider-adapter';
@@ -166,5 +169,33 @@ describe(`Phase 5.0 — ${SIMULATOR_DELIVERY_CAPABILITY} capability`, () => {
     for (const value of cases) {
       assert.equal(validateSimulatorDeliveryCapability(value).valid, false, JSON.stringify(value));
     }
+  });
+});
+
+describe('Phase 5.0 PR-B contract helpers', () => {
+  it('declaredDeliveryReceipts reads the stored capability; anything unreadable means none (OD-3)', () => {
+    assert.deepEqual(
+      [...declaredDeliveryReceipts(['delivered', 'read', 'bogus'])],
+      ['delivered', 'read'],
+    );
+    for (const value of [undefined, null, 'delivered', { delivered: true }, 42]) {
+      assert.equal(declaredDeliveryReceipts(value).size, 0, JSON.stringify(value));
+    }
+  });
+
+  it('reportsDeliveryOutcome: delivered or undelivered declared (read alone is not an outcome)', () => {
+    assert.equal(reportsDeliveryOutcome(new Set(['undelivered'])), true);
+    assert.equal(reportsDeliveryOutcome(new Set(['read'])), false);
+    assert.equal(reportsDeliveryOutcome(new Set()), false);
+  });
+
+  it('validateDeliveryReceiptsCapability with no channel checks the shape only', () => {
+    assert.equal(validateDeliveryReceiptsCapability(['delivered', 'read'], null).valid, true);
+    assert.equal(validateDeliveryReceiptsCapability(['delivered', 'read'], 'sms').valid, false);
+    assert.equal(validateDeliveryReceiptsCapability(['read'], null).valid, false);
+  });
+
+  it('the replay window is ±300 s (OD-14)', () => {
+    assert.equal(WEBHOOK_REPLAY_WINDOW_SECONDS, 300);
   });
 });

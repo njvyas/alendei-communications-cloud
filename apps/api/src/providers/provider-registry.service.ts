@@ -1,14 +1,18 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import {
   AUDIT_ACTIONS,
+  DELIVERY_RECEIPTS_CAPABILITY,
   ERROR_CODES,
   PERMISSIONS,
   PROVIDER_ADAPTER_KEYS,
   PROVIDER_CAPABILITY_FORBIDDEN_KEY_FRAGMENTS,
   RCS_MESSAGE_TYPES_CAPABILITY,
   SIMULATOR_BEHAVIOR_CAPABILITY,
+  SIMULATOR_DELIVERY_CAPABILITY,
+  validateDeliveryReceiptsCapability,
   validateRcsMessageTypesCapability,
   validateSimulatorBehaviorCapability,
+  validateSimulatorDeliveryCapability,
   PROVIDER_CAPABILITY_LIMITS,
   PROVIDER_TRANSITIONS,
   type AuditAction,
@@ -37,6 +41,7 @@ import { ProviderConfigurationCache } from './provider-configuration.cache';
 import { ProviderStateStore, type Admission } from './provider-state.store';
 import {
   adapterNotRegistered,
+  channelCodeOf,
   channelView,
   lifecycleConflict,
   loadCircuitPolicy,
@@ -388,6 +393,8 @@ export class ProviderRegistryService {
       this.db.withRequestTenant(async (tx) => {
         await this.access.authorize(tx, principal, PERMISSIONS.PROVIDERS_MANAGE);
         const provider = await loadProvider(tx, id, { forUpdate: true });
+        // Phase 5.0: rules that depend on the provider's channel (read receipts on SMS, OD-3).
+        assertChannelCapabilities(next, await channelCodeOf(tx, provider.channelId));
         const before = await readCapabilities(tx, id);
         if (sameCapabilities(before, next)) return providerDetail(tx, provider);
 
@@ -666,7 +673,11 @@ function normalizeCapabilities(input: readonly ProviderCapabilityDto[]): Provide
         ? validateRcsMessageTypesCapability(capability.value)
         : capability.key === SIMULATOR_BEHAVIOR_CAPABILITY
           ? validateSimulatorBehaviorCapability(capability.value)
-          : null;
+          : capability.key === SIMULATOR_DELIVERY_CAPABILITY
+            ? validateSimulatorDeliveryCapability(capability.value)
+            : capability.key === DELIVERY_RECEIPTS_CAPABILITY
+              ? validateDeliveryReceiptsCapability(capability.value, null)
+              : null;
     if (check && !check.valid) {
       issues.push({ field, rule: 'INVALID_VALUE', message: check.errors.join('; ') });
     }
@@ -693,6 +704,46 @@ function normalizeCapabilities(input: readonly ProviderCapabilityDto[]): Provide
   return [...input]
     .map((c) => ({ key: c.key, value: c.value }))
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+}
+
+/**
+ * Phase 5.0 (OD-3, spec §F.3): the capability rules that need the provider's channel —
+ * `delivery_receipts` may not declare `read` on SMS, and a `simulator_delivery` scenario
+ * may not script a read on SMS. Same error shape as `normalizeCapabilities`.
+ */
+function assertChannelCapabilities(
+  capabilities: readonly ProviderCapabilityView[],
+  channel: ChannelCode,
+): void {
+  const issues: { field: string; rule: string; message: string }[] = [];
+  capabilities.forEach((capability, index) => {
+    const field = `capabilities.${index}`;
+    if (capability.key === DELIVERY_RECEIPTS_CAPABILITY) {
+      const check = validateDeliveryReceiptsCapability(capability.value, channel);
+      if (!check.valid) {
+        issues.push({ field, rule: 'INVALID_VALUE', message: check.errors.join('; ') });
+      }
+    }
+    if (
+      capability.key === SIMULATOR_DELIVERY_CAPABILITY &&
+      channel === 'sms' &&
+      (capability.value as { read?: unknown } | null)?.read === true
+    ) {
+      issues.push({
+        field,
+        rule: 'INVALID_VALUE',
+        message: 'simulator_delivery.read is not available on the sms channel',
+      });
+    }
+  });
+  if (issues.length > 0) {
+    throw new AppException({
+      status: HttpStatus.BAD_REQUEST,
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: 'The capability set is not valid',
+      details: { issues },
+    });
+  }
 }
 
 function sameCapabilities(
