@@ -325,7 +325,9 @@ export class ContactsService {
         const identityIds: string[] = [];
         for (const { identity, channelCode } of identityRows) {
           identityIds.push(identity.id);
-          const maskedAddress = maskRecipientAddress(identity.normalizedAddress || identity.rawAddress);
+          const maskedAddress = maskRecipientAddress(
+            identity.normalizedAddress || identity.rawAddress,
+          );
           activities.push({
             id: `activity-identity-${identity.id}-created`,
             contactId: contact.id,
@@ -366,7 +368,13 @@ export class ContactsService {
             for (const [k, v] of Object.entries(rawMeta)) {
               if (
                 typeof v === 'string' &&
-                ['rawAddress', 'normalizedAddress', 'address', 'recipientAddress', 'recipient'].includes(k)
+                [
+                  'rawAddress',
+                  'normalizedAddress',
+                  'address',
+                  'recipientAddress',
+                  'recipient',
+                ].includes(k)
               ) {
                 sanitizedMeta[k] = maskRecipientAddress(v);
               } else {
@@ -441,12 +449,7 @@ export class ContactsService {
           .from(schema.messages)
           .leftJoin(schema.channels, eq(schema.messages.channelId, schema.channels.id))
           .leftJoin(schema.templates, eq(schema.messages.templateId, schema.templates.id))
-          .where(
-            and(
-              eq(schema.messages.orgId, orgId),
-              eq(schema.messages.contactId, contact.id),
-            ),
-          );
+          .where(and(eq(schema.messages.orgId, orgId), eq(schema.messages.contactId, contact.id)));
 
         for (const { message, channelCode, templateName } of messageRows) {
           const channelLabel = (channelCode ?? 'message').toUpperCase();
@@ -554,8 +557,8 @@ export class ContactsService {
                 ? `${channelLabel} Delivery Failed`
                 : `${channelLabel} Submission Failed`,
               description: isDownstreamFailure
-                ? (message.failureReason || 'Message delivery failed at recipient endpoint')
-                : (message.failureReason || 'Message submission failed before dispatch'),
+                ? message.failureReason || 'Message delivery failed at recipient endpoint'
+                : message.failureReason || 'Message submission failed before dispatch',
               timestamp: (message.completedAt ?? message.createdAt).toISOString(),
               channelId: message.channelId,
               channelCode: channelCode ?? null,

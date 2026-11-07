@@ -717,9 +717,7 @@ const CATEGORIES: Category[] = [
         'webhook_ingress_enabled',
         'webhook_ingress_key_rotated',
       ],
-      'packages/contracts/src/contacts.ts': [
-        'message_delivered',
-      ],
+      'packages/contracts/src/contacts.ts': ['message_delivered'],
       'packages/contracts/src/errors.ts': [
         'WEBHOOK_INGRESS_KEY_REQUIRED',
         'WEBHOOK_INGRESS_NOT_CONFIGURED',

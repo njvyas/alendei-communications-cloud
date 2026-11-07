@@ -376,7 +376,11 @@ async function setupRoutes(page: Page) {
             description: `Channel identifier ${ident.normalizedAddress || ident.rawAddress} linked${ident.isPrimary ? ' as primary address' : ''}`,
             timestamp: ident.createdAt,
             channelId: ident.channelId,
-            channelCode: ident.channelId.includes('wa') ? 'whatsapp' : ident.channelId.includes('sms') ? 'sms' : 'email',
+            channelCode: ident.channelId.includes('wa')
+              ? 'whatsapp'
+              : ident.channelId.includes('sms')
+                ? 'sms'
+                : 'email',
             statusTone: ident.status === 'active' ? 'accent' : 'warning',
             metadata: {
               rawAddress: ident.rawAddress,
@@ -401,7 +405,11 @@ async function setupRoutes(page: Page) {
             description: `${consent.consentType.toUpperCase()} consent ${isGrant ? 'granted' : 'revoked'} (Source: ${consent.source})`,
             timestamp: consent.occurredAt,
             channelId: consent.channelId,
-            channelCode: consent.channelId.includes('wa') ? 'whatsapp' : consent.channelId.includes('sms') ? 'sms' : 'email',
+            channelCode: consent.channelId.includes('wa')
+              ? 'whatsapp'
+              : consent.channelId.includes('sms')
+                ? 'sms'
+                : 'email',
             statusTone: isGrant ? 'success' : 'error',
             metadata: {
               consentType: consent.consentType,

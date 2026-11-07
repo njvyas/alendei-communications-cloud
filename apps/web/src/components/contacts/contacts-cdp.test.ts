@@ -199,7 +199,10 @@ describe('Phase 8A Contacts / CDP Core & UI Components', () => {
 
     // Invariant: no inferred profile updates from contact.updatedAt
     assert.equal(types.has('field_updated'), false);
-    assert.equal(timeline.find((e) => e.title === 'Contact Record Updated'), undefined);
+    assert.equal(
+      timeline.find((e) => e.title === 'Contact Record Updated'),
+      undefined,
+    );
 
     // Verify absence of mock message events when no message records are supplied
     assert.equal(timeline.filter((e) => e.category === 'message').length, 0);
@@ -739,6 +742,9 @@ describe('Phase 8A Contacts / CDP Core & UI Components', () => {
     const failedEvent = msgEvents.find((e) => e.id === 'event-msg-fail-msg-failed');
     assert.ok(failedEvent);
     assert.equal(failedEvent?.type, 'message_failed');
-    assert.equal(msgEvents.find((e) => e.id === 'event-msg-sent-msg-failed'), undefined);
+    assert.equal(
+      msgEvents.find((e) => e.id === 'event-msg-sent-msg-failed'),
+      undefined,
+    );
   });
 });
