@@ -2,6 +2,11 @@
 
 import type { MessageDetailWithAttempts } from '../../lib/api-client';
 import { MessageStatusBadge } from './message-status-badge';
+import {
+  DeliveryStatusBadge,
+  ReadReceiptBadge,
+  DeliveryOutcomeCell,
+} from '../messages/delivery-status-badge';
 import { FailureReasonAlert } from '../messages/failure-reason-alert';
 import { formatFailureReason, emptyAttemptsGuidance } from '../../lib/failure-reasons';
 
@@ -32,8 +37,10 @@ export function AttemptHistoryCard({ message, isPolling }: AttemptHistoryCardPro
           <p className="mt-0.5 font-mono text-xs text-[var(--color-ink-muted)]">ID: {message.id}</p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2" data-testid="settlement-header-badges">
           <MessageStatusBadge status={message.status} />
+          <DeliveryStatusBadge deliveryStatus={message.deliveryStatus} />
+          {message.readAt && <ReadReceiptBadge readAt={message.readAt} />}
         </div>
       </div>
 
@@ -73,11 +80,14 @@ export function AttemptHistoryCard({ message, isPolling }: AttemptHistoryCardPro
 
       {/* Distinction Banner */}
       <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 p-3 text-[11px] text-[var(--color-ink-muted)]">
-        <span className="font-semibold text-indigo-400">Submission Boundary Rule:</span>{' '}
-        <code className="text-[11px] font-semibold text-emerald-400">PROVIDER_ACCEPTED</code> means
-        the provider submission adapter acknowledged receipt of the message payload. It is{' '}
-        <strong>not a delivery receipt or delivery confirmation</strong> (inbound delivery webhooks
-        and receipts are excluded from Phase 3 scope per ADR-014 D20).
+        <span className="font-semibold text-indigo-400">Two-Axis Delivery Model:</span>{' '}
+        <code className="text-[11px] font-semibold text-emerald-400">PROVIDER_ACCEPTED</code>{' '}
+        represents submission acknowledgment by the provider adapter. Handset delivery and read
+        outcomes are tracked on the independent delivery axis (
+        <code className="text-[11px] font-semibold text-sky-400">DELIVERED</code>,{' '}
+        <code className="text-[11px] font-semibold text-amber-400">PENDING</code>,{' '}
+        <code className="text-[11px] font-semibold text-rose-400">UNDELIVERED</code>) via
+        asynchronous carrier webhooks.
       </div>
 
       {/* Attempts Table */}
@@ -98,7 +108,13 @@ export function AttemptHistoryCard({ message, isPolling }: AttemptHistoryCardPro
                   Provider ID
                 </th>
                 <th scope="col" className="px-3 py-2 font-medium">
-                  Outcome
+                  Provider Msg ID
+                </th>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  Submission
+                </th>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  Delivery
                 </th>
                 <th scope="col" className="px-3 py-2 font-medium">
                   Latency
@@ -114,7 +130,7 @@ export function AttemptHistoryCard({ message, isPolling }: AttemptHistoryCardPro
             <tbody className="divide-y divide-[var(--color-border-subtle)]">
               {message.attempts.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-3 py-4 text-center text-[var(--color-ink-muted)]">
+                  <td colSpan={8} className="px-3 py-4 text-center text-[var(--color-ink-muted)]">
                     {(() => {
                       const guidance = emptyAttemptsGuidance(message.status, message.failureReason);
                       return (
@@ -143,6 +159,21 @@ export function AttemptHistoryCard({ message, isPolling }: AttemptHistoryCardPro
                     <td className="px-3 py-2 font-mono text-[11px] text-[var(--color-ink)]">
                       {att.providerId}
                     </td>
+                    <td
+                      className="px-3 py-2 font-mono text-[11px] text-[var(--color-ink)]"
+                      data-testid={`attempt-provider-msg-id-${att.attemptNumber}`}
+                    >
+                      {att.providerMessageId ? (
+                        <span
+                          title={att.providerMessageId}
+                          className="truncate max-w-[130px] inline-block"
+                        >
+                          {att.providerMessageId}
+                        </span>
+                      ) : (
+                        <span className="opacity-50">—</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2">
                       <span
                         className={`inline-block rounded px-2 py-0.5 text-[10px] font-semibold uppercase ${
@@ -155,6 +186,14 @@ export function AttemptHistoryCard({ message, isPolling }: AttemptHistoryCardPro
                       >
                         {att.status}
                       </span>
+                    </td>
+                    <td className="px-3 py-2" data-testid={`attempt-delivery-${att.attemptNumber}`}>
+                      <DeliveryOutcomeCell
+                        deliveryStatus={att.deliveryStatus}
+                        readAt={att.readAt}
+                        deliveredAt={att.deliveredAt}
+                        size="sm"
+                      />
                     </td>
                     <td className="px-3 py-2 font-mono text-[11px] text-[var(--color-ink)]">
                       {att.latencyMs !== null ? `${att.latencyMs} ms` : '—'}
