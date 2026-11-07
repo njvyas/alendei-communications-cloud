@@ -42,8 +42,8 @@ Excluded from the customer OpenAPI document. Two forms of **one** route, one pip
 
 | Surface | Control |
 |---|---|
-| Application logs | pino request serializer redacts the path and drops params and query; the header is redacted (`req.headers`, and any logged `headers` object) |
-| Traces | the HTTP instrumentation request hook overwrites every URL attribute of an ingress span; no request header is ever captured as a span attribute |
+| Application logs | on both forms the pino request serializer drops the query string, fragment and params, and on the URL form replaces the key with `:providerKey`; the header is redacted (`req.headers`, and any logged `headers` object) |
+| Traces | on both forms the HTTP instrumentation request hook overwrites every URL attribute of the span with the query-free redacted path (`url.query` empty) and sets `http.route` to the form's template; no request header is ever captured as a span attribute |
 | Error bodies | uniform, path-free 401/404/413/415; the middleware answers non-POST or extra-segment requests itself |
 | Database | only the peppered hash (`providers.webhook_ingress_key_hash`); `webhook_events` holds a redacted normalised envelope, never headers |
 | Audit | rotation/enable/disable and the simulator trigger are audited without the key or its hash |
@@ -79,7 +79,7 @@ curl -sS -X POST "https://<console-host>/api/v1/providers/<providerId>/simulator
 ```
 
 - **Body:** `attemptId` (required) and an optional `scenario` — a `simulator_delivery` value: `outcome` (`DELIVERED` / `UNDELIVERED` / `NONE`), `read`, `delayMs` (offsets `occurredAt` only — nothing sleeps), `duplicates` (0–3), `order` (`IN_ORDER` / `REVERSED`), `signature` (`VALID` / `INVALID` / `STALE` / `REPLAY`), `clientReferenceOnly`, `batch`, `withEventIds`. Omitted: the provider's configured `simulator_delivery` capability. `read` is refused on SMS. Any other property — including `messageId` or a URL — is refused (400).
-- **Key handling:** the key is used only to forward each signed request, in the same header, to this deployment's own listening address and port on the fixed path `/api/v1/webhooks/providers`. It is never stored, logged, audited, traced or returned; a wrong key simply yields 401 answers from the ingress.
+- **Key handling:** the key is used only to forward each signed request, in the same header, over **loopback only** — `127.0.0.1` (IPv4 wildcard or loopback bind) or `::1` (IPv6 wildcard or loopback bind) — to the port this deployment listens on, on the fixed path `/api/v1/webhooks/providers`. A server bound only to a specific non-loopback address is refused (503) with nothing sent. It is never stored, logged, audited, traced or returned; a wrong key simply yields 401 answers from the ingress.
 - **Response (200):** `{ providerId, attemptId, scenario, elementCount, requests: [{ index, elements, status, received, errorCode }] }` — the ingress answer to each signed request, in order. A refused receipt (for example `401` for `signature: INVALID`) is reported inside a 200.
 - **Errors:** 400 invalid body, scenario or missing key header; 401 no session; 403 not a platform `providers.test_send` holder; 404 unknown provider; 409 `WEBHOOK_INGRESS_DISABLED`; 422 not a simulator provider; 503 signing key not configured or loopback unavailable.
 - **Audit:** `provider.test_sent` (the existing action and policy) with `metadata.tool = "simulator_delivery_events"`, the attempt id, the scenario, the element and request counts and the per-request outcomes.

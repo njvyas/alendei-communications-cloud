@@ -224,11 +224,44 @@ export class ProviderSimulatorTriggerService {
   }
 }
 
+/** The only destinations the trigger ever posts to. */
+export type LoopbackHost = '127.0.0.1' | '::1';
+
 /**
- * POSTs one signed request to this process's own header-form ingress route. The destination is
- * the address and port `server` is listening on — fixed by the deployment, never by the caller —
- * the path is the fixed route template, and the key travels only in the dedicated header.
- * Exported for the unit test that pins exactly that.
+ * The loopback address through which a server listening on `address` is reachable, or null.
+ * Strict: the result is only ever `127.0.0.1` or `::1`. A wildcard bind is reached through the
+ * loopback of its family; a loopback bind through itself (an IPv4-mapped `::ffff:127.0.0.1` as
+ * `127.0.0.1`); any other bind — a specific non-loopback interface, or another 127.x address — is
+ * not reachable through those two addresses, and is refused rather than used as a destination.
+ */
+export function loopbackHostFor(address: Pick<AddressInfo, 'address'>): LoopbackHost | null {
+  switch (address.address) {
+    case '0.0.0.0':
+    case '127.0.0.1':
+    case '::ffff:127.0.0.1':
+      return '127.0.0.1';
+    case '::':
+    case '::1':
+      return '::1';
+    default:
+      return null;
+  }
+}
+
+const loopbackUnavailable = () =>
+  new AppException({
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    code: ERROR_CODES.SERVICE_UNAVAILABLE,
+    message: 'The ingress is not reachable over loopback',
+    retryable: false,
+  });
+
+/**
+ * POSTs one signed request to this process's own header-form ingress route, over loopback only:
+ * the destination is `127.0.0.1` or `::1` (`loopbackHostFor`) on the port `server` listens on, the
+ * path is the fixed route template, and the key travels only in the dedicated header. None of it
+ * comes from the caller. A server that is not listening, or is bound only to a non-loopback
+ * address, is refused (503) with nothing sent. Exported for the unit tests that pin exactly that.
  */
 export async function postToOwnIngress(
   server: Server,
@@ -236,20 +269,9 @@ export async function postToOwnIngress(
   ingressKey: string,
 ): Promise<Omit<SimulatorDeliveryRequestOutcome, 'index' | 'elements'>> {
   const address = server.address() as AddressInfo | string | null;
-  if (!address || typeof address === 'string') {
-    throw new AppException({
-      status: HttpStatus.SERVICE_UNAVAILABLE,
-      code: ERROR_CODES.SERVICE_UNAVAILABLE,
-      message: 'The ingress is not reachable over loopback',
-      retryable: true,
-    });
-  }
-  const host =
-    address.address === '::' || address.address === '0.0.0.0'
-      ? address.family === 'IPv6'
-        ? '::1'
-        : '127.0.0.1'
-      : address.address;
+  if (!address || typeof address === 'string') throw loopbackUnavailable();
+  const host = loopbackHostFor(address);
+  if (host === null) throw loopbackUnavailable();
   const body = Buffer.from(signed.rawBody);
   return new Promise((resolve, reject) => {
     const req = httpRequest(

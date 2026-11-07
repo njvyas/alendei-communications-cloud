@@ -86,12 +86,23 @@ export function isIngressPath(url: string | undefined | null): boolean {
 }
 
 /**
- * `url` with the ingress key replaced by `:providerKey` and the query string dropped;
- * any other URL unchanged. Total and side-effect free: safe in every serializer.
+ * Whether `url` addresses the ingress in either form: the URL form (`…/webhooks/providers/<key>`,
+ * any extra segments) or the header form (`…/webhooks/providers`, PR-E). Every redaction point
+ * uses this, so neither form's query string or key reaches a log line or a span.
+ */
+export function isIngressUrl(url: string | undefined | null): boolean {
+  return isIngressHeaderRoute(url) || isIngressPath(url);
+}
+
+/**
+ * `url` with the query string and fragment dropped on either ingress form, and, on the URL form,
+ * the key replaced by `:providerKey`; any other URL unchanged. Total and side-effect free: safe
+ * in every serializer.
  */
 export function redactIngressPath<T extends string | undefined | null>(url: T): T {
-  if (typeof url !== 'string' || !INGRESS_PATH.test(url)) return url;
+  if (typeof url !== 'string' || !isIngressUrl(url)) return url;
   const path = url.split(/[?#]/, 1)[0]!;
+  if (isIngressHeaderRoute(url)) return path as T;
   return path.replace(INGRESS_PATH, `$1${INGRESS_KEY_PLACEHOLDER}`) as T;
 }
 
@@ -112,21 +123,24 @@ export interface RedactableSpan {
 }
 
 /**
- * The OpenTelemetry HTTP `requestHook` for incoming requests: on the ingress, overwrite
- * every URL-bearing attribute with the redacted path, set `http.route` to the template and
- * name the span after the template (spec §E.8). Any other request is left alone.
+ * The OpenTelemetry HTTP `requestHook` for incoming requests: on either ingress form, overwrite
+ * every URL-bearing attribute with the redacted, query-free path, set `http.route` to the form's
+ * template and name the span after it (spec §E.8). Any other request is left alone.
  */
 export function redactIngressSpan(
   span: RedactableSpan,
   request: { url?: string; method?: string },
 ): void {
-  if (!isIngressPath(request.url)) return;
+  if (!isIngressUrl(request.url)) return;
   const redacted = redactIngressPath(request.url!);
+  const template = isIngressHeaderRoute(request.url)
+    ? INGRESS_HEADER_ROUTE_TEMPLATE
+    : INGRESS_ROUTE_TEMPLATE;
   for (const attribute of URL_ATTRIBUTES) {
     span.setAttribute(
       attribute,
       attribute === 'http.route'
-        ? INGRESS_ROUTE_TEMPLATE
+        ? template
         : attribute === 'url.query'
           ? ''
           : attribute === 'http.url' || attribute === 'url.full'
@@ -134,5 +148,5 @@ export function redactIngressSpan(
             : redacted,
     );
   }
-  span.updateName(`${request.method ?? 'POST'} ${INGRESS_ROUTE_TEMPLATE}`);
+  span.updateName(`${request.method ?? 'POST'} ${template}`);
 }

@@ -8,7 +8,7 @@ import { trace } from '@opentelemetry/api';
 
 import { RequestContext } from '../common/context/request-context';
 import type { AppConfigService } from '../config/app-config.service';
-import { isIngressPath, redactIngressPath } from '../webhooks/ingress-path';
+import { isIngressUrl, redactIngressPath } from '../webhooks/ingress-path';
 
 /**
  * Structured JSON logging (`OBSERVABILITY.md` §2).
@@ -59,7 +59,8 @@ const REDACTED_PATHS = [
  * Phase 5.0 PR-C (OD-19, spec §E.8): the request serializer redacts the provider webhook
  * ingress key — the path segment after `/webhooks/providers/` — from `req.url` and drops
  * `req.params` and `req.query` on that path (a misbehaving client may repeat the key in the
- * query string), so no request log line ever carries the key.
+ * query string), so no request log line ever carries the key. PR-E: the same for the header
+ * form (`/webhooks/providers`): its query string is dropped too (`isIngressUrl`).
  */
 export function pinoHttpOptions(config: AppConfigService) {
   return {
@@ -71,7 +72,7 @@ export function pinoHttpOptions(config: AppConfigService) {
     redact: { paths: REDACTED_PATHS, censor: '[redacted]' },
     serializers: {
       req: (req: { url?: string; params?: unknown; query?: unknown }) =>
-        isIngressPath(req.url)
+        isIngressUrl(req.url)
           ? { ...req, url: redactIngressPath(req.url), params: undefined, query: undefined }
           : req,
     },
