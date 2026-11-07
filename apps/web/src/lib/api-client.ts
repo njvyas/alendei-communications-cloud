@@ -7,6 +7,7 @@ import type {
   ChannelStatus,
   ConsentEventResponse,
   ConsentEventType,
+  ContactActivityResponse,
   ContactIdentityResponse,
   ContactIdentityStatus,
   ContactResponse,
@@ -2413,6 +2414,12 @@ export interface GetEffectiveConsentParams {
   readonly consentType: string;
 }
 
+export interface ListContactActivitiesParams {
+  readonly category?: 'all' | 'message' | 'consent' | 'identity' | 'profile';
+  readonly cursor?: string;
+  readonly limit?: number;
+}
+
 export const contactsApi = {
   async list(
     workspaceId: string,
@@ -2567,6 +2574,28 @@ export const contactsApi = {
         signal,
       },
     );
+  },
+
+  async listActivities(
+    contactId: string,
+    params: ListContactActivitiesParams = {},
+    signal?: AbortSignal,
+    workspaceId?: string,
+  ): Promise<ApiPagedResponse<ContactActivityResponse>> {
+    const search = new URLSearchParams();
+    if (params.category && params.category !== 'all') search.set('category', params.category);
+    if (params.cursor) search.set('cursor', params.cursor);
+    if (params.limit) search.set('limit', String(params.limit));
+
+    const query = search.toString();
+    const path = workspaceId
+      ? `/workspaces/${encodeURIComponent(workspaceId)}/contacts/${encodeURIComponent(contactId)}/activities${query ? `?${query}` : ''}`
+      : `/contacts/${encodeURIComponent(contactId)}/activities${query ? `?${query}` : ''}`;
+
+    return apiFetch<ApiPagedResponse<ContactActivityResponse>>(path, {
+      method: 'GET',
+      signal,
+    });
   },
 };
 

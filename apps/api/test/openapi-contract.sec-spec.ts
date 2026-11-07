@@ -180,9 +180,10 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * under `/platform/support`: 139 → 143.
      * Phase 5.0 PR-C, 07-Nov-2026: 3 provider webhook-ingress administration operations
      * (key, enable, disable): 143 → 146; the ingress route itself is the second exclusion
-     * (OD-10).)
+     * (OD-10).
+     * Phase 8A, 07-Nov-2026: 2 genuine contact activity timeline operations: 146 → 148.
      */
-    const APPLICATION_OPERATIONS = 146;
+    const APPLICATION_OPERATIONS = 148;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 
