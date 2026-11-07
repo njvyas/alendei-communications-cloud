@@ -3,6 +3,8 @@ import {
   ERROR_CODES,
   PAGE_LIMITS,
   PERMISSIONS,
+  isTerminalMessageStatus,
+  maskRecipientAddress,
   type AuthPrincipal,
   type ContactActivityResponse,
   type ContactResponse,
@@ -10,6 +12,7 @@ import {
   type ConsentEventResponse,
   type EffectiveConsentResponse,
   type EffectiveConsentState,
+  type MessageStatus,
   type PageInfo,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
@@ -322,21 +325,21 @@ export class ContactsService {
         const identityIds: string[] = [];
         for (const { identity, channelCode } of identityRows) {
           identityIds.push(identity.id);
+          const maskedAddress = maskRecipientAddress(identity.normalizedAddress || identity.rawAddress);
           activities.push({
             id: `activity-identity-${identity.id}-created`,
             contactId: contact.id,
             workspaceId: contact.workspaceId,
             type: 'identity_added',
             category: 'identity',
-            title: `Identity Added (${identity.rawAddress})`,
-            description: `Channel identifier ${identity.normalizedAddress || identity.rawAddress} linked${identity.isPrimary ? ' as primary address' : ''}`,
+            title: `Identity Added (${maskedAddress})`,
+            description: `Channel identifier ${maskedAddress} linked${identity.isPrimary ? ' as primary address' : ''}`,
             timestamp: identity.createdAt.toISOString(),
             channelId: identity.channelId,
             channelCode: channelCode ?? null,
             statusTone: identity.status === 'active' ? 'accent' : 'warning',
             metadata: {
-              rawAddress: identity.rawAddress,
-              normalizedAddress: identity.normalizedAddress,
+              maskedAddress,
               isPrimary: identity.isPrimary,
               status: identity.status,
             },
@@ -358,6 +361,18 @@ export class ContactsService {
             );
 
           for (const auditRow of identityAuditRows) {
+            const rawMeta = (auditRow.metadata as Record<string, unknown>) ?? {};
+            const sanitizedMeta: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(rawMeta)) {
+              if (
+                typeof v === 'string' &&
+                ['rawAddress', 'normalizedAddress', 'address', 'recipientAddress', 'recipient'].includes(k)
+              ) {
+                sanitizedMeta[k] = maskRecipientAddress(v);
+              } else {
+                sanitizedMeta[k] = v;
+              }
+            }
             activities.push({
               id: `activity-audit-${auditRow.id}`,
               contactId: contact.id,
@@ -370,7 +385,7 @@ export class ContactsService {
                 : 'Contact identity modified',
               timestamp: (auditRow.occurredAt ?? auditRow.createdAt).toISOString(),
               statusTone: 'warning',
-              metadata: (auditRow.metadata as Record<string, unknown>) ?? {},
+              metadata: sanitizedMeta,
             });
           }
         }
@@ -435,27 +450,54 @@ export class ContactsService {
 
         for (const { message, channelCode, templateName } of messageRows) {
           const channelLabel = (channelCode ?? 'message').toUpperCase();
+          const maskedRecipient = maskRecipientAddress(message.recipientAddress);
 
-          activities.push({
-            id: `activity-msg-${message.id}-sent`,
-            contactId: contact.id,
-            workspaceId: contact.workspaceId,
-            type: 'message_sent',
-            category: 'message',
-            title: `${channelLabel} Dispatched`,
-            description: `Outbound message dispatched to recipient ${message.recipientAddress}`,
-            timestamp: message.createdAt.toISOString(),
-            channelId: message.channelId,
-            channelCode: channelCode ?? null,
-            statusTone: 'neutral',
-            metadata: {
-              messageId: message.id,
-              recipientAddress: message.recipientAddress,
-              status: message.status,
-              templateName: templateName ?? null,
-            },
-          });
+          // 1. Dispatch event (message_sent) vs Pending Dispatch (message_pending)
+          if (message.status === 'accepted') {
+            // Established dispatch: message was submitted to and accepted by the upstream provider/carrier
+            activities.push({
+              id: `activity-msg-${message.id}-sent`,
+              contactId: contact.id,
+              workspaceId: contact.workspaceId,
+              type: 'message_sent',
+              category: 'message',
+              title: `${channelLabel} Dispatched`,
+              description: `Outbound message dispatched to recipient ${maskedRecipient}`,
+              timestamp: message.createdAt.toISOString(),
+              channelId: message.channelId,
+              channelCode: channelCode ?? null,
+              statusTone: 'neutral',
+              metadata: {
+                messageId: message.id,
+                recipientAddress: maskedRecipient,
+                status: message.status,
+                templateName: templateName ?? null,
+              },
+            });
+          } else if (!isTerminalMessageStatus(message.status as MessageStatus)) {
+            // Not yet dispatched: message is pending dispatch
+            activities.push({
+              id: `activity-msg-${message.id}-pending`,
+              contactId: contact.id,
+              workspaceId: contact.workspaceId,
+              type: 'message_pending',
+              category: 'message',
+              title: `${channelLabel} Pending Dispatch`,
+              description: `Outbound message awaiting dispatch to ${maskedRecipient}`,
+              timestamp: message.createdAt.toISOString(),
+              channelId: message.channelId,
+              channelCode: channelCode ?? null,
+              statusTone: 'neutral',
+              metadata: {
+                messageId: message.id,
+                recipientAddress: maskedRecipient,
+                status: message.status,
+                templateName: templateName ?? null,
+              },
+            });
+          }
 
+          // 2. Delivery event (message_delivered)
           if (message.deliveredAt || message.deliveryStatus === 'delivered') {
             activities.push({
               id: `activity-msg-${message.id}-delivered`,
@@ -471,12 +513,13 @@ export class ContactsService {
               statusTone: 'success',
               metadata: {
                 messageId: message.id,
-                recipientAddress: message.recipientAddress,
+                recipientAddress: maskedRecipient,
                 deliveryStatus: message.deliveryStatus,
               },
             });
           }
 
+          // 3. Read event (message_read)
           if (message.readAt) {
             activities.push({
               id: `activity-msg-${message.id}-read`,
@@ -492,29 +535,56 @@ export class ContactsService {
               statusTone: 'accent',
               metadata: {
                 messageId: message.id,
-                recipientAddress: message.recipientAddress,
+                recipientAddress: maskedRecipient,
               },
             });
           }
 
+          // 4. Failure event (message_failed)
           if (message.status === 'failed' || message.deliveryStatus === 'undelivered') {
+            const isDownstreamFailure =
+              message.status === 'accepted' && message.deliveryStatus === 'undelivered';
             activities.push({
               id: `activity-msg-${message.id}-failed`,
               contactId: contact.id,
               workspaceId: contact.workspaceId,
               type: 'message_failed',
               category: 'message',
-              title: `${channelLabel} Delivery Failed`,
-              description: message.failureReason || 'Message delivery failed or undelivered',
+              title: isDownstreamFailure
+                ? `${channelLabel} Delivery Failed`
+                : `${channelLabel} Submission Failed`,
+              description: isDownstreamFailure
+                ? (message.failureReason || 'Message delivery failed at recipient endpoint')
+                : (message.failureReason || 'Message submission failed before dispatch'),
               timestamp: (message.completedAt ?? message.createdAt).toISOString(),
               channelId: message.channelId,
               channelCode: channelCode ?? null,
               statusTone: 'error',
               metadata: {
                 messageId: message.id,
-                recipientAddress: message.recipientAddress,
+                recipientAddress: maskedRecipient,
                 failureReason: message.failureReason,
+                status: message.status,
                 deliveryStatus: message.deliveryStatus,
+              },
+            });
+          } else if (message.status === 'outcome_unknown') {
+            activities.push({
+              id: `activity-msg-${message.id}-failed`,
+              contactId: contact.id,
+              workspaceId: contact.workspaceId,
+              type: 'message_failed',
+              category: 'message',
+              title: `${channelLabel} Dispatch Outcome Unknown`,
+              description: 'Message submission outcome unknown',
+              timestamp: (message.completedAt ?? message.createdAt).toISOString(),
+              channelId: message.channelId,
+              channelCode: channelCode ?? null,
+              statusTone: 'warning',
+              metadata: {
+                messageId: message.id,
+                recipientAddress: maskedRecipient,
+                status: message.status,
               },
             });
           }

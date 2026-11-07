@@ -188,7 +188,7 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
       expect(result.page.hasMore).toBe(false);
     });
 
-    it('maps genuine message dispatched, delivered, read, and failed events from persisted records', async () => {
+    it('maps genuine message dispatched, delivered, read, and failed events from persisted records with accurate status and masked addresses', async () => {
       const channelId = '01900000-0000-7000-8000-000000000020';
       const msgSuccess = {
         id: '01900000-0000-7000-8000-000000000030',
@@ -233,9 +233,9 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
 
       const result = await service.listActivities(principal, contactId, { category: 'message' });
 
-      // msgSuccess generates: message_sent, message_delivered, message_read
-      // msgFailed generates: message_sent, message_failed
-      expect(result.items.length).toBe(5);
+      // msgSuccess (status: accepted) generates: message_sent, message_delivered, message_read (3)
+      // msgFailed (status: failed) generates ONLY: message_failed (1) — NEVER message_sent!
+      expect(result.items.length).toBe(4);
 
       const types = result.items.map((i) => i.type);
       expect(types).toContain('message_sent');
@@ -243,21 +243,35 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
       expect(types).toContain('message_read');
       expect(types).toContain('message_failed');
 
+      // Verify dispatch item: only for msgSuccess
+      const sentItem = result.items.find((i) => i.type === 'message_sent')!;
+      expect(sentItem.title).toBe('WHATSAPP Dispatched');
+      expect(sentItem.description).toContain('+1 •••• 0123');
+      expect(sentItem.metadata?.recipientAddress).toBe('+1 •••• 0123');
+
       // Verify delivery details
       const deliveredItem = result.items.find((i) => i.type === 'message_delivered')!;
       expect(deliveredItem.statusTone).toBe('success');
       expect(deliveredItem.timestamp).toBe('2026-11-02T12:05:00.000Z');
       expect(deliveredItem.channelCode).toBe('whatsapp');
+      expect(deliveredItem.metadata?.recipientAddress).toBe('+1 •••• 0123');
 
       // Verify read details
       const readItem = result.items.find((i) => i.type === 'message_read')!;
       expect(readItem.statusTone).toBe('accent');
       expect(readItem.timestamp).toBe('2026-11-02T12:10:00.000Z');
+      expect(readItem.metadata?.recipientAddress).toBe('+1 •••• 0123');
 
-      // Verify failed details
+      // Verify failed details: submission failure wording
       const failedItem = result.items.find((i) => i.type === 'message_failed')!;
       expect(failedItem.statusTone).toBe('error');
+      expect(failedItem.title).toBe('WHATSAPP Submission Failed');
       expect(failedItem.description).toContain('Destination handset unreachable');
+      expect(failedItem.metadata?.recipientAddress).toBe('+1 •••• 0123');
+
+      // Regression: verify raw unmasked address '+12025550123' NEVER appears in result
+      const serialized = JSON.stringify(result.items);
+      expect(serialized).not.toContain('+12025550123');
 
       // Verify descending chronological order
       for (let i = 0; i < result.items.length - 1; i++) {
@@ -265,6 +279,93 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
         const tB = new Date(result.items[i + 1]!.timestamp).getTime();
         expect(tA).toBeGreaterThanOrEqual(tB);
       }
+    });
+
+    it('emits message_pending for queued/routing/submitting messages and never emits message_sent without accepted status', async () => {
+      const channelId = '01900000-0000-7000-8000-000000000020';
+      const queuedMsg = {
+        id: '01900000-0000-7000-8000-000000000035',
+        orgId,
+        workspaceId,
+        contactId,
+        channelId,
+        status: 'queued',
+        createdAt: new Date('2026-11-04T12:00:00Z'),
+        recipientAddress: '+12025550999',
+      };
+
+      mockTx.select.mockReturnValue({
+        from: jest.fn().mockReturnValue({
+          leftJoin: jest.fn().mockReturnValue({
+            leftJoin: jest.fn().mockReturnValue({
+              where: jest.fn().mockResolvedValue([
+                { message: queuedMsg, channelCode: 'sms', templateName: null },
+              ]),
+            }),
+          }),
+        }),
+      });
+
+      const result = await service.listActivities(principal, contactId, { category: 'message' });
+
+      expect(result.items.length).toBe(1);
+      const pendingEvent = result.items[0]!;
+      expect(pendingEvent.type).toBe('message_pending');
+      expect(pendingEvent.title).toBe('SMS Pending Dispatch');
+      expect(pendingEvent.description).toContain('awaiting dispatch');
+      expect(pendingEvent.metadata?.status).toBe('queued');
+      expect(pendingEvent.metadata?.recipientAddress).toBe('+1 •••• 0999');
+
+      // No message_sent event emitted
+      expect(result.items.find((i) => i.type === 'message_sent')).toBeUndefined();
+    });
+
+    it('strictly masks identity addresses and prevents raw/normalized address leakage in metadata', async () => {
+      const channelId = '01900000-0000-7000-8000-000000000020';
+      const rawPhone = '+12025550888';
+      const identityRow = {
+        id: '01900000-0000-7000-8000-000000000045',
+        orgId,
+        contactId,
+        channelId,
+        rawAddress: rawPhone,
+        normalizedAddress: rawPhone,
+        isPrimary: true,
+        status: 'active',
+        createdAt: new Date('2026-11-01T08:00:00Z'),
+        updatedAt: new Date('2026-11-01T08:00:00Z'),
+      };
+
+      mockTx.select.mockReturnValueOnce({
+        from: jest.fn().mockReturnValue({
+          leftJoin: jest.fn().mockReturnValue({
+            where: jest.fn().mockResolvedValue([
+              { identity: identityRow, channelCode: 'whatsapp' },
+            ]),
+          }),
+        }),
+      }).mockReturnValueOnce({
+        from: jest.fn().mockReturnValue({
+          where: jest.fn().mockResolvedValue([]),
+        }),
+      });
+
+      const result = await service.listActivities(principal, contactId, { category: 'identity' });
+
+      expect(result.items.length).toBe(1);
+      const event = result.items[0]!;
+      expect(event.type).toBe('identity_added');
+      expect(event.title).toBe('Identity Added (+1 •••• 0888)');
+      expect(event.description).toContain('+1 •••• 0888');
+      expect(event.metadata?.maskedAddress).toBe('+1 •••• 0888');
+
+      // Raw and normalized address properties MUST NOT be present in metadata
+      expect(event.metadata?.rawAddress).toBeUndefined();
+      expect(event.metadata?.normalizedAddress).toBeUndefined();
+
+      // Regression: raw phone number NEVER appears in response
+      const serialized = JSON.stringify(result.items);
+      expect(serialized).not.toContain(rawPhone);
     });
 
     it('maps genuine consent events and identity events from database', async () => {
