@@ -1,7 +1,8 @@
-import type {
-  ConsentEventResponse,
-  ContactIdentityResponse,
-  ContactResponse,
+import {
+  maskRecipientAddress,
+  type ConsentEventResponse,
+  type ContactIdentityResponse,
+  type ContactResponse,
 } from '@acc/contracts';
 
 /**
@@ -154,6 +155,7 @@ export function removeCustomField(
  * Activity Timeline event definitions
  */
 export type ActivityEventType =
+  | 'message_pending'
   | 'message_sent'
   | 'message_delivered'
   | 'message_read'
@@ -226,17 +228,17 @@ export function generateContactTimeline(
 
   // 2. Identity events
   for (const ident of identities) {
+    const maskedAddress = maskRecipientAddress(ident.normalizedAddress || ident.rawAddress);
     items.push({
       id: `event-identity-${ident.id}`,
       type: 'identity_added',
       category: 'identity',
-      title: `Identity Added (${ident.rawAddress})`,
-      description: `Channel identifier ${ident.normalizedAddress || ident.rawAddress} linked${ident.isPrimary ? ' as primary address' : ''}.`,
+      title: `Identity Added (${maskedAddress})`,
+      description: `Channel identifier ${maskedAddress} linked${ident.isPrimary ? ' as primary address' : ''}.`,
       timestamp: ident.createdAt,
       statusTone: ident.status === 'active' ? 'accent' : 'warning',
       metadata: {
-        rawAddress: ident.rawAddress,
-        normalizedAddress: ident.normalizedAddress,
+        maskedAddress,
         isPrimary: ident.isPrimary,
         status: ident.status,
       },
@@ -266,26 +268,10 @@ export function generateContactTimeline(
     });
   }
 
-  // 4. Contact record modification event (inferred from updatedAt timestamp)
-  if (contact.updatedAt && contact.updatedAt !== contact.createdAt) {
-    const tags = extractContactTags(contact.metadata);
-    items.push({
-      id: `event-updated-${contact.id}-${contact.updatedAt}`,
-      type: 'field_updated',
-      category: 'profile',
-      title: 'Contact Record Updated',
-      description:
-        tags.length > 0
-          ? `Record timestamp updated. Current tags: ${tags.join(', ')} (inferred from updatedAt; granular attribute audit log pending backend support).`
-          : 'Record timestamp updated (inferred from updatedAt; granular attribute audit log pending backend support).',
-      timestamp: contact.updatedAt,
-      statusTone: 'neutral',
-      metadata: contact.metadata,
-    });
-  }
-
-  // 5. Authentic message events (only when real records are passed)
+  // 4. Authentic message events (only when real records are passed)
   for (const msg of messages) {
+    const maskedRecipient = maskRecipientAddress(msg.recipientAddress);
+
     if (msg.readAt) {
       items.push({
         id: `event-msg-read-${msg.id}`,
@@ -298,7 +284,7 @@ export function generateContactTimeline(
         statusTone: 'accent',
         metadata: {
           messageId: msg.id,
-          recipientAddress: msg.recipientAddress,
+          recipientAddress: maskedRecipient,
           templateName: msg.templateName,
         },
       });
@@ -316,7 +302,7 @@ export function generateContactTimeline(
         statusTone: 'success',
         metadata: {
           messageId: msg.id,
-          recipientAddress: msg.recipientAddress,
+          recipientAddress: maskedRecipient,
           deliveryStatus: msg.deliveryStatus,
         },
       });
@@ -332,28 +318,47 @@ export function generateContactTimeline(
         statusTone: 'error',
         metadata: {
           messageId: msg.id,
-          recipientAddress: msg.recipientAddress,
+          recipientAddress: maskedRecipient,
           failureReason: msg.failureReason,
         },
       });
     }
 
-    items.push({
-      id: `event-msg-sent-${msg.id}`,
-      type: 'message_sent',
-      category: 'message',
-      title: `${msg.channelCode.toUpperCase()} Dispatched`,
-      description: `Outbound message dispatched to recipient ${msg.recipientAddress}.`,
-      timestamp: msg.createdAt,
-      channelCode: msg.channelCode,
-      statusTone: 'neutral',
-      metadata: {
-        messageId: msg.id,
-        recipientAddress: msg.recipientAddress,
-        templateName: msg.templateName,
-        status: msg.status,
-      },
-    });
+    if (msg.status === 'submitted') {
+      items.push({
+        id: `event-msg-sent-${msg.id}`,
+        type: 'message_sent',
+        category: 'message',
+        title: `${msg.channelCode.toUpperCase()} Dispatched`,
+        description: `Outbound message dispatched to recipient ${maskedRecipient}.`,
+        timestamp: msg.createdAt,
+        channelCode: msg.channelCode,
+        statusTone: 'neutral',
+        metadata: {
+          messageId: msg.id,
+          recipientAddress: maskedRecipient,
+          templateName: msg.templateName,
+          status: msg.status,
+        },
+      });
+    } else if (msg.status === 'pending') {
+      items.push({
+        id: `event-msg-pending-${msg.id}`,
+        type: 'message_pending',
+        category: 'message',
+        title: `${msg.channelCode.toUpperCase()} Pending Dispatch`,
+        description: `Outbound message pending dispatch to ${maskedRecipient}.`,
+        timestamp: msg.createdAt,
+        channelCode: msg.channelCode,
+        statusTone: 'neutral',
+        metadata: {
+          messageId: msg.id,
+          recipientAddress: maskedRecipient,
+          templateName: msg.templateName,
+          status: msg.status,
+        },
+      });
+    }
   }
 
   // Sort descending: newest first

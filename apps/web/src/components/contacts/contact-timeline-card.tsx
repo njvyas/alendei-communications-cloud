@@ -5,7 +5,6 @@ import { useQuery } from '@tanstack/react-query';
 import { contactsApi } from '@/lib/api-client';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
-  generateContactTimeline,
   type ActivityCategory,
   type ContactMessageActivityRecord,
 } from '@/lib/cdp';
@@ -24,8 +23,6 @@ interface ContactTimelineCardProps {
 
 export function ContactTimelineCard({
   contact,
-  identities = [],
-  messages = [],
   initialActivities,
 }: ContactTimelineCardProps) {
   const [selectedCategory, setSelectedCategory] = useState<ActivityCategory | 'all'>('all');
@@ -34,6 +31,17 @@ export function ContactTimelineCard({
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState<boolean>(false);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
+
+  const initialCategoryData =
+    initialActivities && initialActivities.length > 0
+      ? {
+          data:
+            selectedCategory === 'all'
+              ? [...initialActivities]
+              : initialActivities.filter((item) => item.category === selectedCategory),
+          page: { hasMore: false, nextCursor: null, limit: initialActivities.length },
+        }
+      : undefined;
 
   // 1. Fetch genuine activities for the selected category from the backend
   const {
@@ -52,13 +60,7 @@ export function ContactTimelineCard({
         signal,
         contact.workspaceId,
       ),
-    initialData:
-      initialActivities && selectedCategory === 'all'
-        ? {
-            data: initialActivities,
-            page: { hasMore: false, nextCursor: null, limit: initialActivities.length },
-          }
-        : undefined,
+    initialData: initialCategoryData,
   });
 
   // 2. Fetch all activities count summary
@@ -66,6 +68,13 @@ export function ContactTimelineCard({
     queryKey: ['contacts', 'activities', contact.id, 'all'],
     queryFn: ({ signal }) =>
       contactsApi.listActivities(contact.id, { category: 'all' }, signal, contact.workspaceId),
+    initialData:
+      initialActivities && initialActivities.length > 0
+        ? {
+            data: [...initialActivities],
+            page: { hasMore: false, nextCursor: null, limit: initialActivities.length },
+          }
+        : undefined,
   });
 
   // Reset pagination state when switching categories or receiving fresh page
@@ -77,18 +86,14 @@ export function ContactTimelineCard({
     }
   }, [activitiesPage]);
 
-  // Fallback items strictly for initial SSR or testing environments without network mocking
-  const fallbackActivities = generateContactTimeline(contact, identities, [], messages);
-
   const displayItems = activitiesPage?.data
     ? [...activitiesPage.data, ...appendedItems]
-    : selectedCategory === 'all'
-      ? fallbackActivities
-      : fallbackActivities.filter((item) => item.category === selectedCategory);
+    : [];
 
   const allSummaryItems =
     allActivitiesPage?.data ??
-    (activitiesPage && selectedCategory === 'all' ? activitiesPage.data : fallbackActivities);
+    (selectedCategory === 'all' ? activitiesPage?.data : undefined) ??
+    [];
 
   const counts: Record<ActivityCategory | 'all', number> = {
     all: allSummaryItems.length,
@@ -148,6 +153,8 @@ export function ContactTimelineCard({
         return '✓';
       case 'message_sent':
         return '✉';
+      case 'message_pending':
+        return '⏳';
       case 'message_failed':
         return '✕';
       case 'consent_granted':
@@ -204,18 +211,11 @@ export function ContactTimelineCard({
       </CardHeader>
 
       <CardContent>
-        {isLoading && !displayItems.length ? (
-          <div
-            className="py-12 text-center text-xs text-[var(--color-ink-muted)]"
-            data-testid="timeline-loading"
-          >
-            <div className="mx-auto mb-2 size-5 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
-            <p>Loading contact activity…</p>
-          </div>
-        ) : isError && !displayItems.length ? (
+        {isError ? (
           <div
             className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-6 text-center text-xs text-rose-400"
             data-testid="timeline-error"
+            role="alert"
           >
             <p className="font-medium">Unable to load contact activity from server</p>
             <button
@@ -225,6 +225,14 @@ export function ContactTimelineCard({
             >
               Retry
             </button>
+          </div>
+        ) : isLoading && !displayItems.length ? (
+          <div
+            className="py-12 text-center text-xs text-[var(--color-ink-muted)]"
+            data-testid="timeline-loading"
+          >
+            <div className="mx-auto mb-2 size-5 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+            <p>Loading contact activity…</p>
           </div>
         ) : displayItems.length === 0 ? (
           selectedCategory === 'message' ? (

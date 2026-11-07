@@ -63,6 +63,7 @@ export const CONTACT_ACTIVITY_EVENT_TYPES = [
   'identity_updated',
   'consent_granted',
   'consent_revoked',
+  'message_pending',
   'message_sent',
   'message_delivered',
   'message_read',
