@@ -5,6 +5,7 @@ import {
   PERMISSIONS,
   isTerminalMessageStatus,
   maskRecipientAddress,
+  sanitizeRecipientContent,
   type AuthPrincipal,
   type ContactActivityResponse,
   type ContactResponse,
@@ -259,6 +260,7 @@ export class ContactsService {
       );
 
       const activities: ContactActivityResponse[] = [];
+      const knownAddresses = new Set<string>();
 
       // 1. Profile events (contact_created from contacts.createdAt, contact_updated from audit_logs)
       if (!category || category === 'profile') {
@@ -325,9 +327,11 @@ export class ContactsService {
         const identityIds: string[] = [];
         for (const { identity, channelCode } of identityRows) {
           identityIds.push(identity.id);
-          const maskedAddress = maskRecipientAddress(
-            identity.normalizedAddress || identity.rawAddress,
-          );
+          const rawOrNorm = identity.normalizedAddress || identity.rawAddress;
+          if (rawOrNorm) {
+            knownAddresses.add(rawOrNorm);
+          }
+          const maskedAddress = maskRecipientAddress(rawOrNorm);
           activities.push({
             id: `activity-identity-${identity.id}-created`,
             contactId: contact.id,
@@ -451,6 +455,12 @@ export class ContactsService {
           .leftJoin(schema.templates, eq(schema.messages.templateId, schema.templates.id))
           .where(and(eq(schema.messages.orgId, orgId), eq(schema.messages.contactId, contact.id)));
 
+        for (const { message } of messageRows) {
+          if (message.recipientAddress) {
+            knownAddresses.add(message.recipientAddress);
+          }
+        }
+
         for (const { message, channelCode, templateName } of messageRows) {
           const channelLabel = (channelCode ?? 'message').toUpperCase();
           const maskedRecipient = maskRecipientAddress(message.recipientAddress);
@@ -547,6 +557,19 @@ export class ContactsService {
           if (message.status === 'failed' || message.deliveryStatus === 'undelivered') {
             const isDownstreamFailure =
               message.status === 'accepted' && message.deliveryStatus === 'undelivered';
+
+            let sanitizedFailureReason = message.failureReason || null;
+            if (sanitizedFailureReason) {
+              sanitizedFailureReason =
+                sanitizeRecipientContent(sanitizedFailureReason, message.recipientAddress) || null;
+              for (const addr of knownAddresses) {
+                if (sanitizedFailureReason && addr !== message.recipientAddress) {
+                  sanitizedFailureReason =
+                    sanitizeRecipientContent(sanitizedFailureReason, addr) || null;
+                }
+              }
+            }
+
             activities.push({
               id: `activity-msg-${message.id}-failed`,
               contactId: contact.id,
@@ -557,8 +580,8 @@ export class ContactsService {
                 ? `${channelLabel} Delivery Failed`
                 : `${channelLabel} Submission Failed`,
               description: isDownstreamFailure
-                ? message.failureReason || 'Message delivery failed at recipient endpoint'
-                : message.failureReason || 'Message submission failed before dispatch',
+                ? sanitizedFailureReason || 'Message delivery failed at recipient endpoint'
+                : sanitizedFailureReason || 'Message submission failed before dispatch',
               timestamp: (message.completedAt ?? message.createdAt).toISOString(),
               channelId: message.channelId,
               channelCode: channelCode ?? null,
@@ -566,7 +589,7 @@ export class ContactsService {
               metadata: {
                 messageId: message.id,
                 recipientAddress: maskedRecipient,
-                failureReason: message.failureReason,
+                failureReason: sanitizedFailureReason,
                 status: message.status,
                 deliveryStatus: message.deliveryStatus,
               },

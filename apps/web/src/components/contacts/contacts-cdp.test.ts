@@ -440,7 +440,7 @@ describe('Phase 8A Contacts / CDP Core & UI Components', () => {
         id: 'msg-real-001',
         channelCode: 'whatsapp',
         recipientAddress: '+12025550199',
-        status: 'submitted',
+        status: 'accepted',
         deliveryStatus: 'delivered',
         createdAt: '2026-11-01T11:00:00.000Z',
         deliveredAt: '2026-11-01T11:00:04.000Z',
@@ -697,20 +697,34 @@ describe('Phase 8A Contacts / CDP Core & UI Components', () => {
     }
   });
 
-  it('19. Message status semantics: pending messages emit message_pending, failed messages never emit message_sent', () => {
+  it('19. Message status semantics: pending messages emit message_pending, failed messages never emit message_sent, undelivered emits delivery failure', () => {
     const messages: ContactMessageActivityRecord[] = [
       {
-        id: 'msg-pending',
+        id: 'msg-queued',
         channelCode: 'whatsapp',
         recipientAddress: '+12025550111',
-        status: 'pending',
+        status: 'queued',
         createdAt: '2026-11-03T10:00:00.000Z',
       },
       {
-        id: 'msg-submitted',
+        id: 'msg-routing',
+        channelCode: 'whatsapp',
+        recipientAddress: '+12025550112',
+        status: 'routing',
+        createdAt: '2026-11-03T10:01:00.000Z',
+      },
+      {
+        id: 'msg-submitting',
+        channelCode: 'whatsapp',
+        recipientAddress: '+12025550113',
+        status: 'submitting',
+        createdAt: '2026-11-03T10:02:00.000Z',
+      },
+      {
+        id: 'msg-accepted',
         channelCode: 'whatsapp',
         recipientAddress: '+12025550222',
-        status: 'submitted',
+        status: 'accepted',
         createdAt: '2026-11-03T10:05:00.000Z',
       },
       {
@@ -721,30 +735,83 @@ describe('Phase 8A Contacts / CDP Core & UI Components', () => {
         failureReason: 'Rate limit exceeded',
         createdAt: '2026-11-03T10:10:00.000Z',
       },
+      {
+        id: 'msg-undelivered',
+        channelCode: 'whatsapp',
+        recipientAddress: '+12025550444',
+        status: 'accepted',
+        deliveryStatus: 'undelivered',
+        failureReason: 'Carrier network unreachable',
+        createdAt: '2026-11-03T10:15:00.000Z',
+      },
     ];
 
     const timeline = generateContactTimeline(mockContact, [], [], messages);
     const msgEvents = timeline.filter((e) => e.category === 'message');
 
-    // Verify msg-pending generated message_pending
-    const pendingEvent = msgEvents.find((e) => e.id === 'event-msg-pending-msg-pending');
-    assert.ok(pendingEvent);
-    assert.equal(pendingEvent?.type, 'message_pending');
-    assert.ok(pendingEvent?.title.includes('Pending Dispatch'));
+    // Verify queued, routing, submitting all generate message_pending
+    for (const pendingId of ['msg-queued', 'msg-routing', 'msg-submitting']) {
+      const event = msgEvents.find((e) => e.id === `event-msg-pending-${pendingId}`);
+      assert.ok(event, `Expected message_pending event for ${pendingId}`);
+      assert.equal(event?.type, 'message_pending');
+      assert.ok(event?.title.includes('Pending Dispatch'));
+      assert.equal(
+        msgEvents.find((e) => e.id === `event-msg-sent-${pendingId}`),
+        undefined,
+      );
+    }
 
-    // Verify msg-submitted generated message_sent
-    const sentEvent = msgEvents.find((e) => e.id === 'event-msg-sent-msg-submitted');
+    // Verify accepted generated message_sent
+    const sentEvent = msgEvents.find((e) => e.id === 'event-msg-sent-msg-accepted');
     assert.ok(sentEvent);
     assert.equal(sentEvent?.type, 'message_sent');
     assert.ok(sentEvent?.title.includes('Dispatched'));
 
-    // Verify msg-failed generated message_failed and did NOT generate message_sent
+    // Verify msg-failed generated message_failed (Submission Failed) and did NOT generate message_sent
     const failedEvent = msgEvents.find((e) => e.id === 'event-msg-fail-msg-failed');
     assert.ok(failedEvent);
     assert.equal(failedEvent?.type, 'message_failed');
+    assert.ok(failedEvent?.title.includes('Submission Failed'));
     assert.equal(
       msgEvents.find((e) => e.id === 'event-msg-sent-msg-failed'),
       undefined,
     );
+
+    // Verify msg-undelivered (accepted + undelivered) generated message_sent AND delivery failure
+    const undelivSent = msgEvents.find((e) => e.id === 'event-msg-sent-msg-undelivered');
+    assert.ok(undelivSent);
+    const undelivFail = msgEvents.find((e) => e.id === 'event-msg-fail-msg-undelivered');
+    assert.ok(undelivFail);
+    assert.ok(undelivFail?.title.includes('Delivery Failed'));
+  });
+
+  it('20. Failure reason PII protection: sanitizes raw phone number and email in failureReason', () => {
+    const rawPhone = '+12025550999';
+    const rawEmail = 'sarah@example.com';
+    const messages: ContactMessageActivityRecord[] = [
+      {
+        id: 'msg-fail-pii-phone',
+        channelCode: 'sms',
+        recipientAddress: rawPhone,
+        status: 'failed',
+        failureReason: `Rejected delivery to ${rawPhone}: unknown handset`,
+        createdAt: '2026-11-03T11:00:00.000Z',
+      },
+      {
+        id: 'msg-fail-pii-email',
+        channelCode: 'email',
+        recipientAddress: rawEmail,
+        status: 'failed',
+        failureReason: `Rejected mailbox ${rawEmail}: quota exceeded`,
+        createdAt: '2026-11-03T11:05:00.000Z',
+      },
+    ];
+
+    const timeline = generateContactTimeline(mockContact, [], [], messages);
+    const serialized = JSON.stringify(timeline);
+    assert.ok(!serialized.includes(rawPhone));
+    assert.ok(!serialized.includes(rawEmail));
+    assert.ok(serialized.includes('+1 •••• 0999'));
+    assert.ok(serialized.includes('s••••h@example.com'));
   });
 });
