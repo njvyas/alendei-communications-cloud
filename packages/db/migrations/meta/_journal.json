@@ -309,6 +309,27 @@
       "when": 1793232000000,
       "tag": "0043_messages_org_id_created_at_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1793318400000,
+      "tag": "0044_phase5_0_delivery_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1793404800000,
+      "tag": "0045_message_attempts_delivery_indexes_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1793491200000,
+      "tag": "0046_phase5_0_delivered_attempt_fk",
+      "breakpoints": true
     }
   ]
 }

@@ -247,3 +247,190 @@ export const PROVIDER_SUBMISSION_DEFAULTS = {
   /** `SLOW_RESPONSE`'s latency — slow, but inside the timeout, so still accepted. */
   SIMULATOR_SLOW_RESPONSE_MS: 300,
 } as const;
+
+// =============================================================================
+// Phase 5.0 — delivery receipts (design spec Rev 2 §D–§F, implementation plan §1.1–§1.2).
+// Types and validators only: the `ProviderAdapter` port keeps its Phase 2 placeholders
+// until the simulator implements `verifyWebhook`/`parseWebhook` (PR-B).
+// =============================================================================
+
+/** The raw inbound request an adapter verifies: exact bytes, never a re-serialised body. */
+export interface RawWebhookRequest {
+  readonly headers: Readonly<Record<string, string | readonly string[] | undefined>>;
+  readonly rawBody: Uint8Array;
+  readonly receivedAt: Date;
+}
+
+export type WebhookVerificationFailure =
+  'missing_signature' | 'bad_signature' | 'stale_timestamp' | 'malformed';
+
+export type WebhookVerification =
+  | {
+      readonly verified: true;
+      /** A request-level provider event id, when the provider's envelope carries one (spec §D). */
+      readonly providerEventId?: string;
+      readonly signatureTimestamp?: Date;
+    }
+  | { readonly verified: false; readonly reason: WebhookVerificationFailure };
+
+export const NORMALIZED_DELIVERY_EVENT_KINDS = [
+  'delivered',
+  'undelivered',
+  'read',
+  'informational',
+] as const;
+export type NormalizedDeliveryEventKind = (typeof NORMALIZED_DELIVERY_EVENT_KINDS)[number];
+
+/** One provider event, normalised by its adapter. Carries no recipient address and no content. */
+export interface NormalizedDeliveryEvent {
+  readonly providerEventId?: string;
+  readonly providerMessageId?: string;
+  /** ACC's client reference echoed by the provider (the attempt id). */
+  readonly clientReference?: string;
+  readonly kind: NormalizedDeliveryEventKind;
+  readonly occurredAt?: string;
+  readonly providerStatus?: string;
+  readonly providerErrorCode?: string;
+}
+
+export const MALFORMED_WEBHOOK_ELEMENT_REASONS = [
+  'missing_reference',
+  'unknown_kind',
+  'invalid_field',
+  'unsupported_type',
+] as const;
+export type MalformedWebhookElementReason = (typeof MALFORMED_WEBHOOK_ELEMENT_REASONS)[number];
+
+/**
+ * The per-element result of `parseWebhook` (plan §1.2). `canonicalBytes` is the
+ * adapter's canonical encoding of this element alone; its SHA-256 is the fallback
+ * deduplication key when the provider supplies no event id.
+ */
+export type ParsedWebhookElement =
+  | {
+      readonly ok: true;
+      readonly event: NormalizedDeliveryEvent;
+      readonly canonicalBytes: Uint8Array;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: MalformedWebhookElementReason;
+      readonly canonicalBytes: Uint8Array;
+      readonly providerEventId?: string;
+    };
+
+/** At most this many elements in one request; more is a request-level 413 (plan §1.2, OD-18). */
+export const WEBHOOK_MAX_EVENTS_PER_REQUEST = 100;
+
+/** Provider capability declaring which delivery receipt types it sends (OD-3). Absent = none. */
+export const DELIVERY_RECEIPTS_CAPABILITY = 'delivery_receipts';
+export const DELIVERY_RECEIPT_TYPES = ['delivered', 'undelivered', 'read'] as const;
+export type DeliveryReceiptType = (typeof DELIVERY_RECEIPT_TYPES)[number];
+
+/**
+ * Validates a `delivery_receipts` capability value as it is saved: a non-empty array of
+ * distinct receipt types. `read` implies the provider also reports `delivered`, and `read`
+ * is refused on SMS (no read receipts on that channel, OD-3).
+ */
+export function validateDeliveryReceiptsCapability(
+  value: unknown,
+  channel: ChannelCode,
+): { readonly valid: boolean; readonly errors: readonly string[] } {
+  if (!Array.isArray(value) || value.length === 0) {
+    return { valid: false, errors: ['delivery_receipts must be a non-empty array'] };
+  }
+  const errors: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (
+      typeof entry !== 'string' ||
+      !(DELIVERY_RECEIPT_TYPES as readonly string[]).includes(entry)
+    ) {
+      errors.push(
+        `delivery_receipts entry ${JSON.stringify(entry)} is not one of ${DELIVERY_RECEIPT_TYPES.join(', ')}`,
+      );
+      continue;
+    }
+    if (seen.has(entry)) errors.push(`delivery_receipts entry ${entry} is repeated`);
+    seen.add(entry);
+  }
+  if (seen.has('read') && !seen.has('delivered')) {
+    errors.push('delivery_receipts with read must also include delivered');
+  }
+  if (seen.has('read') && channel === 'sms') {
+    errors.push('delivery_receipts read is not available on the sms channel');
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+/** Simulator capability scripting delivery events (design spec Rev 2 §F.1). Absent = no events. */
+export const SIMULATOR_DELIVERY_CAPABILITY = 'simulator_delivery';
+
+export interface SimulatorDeliveryScenario {
+  readonly outcome: 'DELIVERED' | 'UNDELIVERED' | 'NONE';
+  readonly read?: boolean;
+  readonly delayMs?: number;
+  readonly duplicates?: number;
+  readonly order?: 'IN_ORDER' | 'REVERSED';
+  readonly signature?: 'VALID' | 'INVALID' | 'STALE' | 'REPLAY';
+  readonly clientReferenceOnly?: boolean;
+  readonly batch?: boolean;
+  readonly withEventIds?: boolean;
+}
+
+const SIMULATOR_DELIVERY_KEYS: Readonly<Record<keyof SimulatorDeliveryScenario, true>> = {
+  outcome: true,
+  read: true,
+  delayMs: true,
+  duplicates: true,
+  order: true,
+  signature: true,
+  clientReferenceOnly: true,
+  batch: true,
+  withEventIds: true,
+};
+
+/** Validates a `simulator_delivery` capability value as it is saved. */
+export function validateSimulatorDeliveryCapability(value: unknown): {
+  readonly valid: boolean;
+  readonly errors: readonly string[];
+} {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return { valid: false, errors: ['simulator_delivery must be an object'] };
+  }
+  const v = value as Record<string, unknown>;
+  const errors: string[] = [];
+  for (const key of Object.keys(v)) {
+    if (!(key in SIMULATOR_DELIVERY_KEYS))
+      errors.push(`simulator_delivery.${key} is not supported`);
+  }
+  if (!['DELIVERED', 'UNDELIVERED', 'NONE'].includes(v.outcome as string)) {
+    errors.push('simulator_delivery.outcome must be one of DELIVERED, UNDELIVERED, NONE');
+  }
+  for (const key of ['read', 'clientReferenceOnly', 'batch', 'withEventIds'] as const) {
+    if (v[key] !== undefined && typeof v[key] !== 'boolean') {
+      errors.push(`simulator_delivery.${key} must be a boolean`);
+    }
+  }
+  const intIn = (key: string, min: number, max: number) => {
+    const n = v[key];
+    if (n !== undefined && (typeof n !== 'number' || !Number.isInteger(n) || n < min || n > max)) {
+      errors.push(`simulator_delivery.${key} must be an integer from ${min} to ${max}`);
+    }
+  };
+  intIn('delayMs', 0, 600_000);
+  intIn('duplicates', 0, 3);
+  if (v.order !== undefined && !['IN_ORDER', 'REVERSED'].includes(v.order as string)) {
+    errors.push('simulator_delivery.order must be IN_ORDER or REVERSED');
+  }
+  if (
+    v.signature !== undefined &&
+    !['VALID', 'INVALID', 'STALE', 'REPLAY'].includes(v.signature as string)
+  ) {
+    errors.push('simulator_delivery.signature must be one of VALID, INVALID, STALE, REPLAY');
+  }
+  if (v.read === true && v.outcome !== 'DELIVERED') {
+    errors.push('simulator_delivery.read requires outcome DELIVERED');
+  }
+  return { valid: errors.length === 0, errors };
+}

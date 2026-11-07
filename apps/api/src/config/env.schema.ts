@@ -83,6 +83,13 @@ export const envSchema = z.object({
    */
   DATABASE_DISPATCH_URL: postgresUrl.optional(),
   DATABASE_DISPATCH_PASSWORD: z.string().min(1).optional(),
+  /**
+   * Phase 5.0: the delivery-receipt principal (`acc_delivery`, migration 0044). Same
+   * shape as the dispatch credential, but only consulted — and, outside development
+   * and test, only required — when `DELIVERY_WEBHOOKS_ENABLED` is true.
+   */
+  DATABASE_DELIVERY_URL: postgresUrl.optional(),
+  DATABASE_DELIVERY_PASSWORD: z.string().min(1).optional(),
   DATABASE_POOL_MAX: positiveInt.max(500).default(10),
   DATABASE_POOL_IDLE_TIMEOUT_MS: positiveInt.default(30_000),
   DATABASE_STATEMENT_TIMEOUT_MS: positiveInt.default(15_000),
@@ -118,6 +125,16 @@ export const envSchema = z.object({
    * sized for ten claims processed together (`DispatcherService.dispatchBatch`).
    */
   DISPATCH_WORKER_BATCH_SIZE: positiveInt.max(10).default(10),
+
+  // --- Delivery receipts (Phase 5.0) ------------------------------------------
+  /**
+   * Provider delivery-receipt ingestion. **Off by default.** Off, the API opens no
+   * `acc_delivery` connection at all. On, startup refuses unless that principal
+   * connects and is RLS-bound (fail closed, AC-GR-3). Must stay off in every
+   * environment until reverse-proxy log redaction of the ingress path (OD-19) is
+   * in place and verified there, and `db:roles:reconcile` has given the role LOGIN.
+   */
+  DELIVERY_WEBHOOKS_ENABLED: booleanFromEnv.default(false),
 
   // --- Secrets -------------------------------------------------------------
   SECRETS_BACKEND: z.enum(['env', 'vault', 'aws', 'azure', 'gcp']).default('env'),
@@ -194,38 +211,79 @@ export function allowsDevelopmentDispatchPassword(appEnv: AppEnvironment): boole
   return DEVELOPMENT_ENVIRONMENTS.includes(appEnv);
 }
 
+/** The delivery-receipt principal every delivery credential must log in as (Phase 5.0). */
+export const DELIVERY_ROLE = 'acc_delivery';
+
+/** The well-known local password of `acc_delivery`; development and test only. */
+export const DEVELOPMENT_DELIVERY_PASSWORD = 'acc_delivery_dev_password';
+
+interface PrincipalLoginSpec {
+  readonly role: string;
+  readonly urlVariable: 'DATABASE_DISPATCH_URL' | 'DATABASE_DELIVERY_URL';
+  readonly passwordVariable: 'DATABASE_DISPATCH_PASSWORD' | 'DATABASE_DELIVERY_PASSWORD';
+  readonly developmentPassword: string;
+  /** Appended to the "must be set" message to say when the credential is required. */
+  readonly requiredWhen?: string;
+}
+
 /**
- * Staging and production must name their own dispatch credential (B3, first
- * release): before this rule a missing one silently became the published
+ * Staging and production must name their own credential for a dedicated principal
+ * (B3, first release): before this rule a missing one silently became the published
  * development password. Messages name the variable, never its value.
  */
-function dispatchCredentialProblems(env: Env): string[] {
+function principalCredentialProblems(env: Env, spec: PrincipalLoginSpec): string[] {
   if (allowsDevelopmentDispatchPassword(env.APP_ENV)) return [];
-  const where = `when APP_ENV=${env.APP_ENV}`;
+  const where = `when APP_ENV=${env.APP_ENV}${spec.requiredWhen ?? ''}`;
 
-  if (env.DATABASE_DISPATCH_URL) {
-    const url = new URL(env.DATABASE_DISPATCH_URL);
+  const configuredUrl = env[spec.urlVariable];
+  if (configuredUrl) {
+    const url = new URL(configuredUrl);
     const problems: string[] = [];
-    if (decodeURIComponent(url.username) !== DISPATCH_ROLE) {
-      problems.push(`DATABASE_DISPATCH_URL must log in as ${DISPATCH_ROLE} ${where}`);
+    if (decodeURIComponent(url.username) !== spec.role) {
+      problems.push(`${spec.urlVariable} must log in as ${spec.role} ${where}`);
     }
     const password = decodeURIComponent(url.password);
     if (password === '') {
-      problems.push(`DATABASE_DISPATCH_URL must carry a password ${where}`);
-    } else if (password === DEVELOPMENT_DISPATCH_PASSWORD) {
-      problems.push(`DATABASE_DISPATCH_URL must not use the development password ${where}`);
+      problems.push(`${spec.urlVariable} must carry a password ${where}`);
+    } else if (password === spec.developmentPassword) {
+      problems.push(`${spec.urlVariable} must not use the development password ${where}`);
     }
     return problems;
   }
-  if (env.DATABASE_DISPATCH_PASSWORD) {
-    return env.DATABASE_DISPATCH_PASSWORD === DEVELOPMENT_DISPATCH_PASSWORD
-      ? [`DATABASE_DISPATCH_PASSWORD must not be the development password ${where}`]
+  const configuredPassword = env[spec.passwordVariable];
+  if (configuredPassword) {
+    return configuredPassword === spec.developmentPassword
+      ? [`${spec.passwordVariable} must not be the development password ${where}`]
       : [];
   }
   return [
-    `DATABASE_DISPATCH_URL or DATABASE_DISPATCH_PASSWORD must be set ${where}: ` +
+    `${spec.urlVariable} or ${spec.passwordVariable} must be set ${where}: ` +
       'the development password stands in only for development and test',
   ];
+}
+
+function dispatchCredentialProblems(env: Env): string[] {
+  return principalCredentialProblems(env, {
+    role: DISPATCH_ROLE,
+    urlVariable: 'DATABASE_DISPATCH_URL',
+    passwordVariable: 'DATABASE_DISPATCH_PASSWORD',
+    developmentPassword: DEVELOPMENT_DISPATCH_PASSWORD,
+  });
+}
+
+/**
+ * Phase 5.0: the `acc_delivery` credential follows the dispatch rules, but only while
+ * delivery-receipt ingestion is enabled — with the flag off no delivery pool exists.
+ */
+function deliveryCredentialProblems(env: Env): string[] {
+  if (!env.DELIVERY_WEBHOOKS_ENABLED) return [];
+  return principalCredentialProblems(env, {
+    role: DELIVERY_ROLE,
+    urlVariable: 'DATABASE_DELIVERY_URL',
+    passwordVariable: 'DATABASE_DELIVERY_PASSWORD',
+    developmentPassword: DEVELOPMENT_DELIVERY_PASSWORD,
+    requiredWhen: ' and DELIVERY_WEBHOOKS_ENABLED=true',
+  });
 }
 
 function productionHardening(env: Env): string[] {
@@ -277,6 +335,7 @@ export function validateEnv(raw: Record<string, unknown>): Env {
   const problems = [
     ...productionHardening(parsed.data),
     ...dispatchCredentialProblems(parsed.data),
+    ...deliveryCredentialProblems(parsed.data),
   ];
   // Checked against the raw input, because after parsing a default is
   // indistinguishable from a choice: production must *state* how many proxy

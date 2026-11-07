@@ -58,7 +58,7 @@ async function main(): Promise<void> {
         : `Applied ${result.pending.length} migration(s) after ${result.applied} verified: ${result.pending.map((m) => m.tag).join(', ')}`,
     );
     console.log(
-      'Roles were not changed. Role LOGIN/passwords are set only by `npm run db:roles:reconcile`.',
+      'No role LOGIN or password was changed (a migration creates a missing application role NOLOGIN only, as 0032 and 0044 do). Role LOGIN/passwords are set only by `npm run db:roles:reconcile`.',
     );
   } finally {
     await pool.end();

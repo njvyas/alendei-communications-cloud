@@ -1,4 +1,9 @@
-import { ConfigurationError, DEVELOPMENT_DISPATCH_PASSWORD, validateEnv } from './env.schema';
+import {
+  ConfigurationError,
+  DEVELOPMENT_DELIVERY_PASSWORD,
+  DEVELOPMENT_DISPATCH_PASSWORD,
+  validateEnv,
+} from './env.schema';
 
 /**
  * Configuration is a security boundary: a process that starts with invalid or
@@ -182,6 +187,89 @@ describe('validateEnv', () => {
         ...problemsOf({ ...STAGING, DATABASE_DISPATCH_URL: `postgres://acc_app:${SECRET}@db/acc` }),
       ].join('\n');
       expect(messages).not.toContain(DEVELOPMENT_DISPATCH_PASSWORD);
+      expect(messages).not.toContain(SECRET);
+    });
+  });
+
+  describe('delivery credential (Phase 5.0, AC-GR-3)', () => {
+    const SECRET = 'a-staging-delivery-credential';
+    const STAGING = {
+      ...MINIMAL_ENV,
+      APP_ENV: 'staging',
+      DATABASE_DISPATCH_PASSWORD: 'a-staging-dispatch-credential',
+    } as const;
+    const ENABLED = { ...STAGING, DELIVERY_WEBHOOKS_ENABLED: 'true' } as const;
+    const problemsOf = (raw: Record<string, unknown>): string[] => {
+      try {
+        validateEnv(raw);
+        return [];
+      } catch (error) {
+        return (error as ConfigurationError).problems as string[];
+      }
+    };
+
+    it('delivery-receipt ingestion is off by default', () => {
+      expect(validateEnv(MINIMAL_ENV).DELIVERY_WEBHOOKS_ENABLED).toBe(false);
+      expect(validateEnv(STAGING).DELIVERY_WEBHOOKS_ENABLED).toBe(false);
+    });
+
+    it('is not required while ingestion is off, in any environment', () => {
+      expect(problemsOf(STAGING)).toEqual([]);
+    });
+
+    it.each(['development', 'test'])(
+      '%s with ingestion on may omit it: the local development password stands in',
+      (appEnv) => {
+        expect(
+          problemsOf({ ...MINIMAL_ENV, APP_ENV: appEnv, DELIVERY_WEBHOOKS_ENABLED: 'true' }),
+        ).toEqual([]);
+      },
+    );
+
+    it('staging with ingestion on refuses to start without one', () => {
+      expect(problemsOf(ENABLED)).toEqual([
+        expect.stringMatching(
+          /DATABASE_DELIVERY_URL or DATABASE_DELIVERY_PASSWORD must be set when APP_ENV=staging and DELIVERY_WEBHOOKS_ENABLED=true/,
+        ),
+      ]);
+    });
+
+    it('accepts a password or a URL that logs in as acc_delivery', () => {
+      expect(problemsOf({ ...ENABLED, DATABASE_DELIVERY_PASSWORD: SECRET })).toEqual([]);
+      expect(
+        problemsOf({
+          ...ENABLED,
+          DATABASE_DELIVERY_URL: `postgres://acc_delivery:${SECRET}@db.internal:5432/acc`,
+        }),
+      ).toEqual([]);
+    });
+
+    it('refuses the development password, another principal, or a URL without a password', () => {
+      expect(
+        problemsOf({ ...ENABLED, DATABASE_DELIVERY_PASSWORD: DEVELOPMENT_DELIVERY_PASSWORD }),
+      ).toEqual([
+        expect.stringMatching(/DATABASE_DELIVERY_PASSWORD must not be the development password/),
+      ]);
+      expect(
+        problemsOf({
+          ...ENABLED,
+          DATABASE_DELIVERY_URL: `postgres://acc_dispatch:${SECRET}@db/acc`,
+        }),
+      ).toEqual([expect.stringMatching(/DATABASE_DELIVERY_URL must log in as acc_delivery/)]);
+      expect(
+        problemsOf({
+          ...ENABLED,
+          DATABASE_DELIVERY_URL: 'postgres://acc_delivery@db.internal/acc',
+        }),
+      ).toEqual([expect.stringMatching(/DATABASE_DELIVERY_URL must carry a password/)]);
+    });
+
+    it('never echoes a credential value in a problem message', () => {
+      const messages = [
+        ...problemsOf({ ...ENABLED, DATABASE_DELIVERY_PASSWORD: DEVELOPMENT_DELIVERY_PASSWORD }),
+        ...problemsOf({ ...ENABLED, DATABASE_DELIVERY_URL: `postgres://acc_app:${SECRET}@db/acc` }),
+      ].join('\n');
+      expect(messages).not.toContain(DEVELOPMENT_DELIVERY_PASSWORD);
       expect(messages).not.toContain(SECRET);
     });
   });

@@ -9,6 +9,7 @@ import {
   pgTable,
   text,
   unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 
@@ -35,6 +36,19 @@ export const messageAttemptStatus = pgEnum('message_attempt_status', [
   'accepted',
   'failed',
   'outcome_unknown',
+]);
+
+/**
+ * Delivery outcome (Phase 5.0, Option B, migration 0044): a second, monotonic axis
+ * beside the unchanged submission `status`. NULL = not applicable / not tracked
+ * (pre-5.0 rows, attempts that never reached a provider). `read` is the `read_at`
+ * attribute, never a status. Transitions are enforced by `fn_delivery_transition_guard`.
+ */
+export const messageDeliveryStatus = pgEnum('message_delivery_status', [
+  'pending',
+  'delivered',
+  'undelivered',
+  'not_supported',
 ]);
 
 /**
@@ -69,6 +83,12 @@ export const messages = pgTable(
     failureReason: text('failure_reason'),
     correlationId: text('correlation_id').notNull(),
     completedAt: tstz('completed_at'),
+    // Phase 5.0 (0044): delivery axis — aggregated from the attempts (spec Rev 2 §B.5).
+    deliveryStatus: messageDeliveryStatus('delivery_status'),
+    deliveredAt: tstz('delivered_at'),
+    readAt: tstz('read_at'),
+    /** The first attempt that reached `delivered`; FK (delivered_attempt_id, id) → attempts (0046). */
+    deliveredAttemptId: uuid('delivered_attempt_id'),
     ...timestamps(),
   },
   (table) => [
@@ -122,6 +142,12 @@ export const messageAttempts = pgTable(
     failureReason: text('failure_reason'),
     latencyMs: integer('latency_ms'),
     completedAt: tstz('completed_at'),
+    // Phase 5.0 (0044): the provider's message id (write-once) and this attempt's delivery axis.
+    providerMessageId: text('provider_message_id'),
+    deliveryStatus: messageDeliveryStatus('delivery_status'),
+    deliveredAt: tstz('delivered_at'),
+    readAt: tstz('read_at'),
+    deliveryUpdatedAt: tstz('delivery_updated_at'),
     createdAt: createdAt(),
   },
   (table) => [
@@ -139,6 +165,12 @@ export const messageAttempts = pgTable(
       ],
     }).onDelete('restrict'),
     unique('uq_message_attempts_id_provider_id').on(table.id, table.providerId),
+    // Phase 5.0: both built CONCURRENTLY by db:migrate (barrier before guard 0045); 0046 attaches
+    // the (id, message_id) index as the UNIQUE constraint of the same name.
+    uniqueIndex('message_attempts_provider_message_uq')
+      .on(table.providerId, table.providerMessageId)
+      .where(sql`${table.providerMessageId} IS NOT NULL`),
+    unique('uq_message_attempts_id_message_id').on(table.id, table.messageId),
     unique('uq_message_attempts_message_attempt_num').on(table.messageId, table.attemptNumber),
     check(
       'message_attempts_latency_ms_nonnegative',

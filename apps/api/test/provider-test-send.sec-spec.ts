@@ -438,13 +438,14 @@ describe('Phase 2.2 provider adapter test-send', () => {
       );
     }
 
-    it('no webhook event table exists to write to', async () => {
+    it('test-send writes nothing to the webhook event table', async () => {
+      // `provider_health` exists from Phase 2.3 by design (migration 0022); it
+      // holds observations, not messages, and is proven in the 2.3 suite.
+      // `messages` and `message_attempts` exist from Phase 3.3 (migration 0033).
+      // `webhook_events` exists from Phase 5.0 (migration 0044) and is written only by
+      // the delivery-receipt ingress (not yet built); a test-send never writes to it.
       const { rows } = await h.admin.execute<{ n: number }>(
-        // `provider_health` exists from Phase 2.3 by design (migration 0022); it
-        // holds observations, not messages, and is proven in the 2.3 suite.
-        // `messages` and `message_attempts` exist from Phase 3.3 (migration 0033).
-        // `webhook_events` remains uncreated (deferred to Phase 4).
-        sql`select count(*)::int n from information_schema.tables where table_schema = 'public' and table_name in ('webhook_events')`,
+        sql`select count(*)::int n from webhook_events`,
       );
       expect(rows[0]!.n).toBe(0);
     });
@@ -680,6 +681,8 @@ describe('Phase 2.2 provider adapter test-send', () => {
         'audit_logs_provider_health_insert',
         'audit_logs_provider_insert',
         'audit_logs_provider_test_send_insert',
+        // Phase 5.0 (migration 0044): ingress-key administration, pinned in phase5_0-delivery-schema.
+        'audit_logs_provider_webhook_ingress_insert',
       ]);
       const policy = rows.find((r) => r.policyname === 'audit_logs_provider_test_send_insert')!;
       expect(policy.with_check).toContain(

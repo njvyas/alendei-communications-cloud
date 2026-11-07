@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   bigint,
+  boolean,
   check,
   index,
   integer,
@@ -13,7 +14,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 
-import { createdAt, primaryId, timestamps, tstz } from './_shared';
+import { bytea, createdAt, primaryId, timestamps, tstz } from './_shared';
 
 /**
  * Channel and provider catalogue (Phase 2.1, `DATABASE.md` §3, ADR-013).
@@ -105,6 +106,17 @@ export const providers = pgTable(
       .default(sql`'[]'::jsonb`),
     /** Successful probes in the current `half_open` episode. */
     circuitProbeSuccesses: integer('circuit_probe_successes').notNull().default(0),
+    /**
+     * Phase 5.0 (0044): webhook ingress. Only the SHA-256 (peppered) hash of the ingress key
+     * is stored; the plaintext is shown once at creation/rotation. The previous hash stays
+     * valid until its expiry (rotation grace). Never serialised into an API response.
+     */
+    webhookIngressKeyHash: bytea('webhook_ingress_key_hash'),
+    webhookIngressKeyPreviousHash: bytea('webhook_ingress_key_previous_hash'),
+    webhookIngressKeyPreviousExpiresAt: tstz('webhook_ingress_key_previous_expires_at'),
+    webhookIngressKeyRotatedAt: tstz('webhook_ingress_key_rotated_at'),
+    /** Per-provider ingress kill switch (OD-12); off by default. */
+    webhookIngressEnabled: boolean('webhook_ingress_enabled').notNull().default(false),
     ...timestamps(),
   },
   (table) => [

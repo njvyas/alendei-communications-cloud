@@ -8,6 +8,8 @@ export const DB_ROLES = {
   RELAY: 'acc_relay',
   /** Dedicated message dispatcher principal (Phase 3.2, ADR-014 §9.2). */
   DISPATCH: 'acc_dispatch',
+  /** Delivery-receipt ingestion principal (Phase 5.0, migration 0044; design spec Rev 2 §C.2a). */
+  DELIVERY: 'acc_delivery',
 } as const;
 
 /**
@@ -41,6 +43,16 @@ export const DISPATCH_SESSION_VARS = {
   MESSAGE_ID: 'app.dispatch_message_id',
   /** The claim token for the claimed message (Phase 3.2, ADR-014 §9.1). */
   CLAIM_TOKEN: 'app.dispatch_claim_token',
+} as const;
+
+/**
+ * Phase 5.0: transaction-local context of the delivery-receipt principal
+ * (`acc_delivery`, migration 0044). The provider comes from the resolved ingress
+ * key, the message from the resolved attempt — never from the request payload.
+ */
+export const DELIVERY_SESSION_VARS = {
+  PROVIDER_ID: 'app.delivery_provider_id',
+  MESSAGE_ID: 'app.delivery_message_id',
 } as const;
 
 /** The seeded reseller that organizations without an external reseller belong to. */

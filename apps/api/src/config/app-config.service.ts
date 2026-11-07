@@ -66,6 +66,8 @@ export class AppConfigService {
       relayUrl: this.get('DATABASE_RELAY_URL'),
       dispatchUrl: this.get('DATABASE_DISPATCH_URL'),
       dispatchPassword: this.get('DATABASE_DISPATCH_PASSWORD'),
+      deliveryUrl: this.get('DATABASE_DELIVERY_URL'),
+      deliveryPassword: this.get('DATABASE_DELIVERY_PASSWORD'),
       poolMax: this.get('DATABASE_POOL_MAX'),
       idleTimeoutMs: this.get('DATABASE_POOL_IDLE_TIMEOUT_MS'),
       statementTimeoutMs: this.get('DATABASE_STATEMENT_TIMEOUT_MS'),
@@ -98,6 +100,13 @@ export class AppConfigService {
       workerEnabled: this.get('DISPATCH_WORKER_ENABLED'),
       pollIntervalMs: this.get('DISPATCH_WORKER_POLL_INTERVAL_MS'),
       batchSize: this.get('DISPATCH_WORKER_BATCH_SIZE'),
+    } as const;
+  }
+
+  /** Phase 5.0: provider delivery-receipt ingestion (off by default). */
+  get delivery() {
+    return {
+      webhooksEnabled: this.get('DELIVERY_WEBHOOKS_ENABLED'),
     } as const;
   }
 

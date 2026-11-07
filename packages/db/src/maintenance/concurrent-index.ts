@@ -13,8 +13,12 @@
  * There is no blocking fallback and no `IF NOT EXISTS`. Every entry point asserts
  * that the caller's connection holds the session-level migration lock.
  *
- * Specs: `messages-org-id-id-desc.ts` (U14.1a, guard 0042) and
- * `messages-org-id-created-at.ts` (U14.1b, guard 0043).
+ * Specs: `messages-org-id-id-desc.ts` (U14.1a, guard 0042),
+ * `messages-org-id-created-at.ts` (U14.1b, guard 0043) and
+ * `message-attempts-delivery.ts` (Phase 5.0, guard 0045: two UNIQUE indexes on
+ * `public.message_attempts`, one of them partial over a nullable column). The
+ * optional spec fields below default to the original U14.1 behaviour, so the
+ * existing specs are classified exactly as before.
  */
 import type { ClientBase } from 'pg';
 
@@ -26,11 +30,15 @@ export interface KeyColumn {
   readonly type: string;
   /** The type whose default btree operator class the index uses (`regtype` input). */
   readonly opclassType: string;
+  /** Phase 5.0: the column may be NULL (default: it must be NOT NULL). */
+  readonly nullable?: boolean;
+  /** Phase 5.0: `pg_index.indcollation` for this key column (default 0; 100 = the default collation of a text column). */
+  readonly collation?: number;
 }
 
 export interface ConcurrentIndexSpec {
   readonly schema: 'public';
-  readonly table: 'messages';
+  readonly table: 'messages' | 'message_attempts';
   readonly name: string;
   readonly columns: readonly KeyColumn[];
   /** `pg_index.indoption` per key column (0 = ASC NULLS LAST, 3 = DESC NULLS FIRST). */
@@ -41,6 +49,18 @@ export interface ConcurrentIndexSpec {
   readonly definition: string;
   /** The runner command operators use to recover an INVALID index. */
   readonly recoveryCommand: string;
+  /** Phase 5.0: a UNIQUE index (default false). */
+  readonly unique?: boolean;
+  /** Phase 5.0: a partial index; the predicate is pinned by `definition` (default: not partial). */
+  readonly partial?: boolean;
+  /**
+   * Phase 5.0: names of constraints that may legitimately depend on this index (for example a
+   * UNIQUE constraint attached with `USING INDEX`, or a foreign key referencing it). Default:
+   * none — any constraint backed by the index is a mismatch, as in U14.1.
+   */
+  readonly allowedConstraints?: readonly string[];
+  /** Phase 5.0: the journal tag that must be applied before the runner may act (default 0033). */
+  readonly requiresMigration?: string;
 }
 
 export class IndexMaintenanceError extends Error {
@@ -74,6 +94,8 @@ export interface TargetRow {
   readonly indisready: boolean | null;
   readonly indislive: boolean | null;
   readonly backsConstraint: boolean | null;
+  /** Phase 5.0: names of the constraints whose `conindid` is this index (optional in fixtures). */
+  readonly constraintNames?: readonly string[] | null;
   readonly definition: string | null;
 }
 
@@ -149,16 +171,27 @@ function definitionProblems(
     p.push(`sort options ${arr(t.indoption)} are not ${arr(spec.indoption)} ${spec.orderLabel}`);
   if (s.opclasses.some((o) => o === null) || arr(t.indclass) !== arr(s.opclasses))
     p.push(`operator classes ${arr(t.indclass)} are not ${opclassLabel(spec)}`);
-  if (arr(t.indcollation) !== arr(spec.columns.map(() => 0)))
-    p.push(`collations ${arr(t.indcollation)} are not ${arr(spec.columns.map(() => 0))}`);
-  if (t.indisunique !== false) p.push('it is UNIQUE');
+  const collations = spec.columns.map((c) => c.collation ?? 0);
+  if (arr(t.indcollation) !== arr(collations))
+    p.push(`collations ${arr(t.indcollation)} are not ${arr(collations)}`);
+  const unique = spec.unique === true;
+  if (t.indisunique !== unique) p.push(unique ? 'it is not UNIQUE' : 'it is UNIQUE');
   if (t.indisprimary !== false) p.push('it is a primary key');
   if (t.indisexclusion !== false) p.push('it is an exclusion index');
   if (t.indimmediate !== true) p.push('it is not immediate');
-  if (t.hasPredicate !== false) p.push('it is partial (has a predicate)');
+  const partial = spec.partial === true;
+  if (t.hasPredicate !== partial)
+    p.push(partial ? 'it is not partial (no predicate)' : 'it is partial (has a predicate)');
   if (t.hasExpressions !== false) p.push('it has expression columns');
   if (t.relpersistence !== 'p') p.push(`persistence is ${t.relpersistence}, not permanent`);
-  if (t.backsConstraint !== false) p.push('it backs a constraint');
+  if (spec.allowedConstraints === undefined) {
+    if (t.backsConstraint !== false) p.push('it backs a constraint');
+  } else {
+    const allowed = new Set(spec.allowedConstraints);
+    const unexpected = (t.constraintNames ?? []).filter((name) => !allowed.has(name));
+    if (unexpected.length > 0)
+      p.push(`it backs unexpected constraint(s): ${[...unexpected].sort().join(', ')}`);
+  }
   if (p.length === 0 && t.definition !== spec.definition) {
     p.push(`definition "${t.definition}" differs from "${spec.definition}"`);
   }
@@ -186,9 +219,9 @@ export function tableProblemsFor(spec: ConcurrentIndexSpec, s: CatalogueSnapshot
   spec.columns.forEach((want, i) => {
     const col = s.columns[i];
     if (!col) p.push(`${qualified(spec)}.${want.name} does not exist`);
-    else if (col.type !== want.type || !col.notNull)
+    else if (col.type !== want.type || (!want.nullable && !col.notNull))
       p.push(
-        `${qualified(spec)}.${want.name} is ${col.type}${col.notNull ? ' NOT NULL' : ''}, expected ${want.type} NOT NULL`,
+        `${qualified(spec)}.${want.name} is ${col.type}${col.notNull ? ' NOT NULL' : ''}, expected ${want.type}${want.nullable ? '' : ' NOT NULL'}`,
       );
   });
   const missing = new Set(
@@ -246,6 +279,8 @@ export async function readIndexCatalogueFor(
             i.indisvalid, i.indisready, i.indislive,
             CASE WHEN i.indexrelid IS NULL THEN NULL
                  ELSE EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = i.indexrelid) END AS "backsConstraint",
+            CASE WHEN i.indexrelid IS NULL THEN NULL
+                 ELSE ARRAY(SELECT c.conname::text FROM pg_constraint c WHERE c.conindid = i.indexrelid ORDER BY c.conname) END AS "constraintNames",
             CASE WHEN i.indexrelid IS NULL THEN NULL ELSE pg_get_indexdef(i.indexrelid) END AS definition
        FROM pg_class ic
        JOIN pg_namespace n ON n.oid = ic.relnamespace
@@ -312,6 +347,7 @@ export async function readIndexCatalogueFor(
           indisready: r.indisready as boolean | null,
           indislive: r.indislive as boolean | null,
           backsConstraint: r.backsConstraint as boolean | null,
+          constraintNames: (r.constraintNames as string[] | null) ?? null,
           definition: (r.definition as string | null) ?? null,
         }
       : null,
@@ -384,11 +420,12 @@ async function concurrently(
 
 /** `CREATE INDEX CONCURRENTLY …` — the exact definition with CONCURRENTLY inserted. */
 export function createSql(spec: ConcurrentIndexSpec): string {
-  const prefix = `CREATE INDEX ${spec.name} `;
+  const kind = spec.unique === true ? 'CREATE UNIQUE INDEX' : 'CREATE INDEX';
+  const prefix = `${kind} ${spec.name} `;
   if (!spec.definition.startsWith(prefix)) {
     throw new IndexMaintenanceError(`index spec ${spec.name}: unexpected definition shape`);
   }
-  return `CREATE INDEX CONCURRENTLY ${spec.name} ${spec.definition.slice(prefix.length)}`;
+  return `${kind} CONCURRENTLY ${spec.name} ${spec.definition.slice(prefix.length)}`;
 }
 
 export const dropSql = (spec: ConcurrentIndexSpec): string =>

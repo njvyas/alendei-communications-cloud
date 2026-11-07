@@ -225,6 +225,12 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
     const DISPATCH_FENCING_0037 = new Set(['app_dispatch_claim_token', 'claim_token']);
     const phase43Recheck = migrations.find((m) => m.n.startsWith('0037_'));
     expect(phase43Recheck).toBeDefined();
+    // Phase 5.0 PR-A (migration 0044): the unchanged 0034 fallback requeue check inside the
+    // replaced messages terminal guard, and the acc_dispatch webhook_events policies that bind
+    // settlement to a live dispatch claim — claim_token fencing only, no credential.
+    const DISPATCH_FENCING_0044 = new Set(['app_dispatch_claim_token', 'claim_token']);
+    const phase50Delivery = migrations.find((m) => m.n.startsWith('0044_'));
+    expect(phase50Delivery).toBeDefined();
     expect(
       phase2.flatMap((m) =>
         [...m.sql.matchAll(/\w*(?:credential|secret|passw|api_?key|token)\w*/gi)]
@@ -235,6 +241,7 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
           .filter((x) => !(m === phase33Dispatch && DISPATCH_FENCING_0033.has(x[0])))
           .filter((x) => !(m === phase34Fallback && DISPATCH_FENCING_0034.has(x[0])))
           .filter((x) => !(m === phase43Recheck && DISPATCH_FENCING_0037.has(x[0])))
+          .filter((x) => !(m === phase50Delivery && DISPATCH_FENCING_0044.has(x[0])))
           .map((x) => `${m.n}: ${x[0]}`),
       ),
     ).toEqual([]);

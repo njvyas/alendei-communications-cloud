@@ -311,9 +311,11 @@ describe('migrateSchema — schema only, verified first, one locked session', ()
   });
 });
 
-describe('two barriers (U14.1a 0042, U14.1b 0043) — journal order, one locked session', () => {
+describe('three barriers (U14.1a 0042, U14.1b 0043, Phase 5.0 0045) — journal order, one locked session', () => {
   const G43 = '0043_messages_org_id_created_at_guard';
+  const G45 = '0045_message_attempts_delivery_indexes_guard';
   const at43 = expected.findIndex((m) => m.tag === G43);
+  const at45 = expected.findIndex((m) => m.tag === G45);
   const barrierFor = (events: string[], tag: string, name: string): Barrier => ({
     beforeTag: tag,
     label: name,
@@ -326,29 +328,47 @@ describe('two barriers (U14.1a 0042, U14.1b 0043) — journal order, one locked 
     }),
   });
 
-  // Pins 0043 as the newest migration at the time of U14.1b; update when a later migration is added.
-  it('0043 directly follows 0042 in the committed journal', () => {
+  // Pins the journal shape at the time of Phase 5.0 (PR-A): 0042, 0043, then 0044 (the prefix of
+  // the third barrier), the 0045 guard and 0046 as the newest. Update when a later migration is added.
+  it('0043 follows 0042; the 0045 guard follows 0044; 0046 is the newest', () => {
     expect(at43).toBe(guardAt + 1);
-    expect(expected).toHaveLength(at43 + 1);
+    expect(at45).toBe(at43 + 2);
+    expect(expected[at45 - 1]?.tag).toBe('0044_phase5_0_delivery_foundation');
+    expect(expected[at45 + 1]?.tag).toBe('0046_phase5_0_delivered_attempt_fk');
+    expect(expected).toHaveLength(at45 + 2);
   });
 
   it.each<[string, Row[] | null, string[]]>([
-    ['fresh database', null, [`apply:${guardAt}`, 'barrier:a', 'apply:1', 'barrier:b', 'apply:1']],
-    ['database at 0041', rowsFor(guardAt), ['barrier:a', 'apply:1', 'barrier:b', 'apply:1']],
+    [
+      'fresh database',
+      null,
+      [`apply:${guardAt}`, 'barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:2'],
+    ],
+    [
+      'database at 0041',
+      rowsFor(guardAt),
+      ['barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:2'],
+    ],
     [
       'database at 0042 (U14.1a applied)',
       rowsFor(guardAt + 1),
-      ['verify:a', 'barrier:b', 'apply:1'],
+      ['verify:a', 'barrier:b', 'apply:2', 'barrier:c', 'apply:2'],
     ],
-    ['up to date', rowsFor(expected.length), ['verify:a', 'verify:b']],
+    [
+      'database at 0044 (Phase 5.0 M1 applied)',
+      rowsFor(at45),
+      ['verify:a', 'verify:b', 'barrier:c', 'apply:2'],
+    ],
+    ['up to date', rowsFor(expected.length), ['verify:a', 'verify:b', 'verify:c']],
   ])(
     '%s: each barrier runs right before its own guard; given out of order, still journal order',
     async (_label, rows, middle) => {
       const db = fakeDatabase(rows);
       const a = barrierFor(db.events, GUARD, 'a');
       const b = barrierFor(db.events, G43, 'b');
-      await migrateSchema(db.pool, REPO_MIGRATIONS, { apply: db.apply, barriers: [b, a] });
-      expect(db.events).toEqual(['lock', ...middle, 'verify:a', 'verify:b', 'unlock']);
+      const c = barrierFor(db.events, G45, 'c');
+      await migrateSchema(db.pool, REPO_MIGRATIONS, { apply: db.apply, barriers: [c, b, a] });
+      expect(db.events).toEqual(['lock', ...middle, 'verify:a', 'verify:b', 'verify:c', 'unlock']);
       expect(db.history()).toHaveLength(expected.length);
       expect(db.pool.connect).toHaveBeenCalledTimes(1);
     },
@@ -358,15 +378,33 @@ describe('two barriers (U14.1a 0042, U14.1b 0043) — journal order, one locked 
     const db = fakeDatabase(rowsFor(guardAt));
     const a = barrierFor(db.events, GUARD, 'a');
     const b = barrierFor(db.events, G43, 'b');
+    const c = barrierFor(db.events, G45, 'c');
     (b.prepare as jest.Mock).mockImplementation(async () => {
       db.events.push('barrier:b');
       throw new Error('refused b');
     });
     await expect(
-      migrateSchema(db.pool, REPO_MIGRATIONS, { apply: db.apply, barriers: [a, b] }),
+      migrateSchema(db.pool, REPO_MIGRATIONS, { apply: db.apply, barriers: [a, b, c] }),
     ).rejects.toThrow('refused b');
     expect(db.events).toEqual(['lock', 'barrier:a', 'apply:1', 'barrier:b', 'unlock']);
     expect(db.history()).toHaveLength(guardAt + 1);
+    expect(c.prepare).not.toHaveBeenCalled();
+  });
+
+  it('a refusal at the 0045 barrier leaves 0044 recorded and 0045/0046 not recorded', async () => {
+    const db = fakeDatabase(rowsFor(guardAt + 2));
+    const a = barrierFor(db.events, GUARD, 'a');
+    const b = barrierFor(db.events, G43, 'b');
+    const c = barrierFor(db.events, G45, 'c');
+    (c.prepare as jest.Mock).mockImplementation(async () => {
+      db.events.push('barrier:c');
+      throw new Error('refused c');
+    });
+    await expect(
+      migrateSchema(db.pool, REPO_MIGRATIONS, { apply: db.apply, barriers: [a, b, c] }),
+    ).rejects.toThrow('refused c');
+    expect(db.events).toEqual(['lock', 'verify:a', 'verify:b', 'apply:1', 'barrier:c', 'unlock']);
+    expect(db.history()).toHaveLength(at45);
   });
 
   it('with 0042 recorded, a drifted U14.1a index stops the run before the 0043 barrier', async () => {
@@ -378,6 +416,18 @@ describe('two barriers (U14.1a 0042, U14.1b 0043) — journal order, one locked 
       migrateSchema(db.pool, REPO_MIGRATIONS, { apply: db.apply, barriers: [a, b] }),
     ).rejects.toThrow('0042 index missing');
     expect(b.prepare).not.toHaveBeenCalled();
+    expect(db.apply).not.toHaveBeenCalled();
+  });
+
+  it('with 0045 recorded, drifted delivery indexes stop the run before anything else is applied', async () => {
+    const db = fakeDatabase(rowsFor(at45 + 1));
+    const a = barrierFor(db.events, GUARD, 'a');
+    const b = barrierFor(db.events, G43, 'b');
+    const c = barrierFor(db.events, G45, 'c');
+    (c.verifyApplied as jest.Mock).mockRejectedValue(new Error('0045 indexes missing'));
+    await expect(
+      migrateSchema(db.pool, REPO_MIGRATIONS, { apply: db.apply, barriers: [a, b, c] }),
+    ).rejects.toThrow('0045 indexes missing');
     expect(db.apply).not.toHaveBeenCalled();
   });
 });

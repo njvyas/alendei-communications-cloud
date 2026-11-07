@@ -32,6 +32,40 @@ export const MESSAGE_ATTEMPT_STATUSES = [
 
 export type MessageAttemptStatus = (typeof MESSAGE_ATTEMPT_STATUSES)[number];
 
+/**
+ * Phase 5.0 (Option B): the delivery axis, beside the unchanged submission status.
+ * `MESSAGE_STATUSES`, `MESSAGE_TERMINAL_STATUSES` and `isTerminalMessageStatus`
+ * describe the **submission** lifecycle only and are deliberately unchanged
+ * ("terminal" = submission-terminal). `null` delivery = not applicable / not tracked.
+ * `read` is the `readAt` attribute, never a delivery status.
+ */
+export const MESSAGE_DELIVERY_STATUSES = [
+  'pending',
+  'delivered',
+  'undelivered',
+  'not_supported',
+] as const;
+
+export type MessageDeliveryStatus = (typeof MESSAGE_DELIVERY_STATUSES)[number];
+
+/**
+ * Final delivery outcomes. `delivered` is terminal for the axis; `undelivered` is final but
+ * may still be superseded by positive evidence (`delivered`), never the reverse.
+ */
+export function isDeliveryFinal(status: MessageDeliveryStatus | null): boolean {
+  return status === 'delivered' || status === 'undelivered';
+}
+
+/**
+ * The monotonic rank enforced by the database (`app_delivery_rank`, migration 0044):
+ * `pending`/`not_supported` (0) < `undelivered` (1) < `delivered` (2).
+ */
+export function deliveryRank(status: MessageDeliveryStatus | null): number {
+  if (status === 'delivered') return 2;
+  if (status === 'undelivered') return 1;
+  return 0;
+}
+
 export const MESSAGE_EVENT_TYPES = {
   QUEUED: 'message.queued',
   ROUTING: 'message.routing',
@@ -39,6 +73,13 @@ export const MESSAGE_EVENT_TYPES = {
   ACCEPTED: 'message.accepted',
   FAILED: 'message.failed',
   OUTCOME_UNKNOWN: 'message.outcome_unknown',
+  // Phase 5.0: delivery axis events (design spec Rev 2 §B.4–§B.7).
+  DELIVERED: 'message.delivered',
+  UNDELIVERED: 'message.undelivered',
+  READ: 'message.read',
+  DELIVERY_CONFLICT: 'message.delivery_conflict',
+  DELIVERY_DUPLICATE: 'message.delivery_duplicate',
+  DELIVERED_AFTER_ESCALATION: 'message.delivered_after_escalation',
 } as const;
 
 export type MessageEventType = (typeof MESSAGE_EVENT_TYPES)[keyof typeof MESSAGE_EVENT_TYPES];

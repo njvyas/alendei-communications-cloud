@@ -74,6 +74,9 @@ const TABLES = [
   'templates',
   'user_roles',
   'users',
+  // Phase 5.0 (migration 0044): inbound provider delivery events. Control-plane table: no
+  // tenant-facing principal holds any privilege on it (pinned in phase5_0-delivery-schema).
+  'webhook_events',
   'workspaces',
   'ws_tickets',
 ].sort();

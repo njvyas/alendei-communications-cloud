@@ -40,6 +40,10 @@ import {
   verifyIndexExact,
 } from '../maintenance/messages-org-id-id-desc';
 import {
+  ensureMessageAttemptsDeliveryIndexes,
+  verifyMessageAttemptsDeliveryIndexes,
+} from '../maintenance/message-attempts-delivery';
+import {
   acquireMigrationLock,
   assertMigrationLockHeld,
   releaseMigrationLock,
@@ -86,9 +90,26 @@ export const MESSAGES_CREATED_AT_INDEX_BARRIER: Barrier = {
     ),
 };
 
+/**
+ * Phase 5.0 (M2): the two UNIQUE indexes on `message_attempts` before guard migration 0045.
+ * Migration 0044 (the prefix) adds `provider_message_id`; 0046 (after) attaches the
+ * (id, message_id) index as a constraint and adds the delivered-attempt foreign key.
+ */
+export const MESSAGE_ATTEMPTS_DELIVERY_INDEXES_BARRIER: Barrier = {
+  beforeTag: '0045_message_attempts_delivery_indexes_guard',
+  label: 'message_attempts delivery indexes',
+  prepare: (client, log) => ensureMessageAttemptsDeliveryIndexes(client, { log }),
+  verifyApplied: (client) =>
+    verifyMessageAttemptsDeliveryIndexes(
+      client,
+      'Refusing: migration 0045_message_attempts_delivery_indexes_guard is recorded, but the indexes are not as required',
+    ),
+};
+
 export const BARRIERS: readonly Barrier[] = [
   MESSAGES_INDEX_BARRIER,
   MESSAGES_CREATED_AT_INDEX_BARRIER,
+  MESSAGE_ATTEMPTS_DELIVERY_INDEXES_BARRIER,
 ];
 
 /** Applies the given migrations (drizzle semantics) on the pinned connection. */

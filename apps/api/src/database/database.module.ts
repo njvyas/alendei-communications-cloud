@@ -3,6 +3,7 @@ import {
   Inject,
   Logger,
   Module,
+  Optional,
   type OnApplicationShutdown,
   type OnModuleInit,
 } from '@nestjs/common';
@@ -17,6 +18,8 @@ import type { Pool } from 'pg';
 
 import { AppConfigService } from '../config/app-config.service';
 import {
+  DELIVERY_ROLE,
+  DEVELOPMENT_DELIVERY_PASSWORD,
   DEVELOPMENT_DISPATCH_PASSWORD,
   DISPATCH_ROLE,
   allowsDevelopmentDispatchPassword,
@@ -27,6 +30,8 @@ import {
   APP_POOL,
   AUTH_DB,
   AUTH_POOL,
+  DELIVERY_DB,
+  DELIVERY_POOL,
   DISPATCH_DB,
   DISPATCH_POOL,
 } from './database.tokens';
@@ -61,17 +66,52 @@ export function resolveDispatchUrl(
   database: { appUrl: string; dispatchUrl?: string; dispatchPassword?: string },
   appEnv: AppEnvironment,
 ): string {
-  if (database.dispatchUrl) return database.dispatchUrl;
+  return resolvePrincipalUrl(
+    database.appUrl,
+    database.dispatchUrl,
+    database.dispatchPassword,
+    appEnv,
+    { role: DISPATCH_ROLE, developmentPassword: DEVELOPMENT_DISPATCH_PASSWORD, label: 'dispatch' },
+  );
+}
+
+/**
+ * Phase 5.0: the delivery-receipt principal's connection string, by the same rules
+ * as `resolveDispatchUrl` (`DATABASE_DELIVERY_URL`, or `DATABASE_URL` with the user
+ * `acc_delivery` and `DATABASE_DELIVERY_PASSWORD`). Only called while
+ * `DELIVERY_WEBHOOKS_ENABLED` is true.
+ */
+export function resolveDeliveryUrl(
+  database: { appUrl: string; deliveryUrl?: string; deliveryPassword?: string },
+  appEnv: AppEnvironment,
+): string {
+  return resolvePrincipalUrl(
+    database.appUrl,
+    database.deliveryUrl,
+    database.deliveryPassword,
+    appEnv,
+    { role: DELIVERY_ROLE, developmentPassword: DEVELOPMENT_DELIVERY_PASSWORD, label: 'delivery' },
+  );
+}
+
+function resolvePrincipalUrl(
+  appUrl: string,
+  url: string | undefined,
+  configuredPassword: string | undefined,
+  appEnv: AppEnvironment,
+  principal: { role: string; developmentPassword: string; label: string },
+): string {
+  if (url) return url;
   const password =
-    database.dispatchPassword ??
-    (allowsDevelopmentDispatchPassword(appEnv) ? DEVELOPMENT_DISPATCH_PASSWORD : undefined);
+    configuredPassword ??
+    (allowsDevelopmentDispatchPassword(appEnv) ? principal.developmentPassword : undefined);
   if (!password) {
     throw new Error(
-      `refusing to build the dispatch database pool: no dispatch credential is configured for APP_ENV=${appEnv}`,
+      `refusing to build the ${principal.label} database pool: no ${principal.label} credential is configured for APP_ENV=${appEnv}`,
     );
   }
-  const parsed = new URL(database.appUrl);
-  parsed.username = DISPATCH_ROLE;
+  const parsed = new URL(appUrl);
+  parsed.username = principal.role;
   parsed.password = password;
   return parsed.toString();
 }
@@ -144,9 +184,40 @@ export function resolveDispatchUrl(
       inject: [DISPATCH_POOL],
       useFactory: (pool: Pool): Database => createDatabase(pool),
     },
+    {
+      // Phase 5.0: no acc_delivery connection exists unless ingestion is enabled.
+      provide: DELIVERY_POOL,
+      inject: [AppConfigService],
+      useFactory: (config: AppConfigService): Pool | null =>
+        config.delivery.webhooksEnabled
+          ? createPool({
+              connectionString: resolveDeliveryUrl(config.database, config.appEnv),
+              max: Math.max(2, Math.floor(config.database.poolMax / 4)),
+              idleTimeoutMillis: config.database.idleTimeoutMs,
+              statementTimeoutMillis: config.database.statementTimeoutMs,
+              ssl: config.database.ssl,
+              applicationName: `${config.serviceName}-delivery`,
+            })
+          : null,
+    },
+    {
+      provide: DELIVERY_DB,
+      inject: [DELIVERY_POOL],
+      useFactory: (pool: Pool | null): Database | null => (pool ? createDatabase(pool) : null),
+    },
     TenantDatabase,
   ],
-  exports: [APP_POOL, APP_DB, AUTH_POOL, AUTH_DB, DISPATCH_POOL, DISPATCH_DB, TenantDatabase],
+  exports: [
+    APP_POOL,
+    APP_DB,
+    AUTH_POOL,
+    AUTH_DB,
+    DISPATCH_POOL,
+    DISPATCH_DB,
+    DELIVERY_POOL,
+    DELIVERY_DB,
+    TenantDatabase,
+  ],
 })
 export class DatabaseModule implements OnModuleInit, OnApplicationShutdown {
   private readonly logger = new Logger(DatabaseModule.name);
@@ -155,6 +226,7 @@ export class DatabaseModule implements OnModuleInit, OnApplicationShutdown {
     @Inject(APP_POOL) private readonly appPool: Pool,
     @Inject(AUTH_POOL) private readonly authPool: Pool,
     @Inject(DISPATCH_POOL) private readonly dispatchPool: Pool,
+    @Optional() @Inject(DELIVERY_POOL) private readonly deliveryPool: Pool | null = null,
   ) {}
 
   /**
@@ -176,14 +248,29 @@ export class DatabaseModule implements OnModuleInit, OnApplicationShutdown {
         `refusing to use the dispatch database pool: it logs in as ${dispatch.role}, not ${DISPATCH_ROLE}`,
       );
     }
-    this.logger.log(
-      `Database principals verified RLS-bound: ${app.role}, ${auth.role}, ${dispatch.role}`,
-    );
+    const verified = [app.role, auth.role, dispatch.role];
+    // Phase 5.0 (AC-GR-3): with delivery-receipt ingestion enabled, acc_delivery must
+    // connect and be RLS-bound, or the process refuses to start (fail closed).
+    if (this.deliveryPool) {
+      const delivery = await assertRlsBoundPrincipal(this.deliveryPool, 'delivery (acc_delivery)');
+      if (delivery.role !== DELIVERY_ROLE) {
+        throw new Error(
+          `refusing to use the delivery database pool: it logs in as ${delivery.role}, not ${DELIVERY_ROLE}`,
+        );
+      }
+      verified.push(delivery.role);
+    }
+    this.logger.log(`Database principals verified RLS-bound: ${verified.join(', ')}`);
   }
 
   /** Drains all pools so in-flight statements finish before the process exits. */
   async onApplicationShutdown(): Promise<void> {
-    await Promise.allSettled([this.appPool.end(), this.authPool.end(), this.dispatchPool.end()]);
+    await Promise.allSettled([
+      this.appPool.end(),
+      this.authPool.end(),
+      this.dispatchPool.end(),
+      ...(this.deliveryPool ? [this.deliveryPool.end()] : []),
+    ]);
     this.logger.log('Database pools closed');
   }
 }

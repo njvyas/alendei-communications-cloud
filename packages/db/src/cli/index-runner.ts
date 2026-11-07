@@ -71,10 +71,20 @@ export async function runIndexRunnerFor(
     locked = true;
     const verdict = verifyMigrationHistory(expected, await readAppliedMigrations(client));
     if (verdict.problems.length > 0) throw new MigrationHistoryError(verdict.problems);
-    const messagesAt = expected.findIndex((m) => m.tag === MESSAGES_MIGRATION);
-    if (verdict.applied <= messagesAt) {
+    // The migration that creates the indexed table/columns (default: 0033, public.messages).
+    const required = spec.requiresMigration ?? MESSAGES_MIGRATION;
+    const requiredAt = expected.findIndex((m) => m.tag === required);
+    if (requiredAt < 0) {
       throw new IndexMaintenanceError(
-        `Refusing: the database has ${verdict.applied} migrations applied; public.messages is created by ${MESSAGES_MIGRATION}. Run db:migrate.`,
+        `index spec ${spec.name}: unknown required migration ${required}`,
+      );
+    }
+    if (verdict.applied <= requiredAt) {
+      // U14.1 wording unchanged for the messages indexes; Phase 5.0 specs name their own prerequisite.
+      throw new IndexMaintenanceError(
+        spec.requiresMigration === undefined
+          ? `Refusing: the database has ${verdict.applied} migrations applied; public.messages is created by ${MESSAGES_MIGRATION}. Run db:migrate.`
+          : `Refusing: the database has ${verdict.applied} migrations applied; ${spec.schema}.${spec.table} (for ${spec.name}) needs ${required}. Run db:migrate.`,
       );
     }
     if (mode === 'check') {
@@ -108,8 +118,14 @@ export async function runIndexRunnerFor(
   }
 }
 
-/** The CLI body shared by the entry points. */
-export async function runIndexCli(spec: ConcurrentIndexSpec, command: string): Promise<void> {
+/** The CLI body shared by the entry points. Several specs (Phase 5.0) are handled in turn. */
+export async function runIndexCli(
+  specOrSpecs: ConcurrentIndexSpec | readonly ConcurrentIndexSpec[],
+  command: string,
+): Promise<void> {
+  const specs: readonly ConcurrentIndexSpec[] = Array.isArray(specOrSpecs)
+    ? specOrSpecs
+    : [specOrSpecs as ConcurrentIndexSpec];
   loadCliEnv();
   const mode = parseRunnerArgs(process.argv.slice(2), command);
   const pool = new Pool({
@@ -128,12 +144,14 @@ export async function runIndexCli(spec: ConcurrentIndexSpec, command: string): P
     });
   }
   try {
-    const { ok, summary } = await runIndexRunnerFor(spec, pool, mode, {
-      lockWaitMs: lockWaitFromEnv(),
-      log: (line) => console.log(line),
-    });
-    console.log(summary);
-    if (!ok) process.exitCode = 1;
+    for (const spec of specs) {
+      const { ok, summary } = await runIndexRunnerFor(spec, pool, mode, {
+        lockWaitMs: lockWaitFromEnv(),
+        log: (line) => console.log(line),
+      });
+      console.log(summary);
+      if (!ok) process.exitCode = 1;
+    }
   } finally {
     await pool.end();
   }
