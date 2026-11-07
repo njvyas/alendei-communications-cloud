@@ -12,6 +12,11 @@ import {
 } from '@/lib/api-client';
 import { AccessibleDialog } from '@/components/ui/dialog';
 import { MessageStatusBadge } from '@/components/whatsapp/message-status-badge';
+import {
+  DeliveryStatusBadge,
+  ReadReceiptBadge,
+  DeliveryOutcomeCell,
+} from './delivery-status-badge';
 import { cn } from '@/lib/cn';
 
 import { FailureReasonAlert } from '@/components/messages/failure-reason-alert';
@@ -137,7 +142,13 @@ export function MessageDetailDialog({
                 Inspect dispatch lifecycle, provider attempts, and outcome settlement.
               </p>
             </div>
-            {message && <MessageStatusBadge status={message.status} />}
+            {message && (
+              <div className="flex flex-wrap items-center gap-2" data-testid="detail-header-badges">
+                <MessageStatusBadge status={message.status} />
+                <DeliveryStatusBadge deliveryStatus={message.deliveryStatus} />
+                {message.readAt && <ReadReceiptBadge readAt={message.readAt} />}
+              </div>
+            )}
           </div>
 
           {messageId && (
@@ -232,6 +243,57 @@ export function MessageDetailDialog({
                 </span>
               </div>
 
+              {/* Delivery Status */}
+              <div>
+                <span className="block text-[11px] font-medium text-[var(--color-ink-muted)]">
+                  Delivery Status
+                </span>
+                <div
+                  className="mt-1 flex items-center gap-1.5"
+                  data-testid="detail-delivery-status"
+                >
+                  <DeliveryStatusBadge deliveryStatus={message.deliveryStatus} size="sm" />
+                </div>
+              </div>
+
+              {/* Delivered At */}
+              <div>
+                <span className="block text-[11px] font-medium text-[var(--color-ink-muted)]">
+                  Delivered At
+                </span>
+                <span
+                  className="mt-1 block text-xs text-[var(--color-ink)]"
+                  data-testid="detail-delivered-at"
+                >
+                  {message.deliveredAt
+                    ? new Date(message.deliveredAt).toLocaleString()
+                    : message.deliveryStatus === 'pending'
+                      ? 'Awaiting delivery receipt'
+                      : message.deliveryStatus === 'not_supported'
+                        ? 'Not supported by provider/channel'
+                        : '—'}
+                </span>
+              </div>
+
+              {/* Read Receipt */}
+              <div>
+                <span className="block text-[11px] font-medium text-[var(--color-ink-muted)]">
+                  Read Receipt
+                </span>
+                <div className="mt-1 flex items-center gap-1.5" data-testid="detail-read-receipt">
+                  {message.readAt ? (
+                    <>
+                      <ReadReceiptBadge readAt={message.readAt} size="sm" />
+                      <span className="text-xs text-[var(--color-ink)]">
+                        {new Date(message.readAt).toLocaleString()}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-xs text-[var(--color-ink-muted)]">—</span>
+                  )}
+                </div>
+              </div>
+
               {message.workspaceId && (
                 <div>
                   <span className="block text-[11px] font-medium text-[var(--color-ink-muted)]">
@@ -297,6 +359,12 @@ export function MessageDetailDialog({
                             Provider Ref
                           </th>
                           <th scope="col" className="px-3 py-2 font-medium">
+                            Provider Msg ID
+                          </th>
+                          <th scope="col" className="px-3 py-2 font-medium">
+                            Delivery
+                          </th>
+                          <th scope="col" className="px-3 py-2 font-medium">
                             Latency
                           </th>
                           <th scope="col" className="px-3 py-2 font-medium">
@@ -332,6 +400,30 @@ export function MessageDetailDialog({
                                     );
                                   })()
                                 : '—'}
+                            </td>
+                            <td className="px-3 py-2 font-mono text-[11px] text-[var(--color-ink)]">
+                              {att.providerMessageId ? (
+                                <span
+                                  title={att.providerMessageId}
+                                  data-testid={`attempt-provider-msg-id-${att.attemptNumber}`}
+                                  className="truncate max-w-[140px] inline-block"
+                                >
+                                  {att.providerMessageId}
+                                </span>
+                              ) : (
+                                <span className="opacity-50">—</span>
+                              )}
+                            </td>
+                            <td
+                              className="px-3 py-2"
+                              data-testid={`attempt-delivery-${att.attemptNumber}`}
+                            >
+                              <DeliveryOutcomeCell
+                                deliveryStatus={att.deliveryStatus}
+                                readAt={att.readAt}
+                                deliveredAt={att.deliveredAt}
+                                size="sm"
+                              />
                             </td>
                             <td className="px-3 py-2 text-[var(--color-ink-muted)]">
                               {att.latencyMs !== null && att.latencyMs !== undefined

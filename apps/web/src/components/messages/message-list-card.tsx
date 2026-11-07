@@ -10,17 +10,20 @@ import {
   maskRecipientAddress,
   type ChannelCode,
   type ChannelView,
+  type MessageDeliveryStatus,
   type MessageStatus,
   type MessageSummaryResponse,
 } from '@/lib/api-client';
 import { useCanReadMessages } from '@/lib/session-store';
 import { MessageStatusBadge } from '@/components/whatsapp/message-status-badge';
+import { DeliveryOutcomeCell } from './delivery-status-badge';
 import { MessageDetailDialog } from './message-detail-dialog';
 import { formatFailureReason } from '@/lib/failure-reasons';
 
 export interface MessageListCardTestHandle {
   readonly setCursorStack: (stack: string[]) => void;
   readonly setSelectedStatus: (status: string) => void;
+  readonly setSelectedDeliveryStatus?: (deliveryStatus: string) => void;
   readonly setSelectedChannelCode: (channel: string) => void;
   readonly setSelectedWorkspaceId: (workspace: string) => void;
   readonly setSelectedProviderId: (providerId: string) => void;
@@ -29,6 +32,7 @@ export interface MessageListCardTestHandle {
   readonly setCreatedTo: (to: string) => void;
   readonly getCursorStack: () => string[];
   readonly getSelectedStatus: () => string;
+  readonly getSelectedDeliveryStatus?: () => string;
   readonly getSelectedProviderId: () => string;
   readonly getAddressFilter: () => string;
 }
@@ -44,6 +48,7 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
 
   // Filters
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
+  const [selectedDeliveryStatus, setSelectedDeliveryStatus] = useState<string>('all');
   const [selectedChannelCode, setSelectedChannelCode] = useState<string>('all');
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>('all');
   const [selectedProviderId, setSelectedProviderId] = useState<string>('all');
@@ -66,6 +71,7 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
     setCursorStack([]);
     setInspectMessageId(null);
     setSelectedStatus('all');
+    setSelectedDeliveryStatus('all');
     setSelectedChannelCode('all');
     setSelectedWorkspaceId('all');
     setSelectedProviderId('all');
@@ -79,6 +85,7 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
     setCursorStack([]);
     setInspectMessageId(null);
     setSelectedStatus('all');
+    setSelectedDeliveryStatus('all');
     setSelectedChannelCode('all');
     setSelectedWorkspaceId('all');
     setSelectedProviderId('all');
@@ -91,6 +98,7 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
     testHandleRef.current = {
       setCursorStack,
       setSelectedStatus,
+      setSelectedDeliveryStatus,
       setSelectedChannelCode,
       setSelectedWorkspaceId,
       setSelectedProviderId,
@@ -99,6 +107,7 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
       setCreatedTo,
       getCursorStack: () => (orgId !== prevOrgId ? [] : cursorStack),
       getSelectedStatus: () => (orgId !== prevOrgId ? 'all' : selectedStatus),
+      getSelectedDeliveryStatus: () => (orgId !== prevOrgId ? 'all' : selectedDeliveryStatus),
       getSelectedProviderId: () => (orgId !== prevOrgId ? 'all' : selectedProviderId),
       getAddressFilter: () => (orgId !== prevOrgId ? '' : addressFilter),
     };
@@ -111,6 +120,7 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
         ? cursorStack[cursorStack.length - 1]
         : undefined;
   const effectiveStatus = orgId !== prevOrgId ? 'all' : selectedStatus;
+  const effectiveDeliveryStatus = orgId !== prevOrgId ? 'all' : selectedDeliveryStatus;
   const effectiveChannelCode = orgId !== prevOrgId ? 'all' : selectedChannelCode;
   const effectiveWorkspaceId = orgId !== prevOrgId ? 'all' : selectedWorkspaceId;
   const effectiveProviderId = orgId !== prevOrgId ? 'all' : selectedProviderId;
@@ -135,6 +145,10 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
 
   const queryParams: Record<string, unknown> = {
     status: effectiveStatus === 'all' ? undefined : (effectiveStatus as MessageStatus),
+    deliveryStatus:
+      effectiveDeliveryStatus === 'all'
+        ? undefined
+        : (effectiveDeliveryStatus as MessageDeliveryStatus),
     channelCode: effectiveChannelCode === 'all' ? undefined : (effectiveChannelCode as ChannelCode),
     workspaceId: effectiveWorkspaceId === 'all' ? undefined : effectiveWorkspaceId,
     cursor: effectiveCursor,
@@ -158,6 +172,11 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
 
   const handleStatusFilterChange = (val: string) => {
     setSelectedStatus(val);
+    setCursorStack([]);
+  };
+
+  const handleDeliveryStatusFilterChange = (val: string) => {
+    setSelectedDeliveryStatus(val);
     setCursorStack([]);
   };
 
@@ -188,6 +207,7 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
 
   const clearFilters = () => {
     setSelectedStatus('all');
+    setSelectedDeliveryStatus('all');
     setSelectedChannelCode('all');
     setSelectedWorkspaceId('all');
     setSelectedProviderId('all');
@@ -199,6 +219,7 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
 
   const hasActiveFilters =
     selectedStatus !== 'all' ||
+    selectedDeliveryStatus !== 'all' ||
     selectedChannelCode !== 'all' ||
     selectedWorkspaceId !== 'all' ||
     selectedProviderId !== 'all' ||
@@ -242,6 +263,29 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
                 <option value="accepted">Accepted (Provider)</option>
                 <option value="failed">Failed</option>
                 <option value="outcome_unknown">Outcome Unknown</option>
+              </select>
+            </div>
+
+            {/* Delivery filter */}
+            <div className="flex items-center gap-2">
+              <label
+                htmlFor="filter-delivery-status"
+                className="text-xs text-[var(--color-ink-muted)]"
+              >
+                Delivery:
+              </label>
+              <select
+                id="filter-delivery-status"
+                value={selectedDeliveryStatus}
+                onChange={(e) => handleDeliveryStatusFilterChange(e.target.value)}
+                className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] px-2.5 py-1 text-xs text-[var(--color-ink)]"
+                data-testid="filter-delivery-status"
+              >
+                <option value="all">All Delivery States</option>
+                <option value="pending">Pending</option>
+                <option value="delivered">Delivered</option>
+                <option value="undelivered">Undelivered</option>
+                <option value="not_supported">Receipts N/A</option>
               </select>
             </div>
 
@@ -455,6 +499,9 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
                   Status
                 </th>
                 <th scope="col" className="px-4 py-3 font-medium">
+                  Delivery
+                </th>
+                <th scope="col" className="px-4 py-3 font-medium">
                   Attempts
                 </th>
                 <th scope="col" className="px-4 py-3 font-medium">
@@ -468,7 +515,7 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
             <tbody className="divide-y divide-[var(--color-border-subtle)]">
               {isLoading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-[var(--color-ink-muted)]">
+                  <td colSpan={8} className="px-4 py-12 text-center text-[var(--color-ink-muted)]">
                     <div className="flex items-center justify-center gap-2" role="status">
                       <div className="size-4 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent" />
                       <span>Loading messages…</span>
@@ -477,7 +524,7 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
                 </tr>
               ) : messages.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-[var(--color-ink-muted)]">
+                  <td colSpan={8} className="px-4 py-12 text-center text-[var(--color-ink-muted)]">
                     <p className="font-medium text-[var(--color-ink)]">No messages found</p>
                     <p className="mt-1 text-xs">
                       {hasActiveFilters
@@ -520,6 +567,14 @@ export function MessageListCard({ orgId, channels = [], testHandleRef }: Message
                       </td>
                       <td className="px-4 py-3">
                         <MessageStatusBadge status={msg.status} />
+                      </td>
+                      <td className="px-4 py-3" data-testid={`delivery-cell-${msg.id}`}>
+                        <DeliveryOutcomeCell
+                          deliveryStatus={msg.deliveryStatus}
+                          readAt={msg.readAt}
+                          deliveredAt={msg.deliveredAt}
+                          size="sm"
+                        />
                       </td>
                       <td className="px-4 py-3 font-mono text-[11px] text-[var(--color-ink-muted)]">
                         {msg.attemptCount} {msg.attemptCount === 1 ? 'attempt' : 'attempts'}

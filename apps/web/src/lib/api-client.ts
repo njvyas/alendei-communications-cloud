@@ -13,11 +13,12 @@ import type {
   EffectiveConsentResponse,
   EffectiveConsentState,
   ProviderCircuitPolicy,
-  MessageAttemptResponse,
+  MessageAttemptResponse as ContractsMessageAttemptResponse,
   MessageAttemptStatus,
-  MessageDetailResponse,
+  MessageDeliveryStatus,
+  MessageDetailResponse as ContractsMessageDetailResponse,
   MessageStatus,
-  MessageSummaryResponse,
+  MessageSummaryResponse as ContractsMessageSummaryResponse,
   OrganizationProviderAssignment,
   PageInfo,
   ProviderCircuitState,
@@ -70,10 +71,13 @@ import {
   DOMAIN_VERIFICATION_METHODS,
   DOMAIN_VERIFICATION_STATUSES,
   MESSAGE_ATTEMPT_STATUSES,
+  MESSAGE_DELIVERY_STATUSES,
   MESSAGE_STATUSES,
   PLATFORM_RESERVED_DOMAINS,
   RESELLER_STATUSES,
   SUPPRESSION_STATUSES,
+  isDeliveryFinal,
+  deliveryRank,
 } from '@acc/contracts';
 import { maskRecipientAddress } from './address-masking';
 
@@ -92,11 +96,9 @@ export type {
   DomainVerificationStatus,
   DomainView,
   EffectiveConsentState,
-  MessageAttemptResponse,
   MessageAttemptStatus,
-  MessageDetailResponse,
+  MessageDeliveryStatus,
   MessageStatus,
-  MessageSummaryResponse,
   OnboardingResult,
   OrganizationProviderAssignment,
   PageInfo,
@@ -126,12 +128,38 @@ export {
   DOMAIN_VERIFICATION_METHODS,
   DOMAIN_VERIFICATION_STATUSES,
   MESSAGE_ATTEMPT_STATUSES,
+  MESSAGE_DELIVERY_STATUSES,
   MESSAGE_STATUSES,
   PLATFORM_RESERVED_DOMAINS,
   RESELLER_STATUSES,
   SUPPRESSION_STATUSES,
+  isDeliveryFinal,
+  deliveryRank,
   maskRecipientAddress,
 };
+
+/**
+ * Phase 5.0 (Option B): Extended message types with two-axis delivery outcomes.
+ */
+export interface MessageSummaryResponse extends ContractsMessageSummaryResponse {
+  readonly deliveryStatus?: MessageDeliveryStatus | null;
+  readonly deliveredAt?: string | null;
+  readonly readAt?: string | null;
+}
+
+export interface MessageAttemptResponse extends ContractsMessageAttemptResponse {
+  readonly deliveryStatus?: MessageDeliveryStatus | null;
+  readonly deliveredAt?: string | null;
+  readonly readAt?: string | null;
+  readonly providerMessageId?: string | null;
+}
+
+export interface MessageDetailResponse extends Omit<ContractsMessageDetailResponse, 'attempts'> {
+  readonly deliveryStatus?: MessageDeliveryStatus | null;
+  readonly deliveredAt?: string | null;
+  readonly readAt?: string | null;
+  readonly attempts: readonly MessageAttemptResponse[];
+}
 
 /**
  * Browser-side API client for Alendei Communications Cloud.
@@ -2527,6 +2555,10 @@ export interface MessageAttemptDetail {
   readonly failureReason: string | null;
   readonly latencyMs: number | null;
   readonly completedAt: string | null;
+  readonly deliveryStatus?: MessageDeliveryStatus | null;
+  readonly deliveredAt?: string | null;
+  readonly readAt?: string | null;
+  readonly providerMessageId?: string | null;
 }
 
 export interface MessageDetailWithAttempts {
@@ -2543,10 +2575,14 @@ export interface MessageDetailWithAttempts {
   readonly createdAt: string;
   readonly completedAt: string | null;
   readonly attempts: readonly MessageAttemptDetail[];
+  readonly deliveryStatus?: MessageDeliveryStatus | null;
+  readonly deliveredAt?: string | null;
+  readonly readAt?: string | null;
 }
 
 export interface ListMessagesParams {
   readonly status?: MessageStatus;
+  readonly deliveryStatus?: MessageDeliveryStatus;
   readonly channelCode?: ChannelCode;
   readonly workspaceId?: string;
   readonly templateId?: string;
@@ -2565,6 +2601,7 @@ export const messagesApi = {
   ): Promise<ApiPagedResponse<MessageSummaryResponse>> {
     const query = new URLSearchParams();
     if (params.status) query.set('status', params.status);
+    if (params.deliveryStatus) query.set('deliveryStatus', params.deliveryStatus);
     if (params.channelCode) query.set('channelCode', params.channelCode);
     if (params.workspaceId) query.set('workspaceId', params.workspaceId);
     if (params.templateId) query.set('templateId', params.templateId);
