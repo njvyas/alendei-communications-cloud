@@ -16,9 +16,11 @@ import { ContactTagsCard } from './contact-tags-card';
 import { ContactCustomFieldsCard } from './contact-custom-fields-card';
 import { ContactTimelineCard } from './contact-timeline-card';
 import { ContactProfileView } from './contact-profile-view';
+import { contactsApi } from '@/lib/api-client';
 import { useSession } from '@/lib/session-store';
 import type {
   ConsentEventResponse,
+  ContactActivityResponse,
   ContactIdentityResponse,
   ContactResponse,
 } from '@acc/contracts';
@@ -466,5 +468,105 @@ describe('Phase 8A Contacts / CDP Core & UI Components', () => {
     const failEvent = messageEvents.find((e) => e.type === 'message_failed');
     assert.equal(failEvent?.metadata?.messageId, 'msg-real-002');
     assert.equal(failEvent?.metadata?.failureReason, 'Carrier network timeout');
+  });
+
+  // ---------------------------------------------------------------------------
+  // 9. Contact Activity Backend API Client & Timeline Card Integration
+  // ---------------------------------------------------------------------------
+  it('14. contactsApi.listActivities constructs correct endpoint path and query parameters', async () => {
+    setupSession();
+    let capturedUrl = '';
+    let capturedHeaders: HeadersInit | undefined;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedUrl = String(input);
+      capturedHeaders = init?.headers;
+      return new Response(
+        JSON.stringify({
+          data: [],
+          page: { hasMore: false, nextCursor: null, limit: 25 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    try {
+      await contactsApi.listActivities('ct-123', {
+        category: 'message',
+        cursor: 'test-cursor-token',
+        limit: 15,
+      });
+
+      assert.ok(capturedUrl.includes('/contacts/ct-123/activities'));
+      assert.ok(capturedUrl.includes('category=message'));
+      assert.ok(capturedUrl.includes('cursor=test-cursor-token'));
+      assert.ok(capturedUrl.includes('limit=15'));
+      const headers = capturedHeaders as Record<string, string>;
+      assert.equal(headers['X-Acc-Organization'], 'org-1');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('15. ContactTimelineCard renders genuine backend activity items, channel badges, and empty states', () => {
+    const genuineActivities: ContactActivityResponse[] = [
+      {
+        id: 'act-msg-01-deliv',
+        contactId: mockContact.id,
+        workspaceId: mockContact.workspaceId,
+        type: 'message_delivered',
+        category: 'message',
+        title: 'WHATSAPP Delivered',
+        description: 'Confirmed delivered to recipient endpoint',
+        timestamp: '2026-11-01T11:00:04.000Z',
+        channelId: 'ch-wa-01',
+        channelCode: 'whatsapp',
+        statusTone: 'success',
+        metadata: { messageId: 'msg-real-001', recipientAddress: '+12025550199' },
+      },
+      {
+        id: 'act-cns-01',
+        contactId: mockContact.id,
+        workspaceId: mockContact.workspaceId,
+        type: 'consent_granted',
+        category: 'consent',
+        title: 'Consent Granted',
+        description: 'MARKETING consent granted (Source: web_form)',
+        timestamp: '2026-11-01T10:05:00.000Z',
+        channelId: 'ch-wa-01',
+        channelCode: 'whatsapp',
+        statusTone: 'success',
+      },
+      {
+        id: 'act-created',
+        contactId: mockContact.id,
+        workspaceId: mockContact.workspaceId,
+        type: 'contact_created',
+        category: 'profile',
+        title: 'Contact Created',
+        description: 'Contact record registered in workspace',
+        timestamp: '2026-11-01T10:00:00.000Z',
+        statusTone: 'neutral',
+      },
+    ];
+
+    const html = renderWithClient(
+      React.createElement(ContactTimelineCard, {
+        contact: mockContact,
+        initialActivities: genuineActivities,
+      }),
+    );
+
+    // Verify presence of genuine items in rendered markup
+    assert.ok(html.includes('WHATSAPP Delivered'));
+    assert.ok(html.includes('whatsapp'));
+    assert.ok(html.includes('Consent Granted'));
+    assert.ok(html.includes('Contact Created'));
+    assert.ok(html.includes('data-testid="timeline-filters"'));
+    assert.ok(html.includes('data-testid="filter-timeline-all"'));
+    assert.ok(html.includes('data-testid="filter-timeline-message"'));
+    assert.ok(html.includes('data-testid="filter-timeline-consent"'));
+    assert.ok(html.includes('data-testid="activity-timeline"'));
   });
 });

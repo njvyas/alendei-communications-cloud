@@ -25,6 +25,7 @@ import {
   CreateContactIdentityDto,
   CreateConsentEventDto,
   GetEffectiveConsentDto,
+  ListContactActivitiesDto,
   ListContactsDto,
   UpdateContactDto,
   UpdateContactIdentityDto,
@@ -99,6 +100,42 @@ export class ContactsController {
   @ApiErrors(400, 401, 403, 404, 429)
   async get(@Param('contactId', new ParseUUIDPipe()) contactId: string) {
     return { data: await this.contacts.get(requestPrincipal(), contactId) };
+  }
+
+  @Get('workspaces/:workspaceId/contacts/:contactId/activities')
+  @RequiresPermission(PERMISSIONS.CONTACTS_READ, { target: 'deferred', because: AT_WORKSPACE })
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'List activities of a contact in a workspace' })
+  @ApiErrors(400, 401, 403, 404, 429)
+  async listActivitiesByWorkspace(
+    @Param('workspaceId', new ParseUUIDPipe()) workspaceId: string,
+    @Param('contactId', new ParseUUIDPipe()) contactId: string,
+    @Query() query: ListContactActivitiesDto,
+  ) {
+    const { items, page } = await this.contacts.listActivities(
+      requestPrincipal(),
+      contactId,
+      query,
+      workspaceId,
+    );
+    return { data: items, page };
+  }
+
+  @Get('contacts/:contactId/activities')
+  @RequiresPermission(PERMISSIONS.CONTACTS_READ, { target: 'deferred', because: AT_WORKSPACE })
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'List activities of a contact' })
+  @ApiErrors(400, 401, 403, 404, 429)
+  async listActivities(
+    @Param('contactId', new ParseUUIDPipe()) contactId: string,
+    @Query() query: ListContactActivitiesDto,
+  ) {
+    const { items, page } = await this.contacts.listActivities(
+      requestPrincipal(),
+      contactId,
+      query,
+    );
+    return { data: items, page };
   }
 
   @Patch('workspaces/:workspaceId/contacts/:contactId')

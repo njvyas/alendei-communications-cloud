@@ -55,3 +55,40 @@ export interface EffectiveConsentResponse {
   readonly effectiveState: EffectiveConsentState;
   readonly evaluatedAt: string;
 }
+
+export const CONTACT_ACTIVITY_EVENT_TYPES = [
+  'contact_created',
+  'contact_updated',
+  'identity_added',
+  'identity_updated',
+  'consent_granted',
+  'consent_revoked',
+  'message_sent',
+  'message_delivered',
+  'message_read',
+  'message_failed',
+] as const;
+export type ContactActivityEventType = (typeof CONTACT_ACTIVITY_EVENT_TYPES)[number];
+
+export const CONTACT_ACTIVITY_CATEGORIES = [
+  'message',
+  'consent',
+  'identity',
+  'profile',
+] as const;
+export type ContactActivityCategory = (typeof CONTACT_ACTIVITY_CATEGORIES)[number];
+
+export interface ContactActivityResponse {
+  readonly id: string;
+  readonly contactId: string;
+  readonly workspaceId: string;
+  readonly type: ContactActivityEventType;
+  readonly category: ContactActivityCategory;
+  readonly title: string;
+  readonly description: string;
+  readonly timestamp: string;
+  readonly channelId?: string | null;
+  readonly channelCode?: string | null;
+  readonly statusTone: 'success' | 'warning' | 'error' | 'neutral' | 'accent';
+  readonly metadata?: Record<string, unknown>;
+}
