@@ -432,4 +432,226 @@ describe('ACC Phase 5.0: Two-Axis Delivery Outcomes Integration & Component Test
     assert.ok(emptyHtml.includes('colSpan="8"'));
     assert.ok(emptyHtml.includes('No messages found'));
   });
+
+  it('7. MessageDetailDialog correctly separates aggregate message status from heterogeneous attempt outcomes', () => {
+    const queryClient: QueryClient = createAppQueryClient();
+
+    // Multi-attempt scenario: Attempt 1 had outcome_unknown and later delivered;
+    // Attempt 2 had circuit open failure; aggregate message is failed + delivered.
+    const multiAttemptDetail: MessageDetailWithAttempts = {
+      id: 'multi-att-msg',
+      orgId: ORG_ID,
+      workspaceId: WORKSPACE_ID,
+      contactId: 'ct-1',
+      channelId: CHANNEL_ID,
+      templateId: null,
+      status: 'failed',
+      recipientAddress: '+12025550155',
+      payload: { text: 'Alert message' },
+      failureReason: 'PROVIDER_TIMEOUT',
+      createdAt: '2026-11-07T10:04:00.000Z',
+      completedAt: '2026-11-07T10:04:06.000Z',
+      deliveryStatus: 'delivered',
+      deliveredAt: '2026-11-07T10:04:12.000Z',
+      readAt: null,
+      deliveredAttemptId: 'att-multi-1',
+      attempts: [
+        {
+          id: 'att-multi-1',
+          attemptNumber: 1,
+          providerId: 'prv-meta-wa-01',
+          status: 'outcome_unknown',
+          failureReason: 'GATEWAY_TIMEOUT',
+          latencyMs: 3000,
+          completedAt: '2026-11-07T10:04:03.000Z',
+          deliveryStatus: 'delivered',
+          deliveredAt: '2026-11-07T10:04:12.000Z',
+          readAt: null,
+          providerMessageId: 'wamid.HBgL5550155META01',
+        },
+        {
+          id: 'att-multi-2',
+          attemptNumber: 2,
+          providerId: 'prv-meta-wa-02',
+          status: 'failed',
+          failureReason: 'CIRCUIT_OPEN',
+          latencyMs: 12,
+          completedAt: '2026-11-07T10:04:06.000Z',
+          deliveryStatus: 'pending',
+          deliveredAt: null,
+          readAt: null,
+          providerMessageId: null,
+        },
+      ],
+    };
+
+    queryClient.setQueryData(['messages', 'detail', 'multi-att-msg'], {
+      data: multiAttemptDetail,
+    });
+
+    const html = renderWithQueryClient(
+      React.createElement(MessageDetailDialog, {
+        messageId: 'multi-att-msg',
+        onClose: () => {},
+        channels: [mockChannel],
+      }),
+      queryClient,
+    );
+
+    // Aggregate badges: FAILED (submission) and DELIVERED (delivery)
+    assert.ok(html.includes('data-testid="detail-header-badges"'));
+    assert.ok(html.includes('FAILED'));
+    assert.ok(html.includes('DELIVERED'));
+
+    // Attempt 1 specifics
+    assert.ok(html.includes('data-testid="attempt-provider-msg-id-1"'));
+    assert.ok(html.includes('wamid.HBgL5550155META01'));
+    assert.ok(html.includes('data-testid="attempt-delivery-1"'));
+    assert.ok(html.includes('OUTCOME_UNKNOWN'));
+
+    // Attempt 2 specifics: no provider message ID, pending delivery, circuit open failure
+    assert.ok(html.includes('data-testid="attempt-provider-msg-id-2"'));
+    assert.ok(html.includes('data-testid="attempt-delivery-2"'));
+    assert.ok(html.includes('CIRCUIT_OPEN'));
+
+    // Verifies attempts count in header
+    assert.ok(html.includes('2 attempts'));
+  });
+
+  it('8. All 4 delivery statuses and legacy NULL fallback render distinct badges and semantic accessibility', () => {
+    setupSession();
+    const queryClient: QueryClient = createAppQueryClient();
+
+    const sampleMessages: MessageSummaryResponse[] = [
+      {
+        id: 'msg-dlv-pending',
+        orgId: ORG_ID,
+        workspaceId: WORKSPACE_ID,
+        contactId: 'ct-1',
+        channelId: CHANNEL_ID,
+        channelCode: 'whatsapp',
+        templateId: null,
+        status: 'accepted',
+        recipientAddress: '+12025550101',
+        failureReason: null,
+        attemptCount: 1,
+        createdAt: '2026-11-07T10:00:00.000Z',
+        completedAt: '2026-11-07T10:00:01.000Z',
+        deliveryStatus: 'pending',
+        deliveredAt: null,
+        readAt: null,
+      },
+      {
+        id: 'msg-dlv-delivered',
+        orgId: ORG_ID,
+        workspaceId: WORKSPACE_ID,
+        contactId: 'ct-2',
+        channelId: CHANNEL_ID,
+        channelCode: 'whatsapp',
+        templateId: null,
+        status: 'accepted',
+        recipientAddress: '+12025550102',
+        failureReason: null,
+        attemptCount: 1,
+        createdAt: '2026-11-07T10:00:00.000Z',
+        completedAt: '2026-11-07T10:00:01.000Z',
+        deliveryStatus: 'delivered',
+        deliveredAt: '2026-11-07T10:00:05.000Z',
+        readAt: '2026-11-07T10:01:00.000Z',
+      },
+      {
+        id: 'msg-dlv-undelivered',
+        orgId: ORG_ID,
+        workspaceId: WORKSPACE_ID,
+        contactId: 'ct-3',
+        channelId: CHANNEL_ID,
+        channelCode: 'whatsapp',
+        templateId: null,
+        status: 'accepted',
+        recipientAddress: '+12025550103',
+        failureReason: null,
+        attemptCount: 1,
+        createdAt: '2026-11-07T10:00:00.000Z',
+        completedAt: '2026-11-07T10:00:01.000Z',
+        deliveryStatus: 'undelivered',
+        deliveredAt: null,
+        readAt: null,
+      },
+      {
+        id: 'msg-dlv-notsupported',
+        orgId: ORG_ID,
+        workspaceId: WORKSPACE_ID,
+        contactId: 'ct-4',
+        channelId: CHANNEL_ID,
+        channelCode: 'whatsapp',
+        templateId: null,
+        status: 'accepted',
+        recipientAddress: '+12025550104',
+        failureReason: null,
+        attemptCount: 1,
+        createdAt: '2026-11-07T10:00:00.000Z',
+        completedAt: '2026-11-07T10:00:01.000Z',
+        deliveryStatus: 'not_supported',
+        deliveredAt: null,
+        readAt: null,
+      },
+      {
+        id: 'msg-dlv-null-legacy',
+        orgId: ORG_ID,
+        workspaceId: WORKSPACE_ID,
+        contactId: 'ct-5',
+        channelId: CHANNEL_ID,
+        channelCode: 'whatsapp',
+        templateId: null,
+        status: 'accepted',
+        recipientAddress: '+12025550105',
+        failureReason: null,
+        attemptCount: 1,
+        createdAt: '2026-10-15T10:00:00.000Z',
+        completedAt: '2026-10-15T10:00:01.000Z',
+        deliveryStatus: null,
+        deliveredAt: null,
+        readAt: null,
+      },
+    ];
+
+    queryClient.setQueryData(
+      [
+        'messages',
+        'list',
+        ORG_ID,
+        {
+          status: undefined,
+          deliveryStatus: undefined,
+          channelCode: undefined,
+          workspaceId: undefined,
+          cursor: undefined,
+          limit: 25,
+        },
+      ],
+      {
+        data: sampleMessages,
+        page: { hasMore: false, nextCursor: null, limit: 25 },
+      },
+    );
+
+    const html = renderWithQueryClient(
+      React.createElement(MessageListCard, { orgId: ORG_ID, channels: [mockChannel] }),
+      queryClient,
+    );
+
+    // Verify presence of all delivery badge data attributes
+    assert.ok(html.includes('data-delivery-status="pending"'));
+    assert.ok(html.includes('data-delivery-status="delivered"'));
+    assert.ok(html.includes('data-delivery-status="undelivered"'));
+    assert.ok(html.includes('data-delivery-status="not_supported"'));
+    assert.ok(html.includes('data-delivery-status="not_tracked"'));
+
+    // Verify presence of semantic accessibility labels
+    assert.ok(html.includes('aria-label="Delivery status: Pending delivery"'));
+    assert.ok(html.includes('aria-label="Delivery status: Delivered"'));
+    assert.ok(html.includes('aria-label="Delivery status: Undelivered"'));
+    assert.ok(html.includes('aria-label="Delivery status: Receipts not supported"'));
+    assert.ok(html.includes('aria-label="Delivery status: Not tracked"'));
+  });
 });

@@ -158,6 +158,7 @@ export interface MessageDetailResponse extends Omit<ContractsMessageDetailRespon
   readonly deliveryStatus?: MessageDeliveryStatus | null;
   readonly deliveredAt?: string | null;
   readonly readAt?: string | null;
+  readonly deliveredAttemptId?: string | null;
   readonly attempts: readonly MessageAttemptResponse[];
 }
 
@@ -2578,6 +2579,7 @@ export interface MessageDetailWithAttempts {
   readonly deliveryStatus?: MessageDeliveryStatus | null;
   readonly deliveredAt?: string | null;
   readonly readAt?: string | null;
+  readonly deliveredAttemptId?: string | null;
 }
 
 export interface ListMessagesParams {

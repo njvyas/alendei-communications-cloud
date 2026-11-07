@@ -1,4 +1,4 @@
-import { test, type Page } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { loginViaUi } from './helpers/auth';
 
 const SCREENSHOT_DIR =
@@ -518,6 +518,10 @@ test.describe('ACC Phase 5.0 Visual Showcase & Screenshots', () => {
     await page.waitForURL((url) => url.pathname === '/messages');
     await page.waitForSelector('[data-testid="messages-table"]');
 
+    // Assert tablet visibility of delivery filter and outcomes
+    await expect(page.locator('[data-testid="filter-delivery-status"]')).toBeVisible();
+    await expect(page.locator('[data-testid="delivery-cell-msg-p50-01"]')).toBeVisible();
+
     // Screenshot 6: Tablet Messages Table
     await page.screenshot({
       path: `${SCREENSHOT_DIR}/06-tablet-messages-table.png`,
@@ -528,6 +532,17 @@ test.describe('ACC Phase 5.0 Visual Showcase & Screenshots', () => {
     await page.setViewportSize({ width: 375, height: 812 });
     await page.reload();
     await page.waitForSelector('[data-testid="messages-table"]');
+
+    // Assert mobile layout elements and responsive interactions
+    await expect(page.locator('[data-testid="filter-delivery-status"]')).toBeVisible();
+    await expect(page.locator('[data-testid="messages-table"]')).toBeVisible();
+
+    // Open detail dialog on mobile to verify responsive modal layout
+    await page.locator('[data-testid="inspect-message-btn-msg-p50-01"]').click();
+    await page.waitForSelector('#message-detail-title');
+    await expect(page.locator('[data-testid="detail-header-badges"]')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
 
     // Screenshot 7: Mobile Messages Table
     await page.screenshot({

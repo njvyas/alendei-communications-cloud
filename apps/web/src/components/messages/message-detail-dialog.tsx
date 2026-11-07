@@ -401,11 +401,13 @@ export function MessageDetailDialog({
                                   })()
                                 : '—'}
                             </td>
-                            <td className="px-3 py-2 font-mono text-[11px] text-[var(--color-ink)]">
+                            <td
+                              className="px-3 py-2 font-mono text-[11px] text-[var(--color-ink)]"
+                              data-testid={`attempt-provider-msg-id-${att.attemptNumber}`}
+                            >
                               {att.providerMessageId ? (
                                 <span
                                   title={att.providerMessageId}
-                                  data-testid={`attempt-provider-msg-id-${att.attemptNumber}`}
                                   className="truncate max-w-[140px] inline-block"
                                 >
                                   {att.providerMessageId}
