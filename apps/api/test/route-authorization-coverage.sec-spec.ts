@@ -293,7 +293,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // U13.4 (01-Nov-2026) added 4 platform operational support routes: 126 → 130.
     // Phase 5.0 PR-C added 3 platform ingress-key routes (key, enable, disable; target deferred,
     // platform catalogue): 130 → 133 scoped; and 1 public route (the webhook ingress): 7 → 8 open.
-    expect(scoped.length).toBe(133);
+    // Phase 8A added 2 scoped contact activities routes (workspace-scoped and direct; target deferred): 133 → 135 scoped.
+    expect(scoped.length).toBe(135);
     expect(exempt.length).toBe(7);
     expect(open.length).toBe(8);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
@@ -318,7 +319,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // U13.3 added 5, all deferred: each targets `platform`, like the catalogue: 96 → 101.
     // U13.4 added 4 platform operational support routes, all deferred: 101 → 105.
     // Phase 5.0 PR-C added 3 ingress-key routes, each targeting `platform`: 105 → 108.
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(108);
+    // Phase 8A added 2 contact activities routes, each targeting deferred workspace context: 108 → 110.
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(110);
   });
 });
 
