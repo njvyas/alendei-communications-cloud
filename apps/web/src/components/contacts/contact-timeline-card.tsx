@@ -4,10 +4,7 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { contactsApi } from '@/lib/api-client';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  type ActivityCategory,
-  type ContactMessageActivityRecord,
-} from '@/lib/cdp';
+import { type ActivityCategory, type ContactMessageActivityRecord } from '@/lib/cdp';
 import type {
   ContactActivityResponse,
   ContactIdentityResponse,
@@ -21,10 +18,7 @@ interface ContactTimelineCardProps {
   readonly initialActivities?: readonly ContactActivityResponse[];
 }
 
-export function ContactTimelineCard({
-  contact,
-  initialActivities,
-}: ContactTimelineCardProps) {
+export function ContactTimelineCard({ contact, initialActivities }: ContactTimelineCardProps) {
   const [selectedCategory, setSelectedCategory] = useState<ActivityCategory | 'all'>('all');
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({});
   const [appendedItems, setAppendedItems] = useState<ContactActivityResponse[]>([]);
@@ -86,9 +80,7 @@ export function ContactTimelineCard({
     }
   }, [activitiesPage]);
 
-  const displayItems = activitiesPage?.data
-    ? [...activitiesPage.data, ...appendedItems]
-    : [];
+  const displayItems = activitiesPage?.data ? [...activitiesPage.data, ...appendedItems] : [];
 
   const allSummaryItems =
     allActivitiesPage?.data ??

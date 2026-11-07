@@ -71,12 +71,7 @@ export const CONTACT_ACTIVITY_EVENT_TYPES = [
 ] as const;
 export type ContactActivityEventType = (typeof CONTACT_ACTIVITY_EVENT_TYPES)[number];
 
-export const CONTACT_ACTIVITY_CATEGORIES = [
-  'message',
-  'consent',
-  'identity',
-  'profile',
-] as const;
+export const CONTACT_ACTIVITY_CATEGORIES = ['message', 'consent', 'identity', 'profile'] as const;
 export type ContactActivityCategory = (typeof CONTACT_ACTIVITY_CATEGORIES)[number];
 
 export interface ContactActivityResponse {

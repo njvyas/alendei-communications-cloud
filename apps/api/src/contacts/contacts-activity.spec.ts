@@ -66,13 +66,15 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
       expect(await errorsFor(ListContactActivitiesDto, { category: 'billing' })).toContain(
         'category',
       );
-      expect(await errorsFor(ListContactActivitiesDto, { category: 123 as unknown as string })).toContain(
-        'category',
-      );
+      expect(
+        await errorsFor(ListContactActivitiesDto, { category: 123 as unknown as string }),
+      ).toContain('category');
     });
 
     it('accepts valid pagination parameters', async () => {
-      expect(await errorsFor(ListContactActivitiesDto, { limit: 50, cursor: 'valid-cursor' })).toEqual([]);
+      expect(
+        await errorsFor(ListContactActivitiesDto, { limit: 50, cursor: 'valid-cursor' }),
+      ).toEqual([]);
       expect(await errorsFor(ListContactActivitiesDto, { limit: 0 })).toContain('limit');
       expect(await errorsFor(ListContactActivitiesDto, { limit: 200 })).toContain('limit');
     });
@@ -298,9 +300,11 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
         from: jest.fn().mockReturnValue({
           leftJoin: jest.fn().mockReturnValue({
             leftJoin: jest.fn().mockReturnValue({
-              where: jest.fn().mockResolvedValue([
-                { message: queuedMsg, channelCode: 'sms', templateName: null },
-              ]),
+              where: jest
+                .fn()
+                .mockResolvedValue([
+                  { message: queuedMsg, channelCode: 'sms', templateName: null },
+                ]),
             }),
           }),
         }),
@@ -336,19 +340,21 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
         updatedAt: new Date('2026-11-01T08:00:00Z'),
       };
 
-      mockTx.select.mockReturnValueOnce({
-        from: jest.fn().mockReturnValue({
-          leftJoin: jest.fn().mockReturnValue({
-            where: jest.fn().mockResolvedValue([
-              { identity: identityRow, channelCode: 'whatsapp' },
-            ]),
+      mockTx.select
+        .mockReturnValueOnce({
+          from: jest.fn().mockReturnValue({
+            leftJoin: jest.fn().mockReturnValue({
+              where: jest
+                .fn()
+                .mockResolvedValue([{ identity: identityRow, channelCode: 'whatsapp' }]),
+            }),
           }),
-        }),
-      }).mockReturnValueOnce({
-        from: jest.fn().mockReturnValue({
-          where: jest.fn().mockResolvedValue([]),
-        }),
-      });
+        })
+        .mockReturnValueOnce({
+          from: jest.fn().mockReturnValue({
+            where: jest.fn().mockResolvedValue([]),
+          }),
+        });
 
       const result = await service.listActivities(principal, contactId, { category: 'identity' });
 
@@ -385,9 +391,7 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
       mockTx.select.mockReturnValue({
         from: jest.fn().mockReturnValue({
           leftJoin: jest.fn().mockReturnValue({
-            where: jest.fn().mockResolvedValue([
-              { consent: consentRow, channelCode: 'whatsapp' },
-            ]),
+            where: jest.fn().mockResolvedValue([{ consent: consentRow, channelCode: 'whatsapp' }]),
           }),
         }),
       });
@@ -397,7 +401,9 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
       expect(result.items[0]!.type).toBe('consent_granted');
       expect(result.items[0]!.category).toBe('consent');
       expect(result.items[0]!.statusTone).toBe('success');
-      expect(result.items[0]!.description).toContain('MARKETING consent granted (Source: web_form)');
+      expect(result.items[0]!.description).toContain(
+        'MARKETING consent granted (Source: web_form)',
+      );
     });
 
     it('enforces tenant isolation and rejects cross-tenant requests with 404', async () => {
@@ -461,7 +467,10 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
       });
 
       // Page 1: limit 2
-      const page1 = await service.listActivities(principal, contactId, { limit: 2, category: 'message' });
+      const page1 = await service.listActivities(principal, contactId, {
+        limit: 2,
+        category: 'message',
+      });
       expect(page1.items.length).toBe(2);
       expect(page1.page.hasMore).toBe(true);
       expect(page1.page.nextCursor).not.toBeNull();
