@@ -68,6 +68,11 @@ export const AUDIT_ACTIONS = {
   PROVIDER_CIRCUIT_CHANGED: 'provider.circuit_changed',
   // Gate D.3 remediation: the platform circuit policy (`PROVIDER_ADAPTER.md` §6a).
   PROVIDER_CIRCUIT_POLICY_UPDATED: 'provider.circuit_policy_updated',
+  // Phase 5.0: webhook ingress administration (migration 0044 audit policy). The key
+  // value itself is never part of an audit record.
+  PROVIDER_WEBHOOK_INGRESS_KEY_ROTATED: 'provider.webhook_ingress_key_rotated',
+  PROVIDER_WEBHOOK_INGRESS_ENABLED: 'provider.webhook_ingress_enabled',
+  PROVIDER_WEBHOOK_INGRESS_DISABLED: 'provider.webhook_ingress_disabled',
 
   // Phase 3.2: organization provider assignments (ADR-014 §4, P3-D05).
   ORGANIZATION_PROVIDER_ASSIGNED: 'organization_provider.assigned',

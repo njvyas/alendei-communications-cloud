@@ -232,9 +232,10 @@ afterAll(async () => {
 });
 
 describe('U14.1b — one db:migrate for every starting point; U14.1a untouched', () => {
-  // Pins 0043 as the newest migration at the time of U14.1b; update when a later migration is added.
-  it('0043 is the last committed migration and directly follows 0042', () => {
-    expect([AT42, AT43, expected.length]).toEqual([42, 43, 44]);
+  // Pinned at U14.1b; updated by Phase 5.0 (PR-A), which adds 0044 (M1), the 0045 guard (M2,
+  // a third barrier) and 0046 (M3) after it. Update when a later migration is added.
+  it('0043 directly follows 0042; Phase 5.0 adds 0044–0046 after it', () => {
+    expect([AT42, AT43, expected.length]).toEqual([42, 43, 47]);
   });
 
   it.each<[string, () => string]>([
@@ -284,6 +285,7 @@ describe('U14.1b — one db:migrate for every starting point; U14.1a untouched',
     const r = await migrateSchema(poolFor(db), FOLDER);
     expect(r.barriers).toEqual([
       { tag: '0043_messages_org_id_created_at_guard', result: 'present' },
+      { tag: '0045_message_attempts_delivery_indexes_guard', result: 'created' }, // Phase 5.0 (M2)
     ]);
     expect(await stateOf(db)).toEqual(before);
     expect(await history(db)).toBe(expected.length);
@@ -464,6 +466,7 @@ describe('U14.1b — interruption and recovery', () => {
     const r = await migrateSchema(poolFor(db), FOLDER);
     expect(r.barriers).toEqual([
       { tag: '0043_messages_org_id_created_at_guard', result: 'present' },
+      { tag: '0045_message_attempts_delivery_indexes_guard', result: 'created' }, // Phase 5.0 (M2)
     ]);
     expect(await history(db)).toBe(expected.length);
   });

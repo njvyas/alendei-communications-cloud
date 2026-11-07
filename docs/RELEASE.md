@@ -25,6 +25,7 @@ C="docker compose -f deploy/compose.release.yml --env-file deploy/release.env"
 
 - Configuration is validated before startup; any problem refuses the start and names the variable, never its value.
 - **Dispatch credential (B3):** `DATABASE_DISPATCH_PASSWORD` or `DATABASE_DISPATCH_URL` is mandatory; the development password and a URL for another principal are refused; at startup the API proves the dispatch pool logs in as `acc_dispatch` and that `acc_app`, `acc_auth` and `acc_dispatch` are RLS-bound (not superuser, no `BYPASSRLS`, no table ownership, no role membership).
+- **Delivery receipts (Phase 5.0):** `DELIVERY_WEBHOOKS_ENABLED` defaults to `false` and must stay `false` in every environment until reverse-proxy access-log redaction of the ingress path (OD-19) is implemented and verified there. Off, the API opens no `acc_delivery` connection. On, the same B3 rules apply to `DATABASE_DELIVERY_PASSWORD`/`DATABASE_DELIVERY_URL`, and startup refuses unless `acc_delivery` connects and is RLS-bound (fail closed). The PR-A release contains no ingress route.
 - Tenant isolation (PostgreSQL RLS beneath the authorization layer), five-scope RBAC, R-6 delegation, the audit trail, rate limits, the `Secure` refresh cookie (only development and test omit it) and the protected OpenAPI document (served to signed-in sessions only, no UI).
 
 **Production rules that `staging` does not enforce by itself, so `release.env` must set them** (the template does):
@@ -90,9 +91,9 @@ Set `ACC_VERSION=$VERSION` in `deploy/release.env`. The console image is built p
 | Step | Command | Pass criterion |
 |---|---|---|
 | 1. Data services | `$C up -d --wait postgres redis` | both healthy |
-| 2. Schema | `$C run --rm migrate` | `Barrier messages_org_id_id_desc_idx before 0042_messages_org_id_id_desc_guard: created`, `Barrier messages_org_id_created_at_idx before 0043_messages_org_id_created_at_guard: created`, `Applied 44 migration(s) after 0 verified` and `Roles were not changed` |
-| 3. History proof | `$C exec -T postgres psql -U postgres -d acc -Atc "SELECT count(*), md5(string_agg(hash \|\| ':' \|\| created_at, ',' ORDER BY id)) FROM drizzle.__drizzle_migrations"` | `44\|d02a30795d21707f7e9b83563fa3500f` — exactly the committed migrations `0000`–`0043` (U14.1b) |
-| 4. Role logins | `$C run --rm roles` | `Roles reconciled … acc_app, acc_auth, acc_relay, acc_dispatch` |
+| 2. Schema | `$C run --rm migrate` | `Barrier messages_org_id_id_desc_idx before 0042_messages_org_id_id_desc_guard: created`, `Barrier messages_org_id_created_at_idx before 0043_messages_org_id_created_at_guard: created`, `Barrier message_attempts delivery indexes before 0045_message_attempts_delivery_indexes_guard: created`, `Applied 47 migration(s) after 0 verified` and `No role LOGIN or password was changed` (Phase 5.0: migration 0044 creates the missing role `acc_delivery` `NOLOGIN`, as 0032 created `acc_dispatch`) |
+| 3. History proof | `$C exec -T postgres psql -U postgres -d acc -Atc "SELECT count(*), md5(string_agg(hash \|\| ':' \|\| created_at, ',' ORDER BY id)) FROM drizzle.__drizzle_migrations"` | `47\|80ef025557d1402469540e8d237e6c80` — exactly the committed migrations `0000`–`0046` (Phase 5.0 PR-A) |
+| 4. Role logins | `$C run --rm roles` | `Roles reconciled … acc_app, acc_auth, acc_relay, acc_dispatch, acc_delivery` (Phase 5.0: `release.env` must set `DATABASE_DELIVERY_PASSWORD`; the owner or operator provisions it, and `roles` refuses without it) |
 | 5. Seed | `$C run --rm seed` | completes (idempotent) |
 | 6. First operator | `$C run --rm bootstrap` | `Platform administrator created` (a re-run: `Already bootstrapped`) |
 | 7. Start | `$C up -d --wait api web` | both healthy; `$C logs api` shows `Database principals verified RLS-bound: acc_app, acc_auth, acc_dispatch` and `message dispatch started` |
@@ -133,7 +134,7 @@ It refuses (exit 1, `user activation refused: <reason>`) unless the operator is 
 2. Back up: `$C exec -T postgres pg_dump -U postgres -d acc -Fc > acc-<date>-pre-<version>.dump`, copied off-host. Confirm the dump restores (§7) before continuing; without a tested restore there is no rollback after a migration.
 3. Record the current history with the §5.2 history query, before changing anything. Do not assume the entry count from earlier records or documentation; the recorded count decides how many migrations the release will apply.
 4. Set `ACC_VERSION=<new>`; `$C run --rm migrate` — refuses before applying anything if the recorded history does not match the committed files.
-5. **Mandatory history proof.** Before starting `api` or `web`, run the §5.2 history query again and compare it with the expected proof for the release commit (for the U14.1b 44-migration baseline, `0000`–`0043`: `44|d02a30795d21707f7e9b83563fa3500f`; the previous baselines were `43|fbfdb9c50a8e1639595ea0a35f7dcea0` (`0000`–`0042`, U14.1a), `41|4231dbd6b96656ff71c2882214679ee3` (`0000`–`0040`) and `42|28f641d658abc3a41e5bfb91a09a284c` (`0000`–`0041`)). Record the actual result in the upgrade record. If the count or the hash differs, **stop**: do not start the new application; investigate, or restore the pre-upgrade dump (§7). A proof computed on a disposable database clone shows what the committed migrations produce; it is not evidence of the target database's state.
+5. **Mandatory history proof.** Before starting `api` or `web`, run the §5.2 history query again and compare it with the expected proof for the release commit (for the Phase 5.0 PR-A 47-migration baseline, `0000`–`0046`: `47|80ef025557d1402469540e8d237e6c80`; the previous baselines were `44|d02a30795d21707f7e9b83563fa3500f` (`0000`–`0043`, U14.1b), `43|fbfdb9c50a8e1639595ea0a35f7dcea0` (`0000`–`0042`, U14.1a), `41|4231dbd6b96656ff71c2882214679ee3` (`0000`–`0040`) and `42|28f641d658abc3a41e5bfb91a09a284c` (`0000`–`0041`)). Record the actual result in the upgrade record. If the count or the hash differs, **stop**: do not start the new application; investigate, or restore the pre-upgrade dump (§7). A proof computed on a disposable database clone shows what the committed migrations produce; it is not evidence of the target database's state.
 6. `$C up -d --wait api web`; re-run §9.
 
 ## 7. Rollback and recovery
@@ -147,7 +148,7 @@ It refuses (exit 1, `user activation refused: <reason>`) unless the operator is 
     ```bash
     $C exec -T postgres pg_restore -U postgres -d acc --clean --if-exists < "$DUMP_FILE"
     ```
-  - *Restoring into a fresh cluster or volume* (disaster recovery or new host): `pg_dump` exports database objects, not cluster-global roles (`pg_roles`). Restoring with `--exit-on-error` fails at the first RLS policy or grant with `role "acc_auth" does not exist` (reported finding QAF-007). Pre-create the four application roles as `NOLOGIN` before restore:
+  - *Restoring into a fresh cluster or volume* (disaster recovery or new host): `pg_dump` exports database objects, not cluster-global roles (`pg_roles`). Restoring with `--exit-on-error` fails at the first RLS policy or grant with `role "acc_auth" does not exist` (reported finding QAF-007). Pre-create the five application roles as `NOLOGIN` before restore (`acc_delivery` from Phase 5.0, migration 0044):
     ```bash
     $C exec -T postgres psql -U postgres -d postgres -c "DO \$\$
     BEGIN
@@ -155,6 +156,7 @@ It refuses (exit 1, `user activation refused: <reason>`) unless the operator is 
       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'acc_auth') THEN CREATE ROLE acc_auth NOLOGIN; END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'acc_relay') THEN CREATE ROLE acc_relay NOLOGIN; END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'acc_dispatch') THEN CREATE ROLE acc_dispatch NOLOGIN; END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'acc_delivery') THEN CREATE ROLE acc_delivery NOLOGIN; END IF;
     END \$\$;"
     $C exec -T postgres pg_restore -U postgres -d acc --exit-on-error < "$DUMP_FILE"
     ```

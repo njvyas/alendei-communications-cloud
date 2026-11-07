@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { timestamp, uuid } from 'drizzle-orm/pg-core';
+import { customType, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 /**
  * Primary key: UUIDv7, time-sortable (`DATABASE.md` §1). `uuidv7()` is a plain
@@ -24,3 +24,8 @@ export const timestamps = () => ({
 });
 
 export const tstz = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
+
+/** `bytea` as a Node `Buffer` (Phase 5.0: ingress key hashes, webhook event hashes). */
+export const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => 'bytea',
+});

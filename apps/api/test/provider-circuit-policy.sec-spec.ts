@@ -817,6 +817,9 @@ describe('Gate D.3 remediation — the administrable circuit policy', () => {
       expect(definers.map((d) => d.proname).sort()).toEqual([
         'app_has_platform_permission',
         'app_has_platform_scope',
+        // Phase 5.0 (0044): the ingress-key resolver (design spec Rev 2 §C.1(5), §E.2);
+        // EXECUTE for acc_delivery only (pinned in phase5_0-delivery-schema).
+        'app_webhook_provider_resolve',
       ]);
     });
   });

@@ -12,6 +12,7 @@ const PASSWORDS = {
   DATABASE_AUTH_PASSWORD: 'auth-secret',
   DATABASE_RELAY_PASSWORD: 'relay-secret',
   DATABASE_DISPATCH_PASSWORD: 'dispatch-secret',
+  DATABASE_DELIVERY_PASSWORD: 'delivery-secret',
 };
 
 const base = (database = 'acc') => ({
@@ -40,6 +41,7 @@ describe('planRoleReconcile — deliberate, targeted, never in tests, clones or 
       'acc_auth',
       'acc_relay',
       'acc_dispatch',
+      'acc_delivery',
     ]);
   });
 
@@ -103,7 +105,7 @@ describe('planRoleReconcile — deliberate, targeted, never in tests, clones or 
       CI: 'true',
       ACC_ROLE_RECONCILE_EPHEMERAL_CI: '1',
     });
-    expect(plan.credentials).toHaveLength(4);
+    expect(plan.credentials).toHaveLength(5);
   });
 
   it.each(Object.keys(PASSWORDS))(
@@ -115,6 +117,11 @@ describe('planRoleReconcile — deliberate, targeted, never in tests, clones or 
 
   it.each(Object.keys(PASSWORDS))('refuses when %s is blank', (variable) => {
     expect(refusal({ ...base(), [variable]: '   ' })).toContain(`${variable} must be set`);
+  });
+
+  it('refuses when the Phase 5.0 delivery role has no password (it was created NOLOGIN by 0044)', () => {
+    const reasons = refusal({ ...base(), DATABASE_DELIVERY_PASSWORD: undefined });
+    expect(reasons).toContain('DATABASE_DELIVERY_PASSWORD must be set for acc_delivery');
   });
 
   it('never invents the old dispatch default', () => {
@@ -142,7 +149,13 @@ describe('reconcileRoles — alters only existing, allowlisted roles', () => {
   const credentials = planRoleReconcile(base()).credentials;
 
   it('issues exactly one ALTER ROLE … LOGIN PASSWORD per role and never creates a role', async () => {
-    const { pool, statements } = fakePool(['acc_app', 'acc_auth', 'acc_relay', 'acc_dispatch']);
+    const { pool, statements } = fakePool([
+      'acc_app',
+      'acc_auth',
+      'acc_relay',
+      'acc_dispatch',
+      'acc_delivery',
+    ]);
     await reconcileRoles(pool, credentials);
     const alters = statements.filter((s) => s.startsWith('ALTER ROLE'));
     expect(alters.map((s) => s.split(' ')[2])).toEqual([
@@ -150,6 +163,7 @@ describe('reconcileRoles — alters only existing, allowlisted roles', () => {
       'acc_auth',
       'acc_relay',
       'acc_dispatch',
+      'acc_delivery',
     ]);
     expect(alters.every((s) => / LOGIN PASSWORD '/.test(s))).toBe(true);
     expect(statements.some((s) => /CREATE\s+ROLE/i.test(s))).toBe(false);

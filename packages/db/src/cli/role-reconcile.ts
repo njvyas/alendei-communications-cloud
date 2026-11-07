@@ -32,6 +32,7 @@ export const ROLE_PASSWORD_VARIABLES: ReadonlyArray<readonly [string, string]> =
   [DB_ROLES.AUTH, 'DATABASE_AUTH_PASSWORD'],
   [DB_ROLES.RELAY, 'DATABASE_RELAY_PASSWORD'],
   [DB_ROLES.DISPATCH, 'DATABASE_DISPATCH_PASSWORD'],
+  [DB_ROLES.DELIVERY, 'DATABASE_DELIVERY_PASSWORD'],
 ] as const);
 
 export interface RoleCredential {

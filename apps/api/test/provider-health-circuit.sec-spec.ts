@@ -1891,6 +1891,9 @@ describe('Phase 2.3 provider health and circuit breaker', () => {
       expect(definers.map((d) => d.proname).sort()).toEqual([
         'app_has_platform_permission',
         'app_has_platform_scope',
+        // Phase 5.0 (0044): the ingress-key resolver (design spec Rev 2 §C.1(5), §E.2) — hash in,
+        // provider facts out; EXECUTE for acc_delivery only (pinned in phase5_0-delivery-schema).
+        'app_webhook_provider_resolve',
       ]);
       const { rows: triggers } = await h.admin.execute<{ tgname: string }>(
         sql`select tgname from pg_trigger where tgrelid in ('providers'::regclass, 'provider_health'::regclass) and not tgisinternal order by tgname`,

@@ -261,6 +261,7 @@ describe('U14.1a — one db:migrate for every starting point', () => {
     expect(r1.barriers).toEqual([
       { tag: '0042_messages_org_id_id_desc_guard', result: 'created' },
       { tag: '0043_messages_org_id_created_at_guard', result: 'created' }, // U14.1b, the next barrier
+      { tag: '0045_message_attempts_delivery_indexes_guard', result: 'created' }, // Phase 5.0 (M2)
     ]);
     expect(await history(db)).toBe(expected.length);
     const s = await indexState(db);
@@ -739,7 +740,7 @@ describe('U14.1a — serialization: one migrator at a time, bounded wait', () =>
     await blocker.end();
     await observer.end();
     await expect(first).resolves.toMatchObject({
-      barriers: [{ result: 'created' }, { result: 'created' }],
+      barriers: [{ result: 'created' }, { result: 'created' }, { result: 'created' }],
     });
     expect(await history(db)).toBe(expected.length);
   });

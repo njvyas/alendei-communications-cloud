@@ -94,6 +94,7 @@ jobs:
       DATABASE_AUTH_PASSWORD: acc_auth_ci_password
       DATABASE_RELAY_PASSWORD: acc_relay_ci_password
       DATABASE_DISPATCH_PASSWORD: acc_dispatch_ci_password
+      DATABASE_DELIVERY_PASSWORD: acc_delivery_ci_password
       REDIS_URL: redis://localhost:6379
       KAFKA_BROKERS: localhost:19092
       SECRETS_BACKEND: env
