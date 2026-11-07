@@ -814,4 +814,37 @@ describe('Phase 8A Contacts / CDP Core & UI Components', () => {
     assert.ok(serialized.includes('+1 •••• 0999'));
     assert.ok(serialized.includes('s••••h@example.com'));
   });
+
+  it('21. generateContactTimeline handles outcome_unknown as message_outcome_unknown and never emits message_sent or message_failed', () => {
+    const messages: ContactMessageActivityRecord[] = [
+      {
+        id: 'msg-unknown-1',
+        channelCode: 'whatsapp',
+        recipientAddress: '+12025550888',
+        status: 'outcome_unknown',
+        createdAt: '2026-11-03T12:00:00.000Z',
+      },
+    ];
+
+    const timeline = generateContactTimeline(mockContact, [], [], messages);
+    const msgEvents = timeline.filter((e) => e.category === 'message');
+
+    assert.equal(msgEvents.length, 1);
+    const event = msgEvents[0];
+    assert.ok(event);
+    assert.equal(event.type, 'message_outcome_unknown');
+    assert.equal(event.statusTone, 'warning');
+    assert.ok(event.title.includes('Dispatch Outcome Unknown'));
+    assert.ok(event.description && event.description.includes('submission outcome unknown'));
+
+    // Assert it never generated message_sent or message_failed
+    assert.equal(
+      msgEvents.find((e) => e.type === 'message_sent'),
+      undefined,
+    );
+    assert.equal(
+      msgEvents.find((e) => e.type === 'message_failed'),
+      undefined,
+    );
+  });
 });

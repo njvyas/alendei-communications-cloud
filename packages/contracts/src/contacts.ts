@@ -68,6 +68,7 @@ export const CONTACT_ACTIVITY_EVENT_TYPES = [
   'message_delivered',
   'message_read',
   'message_failed',
+  'message_outcome_unknown',
 ] as const;
 export type ContactActivityEventType = (typeof CONTACT_ACTIVITY_EVENT_TYPES)[number];
 

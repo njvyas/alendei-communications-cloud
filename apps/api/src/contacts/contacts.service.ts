@@ -309,7 +309,8 @@ export class ContactsService {
       }
 
       // 2. Identity events (identity_added from contact_identities, identity_updated from audit_logs)
-      if (!category || category === 'identity') {
+      // Also populates knownAddresses for failureReason PII sanitisation when category is 'message'
+      if (!category || category === 'identity' || category === 'message') {
         const identityRows = await tx
           .select({
             identity: schema.contactIdentities,
@@ -325,34 +326,38 @@ export class ContactsService {
           );
 
         const identityIds: string[] = [];
-        for (const { identity, channelCode } of identityRows) {
+        for (const row of identityRows) {
+          const identity = row?.identity;
+          if (!identity) continue;
           identityIds.push(identity.id);
           const rawOrNorm = identity.normalizedAddress || identity.rawAddress;
           if (rawOrNorm) {
             knownAddresses.add(rawOrNorm);
           }
-          const maskedAddress = maskRecipientAddress(rawOrNorm);
-          activities.push({
-            id: `activity-identity-${identity.id}-created`,
-            contactId: contact.id,
-            workspaceId: contact.workspaceId,
-            type: 'identity_added',
-            category: 'identity',
-            title: `Identity Added (${maskedAddress})`,
-            description: `Channel identifier ${maskedAddress} linked${identity.isPrimary ? ' as primary address' : ''}`,
-            timestamp: identity.createdAt.toISOString(),
-            channelId: identity.channelId,
-            channelCode: channelCode ?? null,
-            statusTone: identity.status === 'active' ? 'accent' : 'warning',
-            metadata: {
-              maskedAddress,
-              isPrimary: identity.isPrimary,
-              status: identity.status,
-            },
-          });
+          if (!category || category === 'identity') {
+            const maskedAddress = maskRecipientAddress(rawOrNorm);
+            activities.push({
+              id: `activity-identity-${identity.id}-created`,
+              contactId: contact.id,
+              workspaceId: contact.workspaceId,
+              type: 'identity_added',
+              category: 'identity',
+              title: `Identity Added (${maskedAddress})`,
+              description: `Channel identifier ${maskedAddress} linked${identity.isPrimary ? ' as primary address' : ''}`,
+              timestamp: identity.createdAt.toISOString(),
+              channelId: identity.channelId,
+              channelCode: row.channelCode ?? null,
+              statusTone: identity.status === 'active' ? 'accent' : 'warning',
+              metadata: {
+                maskedAddress,
+                isPrimary: identity.isPrimary,
+                status: identity.status,
+              },
+            });
+          }
         }
 
-        if (identityIds.length > 0) {
+        if ((!category || category === 'identity') && identityIds.length > 0) {
           const identityAuditRows = await tx
             .select()
             .from(schema.auditLogs)
@@ -596,10 +601,10 @@ export class ContactsService {
             });
           } else if (message.status === 'outcome_unknown') {
             activities.push({
-              id: `activity-msg-${message.id}-failed`,
+              id: `activity-msg-${message.id}-unknown`,
               contactId: contact.id,
               workspaceId: contact.workspaceId,
-              type: 'message_failed',
+              type: 'message_outcome_unknown',
               category: 'message',
               title: `${channelLabel} Dispatch Outcome Unknown`,
               description: 'Message submission outcome unknown',

@@ -149,6 +149,8 @@ export function ContactTimelineCard({ contact, initialActivities }: ContactTimel
         return '⏳';
       case 'message_failed':
         return '✕';
+      case 'message_outcome_unknown':
+        return '?';
       case 'consent_granted':
         return '🛡+';
       case 'consent_revoked':

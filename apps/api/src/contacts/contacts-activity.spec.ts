@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { type AuthPrincipal } from '@acc/contracts';
+import { schema } from '@acc/db';
 import { ListContactActivitiesDto } from './contacts.dto';
 import { ContactsService } from './contacts.service';
 import { CursorCodec } from '../common/http/cursor';
@@ -107,6 +108,23 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
     let service: ContactsService;
     let mockTx: { select: jest.Mock };
 
+    function createMockQuery(
+      defaultRows: unknown[] = [],
+      tableMap: Map<unknown, unknown[]> = new Map(),
+    ) {
+      return {
+        from: jest.fn((table: unknown) => {
+          const rows = tableMap.get(table) ?? defaultRows;
+          const chain: { leftJoin: jest.Mock; where: jest.Mock } = {
+            leftJoin: jest.fn(),
+            where: jest.fn().mockResolvedValue(rows),
+          };
+          chain.leftJoin.mockReturnValue(chain);
+          return chain;
+        }),
+      };
+    }
+
     beforeEach(() => {
       mockTx = {
         select: jest.fn(),
@@ -146,17 +164,7 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
 
     it('returns genuine contact_created event from contact.createdAt and no synthetic field updates', async () => {
       // Mock empty query responses for auditLogs, identities, consents, messages
-      mockTx.select.mockReturnValue({
-        from: jest.fn().mockReturnValue({
-          where: jest.fn().mockResolvedValue([]),
-          leftJoin: jest.fn().mockReturnValue({
-            where: jest.fn().mockResolvedValue([]),
-            leftJoin: jest.fn().mockReturnValue({
-              where: jest.fn().mockResolvedValue([]),
-            }),
-          }),
-        }),
-      });
+      mockTx.select.mockReturnValue(createMockQuery([]));
 
       const result = await service.listActivities(principal, contactId, { category: 'all' });
 
@@ -172,17 +180,7 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
     });
 
     it('returns zero message activities when no messages exist for contact (never fabricates messages)', async () => {
-      mockTx.select.mockReturnValue({
-        from: jest.fn().mockReturnValue({
-          where: jest.fn().mockResolvedValue([]),
-          leftJoin: jest.fn().mockReturnValue({
-            where: jest.fn().mockResolvedValue([]),
-            leftJoin: jest.fn().mockReturnValue({
-              where: jest.fn().mockResolvedValue([]),
-            }),
-          }),
-        }),
-      });
+      mockTx.select.mockReturnValue(createMockQuery([]));
 
       const result = await service.listActivities(principal, contactId, { category: 'message' });
 
@@ -220,18 +218,12 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
         recipientAddress: '+12025550123',
       };
 
-      mockTx.select.mockReturnValue({
-        from: jest.fn().mockReturnValue({
-          leftJoin: jest.fn().mockReturnValue({
-            leftJoin: jest.fn().mockReturnValue({
-              where: jest.fn().mockResolvedValue([
-                { message: msgSuccess, channelCode: 'whatsapp', templateName: 'order_update' },
-                { message: msgFailed, channelCode: 'whatsapp', templateName: null },
-              ]),
-            }),
-          }),
-        }),
-      });
+      mockTx.select.mockReturnValue(
+        createMockQuery([
+          { message: msgSuccess, channelCode: 'whatsapp', templateName: 'order_update' },
+          { message: msgFailed, channelCode: 'whatsapp', templateName: null },
+        ]),
+      );
 
       const result = await service.listActivities(principal, contactId, { category: 'message' });
 
@@ -330,19 +322,13 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
         recipientAddress: rawPhone,
       };
 
-      mockTx.select.mockReturnValue({
-        from: jest.fn().mockReturnValue({
-          leftJoin: jest.fn().mockReturnValue({
-            leftJoin: jest.fn().mockReturnValue({
-              where: jest.fn().mockResolvedValue([
-                { message: phoneFailedMsg, channelCode: 'sms', templateName: null },
-                { message: emailFailedMsg, channelCode: 'email', templateName: null },
-                { message: downstreamFailedMsg, channelCode: 'sms', templateName: null },
-              ]),
-            }),
-          }),
-        }),
-      });
+      mockTx.select.mockReturnValue(
+        createMockQuery([
+          { message: phoneFailedMsg, channelCode: 'sms', templateName: null },
+          { message: emailFailedMsg, channelCode: 'email', templateName: null },
+          { message: downstreamFailedMsg, channelCode: 'sms', templateName: null },
+        ]),
+      );
 
       const result = await service.listActivities(principal, contactId, { category: 'message' });
 
@@ -393,19 +379,9 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
         recipientAddress: '+12025550999',
       };
 
-      mockTx.select.mockReturnValue({
-        from: jest.fn().mockReturnValue({
-          leftJoin: jest.fn().mockReturnValue({
-            leftJoin: jest.fn().mockReturnValue({
-              where: jest
-                .fn()
-                .mockResolvedValue([
-                  { message: queuedMsg, channelCode: 'sms', templateName: null },
-                ]),
-            }),
-          }),
-        }),
-      });
+      mockTx.select.mockReturnValue(
+        createMockQuery([{ message: queuedMsg, channelCode: 'sms', templateName: null }]),
+      );
 
       const result = await service.listActivities(principal, contactId, { category: 'message' });
 
@@ -549,19 +525,13 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
         recipientAddress: '+12025550123',
       };
 
-      mockTx.select.mockReturnValue({
-        from: jest.fn().mockReturnValue({
-          leftJoin: jest.fn().mockReturnValue({
-            leftJoin: jest.fn().mockReturnValue({
-              where: jest.fn().mockResolvedValue([
-                { message: msg1, channelCode: 'sms', templateName: null },
-                { message: msg2, channelCode: 'sms', templateName: null },
-                { message: msg3, channelCode: 'sms', templateName: null },
-              ]),
-            }),
-          }),
-        }),
-      });
+      mockTx.select.mockReturnValue(
+        createMockQuery([
+          { message: msg1, channelCode: 'sms', templateName: null },
+          { message: msg2, channelCode: 'sms', templateName: null },
+          { message: msg3, channelCode: 'sms', templateName: null },
+        ]),
+      );
 
       // Page 1: limit 2
       const page1 = await service.listActivities(principal, contactId, {
@@ -586,6 +556,112 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
       const p1Ids = page1.items.map((i) => i.id);
       const p2Ids = page2.items.map((i) => i.id);
       expect(p1Ids.some((id) => p2Ids.includes(id))).toBe(false);
+    });
+
+    it('protects PII in category=message: populates knownAddresses from identity rows to sanitize failureReason without returning identity events', async () => {
+      const channelId = '01900000-0000-7000-8000-000000000020';
+      const rawPhone = '+12025550999';
+      const rawEmail = 'sarah.alternate@example.com';
+
+      const identity1 = {
+        id: '01900000-0000-7000-8000-000000000061',
+        orgId,
+        contactId,
+        workspaceId,
+        channelId,
+        rawAddress: rawPhone,
+        normalizedAddress: rawPhone,
+        isPrimary: true,
+        status: 'active',
+        createdAt: new Date('2026-11-01T10:00:00Z'),
+      };
+      const identity2 = {
+        id: '01900000-0000-7000-8000-000000000062',
+        orgId,
+        contactId,
+        workspaceId,
+        channelId: '01900000-0000-7000-8000-000000000021',
+        rawAddress: rawEmail,
+        normalizedAddress: rawEmail,
+        isPrimary: false,
+        status: 'active',
+        createdAt: new Date('2026-11-01T10:00:00Z'),
+      };
+
+      const msg = {
+        id: '01900000-0000-7000-8000-000000000070',
+        orgId,
+        workspaceId,
+        contactId,
+        channelId,
+        status: 'failed',
+        deliveryStatus: 'undelivered',
+        failureReason: `Provider rejected ${rawPhone} (alternate: ${rawEmail}): unreachable`,
+        completedAt: new Date('2026-11-05T09:01:00Z'),
+        createdAt: new Date('2026-11-05T09:00:00Z'),
+        recipientAddress: rawPhone,
+      };
+
+      const tableMap = new Map<unknown, unknown[]>();
+      tableMap.set(schema.contactIdentities, [
+        { identity: identity1, channelCode: 'sms' },
+        { identity: identity2, channelCode: 'email' },
+      ]);
+      tableMap.set(schema.messages, [{ message: msg, channelCode: 'sms', templateName: null }]);
+
+      mockTx.select.mockReturnValue(createMockQuery([], tableMap));
+
+      const result = await service.listActivities(principal, contactId, { category: 'message' });
+
+      // Only 1 activity returned: the message failure (NO identity events leaked into category=message)
+      expect(result.items.length).toBe(1);
+      const failedItem = result.items[0]!;
+      expect(failedItem.type).toBe('message_failed');
+      expect(failedItem.category).toBe('message');
+
+      // Failure reason in description and metadata must sanitize both the primary phone and alternate identity email
+      expect(failedItem.description).toContain('+1 •••• 0999');
+      expect(failedItem.description).toContain('s••••e@example.com');
+      expect(failedItem.metadata?.failureReason).toContain('+1 •••• 0999');
+      expect(failedItem.metadata?.failureReason).toContain('s••••e@example.com');
+
+      // Regression: assert neither raw phone nor raw email appears anywhere in serialized response
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain(rawPhone);
+      expect(serialized).not.toContain(rawEmail);
+    });
+
+    it('correctly handles outcome_unknown with message_outcome_unknown and never emits message_sent or message_failed', async () => {
+      const channelId = '01900000-0000-7000-8000-000000000020';
+      const unknownMsg = {
+        id: '01900000-0000-7000-8000-000000000080',
+        orgId,
+        workspaceId,
+        contactId,
+        channelId,
+        status: 'outcome_unknown',
+        createdAt: new Date('2026-11-04T12:00:00Z'),
+        recipientAddress: '+12025550999',
+      };
+
+      mockTx.select.mockReturnValue(
+        createMockQuery([{ message: unknownMsg, channelCode: 'whatsapp', templateName: null }]),
+      );
+
+      const result = await service.listActivities(principal, contactId, { category: 'message' });
+
+      expect(result.items.length).toBe(1);
+      const item = result.items[0]!;
+      expect(item.type).toBe('message_outcome_unknown');
+      expect(item.statusTone).toBe('warning');
+      expect(item.title).toBe('WHATSAPP Dispatch Outcome Unknown');
+      expect(item.description).toBe('Message submission outcome unknown');
+      expect(item.metadata?.recipientAddress).toBe('+1 •••• 0999');
+
+      // Regression: ensure it never generates message_sent or message_failed
+      const types = result.items.map((i) => i.type);
+      expect(types).not.toContain('message_sent');
+      expect(types).not.toContain('message_failed');
     });
   });
 });

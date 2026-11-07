@@ -163,6 +163,7 @@ export type ActivityEventType =
   | 'message_delivered'
   | 'message_read'
   | 'message_failed'
+  | 'message_outcome_unknown'
   | 'consent_granted'
   | 'consent_revoked'
   | 'identity_added'
@@ -410,7 +411,7 @@ export function generateContactTimeline(
     } else if (msg.status === 'outcome_unknown') {
       items.push({
         id: `event-msg-unknown-${msg.id}`,
-        type: 'message_failed',
+        type: 'message_outcome_unknown',
         category: 'message',
         title: `${msg.channelCode.toUpperCase()} Dispatch Outcome Unknown`,
         description: 'Message submission outcome unknown.',
