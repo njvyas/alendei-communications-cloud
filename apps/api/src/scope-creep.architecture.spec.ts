@@ -300,7 +300,7 @@ const CATEGORIES: Category[] = [
     key: 'lifecycle',
     forbids: 'the message lifecycle \u2014 messages, attempts, delivery, webhooks (ADR-013 PD-3)',
     exceptions:
-      'Pre-existing: the `checkStatus`/`parseWebhook` interface members, which the simulator refuses (PD-6) and `GuardedProviderAdapter` declares abstract (ADR-015 R-13), a role description and a forbidden metric label name. Phase 3.3: message attempts table and lifecycle status (ADR-014 §4, §9.2). UI readiness (20-Oct-2026): the `MessageAttemptResponse` contract type and the documentation-only `MessageAttempt` OpenAPI schema, describing the attempts `GET /messages/:id` already returns. Phase 5.0 PR-A (owner authorisation 07-Nov-2026; design spec Rev 2 §B–§D, implementation plan T1–T5): the delivery axis (`message_delivery_status`, delivery columns, write-once `provider_message_id`), the `webhook_events` table and its outcome enum, the provider ingress-key hash columns and kill switch, the `acc_delivery` principal (role, session variables, reconcile entry, optional pool behind `DELIVERY_WEBHOOKS_ENABLED`, default off), the delivery contracts and capability validators, the ingress-administration audit actions and the M2 concurrent-index barrier and runner. Schema, contracts and safeguards only: no route, controller, ingestion service, timer or worker exists until PR-C, and ingress stays disabled until OD-19 is verified. Phase 5.0 PR-B (implementation plan T6–T7): the dispatcher settlement writes the provider message id and initial delivery status and applies held receipts under the message-then-attempt lock order; the shared delivery rules and writer (`messages/delivery/`), reused by the PR-C ingestion; the simulator `verifyWebhook`/`parseWebhook`, its receipt format and signed-request factory; the `delivery_receipts`/`simulator_delivery` capability validation; and forward-fix migration 0047 (acc_dispatch visibility of the receipts it settles). Still no route, controller, timer or worker. Phase 5.0 PR-C (implementation plan T8-T9): the provider webhook ingress (`webhooks/`: one public route, disabled unless DELIVERY_WEBHOOKS_ENABLED, raw-body capture on that path only, rate limits, adapter verification and parsing, per-event insert-or-count, ingestion as acc_delivery through the shared delivery writer, log and span redaction of the key) and the ingress-key administration endpoints and resolver facts (migration 0048). No outbound webhook, timer, worker or event publishing. Phase 5.0 PR-D (implementation plan T10): read-only exposure of the delivery axis: `deliveryStatus`/`deliveredAt`/`readAt` on the message and attempt responses, the optional `deliveryStatus` list filter, the additive usage `delivery` block and their OpenAPI schemas; and (owner decision 07-Nov-2026) the platform-support dispatch `deliveryStatus` filter with migration 0049, which recreates the definer `app_platform_support_dispatch_diagnostics` with one optional parameter and unchanged result shape, security and grants. No write path, route or provider reference (OD-9: platform-staff-only, not returned) is added.',
+      'Pre-existing: the `checkStatus`/`parseWebhook` interface members, which the simulator refuses (PD-6) and `GuardedProviderAdapter` declares abstract (ADR-015 R-13), a role description and a forbidden metric label name. Phase 3.3: message attempts table and lifecycle status (ADR-014 §4, §9.2). UI readiness (20-Oct-2026): the `MessageAttemptResponse` contract type and the documentation-only `MessageAttempt` OpenAPI schema, describing the attempts `GET /messages/:id` already returns. Phase 5.0 PR-A (owner authorisation 07-Nov-2026; design spec Rev 2 §B–§D, implementation plan T1–T5): the delivery axis (`message_delivery_status`, delivery columns, write-once `provider_message_id`), the `webhook_events` table and its outcome enum, the provider ingress-key hash columns and kill switch, the `acc_delivery` principal (role, session variables, reconcile entry, optional pool behind `DELIVERY_WEBHOOKS_ENABLED`, default off), the delivery contracts and capability validators, the ingress-administration audit actions and the M2 concurrent-index barrier and runner. Schema, contracts and safeguards only: no route, controller, ingestion service, timer or worker exists until PR-C, and ingress stays disabled until OD-19 is verified. Phase 5.0 PR-B (implementation plan T6–T7): the dispatcher settlement writes the provider message id and initial delivery status and applies held receipts under the message-then-attempt lock order; the shared delivery rules and writer (`messages/delivery/`), reused by the PR-C ingestion; the simulator `verifyWebhook`/`parseWebhook`, its receipt format and signed-request factory; the `delivery_receipts`/`simulator_delivery` capability validation; and forward-fix migration 0047 (acc_dispatch visibility of the receipts it settles). Still no route, controller, timer or worker. Phase 5.0 PR-C (implementation plan T8-T9): the provider webhook ingress (`webhooks/`: one public route, disabled unless DELIVERY_WEBHOOKS_ENABLED, raw-body capture on that path only, rate limits, adapter verification and parsing, per-event insert-or-count, ingestion as acc_delivery through the shared delivery writer, log and span redaction of the key) and the ingress-key administration endpoints and resolver facts (migration 0048). No outbound webhook, timer, worker or event publishing. Phase 5.0 PR-D (implementation plan T10): read-only exposure of the delivery axis: `deliveryStatus`/`deliveredAt`/`readAt` on the message and attempt responses, the optional `deliveryStatus` list filter, the additive usage `delivery` block and their OpenAPI schemas; and (owner decision 07-Nov-2026) the platform-support dispatch `deliveryStatus` filter with migration 0049, which recreates the definer `app_platform_support_dispatch_diagnostics` with one optional parameter and unchanged result shape, security and grants. No write path, route or provider reference (OD-9: platform-staff-only, not returned) is added. Phase 8A (07-Nov-2026): genuine contact activity timeline derives persisted message delivery outcomes (`message_delivered`, `deliveredAt`, `deliveryStatus`).',
     pattern:
       /[\w-]*(?:message_?attempt|webhook|deliver|dlr|checkStatus|parseWebhook|inbound_?message|conversation)[\w-]*/gi,
     providerCodeOnly: false,
@@ -352,6 +352,17 @@ const CATEGORIES: Category[] = [
         'acc_delivery',
         'acc_delivery_dev_password',
         'deliveryCredentialProblems',
+      ],
+      'apps/api/src/contacts/contacts.service.ts': [
+        '-delivered',
+        'Delivered',
+        'Delivery',
+        'delivered',
+        'deliveredAt',
+        'delivery',
+        'deliveryStatus',
+        'message_delivered',
+        'undelivered',
       ],
       'apps/api/src/database/database.module.ts': [
         '-delivery',
@@ -750,6 +761,9 @@ const CATEGORIES: Category[] = [
         'webhook_ingress_disabled',
         'webhook_ingress_enabled',
         'webhook_ingress_key_rotated',
+      ],
+      'packages/contracts/src/contacts.ts': [
+        'message_delivered',
       ],
       'packages/contracts/src/errors.ts': [
         'WEBHOOK_INGRESS_KEY_REQUIRED',
