@@ -456,7 +456,6 @@ const CATEGORIES: Category[] = [
         'provider-webhooks',
         'webhooks',
       ],
-      'apps/api/src/observability/logging.module.ts': ['webhooks'],
       'apps/api/src/observability/metrics.service.ts': [
         'Webhook',
         'acc_delivery_receipt_latency_seconds',
@@ -475,6 +474,7 @@ const CATEGORIES: Category[] = [
         'webhookRequests',
         'webhookVerificationFailures',
       ],
+      'apps/api/src/observability/pino-http-options.ts': ['webhooks'],
       'apps/api/src/observability/tracing.ts': ['webhooks'],
       'apps/api/src/openapi/openapi-schemas.ts': [
         'MESSAGE_ATTEMPT_STATUSES',

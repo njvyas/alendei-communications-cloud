@@ -10,7 +10,7 @@ import pino from 'pino';
 import pinoHttp from 'pino-http';
 
 import type { AppConfigService } from '../config/app-config.service';
-import { pinoHttpOptions } from '../observability/logging.module';
+import { pinoHttpOptions } from '../observability/pino-http-options';
 import { generateIngressKey, hashIngressKey, MAX_INGRESS_KEY_LENGTH } from './ingress-key';
 import {
   INGRESS_ROUTE_TEMPLATE,
