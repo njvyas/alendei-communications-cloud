@@ -328,36 +328,38 @@ describe('three barriers (U14.1a 0042, U14.1b 0043, Phase 5.0 0045) — journal 
     }),
   });
 
-  // Pins the journal shape at the time of Phase 5.0 (PR-A): 0042, 0043, then 0044 (the prefix of
-  // the third barrier), the 0045 guard and 0046 as the newest. Update when a later migration is added.
-  it('0043 follows 0042; the 0045 guard follows 0044; 0046 is the newest', () => {
+  // Pins the journal shape at the time of Phase 5.0 (PR-B): 0042, 0043, then 0044 (the prefix of
+  // the third barrier), the 0045 guard, 0046 and the forward fix 0047 as the newest. Update when a
+  // later migration is added.
+  it('0043 follows 0042; the 0045 guard follows 0044; 0046 then 0047 are the newest', () => {
     expect(at43).toBe(guardAt + 1);
     expect(at45).toBe(at43 + 2);
     expect(expected[at45 - 1]?.tag).toBe('0044_phase5_0_delivery_foundation');
     expect(expected[at45 + 1]?.tag).toBe('0046_phase5_0_delivered_attempt_fk');
-    expect(expected).toHaveLength(at45 + 2);
+    expect(expected[at45 + 2]?.tag).toBe('0047_phase5_0_dispatch_settled_event_visibility');
+    expect(expected).toHaveLength(at45 + 3);
   });
 
   it.each<[string, Row[] | null, string[]]>([
     [
       'fresh database',
       null,
-      [`apply:${guardAt}`, 'barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:2'],
+      [`apply:${guardAt}`, 'barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:3'],
     ],
     [
       'database at 0041',
       rowsFor(guardAt),
-      ['barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:2'],
+      ['barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:3'],
     ],
     [
       'database at 0042 (U14.1a applied)',
       rowsFor(guardAt + 1),
-      ['verify:a', 'barrier:b', 'apply:2', 'barrier:c', 'apply:2'],
+      ['verify:a', 'barrier:b', 'apply:2', 'barrier:c', 'apply:3'],
     ],
     [
       'database at 0044 (Phase 5.0 M1 applied)',
       rowsFor(at45),
-      ['verify:a', 'verify:b', 'barrier:c', 'apply:2'],
+      ['verify:a', 'verify:b', 'barrier:c', 'apply:3'],
     ],
     ['up to date', rowsFor(expected.length), ['verify:a', 'verify:b', 'verify:c']],
   ])(

@@ -13,14 +13,26 @@ import {
   type ProviderFailureCategory,
   type ProviderHealthCheckOptions,
   type ProviderHealthProbe,
+  type ParsedWebhookRequest,
   type ProviderSubmission,
   type ProviderSubmissionResult,
+  type RawWebhookRequest,
   type SimulatorBehavior,
   type SimulatorHealthBehavior,
+  type VerifiedWebhook,
+  type WebhookVerification,
 } from '@acc/contracts';
 
 import { GuardedProviderAdapter, type AdapterSubmitOptions } from './circuit-admission';
+import { parseSimulatorWebhook, verifySimulatorWebhook } from './simulator-webhook';
 import type { SubmissionTimer } from './submission-timer';
+
+/**
+ * Supplies the simulator's non-production webhook signing key (Phase 5.0, spec §E.4),
+ * resolved through `SecretsPort` by whoever wires the simulator. Absent, the simulator
+ * cannot verify a receipt and says so as a configuration error.
+ */
+export type SimulatorWebhookKeySource = () => Promise<Uint8Array>;
 
 /** An adapter operation that has no Phase 2 behaviour (ADR-013 PD-6). */
 export class ProviderAdapterUnsupportedOperation extends Error {
@@ -63,6 +75,16 @@ const FAILURES: Readonly<
 interface SimulatorScenario {
   readonly submission?: SimulatorBehavior;
   readonly health?: SimulatorHealthBehavior;
+  /** Phase 5.0: the webhook signing key source, carried by every view. */
+  readonly webhookKey?: SimulatorWebhookKeySource;
+}
+
+/** The simulator cannot verify receipts because no signing key source is wired (Phase 5.0). */
+export class SimulatorWebhookKeyUnavailable extends Error {
+  constructor() {
+    super('simulator: no webhook signing key is configured');
+    this.name = 'SimulatorWebhookKeyUnavailable';
+  }
 }
 
 /**
@@ -70,7 +92,8 @@ interface SimulatorScenario {
  * opens a network connection and reproduces, on demand, the seven
  * submission-time behaviours. It is **deterministic**: the behaviour is chosen
  * explicitly per submission (`forBehavior`), the provider message id derives
- * from the submission id, and every wait goes through the injected timer.
+ * from the submission id — the attempt id since Phase 5.0 (OD-8), so it is unique
+ * per attempt — and every wait goes through the injected timer.
  *
  * A `GuardedProviderAdapter` (ADR-015 R-13): `send()` is the base's, so a
  * call without the permit the submission executor minted for this very
@@ -79,7 +102,8 @@ interface SimulatorScenario {
  * exactly as the registered simulator is.
  *
  * It holds and needs no credential; `INVALID_CREDENTIALS` is a simulated answer.
- * Delivery and webhook behaviours are Phase 3.
+ * Phase 5.0: it verifies and parses its own signed delivery receipts
+ * (`simulator-webhook.ts`); the signing key is a non-production simulator key.
  */
 export class SimulatorAdapter extends GuardedProviderAdapter {
   readonly adapterKey = 'simulator';
@@ -120,12 +144,18 @@ export class SimulatorAdapter extends GuardedProviderAdapter {
    * success.
    */
   forHealthBehavior(behavior: SimulatorHealthBehavior): SimulatorAdapter {
-    return new SimulatorAdapter(this.#timer, { health: behavior });
+    return new SimulatorAdapter(this.#timer, {
+      health: behavior,
+      ...(this.#scenario.webhookKey ? { webhookKey: this.#scenario.webhookKey } : {}),
+    });
   }
 
   /** A view of this adapter that answers every submission with `behavior`. */
   forBehavior(behavior: SimulatorBehavior): SimulatorAdapter {
-    return new SimulatorAdapter(this.#timer, { submission: behavior });
+    return new SimulatorAdapter(this.#timer, {
+      submission: behavior,
+      ...(this.#scenario.webhookKey ? { webhookKey: this.#scenario.webhookKey } : {}),
+    });
   }
 
   /**
@@ -161,8 +191,22 @@ export class SimulatorAdapter extends GuardedProviderAdapter {
     return Promise.reject(new ProviderAdapterUnsupportedOperation(this.adapterKey, 'checkStatus'));
   }
 
-  parseWebhook(): Promise<never> {
-    return Promise.reject(new ProviderAdapterUnsupportedOperation(this.adapterKey, 'parseWebhook'));
+  /**
+   * Verifies a simulator receipt's signature over the exact raw bytes, constant-time, and
+   * its timestamp against the replay window (spec §E.4, §E.5). Never parses the body.
+   */
+  async verifyWebhook(
+    _context: ProviderAdapterContext,
+    request: RawWebhookRequest,
+  ): Promise<WebhookVerification> {
+    const source = this.#scenario.webhookKey;
+    if (!source) throw new SimulatorWebhookKeyUnavailable();
+    return verifySimulatorWebhook(await source(), request);
+  }
+
+  /** Pure: one result per element of a verified body, or a request-level refusal (plan §1.2). */
+  parseWebhook(_context: ProviderAdapterContext, verified: VerifiedWebhook): ParsedWebhookRequest {
+    return parseSimulatorWebhook(verified.rawBody);
   }
 
   /** The simulated provider itself: every submission that reaches "the provider" passes here. */

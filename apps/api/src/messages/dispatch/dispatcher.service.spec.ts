@@ -231,6 +231,22 @@ describe('DispatcherService provider lifecycle exclusion before admission (Issue
           return { rows: candidates, rowCount: candidates.length };
         }
         if (sql.includes('max(attempt_number)')) return { rows: [{ max_num: 0 }], rowCount: 1 };
+        // Phase 5.0: the settlement message lock (delivery-writer lockMessage, §B.8).
+        if (sql.includes('FROM messages WHERE id = $1 FOR UPDATE')) {
+          return {
+            rows: [
+              {
+                org_id: claim.orgId,
+                current_attempt_id: null,
+                delivery_status: null,
+                delivered_at: null,
+                read_at: null,
+                delivered_attempt_id: null,
+              },
+            ],
+            rowCount: 1,
+          };
+        }
         if (sql.includes('SELECT count(*)::text AS count FROM message_attempts')) {
           return { rows: [{ count: '0' }], rowCount: 1 };
         }

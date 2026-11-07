@@ -97,8 +97,11 @@ class Recorder extends GuardedProviderAdapter {
   checkStatus(): Promise<never> {
     return Promise.reject(new Error('n/a'));
   }
-  parseWebhook(): Promise<never> {
+  verifyWebhook(): Promise<never> {
     return Promise.reject(new Error('n/a'));
+  }
+  parseWebhook(): never {
+    throw new Error('n/a');
   }
 }
 

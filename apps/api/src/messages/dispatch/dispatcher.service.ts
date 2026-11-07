@@ -1,10 +1,13 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ORG_LIFECYCLE_LOCK_CLASS, schema } from '@acc/db';
 import {
+  DELIVERY_RECEIPTS_CAPABILITY,
   ERROR_CODES,
   RCS_MESSAGE_TYPES_CAPABILITY,
+  declaredDeliveryReceipts,
   rcsProviderSupports,
   type AuthPrincipal,
+  type DeliveryReceiptType,
   type ProviderStatus,
   type RcsMessageType,
   type SimulatorBehavior,
@@ -18,6 +21,12 @@ import { AppException } from '../../common/errors/app.exception';
 import { DISPATCH_POOL } from '../../database/database.tokens';
 import { ProviderSubmissionExecutor } from '../../provider-adapters/submission-executor';
 import { ProviderStateStore } from '../../providers/provider-state.store';
+import { initialDeliveryStatus } from '../delivery/delivery-rules';
+import {
+  applyHeldReceipts,
+  lockMessage,
+  refreshMessageDeliveryState,
+} from '../delivery/delivery-writer';
 import { mapMessageForSubmission, resolveChannelCode } from './submission-mapping';
 
 /** A PostgreSQL SQLSTATE: five digits or upper-case letters (for example 42501). */
@@ -771,7 +780,10 @@ export class DispatcherService {
       const settled = await this.executor.execute(
         admission.admission,
         {
-          submissionId: claim.messageId,
+          // Phase 5.0 (OD-8): the attempt id is the submission reference and the client
+          // reference a provider echoes in its receipts — unique per attempt, so every
+          // attempt of a message gets its own provider message id.
+          submissionId: attemptId,
           correlationId: message.correlation_id,
           channel: channelCode,
           recipient: message.recipient_address,
@@ -833,6 +845,17 @@ export class DispatcherService {
         };
       }
 
+      // Phase 5.0 lock order (§B.8): the message row first, before anything touches the
+      // attempt — including the observation below, whose attempt reference takes a key-share
+      // lock on it. Delivery ingestion locks message then attempt, so this order cannot
+      // deadlock with a receipt for the same attempt (AC-LK-1/2).
+      await lockMessage(client, claim.messageId);
+
+      // Phase 5.0: the receipt types the selected provider declares decide the attempt's
+      // initial delivery status (`pending`, or `not_supported` without receipts, OD-3).
+      const receipts = await this.deliveryReceiptsOf(client, selectedProviderId);
+      const initialDelivery = initialDeliveryStatus(receipts);
+
       // Record observation and sample in providerStateStore
       const settlementTx = drizzle(client, { schema });
       await this.providerStateStore.recordSubmission(
@@ -859,13 +882,24 @@ export class DispatcherService {
       if (isAccepted) {
         // Success path
         await client.query(
+          // Phase 5.0: the provider message id (write-once) and the initial delivery status are
+          // written in the same statement that settles the attempt — the terminal guard admits
+          // no later provider reference on an accepted attempt (migration 0044).
           `UPDATE message_attempts
            SET status = 'accepted',
                failure_reason = NULL,
                latency_ms = $1,
-               completed_at = now()
+               completed_at = now(),
+               provider_message_id = $3,
+               delivery_status = $4,
+               delivery_updated_at = now()
            WHERE id = $2`,
-          [settled.result.latencyMs, attemptId],
+          [
+            settled.result.latencyMs,
+            attemptId,
+            settled.result.outcome === 'accepted' ? settled.result.providerMessageId : null,
+            initialDelivery,
+          ],
         );
 
         await client.query(
@@ -889,6 +923,14 @@ export class DispatcherService {
             JSON.stringify({ latencyMs: settled.result.latencyMs }),
           ],
         );
+
+        // Phase 5.0: the message's delivery state and the held receipts — while the claim row
+        // still exists (every acc_dispatch policy is claim-bound).
+        await this.settleDelivery(client, claim, attemptId, selectedProviderId, {
+          providerMessageId:
+            settled.result.outcome === 'accepted' ? settled.result.providerMessageId : null,
+          receipts,
+        });
 
         await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
           claim.messageId,
@@ -914,9 +956,11 @@ export class DispatcherService {
            SET status = 'outcome_unknown',
                failure_reason = $1,
                latency_ms = $2,
-               completed_at = now()
+               completed_at = now(),
+               delivery_status = $4,
+               delivery_updated_at = now()
            WHERE id = $3`,
-          [unknownReason, settled.result.latencyMs, attemptId],
+          [unknownReason, settled.result.latencyMs, attemptId, initialDelivery],
         );
 
         await client.query(
@@ -944,6 +988,13 @@ export class DispatcherService {
             }),
           ],
         );
+
+        // Phase 5.0: delivery is tracked for an unknown outcome too — a receipt may resolve it
+        // on the delivery axis while the submission status stays outcome_unknown (§B.5 rule 5).
+        await this.settleDelivery(client, claim, attemptId, selectedProviderId, {
+          providerMessageId: null,
+          receipts,
+        });
 
         // Delete from queue (terminal, non-retryable, zero fallback per ADR-014 D16)
         await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
@@ -1021,6 +1072,13 @@ export class DispatcherService {
             ],
           );
 
+          // Phase 5.0: receipts held for this failed attempt (anomaly path, §B.3), before the
+          // claim is released. Never cancels or alters the requeue (§B.6a rules 3–5).
+          await this.settleDelivery(client, claim, attemptId, selectedProviderId, {
+            providerMessageId: null,
+            receipts,
+          });
+
           // Release claim on queue so next worker/poll claims with fresh token and epoch
           await client.query(
             `UPDATE message_dispatch_queue
@@ -1071,6 +1129,11 @@ export class DispatcherService {
         ],
       );
 
+      await this.settleDelivery(client, claim, attemptId, selectedProviderId, {
+        providerMessageId: null,
+        receipts,
+      });
+
       await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
         claim.messageId,
       ]);
@@ -1095,6 +1158,49 @@ export class DispatcherService {
     } finally {
       client.release();
     }
+  }
+
+  /** The receipt types the provider declares (`delivery_receipts`, OD-3); none when absent. */
+  private async deliveryReceiptsOf(
+    client: PoolClient,
+    providerId: string,
+  ): Promise<ReadonlySet<DeliveryReceiptType>> {
+    const { rows } = await client.query<{ value: unknown }>(
+      `SELECT value FROM provider_capabilities WHERE provider_id = $1 AND capability_key = $2`,
+      [providerId, DELIVERY_RECEIPTS_CAPABILITY],
+    );
+    return declaredDeliveryReceipts(rows[0]?.value);
+  }
+
+  /**
+   * Phase 5.0 settlement of the delivery axis (design spec Rev 2 §B.3, §B.5, §E.6; plan T6),
+   * in the settlement transaction, under the message lock and the live claim, after the
+   * attempt has settled (with its initial delivery status when `accepted`/`outcome_unknown`):
+   * derives the message's delivery state, then applies the receipts held for this attempt
+   * (`deferred`/`unmatched`). Changes only delivery columns, `message_events` and held
+   * `webhook_events` outcomes.
+   */
+  private async settleDelivery(
+    client: PoolClient,
+    claim: Pick<DispatchClaim, 'orgId' | 'messageId'>,
+    attemptId: string,
+    providerId: string,
+    options: {
+      readonly providerMessageId: string | null;
+      readonly receipts: ReadonlySet<DeliveryReceiptType>;
+    },
+  ): Promise<void> {
+    const receipts = options.receipts;
+    await refreshMessageDeliveryState(client, claim.messageId);
+    await applyHeldReceipts(client, {
+      orgId: claim.orgId,
+      messageId: claim.messageId,
+      attemptId,
+      providerId,
+      providerMessageId: options.providerMessageId,
+      receipts,
+      now: new Date(),
+    });
   }
 
   /**
@@ -1140,14 +1246,32 @@ export class DispatcherService {
   ): Promise<string> {
     const reason = 'Dispatch lease expired during external submission (outcome_unknown)';
 
+    // Phase 5.0 lock order (§B.8): the message row before the attempt.
+    await lockMessage(client, messageId);
+
+    // Phase 5.0: an abandoned submission is an unknown outcome, tracked on the delivery axis
+    // like any other (§B.3); its initial status is written as the attempt settles.
+    let delivery: { providerId: string; receipts: ReadonlySet<DeliveryReceiptType> } | null = null;
     if (attemptId) {
+      const { rows } = await client.query<{ provider_id: string }>(
+        `SELECT provider_id FROM message_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      if (rows[0]) {
+        delivery = {
+          providerId: rows[0].provider_id,
+          receipts: await this.deliveryReceiptsOf(client, rows[0].provider_id),
+        };
+      }
       await client.query(
         `UPDATE message_attempts
          SET status = 'outcome_unknown',
              failure_reason = $1,
-             completed_at = now()
+             completed_at = now(),
+             delivery_status = $3::message_delivery_status,
+             delivery_updated_at = CASE WHEN $3::message_delivery_status IS NULL THEN NULL ELSE now() END
          WHERE id = $2`,
-        [reason, attemptId],
+        [reason, attemptId, delivery ? initialDeliveryStatus(delivery.receipts) : null],
       );
     }
 
@@ -1172,6 +1296,13 @@ export class DispatcherService {
         JSON.stringify({ outcome: 'outcome_unknown', reason }),
       ],
     );
+
+    if (attemptId && delivery) {
+      await this.settleDelivery(client, { orgId, messageId }, attemptId, delivery.providerId, {
+        providerMessageId: null,
+        receipts: delivery.receipts,
+      });
+    }
 
     // Delete from queue (non-retryable)
     await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [messageId]);

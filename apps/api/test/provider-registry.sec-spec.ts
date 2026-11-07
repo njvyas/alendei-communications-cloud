@@ -883,6 +883,75 @@ describe('Phase 2.1 provider and channel registry', () => {
       await put(tokens.orgAdmin!, [{ key: 'simulator_behavior', value: 'SUCCESS' }]).expect(403);
     });
 
+    it('delivery_receipts and simulator_delivery (Phase 5.0, AC-SIM-3): valid values are saved; invalid ones, and read on SMS, are refused and nothing changes', async () => {
+      const sms = await createProvider(providerName(), 'sms');
+      const wa = await createProvider(providerName(), 'whatsapp');
+      const put = (id: string, capabilities: unknown) =>
+        call('put', tokens.platform!, `/providers/${id}/capabilities`).send({ capabilities });
+
+      const waValid = [
+        { key: 'delivery_receipts', value: ['delivered', 'undelivered', 'read'] },
+        {
+          key: 'simulator_delivery',
+          value: {
+            outcome: 'DELIVERED',
+            read: true,
+            duplicates: 2,
+            batch: true,
+            withEventIds: false,
+          },
+        },
+      ];
+      expect((await put(wa.id, waValid).expect(200)).body.data.capabilities).toEqual(waValid);
+      const smsValid = [
+        { key: 'delivery_receipts', value: ['delivered', 'undelivered'] },
+        { key: 'simulator_delivery', value: { outcome: 'UNDELIVERED', order: 'REVERSED' } },
+      ];
+      expect((await put(sms.id, smsValid).expect(200)).body.data.capabilities).toEqual(smsValid);
+
+      const refused = async (id: string, key: string, value: unknown) => {
+        const r = await put(id, [{ key, value }]).expect(400);
+        expect(r.body.error.code).toBe('VALIDATION_FAILED');
+        expect(r.body.error.details.issues).toEqual([
+          expect.objectContaining({ field: 'capabilities.0', rule: 'INVALID_VALUE' }),
+        ]);
+      };
+      for (const value of [
+        [],
+        ['read'],
+        ['delivered', 'delivered'],
+        ['seen'],
+        'delivered',
+        { a: 1 },
+      ]) {
+        await refused(wa.id, 'delivery_receipts', value);
+      }
+      for (const value of [
+        {},
+        { outcome: 'LOST' },
+        { outcome: 'DELIVERED', duplicates: 4 },
+        { outcome: 'DELIVERED', delayMs: -1 },
+        { outcome: 'DELIVERED', signature: 'FORGED' },
+        { outcome: 'UNDELIVERED', read: true },
+        { outcome: 'DELIVERED', extra: true },
+        ['DELIVERED'],
+      ]) {
+        await refused(wa.id, 'simulator_delivery', value);
+      }
+      // OD-3 / spec §F.3: no read receipts on SMS, declared or scripted.
+      await refused(sms.id, 'delivery_receipts', ['delivered', 'read']);
+      await refused(sms.id, 'simulator_delivery', { outcome: 'DELIVERED', read: true });
+
+      expect(
+        (await call('get', tokens.platform!, `/providers/${wa.id}`).expect(200)).body.data
+          .capabilities,
+      ).toEqual(waValid);
+      expect(
+        (await call('get', tokens.platform!, `/providers/${sms.id}`).expect(200)).body.data
+          .capabilities,
+      ).toEqual(smsValid);
+    });
+
     it('there is no provider deletion', async () => {
       const p = await createProvider();
       await call('delete', tokens.platform!, `/providers/${p.id}`).expect(404);
