@@ -260,6 +260,16 @@ export const ERROR_CODES = {
 
   // --- Generic -------------------------------------------------------------
 
+  // Phase 5.0 provider webhook ingress (design spec Rev 2 §E). The 401 code is the same for
+  // an unknown ingress key and a failed signature, so neither can be told apart (AC-SV-2).
+  WEBHOOK_NOT_ACCEPTED: 'WEBHOOK_NOT_ACCEPTED',
+  WEBHOOK_PAYLOAD_INVALID: 'WEBHOOK_PAYLOAD_INVALID',
+  WEBHOOK_PAYLOAD_TOO_LARGE: 'WEBHOOK_PAYLOAD_TOO_LARGE',
+  WEBHOOK_UNSUPPORTED_MEDIA_TYPE: 'WEBHOOK_UNSUPPORTED_MEDIA_TYPE',
+  // Ingress-key administration: no server pepper configured; ingress enabled without a key.
+  WEBHOOK_INGRESS_NOT_CONFIGURED: 'WEBHOOK_INGRESS_NOT_CONFIGURED',
+  WEBHOOK_INGRESS_KEY_REQUIRED: 'WEBHOOK_INGRESS_KEY_REQUIRED',
+
   VALIDATION_FAILED: 'VALIDATION_FAILED',
   RESOURCE_NOT_FOUND: 'RESOURCE_NOT_FOUND',
   RESOURCE_CONFLICT: 'RESOURCE_CONFLICT',

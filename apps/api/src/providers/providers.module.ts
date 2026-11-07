@@ -14,6 +14,7 @@ import { PROVIDER_CLOCK, SystemProviderClock } from './provider-clock';
 import { ProviderHealthService } from './provider-health.service';
 import { ProviderRegistryService } from './provider-registry.service';
 import { ProviderStateStore } from './provider-state.store';
+import { ProviderWebhookIngressService } from './provider-webhook-ingress.service';
 import { ProvidersController } from './providers.controller';
 
 /**
@@ -40,6 +41,8 @@ import { ProvidersController } from './providers.controller';
     ProviderConfigurationListener,
     ProviderCatalogueService,
     OrganizationProviderAssignmentsService,
+    // Phase 5.0 PR-C (T9): ingress-key administration.
+    ProviderWebhookIngressService,
   ],
   exports: [OrganizationProviderAssignmentsService, ProviderStateStore],
 })

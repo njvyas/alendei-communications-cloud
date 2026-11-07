@@ -22,6 +22,8 @@ import { NodeSDK } from '@opentelemetry/sdk-node';
 import { ParentBasedSampler, TraceIdRatioBasedSampler } from '@opentelemetry/sdk-trace-base';
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
 
+import { redactIngressSpan } from '../webhooks/ingress-path';
+
 let sdk: NodeSDK | undefined;
 
 function envFlag(name: string, fallback = false): boolean {
@@ -55,6 +57,12 @@ export function startTracing(): void {
         ignoreIncomingRequestHook: (request) => {
           const url = request.url ?? '';
           return url.startsWith('/metrics') || url.startsWith('/health');
+        },
+        // Phase 5.0 PR-C (spec §E.8, OD-19): the webhook ingress path carries the provider's
+        // ingress key. Every URL-bearing attribute of its span is overwritten with the
+        // redacted path and `http.route` is the route template; other requests are untouched.
+        requestHook: (span, request) => {
+          if ('url' in request) redactIngressSpan(span, request);
         },
       }),
       new PgInstrumentation({ enhancedDatabaseReporting: false }),

@@ -337,6 +337,13 @@
       "when": 1793577600000,
       "tag": "0047_phase5_0_dispatch_settled_event_visibility",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1793664000000,
+      "tag": "0048_phase5_0_ingress_resolver_facts",
+      "breakpoints": true
     }
   ]
 }

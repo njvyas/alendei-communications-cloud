@@ -33,6 +33,12 @@ const ALLOWED_LABELS = new Set([
   // fixed enum of at most four values (`PROVIDER_ADAPTER.md` §6g).
   'from_state',
   'to_state',
+  // Phase 5.0 PR-C (spec Rev 2 §E.8): the provider adapter key (a registered adapter, today
+  // only `simulator`, or `unknown` before a key resolves), a verification-failure reason
+  // (four fixed values) and the delivery status a transition reached (three fixed values).
+  'adapter',
+  'reason',
+  'to',
 ]);
 
 /** Labels that would create one time series per tenant/message/campaign. */
@@ -103,6 +109,12 @@ export class MetricsService implements OnModuleInit {
   readonly providerConfigConvergence: Histogram<never>;
   readonly providerConfigListenerConnected: Gauge<never>;
   readonly providerConfigListenerEvents: Counter<'outcome'>;
+  // Phase 5.0 PR-C — provider webhook ingress (spec Rev 2 §E.8, plan §1.1–§1.2).
+  readonly webhookRequests: Counter<'adapter' | 'outcome'>;
+  readonly webhookEvents: Counter<'adapter' | 'outcome'>;
+  readonly webhookVerificationFailures: Counter<'adapter' | 'reason'>;
+  readonly deliveryTransitions: Counter<'channel' | 'to'>;
+  readonly deliveryReceiptLatency: Histogram<'channel'>;
 
   constructor(private readonly config: AppConfigService) {
     this.registry.setDefaultLabels({
@@ -246,6 +258,34 @@ export class MetricsService implements OnModuleInit {
       name: 'acc_provider_config_listener_events_total',
       help: 'Configuration LISTEN connection events: connected, lost.',
       labelNames: ['outcome'],
+    });
+
+    // Phase 5.0 PR-C: provider webhook ingress. No organization, provider id or key label.
+    this.webhookRequests = this.counter({
+      name: 'acc_webhook_requests_total',
+      help: 'Webhook ingress requests by adapter and outcome: accepted, rate_limited, not_accepted (unknown key, ingress disabled or failed verification), malformed, too_large, unsupported_media_type, error.',
+      labelNames: ['adapter', 'outcome'],
+    });
+    this.webhookEvents = this.counter({
+      name: 'acc_webhook_events_total',
+      help: 'Webhook events by adapter and outcome: applied, no_change, deferred, unmatched, rejected_malformed, conflict, informational, or duplicate (counted on the original row, never stored).',
+      labelNames: ['adapter', 'outcome'],
+    });
+    this.webhookVerificationFailures = this.counter({
+      name: 'acc_webhook_verification_failures_total',
+      help: 'Webhook requests refused by the adapter signature check, by reason: missing_signature, bad_signature, stale_timestamp, malformed.',
+      labelNames: ['adapter', 'reason'],
+    });
+    this.deliveryTransitions = this.counter({
+      name: 'acc_delivery_transitions_total',
+      help: 'Attempt delivery-status changes applied from provider receipts, by channel and the status reached (delivered, undelivered; read sets read_at on a delivered attempt).',
+      labelNames: ['channel', 'to'],
+    });
+    this.deliveryReceiptLatency = this.histogram({
+      name: 'acc_delivery_receipt_latency_seconds',
+      help: 'Time from the provider-reported event time to its receipt by the ingress, for receipts that changed delivery state.',
+      labelNames: ['channel'],
+      buckets: [0.5, 1, 2, 5, 10, 30, 60, 300, 900, 3600, 21600, 86400],
     });
   }
 

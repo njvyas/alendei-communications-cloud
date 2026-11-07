@@ -58,6 +58,10 @@ const PUBLIC_PATHS = new Set([
   'GET /health/live',
   'GET /health/ready',
   'GET /metrics',
+  // Phase 5.0 PR-C: the provider webhook ingress. Providers authenticate by the opaque
+  // ingress key in the path and the adapter-owned signature over the raw body — never by a
+  // session or API key. Disabled (404) unless DELIVERY_WEBHOOKS_ENABLED.
+  'POST /api/v1/webhooks/providers/:providerKey',
 ]);
 
 const PREFIXED = new Set(['metrics', 'health', 'health/live', 'health/ready']);
@@ -287,9 +291,11 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 4 U13.2 (01-Nov-2026) added 1 scoped route (`GET /organizations/:id/lifecycle-history`): 120 → 121 scoped.
     // U13.3 (01-Nov-2026) added 5 read-only platform domain oversight routes: 121 → 126.
     // U13.4 (01-Nov-2026) added 4 platform operational support routes: 126 → 130.
-    expect(scoped.length).toBe(130);
+    // Phase 5.0 PR-C added 3 platform ingress-key routes (key, enable, disable; target deferred,
+    // platform catalogue): 130 → 133 scoped; and 1 public route (the webhook ingress): 7 → 8 open.
+    expect(scoped.length).toBe(133);
     expect(exempt.length).toBe(7);
-    expect(open.length).toBe(7);
+    expect(open.length).toBe(8);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
 
     // Of the scoped routes, exactly the two grant/revoke handlers defer their
@@ -311,7 +317,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 4 U13.2 added GET /organizations/:id/lifecycle-history, deferred: 95 → 96.
     // U13.3 added 5, all deferred: each targets `platform`, like the catalogue: 96 → 101.
     // U13.4 added 4 platform operational support routes, all deferred: 101 → 105.
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(105);
+    // Phase 5.0 PR-C added 3 ingress-key routes, each targeting `platform`: 105 → 108.
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(108);
   });
 });
 

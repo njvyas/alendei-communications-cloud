@@ -9,6 +9,7 @@ import { Logger as PinoLogger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 import { AppConfigService } from './config/app-config.service';
 import { mountDevelopmentSwaggerUi } from './openapi/openapi-dev-ui';
+import { configureWebhookBodyParsing } from './webhooks/webhook-body-parsing';
 
 /**
  * Builds the production application: the module graph plus every piece of
@@ -53,6 +54,10 @@ export function configureApp(app: NestExpressApplication, config: AppConfigServi
   // The refresh token arrives as an httpOnly cookie (`API.md` §3b); nothing
   // else in the platform reads cookies.
   app.use(cookieParser());
+
+  // Phase 5.0 PR-C: the provider webhook ingress keeps its exact raw bytes (signature
+  // verification, plan §1.3); every other route's body parsing is untouched.
+  configureWebhookBodyParsing(app, config);
 
   // Proxy headers are trusted for exactly the configured number of hops, and
   // `0` — the default — trusts none: the client address is the socket peer and

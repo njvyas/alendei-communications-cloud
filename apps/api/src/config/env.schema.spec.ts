@@ -198,7 +198,11 @@ describe('validateEnv', () => {
       APP_ENV: 'staging',
       DATABASE_DISPATCH_PASSWORD: 'a-staging-dispatch-credential',
     } as const;
-    const ENABLED = { ...STAGING, DELIVERY_WEBHOOKS_ENABLED: 'true' } as const;
+    const ENABLED = {
+      ...STAGING,
+      DELIVERY_WEBHOOKS_ENABLED: 'true',
+      WEBHOOK_INGRESS_KEY_PEPPER_REF: 'vault:acc/webhook-ingress-pepper',
+    } as const;
     const problemsOf = (raw: Record<string, unknown>): string[] => {
       try {
         validateEnv(raw);
@@ -225,6 +229,32 @@ describe('validateEnv', () => {
         ).toEqual([]);
       },
     );
+
+    it('PR-C: staging with ingestion on refuses to start without an ingress-key pepper reference (OD-6)', () => {
+      const { WEBHOOK_INGRESS_KEY_PEPPER_REF: _pepper, ...withoutPepper } = ENABLED;
+      expect(problemsOf({ ...withoutPepper, DATABASE_DELIVERY_PASSWORD: SECRET })).toEqual([
+        expect.stringMatching(
+          /WEBHOOK_INGRESS_KEY_PEPPER_REF must be set when APP_ENV=staging and DELIVERY_WEBHOOKS_ENABLED=true/,
+        ),
+      ]);
+      expect(problemsOf({ ...ENABLED, DATABASE_DELIVERY_PASSWORD: SECRET })).toEqual([]);
+    });
+
+    it('PR-C: ingress defaults — 64 KiB body, 24 h rotation grace, global/IP/provider limits', () => {
+      const env = validateEnv(MINIMAL_ENV);
+      expect(env.WEBHOOK_MAX_BODY_BYTES).toBe(65_536);
+      expect(env.WEBHOOK_KEY_ROTATION_GRACE_SECONDS).toBe(86_400);
+      expect([
+        env.WEBHOOK_RATE_LIMIT_WINDOW_SECONDS,
+        env.WEBHOOK_RATE_LIMIT_GLOBAL_MAX,
+        env.WEBHOOK_RATE_LIMIT_IP_MAX,
+        env.WEBHOOK_RATE_LIMIT_PROVIDER_MAX,
+        env.WEBHOOK_RATE_LIMIT_PROVIDER_IP_MAX,
+      ]).toEqual([60, 6_000, 600, 3_000, 600]);
+      expect(() =>
+        validateEnv({ ...MINIMAL_ENV, WEBHOOK_INGRESS_KEY_PEPPER_REF: 'plain' }),
+      ).toThrow(/WEBHOOK_INGRESS_KEY_PEPPER_REF/);
+    });
 
     it('staging with ingestion on refuses to start without one', () => {
       expect(problemsOf(ENABLED)).toEqual([

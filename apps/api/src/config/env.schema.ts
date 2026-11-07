@@ -135,6 +135,32 @@ export const envSchema = z.object({
    * in place and verified there, and `db:roles:reconcile` has given the role LOGIN.
    */
   DELIVERY_WEBHOOKS_ENABLED: booleanFromEnv.default(false),
+  /**
+   * Phase 5.0 PR-C (OD-6): the server pepper for ingress-key hashes, resolved through
+   * SecretsPort. A key is stored only as HMAC-SHA256(pepper, key). Required to issue keys
+   * and, outside development and test, whenever ingress is enabled.
+   */
+  WEBHOOK_INGRESS_KEY_PEPPER_REF: secretRef.optional(),
+  /**
+   * The simulator's NON-PRODUCTION receipt-signing key (spec §E.4), resolved through
+   * SecretsPort. Not a provider credential. Without it a simulator receipt cannot be
+   * verified and is refused.
+   */
+  SIMULATOR_WEBHOOK_SIGNING_KEY_REF: secretRef.optional(),
+  /** Largest accepted ingress body (OD-11). */
+  WEBHOOK_MAX_BODY_BYTES: positiveInt.max(1_048_576).default(65_536),
+  /** How long the previous ingress key stays valid after a rotation (OD-6). */
+  WEBHOOK_KEY_ROTATION_GRACE_SECONDS: positiveInt.max(604_800).default(86_400),
+  /**
+   * Ingress rate limits (spec §E.3 steps 1 and 3), fixed windows in Redis. The global and
+   * per-source-IP buckets are consumed BEFORE the key is hashed or looked up; the
+   * per-provider and per-provider-and-IP buckets after it resolves.
+   */
+  WEBHOOK_RATE_LIMIT_WINDOW_SECONDS: positiveInt.max(3_600).default(60),
+  WEBHOOK_RATE_LIMIT_GLOBAL_MAX: positiveInt.default(6_000),
+  WEBHOOK_RATE_LIMIT_IP_MAX: positiveInt.default(600),
+  WEBHOOK_RATE_LIMIT_PROVIDER_MAX: positiveInt.default(3_000),
+  WEBHOOK_RATE_LIMIT_PROVIDER_IP_MAX: positiveInt.default(600),
 
   // --- Secrets -------------------------------------------------------------
   SECRETS_BACKEND: z.enum(['env', 'vault', 'aws', 'azure', 'gcp']).default('env'),
@@ -277,13 +303,22 @@ function dispatchCredentialProblems(env: Env): string[] {
  */
 function deliveryCredentialProblems(env: Env): string[] {
   if (!env.DELIVERY_WEBHOOKS_ENABLED) return [];
-  return principalCredentialProblems(env, {
-    role: DELIVERY_ROLE,
-    urlVariable: 'DATABASE_DELIVERY_URL',
-    passwordVariable: 'DATABASE_DELIVERY_PASSWORD',
-    developmentPassword: DEVELOPMENT_DELIVERY_PASSWORD,
-    requiredWhen: ' and DELIVERY_WEBHOOKS_ENABLED=true',
-  });
+  const pepper =
+    allowsDevelopmentDispatchPassword(env.APP_ENV) || env.WEBHOOK_INGRESS_KEY_PEPPER_REF
+      ? []
+      : [
+          `WEBHOOK_INGRESS_KEY_PEPPER_REF must be set when APP_ENV=${env.APP_ENV} and DELIVERY_WEBHOOKS_ENABLED=true`,
+        ];
+  return [
+    ...pepper,
+    ...principalCredentialProblems(env, {
+      role: DELIVERY_ROLE,
+      urlVariable: 'DATABASE_DELIVERY_URL',
+      passwordVariable: 'DATABASE_DELIVERY_PASSWORD',
+      developmentPassword: DEVELOPMENT_DELIVERY_PASSWORD,
+      requiredWhen: ' and DELIVERY_WEBHOOKS_ENABLED=true',
+    }),
+  ];
 }
 
 function productionHardening(env: Env): string[] {

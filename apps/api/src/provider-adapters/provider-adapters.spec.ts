@@ -1000,14 +1000,18 @@ describe('circuit admission is mandatory before any provider call (Gate D.3, PRO
     await expect(executor.probe(context())).resolves.toMatchObject({ outcome: 'healthy' });
   });
 
-  it('the executor exposes no adapter: its public surface is execute, probe and the registered keys', () => {
+  it('the executor exposes no adapter: its public surface is execute, probe, the registered keys and webhook verify/parse', () => {
     const { executor } = rig();
     expect(Object.getOwnPropertyNames(ProviderSubmissionExecutor.prototype).sort()).toEqual([
       'adapterKeys',
       'constructor',
       'execute',
       'isSimulator',
+      // Phase 5.0 PR-C: delegate to the registered adapter; return a verdict or a parse,
+      // never the adapter (circuit-admission.architecture.spec: ingress pipeline only).
+      'parseWebhook',
       'probe',
+      'verifyWebhook',
     ]);
     expect(Object.keys(executor)).toEqual([]);
     expect(executor.adapterKeys()).toEqual([...PROVIDER_ADAPTER_KEYS]);

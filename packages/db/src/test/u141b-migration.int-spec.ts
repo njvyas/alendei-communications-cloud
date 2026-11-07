@@ -233,9 +233,9 @@ afterAll(async () => {
 
 describe('U14.1b — one db:migrate for every starting point; U14.1a untouched', () => {
   // Pinned at U14.1b; updated by Phase 5.0 (PR-A: 0044 M1, the 0045 guard (M2, a third barrier),
-  // 0046 M3; PR-B: the forward fix 0047). Update when a later migration is added.
-  it('0043 directly follows 0042; Phase 5.0 adds 0044–0047 after it', () => {
-    expect([AT42, AT43, expected.length]).toEqual([42, 43, 48]);
+  // 0046 M3; PR-B: the forward fix 0047; PR-C: 0048). Update when a later migration is added.
+  it('0043 directly follows 0042; Phase 5.0 adds 0044–0048 after it', () => {
+    expect([AT42, AT43, expected.length]).toEqual([42, 43, 49]);
   });
 
   it.each<[string, () => string]>([
