@@ -1,8 +1,11 @@
 import {
   maskRecipientAddress,
+  sanitizeRecipientContent,
   type ConsentEventResponse,
   type ContactIdentityResponse,
   type ContactResponse,
+  type MessageDeliveryStatus,
+  type MessageStatus,
 } from '@acc/contracts';
 
 /**
@@ -191,8 +194,8 @@ export interface ContactMessageActivityRecord {
   readonly id: string;
   readonly channelCode: 'whatsapp' | 'sms' | 'email' | 'rcs' | 'voice';
   readonly recipientAddress: string;
-  readonly status: 'pending' | 'submitted' | 'failed';
-  readonly deliveryStatus?: 'pending' | 'delivered' | 'undelivered' | 'not_supported' | null;
+  readonly status: MessageStatus | 'pending' | 'submitted';
+  readonly deliveryStatus?: MessageDeliveryStatus | null;
   readonly createdAt: string;
   readonly deliveredAt?: string | null;
   readonly readAt?: string | null;
@@ -268,10 +271,84 @@ export function generateContactTimeline(
     });
   }
 
+  // Track known addresses for PII sanitization in failure reasons
+  const knownAddresses = new Set<string>();
+  for (const id of identities) {
+    const rawOrNorm = id.normalizedAddress || id.rawAddress;
+    if (rawOrNorm) knownAddresses.add(rawOrNorm);
+  }
+  for (const m of messages) {
+    if (m.recipientAddress) knownAddresses.add(m.recipientAddress);
+  }
+
   // 4. Authentic message events (only when real records are passed)
   for (const msg of messages) {
     const maskedRecipient = maskRecipientAddress(msg.recipientAddress);
 
+    // 1. Dispatch event (message_sent) vs Pending Dispatch (message_pending)
+    // - accepted -> message_sent
+    // - queued, routing, submitting -> message_pending
+    if (msg.status === 'accepted' || (msg.status as string) === 'submitted') {
+      items.push({
+        id: `event-msg-sent-${msg.id}`,
+        type: 'message_sent',
+        category: 'message',
+        title: `${msg.channelCode.toUpperCase()} Dispatched`,
+        description: `Outbound message dispatched to recipient ${maskedRecipient}.`,
+        timestamp: msg.createdAt,
+        channelCode: msg.channelCode,
+        statusTone: 'neutral',
+        metadata: {
+          messageId: msg.id,
+          recipientAddress: maskedRecipient,
+          templateName: msg.templateName,
+          status: msg.status,
+        },
+      });
+    } else if (
+      msg.status === 'queued' ||
+      msg.status === 'routing' ||
+      msg.status === 'submitting' ||
+      (msg.status as string) === 'pending'
+    ) {
+      items.push({
+        id: `event-msg-pending-${msg.id}`,
+        type: 'message_pending',
+        category: 'message',
+        title: `${msg.channelCode.toUpperCase()} Pending Dispatch`,
+        description: `Outbound message awaiting dispatch to ${maskedRecipient}.`,
+        timestamp: msg.createdAt,
+        channelCode: msg.channelCode,
+        statusTone: 'neutral',
+        metadata: {
+          messageId: msg.id,
+          recipientAddress: maskedRecipient,
+          templateName: msg.templateName,
+          status: msg.status,
+        },
+      });
+    }
+
+    // 2. Delivery event (message_delivered)
+    if (msg.deliveredAt || msg.deliveryStatus === 'delivered') {
+      items.push({
+        id: `event-msg-deliv-${msg.id}`,
+        type: 'message_delivered',
+        category: 'message',
+        title: `${msg.channelCode.toUpperCase()} Delivered`,
+        description: 'Confirmed delivered to recipient endpoint.',
+        timestamp: msg.deliveredAt || msg.createdAt,
+        channelCode: msg.channelCode,
+        statusTone: 'success',
+        metadata: {
+          messageId: msg.id,
+          recipientAddress: maskedRecipient,
+          deliveryStatus: msg.deliveryStatus,
+        },
+      });
+    }
+
+    // 3. Read event (message_read)
     if (msg.readAt) {
       items.push({
         id: `event-msg-read-${msg.id}`,
@@ -290,71 +367,59 @@ export function generateContactTimeline(
       });
     }
 
-    if (msg.deliveredAt || msg.deliveryStatus === 'delivered') {
-      items.push({
-        id: `event-msg-deliv-${msg.id}`,
-        type: 'message_delivered',
-        category: 'message',
-        title: `${msg.channelCode.toUpperCase()} Delivered`,
-        description: `Confirmed delivered to recipient endpoint.`,
-        timestamp: msg.deliveredAt || msg.createdAt,
-        channelCode: msg.channelCode,
-        statusTone: 'success',
-        metadata: {
-          messageId: msg.id,
-          recipientAddress: maskedRecipient,
-          deliveryStatus: msg.deliveryStatus,
-        },
-      });
-    } else if (msg.deliveryStatus === 'undelivered' || msg.status === 'failed') {
+    // 4. Failure event (message_failed)
+    // - failed -> message_failed, never message_sent
+    // - undelivered -> delivery failure
+    if (msg.status === 'failed' || msg.deliveryStatus === 'undelivered') {
+      const isDownstreamFailure =
+        (msg.status === 'accepted' || (msg.status as string) === 'submitted') &&
+        msg.deliveryStatus === 'undelivered';
+
+      let sanitizedFailureReason = msg.failureReason || null;
+      if (sanitizedFailureReason) {
+        sanitizedFailureReason =
+          sanitizeRecipientContent(sanitizedFailureReason, msg.recipientAddress) || null;
+        for (const addr of knownAddresses) {
+          if (sanitizedFailureReason && addr !== msg.recipientAddress) {
+            sanitizedFailureReason = sanitizeRecipientContent(sanitizedFailureReason, addr) || null;
+          }
+        }
+      }
+
       items.push({
         id: `event-msg-fail-${msg.id}`,
         type: 'message_failed',
         category: 'message',
-        title: `${msg.channelCode.toUpperCase()} Delivery Failed`,
-        description: msg.failureReason || 'Message failed or undelivered.',
+        title: isDownstreamFailure
+          ? `${msg.channelCode.toUpperCase()} Delivery Failed`
+          : `${msg.channelCode.toUpperCase()} Submission Failed`,
+        description: isDownstreamFailure
+          ? sanitizedFailureReason || 'Message delivery failed at recipient endpoint.'
+          : sanitizedFailureReason || 'Message submission failed before dispatch.',
         timestamp: msg.createdAt,
         channelCode: msg.channelCode,
         statusTone: 'error',
         metadata: {
           messageId: msg.id,
           recipientAddress: maskedRecipient,
-          failureReason: msg.failureReason,
-        },
-      });
-    }
-
-    if (msg.status === 'submitted') {
-      items.push({
-        id: `event-msg-sent-${msg.id}`,
-        type: 'message_sent',
-        category: 'message',
-        title: `${msg.channelCode.toUpperCase()} Dispatched`,
-        description: `Outbound message dispatched to recipient ${maskedRecipient}.`,
-        timestamp: msg.createdAt,
-        channelCode: msg.channelCode,
-        statusTone: 'neutral',
-        metadata: {
-          messageId: msg.id,
-          recipientAddress: maskedRecipient,
-          templateName: msg.templateName,
+          failureReason: sanitizedFailureReason,
           status: msg.status,
+          deliveryStatus: msg.deliveryStatus,
         },
       });
-    } else if (msg.status === 'pending') {
+    } else if (msg.status === 'outcome_unknown') {
       items.push({
-        id: `event-msg-pending-${msg.id}`,
-        type: 'message_pending',
+        id: `event-msg-unknown-${msg.id}`,
+        type: 'message_failed',
         category: 'message',
-        title: `${msg.channelCode.toUpperCase()} Pending Dispatch`,
-        description: `Outbound message pending dispatch to ${maskedRecipient}.`,
+        title: `${msg.channelCode.toUpperCase()} Dispatch Outcome Unknown`,
+        description: 'Message submission outcome unknown.',
         timestamp: msg.createdAt,
         channelCode: msg.channelCode,
-        statusTone: 'neutral',
+        statusTone: 'warning',
         metadata: {
           messageId: msg.id,
           recipientAddress: maskedRecipient,
-          templateName: msg.templateName,
           status: msg.status,
         },
       });

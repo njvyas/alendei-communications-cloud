@@ -283,6 +283,103 @@ describe('Phase 8A — Contact Activity Backend Integration', () => {
       }
     });
 
+    it('protects PII: sanitizes raw phone number and email address embedded in provider failure reasons', async () => {
+      const channelId = '01900000-0000-7000-8000-000000000020';
+      const rawPhone = '+12025550999';
+      const rawEmail = 'sarah.connor@example.com';
+
+      const phoneFailedMsg = {
+        id: '01900000-0000-7000-8000-000000000041',
+        orgId,
+        workspaceId,
+        contactId,
+        channelId,
+        status: 'failed',
+        deliveryStatus: 'undelivered',
+        failureReason: `Carrier rejected ${rawPhone}: destination handset unreachable`,
+        completedAt: new Date('2026-11-05T09:01:00Z'),
+        createdAt: new Date('2026-11-05T09:00:00Z'),
+        recipientAddress: rawPhone,
+      };
+
+      const emailFailedMsg = {
+        id: '01900000-0000-7000-8000-000000000042',
+        orgId,
+        workspaceId,
+        contactId,
+        channelId,
+        status: 'failed',
+        deliveryStatus: 'undelivered',
+        failureReason: `SMTP 550 5.1.1 <${rawEmail}>: Recipient address rejected`,
+        completedAt: new Date('2026-11-05T10:01:00Z'),
+        createdAt: new Date('2026-11-05T10:00:00Z'),
+        recipientAddress: rawEmail,
+      };
+
+      const downstreamFailedMsg = {
+        id: '01900000-0000-7000-8000-000000000043',
+        orgId,
+        workspaceId,
+        contactId,
+        channelId,
+        status: 'accepted',
+        deliveryStatus: 'undelivered',
+        failureReason: `Downstream delivery failed to ${rawPhone} (cc: ${rawEmail})`,
+        completedAt: new Date('2026-11-05T11:01:00Z'),
+        createdAt: new Date('2026-11-05T11:00:00Z'),
+        recipientAddress: rawPhone,
+      };
+
+      mockTx.select.mockReturnValue({
+        from: jest.fn().mockReturnValue({
+          leftJoin: jest.fn().mockReturnValue({
+            leftJoin: jest.fn().mockReturnValue({
+              where: jest.fn().mockResolvedValue([
+                { message: phoneFailedMsg, channelCode: 'sms', templateName: null },
+                { message: emailFailedMsg, channelCode: 'email', templateName: null },
+                { message: downstreamFailedMsg, channelCode: 'sms', templateName: null },
+              ]),
+            }),
+          }),
+        }),
+      });
+
+      const result = await service.listActivities(principal, contactId, { category: 'message' });
+
+      // phoneFailedMsg: 1 message_failed
+      // emailFailedMsg: 1 message_failed
+      // downstreamFailedMsg: 1 message_sent, 1 message_failed
+      expect(result.items.length).toBe(4);
+
+      const phoneItem = result.items.find(
+        (i) => i.id === `activity-msg-${phoneFailedMsg.id}-failed`,
+      )!;
+      expect(phoneItem).toBeDefined();
+      expect(phoneItem.description).toContain('+1 •••• 0999');
+      expect(phoneItem.metadata?.failureReason).toContain('+1 •••• 0999');
+
+      const emailItem = result.items.find(
+        (i) => i.id === `activity-msg-${emailFailedMsg.id}-failed`,
+      )!;
+      expect(emailItem).toBeDefined();
+      expect(emailItem.description).toContain('s••••r@example.com');
+      expect(emailItem.metadata?.failureReason).toContain('s••••r@example.com');
+
+      const downstreamItem = result.items.find(
+        (i) => i.id === `activity-msg-${downstreamFailedMsg.id}-failed`,
+      )!;
+      expect(downstreamItem).toBeDefined();
+      expect(downstreamItem.description).toContain('+1 •••• 0999');
+      expect(downstreamItem.description).toContain('s••••r@example.com');
+      expect(downstreamItem.metadata?.failureReason).toContain('+1 •••• 0999');
+      expect(downstreamItem.metadata?.failureReason).toContain('s••••r@example.com');
+
+      // Regression: neither raw recipient phone number nor email appears anywhere in serialized response
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain(rawPhone);
+      expect(serialized).not.toContain(rawEmail);
+    });
+
     it('emits message_pending for queued/routing/submitting messages and never emits message_sent without accepted status', async () => {
       const channelId = '01900000-0000-7000-8000-000000000020';
       const queuedMsg = {
