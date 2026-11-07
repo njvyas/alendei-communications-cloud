@@ -1577,12 +1577,17 @@ Enable/disable of an assignment already in that state is a no-op `200` and write
   "failureReason": "string | null",   // e.g. NO_ELIGIBLE_PROVIDER
   "createdAt": "ISO-8601",
   "completedAt": "ISO-8601 | null",
+  "deliveryStatus": "delivered", // Phase 5.0: pending | delivered | undelivered | not_supported | null (null = not tracked)
+  "deliveredAt": "ISO-8601 | null",
+  "readAt": "ISO-8601 | null",
   "attempts": [                 // ordered by attemptNumber; empty until the first attempt
     {
       "id": "uuid", "attemptNumber": 1, "providerId": "uuid",
       "status": "failed",       // submitting | accepted | failed | outcome_unknown
       "failureReason": "string | null",   // PROVIDER_ERROR | RATE_LIMITED | TIMEOUT | UNKNOWN
-      "latencyMs": 120, "completedAt": "ISO-8601 | null"
+      "latencyMs": 120, "completedAt": "ISO-8601 | null",
+      "deliveryStatus": "pending | delivered | undelivered | not_supported | null",
+      "deliveredAt": "ISO-8601 | null", "readAt": "ISO-8601 | null"
     }
   ]
 }
@@ -1590,7 +1595,8 @@ Enable/disable of an assignment already in that state is a no-op `200` and write
 
 - **Who:** `messages.send` / `messages.read` at the request organization; session or API key. Another organization's message is `404 RESOURCE_NOT_FOUND`; a list never contains one.
 - `providerId` is an id only: tenant users hold no `providers.read`, so the console cannot and must not resolve provider names for them.
-- `accepted` means the provider accepted the submission, not delivery (no receipts exist).
+- `accepted` means the provider accepted the submission, not delivery.
+- **Delivery axis (Phase 5.0, Option B):** `deliveryStatus`, `deliveredAt` and `readAt` are independent of `status`, which a delivery outcome never rewrites (a `failed` message can show `deliveryStatus: "delivered"` when a superseded attempt is later reported delivered). The three fields are always present in responses; `deliveryStatus: null` means **not tracked** (the record predates delivery tracking, or never reached a provider) and must be shown as such, never as pending. `not_supported` means the provider or channel reports no receipts. `readAt` implies delivery. The provider's own message reference is not returned (owner decision OD-9 open).
 - **Privacy & Recipient Masking (F2):** The API permanently masks recipient addresses in both list and detail responses (`recipientAddress` is returned as `+1 •••• 0201` or `u••••r@example.com`). Full unmasked recipient numbers are never returned in ordinary responses, and nested failure reasons and payloads are sanitized to prevent alternate exposure paths. No reveal control or unmasking endpoint exists.
 - **Release & Compatibility Note (F2 / 2026-10-23):** As an intentional security and privacy hardening measure, `GET /api/v1/messages` and `GET /api/v1/messages/:id` now permanently return masked `recipientAddress` strings. API clients and consoles must not assume recipient addresses in list or detail responses can be parsed as raw unmasked E.164 phone numbers or full email addresses. Free-text failure reasons and nested payload values are sanitized to prevent alternative leakage of the message recipient. Unrelated numbers, URLs, queue names, and business contact numbers in payloads remain unredacted.
 
@@ -1604,7 +1610,9 @@ Enable/disable of an assignment already in that state is a no-op `200` and write
   "recipientAddress": "+1 •••• 0201", // permanently masked by API boundary
   "failureReason": "NO_ELIGIBLE_PROVIDER",
   "attemptCount": 1,
-  "createdAt": "ISO-8601", "completedAt": "ISO-8601 | null"
+  "createdAt": "ISO-8601", "completedAt": "ISO-8601 | null",
+  "deliveryStatus": "pending | delivered | undelivered | not_supported | null",
+  "deliveredAt": "ISO-8601 | null", "readAt": "ISO-8601 | null"
 }
 ```
 
@@ -1612,7 +1620,7 @@ Enable/disable of an assignment already in that state is a no-op `200` and write
 |---|---|---|---|---|---|
 | `POST` | `/api/v1/messages` | `messages.send` | `{channelCode, recipient: 3–100, templateId?, workspaceId?, payload: object}`; optional `Idempotency-Key` | `202 {data:queued}` | `400`; `401`; `403`; `404` unknown channel; `409`; `422 RECIPIENT_SUPPRESSED`, `CONSENT_REVOKED`, `TEMPLATE_NOT_APPROVED`, `NO_ACTIVE_PROVIDER_ASSIGNMENT`, `SMS_*`, `RCS_*`, `IDEMPOTENCY_KEY_PAYLOAD_MISMATCH` |
 | `GET` | `/api/v1/messages/:id` | `messages.read` | — | `200 {data:messageDetail}` | `400`; `401`; `403`; `404` |
-| `GET` | `/api/v1/messages` | `messages.read` | `status`, `channelCode` (`whatsapp` \| `rcs` \| `sms` \| `email` \| `voice`), `workspaceId`, `templateId`, `providerId` (messages with an attempt through that provider), `createdFrom` (inclusive) / `createdTo` (exclusive) ISO-8601, `limit`, `cursor`, `sort` (`-createdAt` default, `createdAt`) | `200 {data:[messageSummary], page}` | `400` (invalid value or unknown parameter); `401`; `403` |
+| `GET` | `/api/v1/messages` | `messages.read` | `status`, `deliveryStatus` (`pending` \| `delivered` \| `undelivered` \| `not_supported`; untracked messages never match), `channelCode` (`whatsapp` \| `rcs` \| `sms` \| `email` \| `voice`), `workspaceId`, `templateId`, `providerId` (messages with an attempt through that provider), `createdFrom` (inclusive) / `createdTo` (exclusive) ISO-8601, `limit`, `cursor`, `sort` (`-createdAt` default, `createdAt`) | `200 {data:[messageSummary], page}` | `400` (invalid value or unknown parameter); `401`; `403` |
 
 ## 34. Related
 

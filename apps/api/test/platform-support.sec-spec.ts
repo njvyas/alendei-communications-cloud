@@ -10,6 +10,9 @@
  *    address, user agent or actor email.
  * 6. Auditability: every diagnostic read is synchronously recorded in audit_logs, in the same
  *    transaction — a read whose record cannot be written fails (500) and returns nothing.
+ * 7. Phase 5.0 (migration 0049): the dispatch `deliveryStatus` filter narrows within the same
+ *    boundary, returns the same shape (no delivery field, no provider message reference), is
+ *    validated, recorded in the audit row and refused to tenant principals.
  */
 import { ERROR_CODES, PLATFORM_ROLE_KEYS, PLATFORM_SUPPORT_FAILURE_CODES } from '@acc/contracts';
 import { schema } from '@acc/db';
@@ -186,6 +189,120 @@ describe('Platform Support & Operations (U13.4 Security & RLS Spec)', () => {
         .get(url(`/platform/support/organizations/${randomOrgId}/overview`))
         .set('authorization', `Bearer ${tenantAdminToken}`);
       expect(res.status).toBe(403);
+    });
+  });
+
+  describe('Dispatch delivery-status filter (Phase 5.0, migration 0049)', () => {
+    let deliveredId: string;
+    const PROVIDER_REF = `u134-sec-ref-${uuidv7().slice(-12)}`;
+    const dispatch = (query: string, token: string | null = supportToken) => {
+      const r = request(h.app.getHttpServer()).get(
+        url(`/platform/support/organizations/${org.orgId}/dispatch${query}`),
+      );
+      return token ? r.set('authorization', `Bearer ${token}`) : r;
+    };
+
+    beforeAll(async () => {
+      // An accepted message delivered on its attempt; removed by the suite's afterAll.
+      const contactId = uuidv7();
+      await h.admin.execute(
+        sql`INSERT INTO contacts (id, org_id, workspace_id) VALUES (${contactId}, ${org.orgId}, ${org.workspaceId})`,
+      );
+      deliveredId = uuidv7();
+      await h.admin.execute(
+        sql`INSERT INTO messages (id, org_id, workspace_id, contact_id, channel_id, status, payload,
+                                  recipient_address, correlation_id, delivery_status, delivered_at)
+            VALUES (${deliveredId}, ${org.orgId}, ${org.workspaceId}, ${contactId}, ${smsId}, 'accepted',
+                    ${JSON.stringify({ text: PLANTED_BODY })}::jsonb, ${PLANTED_RECIPIENT}, ${uuidv7()},
+                    'delivered', now())`,
+      );
+      await h.admin.execute(
+        sql`INSERT INTO message_attempts (message_id, org_id, provider_id, channel_id, attempt_number,
+                                          fencing_epoch, claim_token, status, latency_ms,
+                                          provider_message_id, delivery_status, delivered_at)
+            VALUES (${deliveredId}, ${org.orgId}, ${providerId}, ${smsId}, 1, 1, ${uuidv7()}, 'accepted', 30,
+                    ${PROVIDER_REF}, 'delivered', now())`,
+      );
+    });
+
+    it('returns only messages with that delivery status, in the unchanged shape', async () => {
+      const res = await dispatch('?deliveryStatus=delivered').expect(200);
+      const ids = res.body.data.recentMessages.map((m: { messageId: string }) => m.messageId);
+      expect(ids).toEqual([deliveredId]);
+      const [m] = res.body.data.recentMessages;
+      expect(Object.keys(m).sort()).toEqual(
+        [
+          'attemptCount',
+          'attempts',
+          'channel',
+          'completedAt',
+          'createdAt',
+          'failureCode',
+          'messageId',
+          'status',
+          'updatedAt',
+        ].sort(),
+      );
+      const raw = JSON.stringify(res.body);
+      expect(raw).not.toContain(PROVIDER_REF);
+      expect(raw).not.toContain(PLANTED_BODY);
+      expect(raw).not.toContain(PLANTED_RECIPIENT.slice(3));
+      expect(raw).not.toMatch(/delivery|providerMessage|recipient|payload/i);
+      for (const other of ['pending', 'undelivered', 'not_supported']) {
+        const r = await dispatch(`?deliveryStatus=${other}`).expect(200);
+        expect([other, r.body.data.recentMessages]).toEqual([other, []]);
+      }
+    });
+
+    it('omitted: the default troubleshooting view is unchanged (the accepted message is not listed)', async () => {
+      const res = await dispatch('').expect(200);
+      const ids = res.body.data.recentMessages.map((m: { messageId: string }) => m.messageId);
+      expect(ids).toContain(messageId);
+      expect(ids).not.toContain(deliveredId);
+    });
+
+    it('composes with status; an untracked failed message never matches', async () => {
+      const failed = await dispatch('?deliveryStatus=delivered&status=failed').expect(200);
+      expect(failed.body.data.recentMessages).toEqual([]);
+      const accepted = await dispatch('?deliveryStatus=delivered&status=accepted').expect(200);
+      expect(
+        accepted.body.data.recentMessages.map((m: { messageId: string }) => m.messageId),
+      ).toEqual([deliveredId]);
+    });
+
+    it('refuses values outside MESSAGE_DELIVERY_STATUSES with 400', async () => {
+      for (const value of [
+        'read',
+        'not_tracked',
+        'expired',
+        'DELIVERED',
+        '',
+        'delivered,pending',
+      ]) {
+        const res = await dispatch(`?deliveryStatus=${encodeURIComponent(value)}`);
+        expect([value, res.status]).toEqual([value, 400]);
+      }
+    });
+
+    it('tenant administrator 403, no token 401 — with the filter', async () => {
+      expect((await dispatch('?deliveryStatus=delivered', tenantAdminToken)).status).toBe(403);
+      expect((await dispatch('?deliveryStatus=delivered', null)).status).toBe(401);
+    });
+
+    it('the diagnostic read is audited with the filter', async () => {
+      await dispatch('?deliveryStatus=delivered&limit=7').expect(200);
+      const [row] = await h.admin
+        .select()
+        .from(schema.auditLogs)
+        .where(sql`action = 'platform.support.diagnostic_read' AND metadata->>'tool' = 'dispatch'`);
+      expect(row?.actorUserId).toBe(supportUser.userId);
+      expect(row?.metadata).toEqual({
+        tool: 'dispatch',
+        channel: null,
+        status: null,
+        deliveryStatus: 'delivered',
+        limit: 7,
+      });
     });
   });
 

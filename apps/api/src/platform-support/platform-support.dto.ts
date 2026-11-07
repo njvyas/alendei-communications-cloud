@@ -13,8 +13,10 @@ import {
 } from 'class-validator';
 import {
   CHANNEL_CODES,
+  MESSAGE_DELIVERY_STATUSES,
   MESSAGE_STATUSES,
   type ChannelCode,
+  type MessageDeliveryStatus,
   type MessageStatus,
 } from '@acc/contracts';
 
@@ -26,6 +28,15 @@ export class PlatformSupportDispatchQueryDto {
   @IsOptional()
   @IsIn(MESSAGE_STATUSES)
   readonly status?: MessageStatus;
+
+  /**
+   * Phase 5.0 (migration 0049): only messages with exactly this delivery status; messages
+   * with none (not tracked) never match. Without `status`, the default troubleshooting
+   * status set is not applied. The database function validates the same closed list.
+   */
+  @IsOptional()
+  @IsIn(MESSAGE_DELIVERY_STATUSES)
+  readonly deliveryStatus?: MessageDeliveryStatus;
 
   @IsOptional()
   @Type(() => Number)

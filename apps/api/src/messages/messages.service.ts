@@ -16,6 +16,7 @@ import {
   sanitizeRecipientData,
   type AuthPrincipal,
   type MessageDetailResponse,
+  type MessageDeliveryStatus,
   type MessageStatus,
   type MessageSummaryResponse,
   type PageInfo,
@@ -37,9 +38,30 @@ import { IdempotencyService, type IdempotentOutcome } from '../idempotency/idemp
 import { requireOrganization } from '../workspaces/workspace-administration.service';
 import type { SendMessageDto } from './dto/send-message.dto';
 
+/**
+ * Phase 5.0 delivery fields of a message or attempt row, always present: `null` delivery
+ * status means not tracked. Read-only projection; the submission `status` is untouched.
+ */
+export function deliveryView(row: {
+  readonly deliveryStatus: MessageDeliveryStatus | null;
+  readonly deliveredAt: Date | null;
+  readonly readAt: Date | null;
+}): {
+  deliveryStatus: MessageDeliveryStatus | null;
+  deliveredAt: string | null;
+  readAt: string | null;
+} {
+  return {
+    deliveryStatus: row.deliveryStatus ?? null,
+    deliveredAt: row.deliveredAt ? row.deliveredAt.toISOString() : null,
+    readAt: row.readAt ? row.readAt.toISOString() : null,
+  };
+}
+
 /** Allow-listed filters for `GET /messages`. */
 export interface ListMessagesFilter extends ListQueryInput {
   readonly status?: MessageStatus;
+  readonly deliveryStatus?: MessageDeliveryStatus;
   readonly channelCode?: string;
   readonly workspaceId?: string;
   readonly templateId?: string;
@@ -680,6 +702,7 @@ export class MessagesService {
         failureReason: sanitizeRecipientContent(row.failureReason, row.recipientAddress) || null,
         createdAt: row.createdAt.toISOString(),
         completedAt: row.completedAt ? row.completedAt.toISOString() : null,
+        ...deliveryView(row),
         attempts: attempts.map((a) => ({
           id: a.id,
           attemptNumber: a.attemptNumber,
@@ -688,6 +711,7 @@ export class MessagesService {
           failureReason: sanitizeRecipientContent(a.failureReason, row.recipientAddress) || null,
           latencyMs: a.latencyMs,
           completedAt: a.completedAt ? a.completedAt.toISOString() : null,
+          ...deliveryView(a),
         })),
       };
     });
@@ -722,6 +746,9 @@ export class MessagesService {
         predicates.push(eq(schema.messages.channelId, channel.id));
       }
       if (filter.status) predicates.push(eq(schema.messages.status, filter.status));
+      if (filter.deliveryStatus) {
+        predicates.push(eq(schema.messages.deliveryStatus, filter.deliveryStatus));
+      }
       if (filter.workspaceId) predicates.push(eq(schema.messages.workspaceId, filter.workspaceId));
       if (filter.templateId) predicates.push(eq(schema.messages.templateId, filter.templateId));
       if (filter.createdFrom) predicates.push(gte(schema.messages.createdAt, filter.createdFrom));
@@ -751,6 +778,9 @@ export class MessagesService {
           attemptCount: sql<number>`(SELECT count(*)::int FROM ${schema.messageAttempts} WHERE ${schema.messageAttempts.messageId} = ${schema.messages}.${sql.identifier('id')} AND ${schema.messageAttempts.orgId} = ${schema.messages}.${sql.identifier('org_id')})`,
           createdAt: schema.messages.createdAt,
           completedAt: schema.messages.completedAt,
+          deliveryStatus: schema.messages.deliveryStatus,
+          deliveredAt: schema.messages.deliveredAt,
+          readAt: schema.messages.readAt,
         })
         .from(schema.messages)
         .where(and(...predicates))
@@ -766,6 +796,7 @@ export class MessagesService {
         failureReason: sanitizeRecipientContent(row.failureReason, row.recipientAddress) || null,
         createdAt: row.createdAt.toISOString(),
         completedAt: row.completedAt ? row.completedAt.toISOString() : null,
+        ...deliveryView(row),
       })),
       page,
     };
