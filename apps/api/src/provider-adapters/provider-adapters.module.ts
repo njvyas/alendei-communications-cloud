@@ -1,6 +1,10 @@
 import { Module } from '@nestjs/common';
 
 import { MetricsService } from '../observability/metrics.service';
+import {
+  SIMULATOR_WEBHOOK_KEY_SOURCE,
+  type SimulatorWebhookKeySourceFn,
+} from '../webhooks/simulator-webhook-key';
 import { CircuitAdmissions } from './circuit-admission';
 import { SimulatorAdapter } from './simulator.adapter';
 import { ProviderSubmissionExecutor } from './submission-executor';
@@ -30,10 +34,23 @@ import { RealSubmissionTimer, SUBMISSION_TIMER, type SubmissionTimer } from './s
       useFactory: (
         timer: SubmissionTimer,
         admissions: CircuitAdmissions,
+        webhookKey: SimulatorWebhookKeySourceFn,
         metrics?: MetricsService,
       ) =>
-        new ProviderSubmissionExecutor(timer, admissions, [new SimulatorAdapter(timer)], metrics),
-      inject: [SUBMISSION_TIMER, CircuitAdmissions, { token: MetricsService, optional: true }],
+        new ProviderSubmissionExecutor(
+          timer,
+          admissions,
+          // Phase 5.0 PR-C: the simulator's receipt-signing key source, resolved in the
+          // deployment plane (webhooks/webhook-key-material.module.ts) — never here (D-2).
+          [new SimulatorAdapter(timer, { webhookKey })],
+          metrics,
+        ),
+      inject: [
+        SUBMISSION_TIMER,
+        CircuitAdmissions,
+        SIMULATOR_WEBHOOK_KEY_SOURCE,
+        { token: MetricsService, optional: true },
+      ],
     },
   ],
   exports: [ProviderSubmissionExecutor, CircuitAdmissions],

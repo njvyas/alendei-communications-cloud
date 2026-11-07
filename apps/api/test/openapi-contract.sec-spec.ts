@@ -34,8 +34,19 @@ const REQUEST_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'ALL', 'OPTION
 const BODY = 3;
 const QUERY = 4;
 
-/** The one approved exclusion (ADR, "Route exclusions"). */
-const EXCLUDED = [{ method: 'GET', path: '/metrics', controller: 'MetricsController' }];
+/**
+ * The approved exclusions (ADR, "Route exclusions"): `GET /metrics`, and — Phase 5.0 PR-C,
+ * owner decision OD-10 — the provider webhook ingress, which is not part of the customer API
+ * (providers call it; it is documented in the internal appendix of API.md instead).
+ */
+const EXCLUDED = [
+  { method: 'GET', path: '/metrics', controller: 'MetricsController' },
+  {
+    method: 'POST',
+    path: '/api/v1/webhooks/providers/{providerKey}',
+    controller: 'ProviderWebhooksController',
+  },
+];
 
 interface Route {
   readonly method: string;
@@ -166,13 +177,16 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * U13.3, 01-Nov-2026: 5 read-only platform domain oversight operations
      * under `/platform/domains`: 134 → 139.
      * U13.4, 01-Nov-2026: 4 platform support & troubleshooting operations
-     * under `/platform/support`: 139 → 143.)
+     * under `/platform/support`: 139 → 143.
+     * Phase 5.0 PR-C, 07-Nov-2026: 3 provider webhook-ingress administration operations
+     * (key, enable, disable): 143 → 146; the ingress route itself is the second exclusion
+     * (OD-10).)
      */
-    const APPLICATION_OPERATIONS = 143;
+    const APPLICATION_OPERATIONS = 146;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 
-    it('reconciles exactly: 74 application operations + 1 document operation = 75; GET /metrics the sole exclusion', () => {
+    it('reconciles exactly: the application operations + 1 document operation; GET /metrics and the webhook ingress the only exclusions', () => {
       const all = routes.map(key);
       expect(new Set(all).size).toBe(all.length);
       const excluded = routes.filter(isExcluded).map(key);
@@ -180,10 +194,13 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
       const application = routes
         .filter((r) => !isExcluded(r) && key(r) !== DOCUMENT_OPERATION)
         .map(key);
-      expect(excluded).toEqual(['GET /metrics']);
+      expect([...excluded].sort()).toEqual([
+        'GET /metrics',
+        'POST /api/v1/webhooks/providers/{providerKey}',
+      ]);
       expect(document).toEqual([DOCUMENT_OPERATION]);
       expect(application).toHaveLength(APPLICATION_OPERATIONS);
-      expect(routes).toHaveLength(APPLICATION_OPERATIONS + 1 + 1);
+      expect(routes).toHaveLength(APPLICATION_OPERATIONS + 1 + EXCLUDED.length);
 
       const operations = Object.entries(paths()).flatMap(([path, item]) =>
         Object.keys(item).map((method) => `${method.toUpperCase()} ${path}`),
@@ -215,7 +232,7 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
       expect(mounted).toEqual(routes.map(key).sort());
     });
 
-    it('every route is documented, except exactly the approved exclusion', () => {
+    it('every route is documented, except exactly the approved exclusions', () => {
       const missing = documented()
         .filter((r) => !operationOf(r))
         .map((r) => `${r.method} ${r.path}`);
@@ -238,11 +255,14 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
       expect(phantom).toEqual([]);
     });
 
-    it('no route can disappear silently: the only exclusion metadata is the approved one', () => {
+    it('no route can disappear silently: the only exclusion metadata is the approved ones', () => {
       const excludedControllers = routes
         .filter((r) => Reflect.getMetadata('swagger/apiExcludeController', r.controller))
         .map((r) => r.controller.name);
-      expect([...new Set(excludedControllers)]).toEqual(['MetricsController']);
+      expect([...new Set(excludedControllers)]).toEqual([
+        'MetricsController',
+        'ProviderWebhooksController',
+      ]);
       const excludedEndpoints = routes.filter((r) =>
         Reflect.getMetadata('swagger/apiExcludeEndpoint', r.handler),
       );

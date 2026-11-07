@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
@@ -25,6 +26,8 @@ import {
   ProviderHealthSampleSchema,
   ProviderSchema,
   ProviderTestSendResultSchema,
+  ProviderWebhookIngressKeySchema,
+  ProviderWebhookIngressSchema,
 } from '../openapi/openapi-schemas';
 import { PLATFORM_CATALOGUE, requestPrincipal } from './channels.controller';
 import {
@@ -38,6 +41,7 @@ import {
 } from './provider.dto';
 import { ProviderHealthService } from './provider-health.service';
 import { ProviderRegistryService } from './provider-registry.service';
+import { ProviderWebhookIngressService } from './provider-webhook-ingress.service';
 
 /**
  * Provider registry (Phase 2.1), test-send (2.2) and health/circuit (2.3) —
@@ -54,6 +58,7 @@ export class ProvidersController {
   constructor(
     private readonly registry: ProviderRegistryService,
     private readonly health: ProviderHealthService,
+    private readonly webhookIngress: ProviderWebhookIngressService,
   ) {}
 
   @Get()
@@ -181,6 +186,58 @@ export class ProvidersController {
   @ApiErrors(400, 401, 403, 404, 409, 429)
   async drain(@Param('id', new ParseUUIDPipe()) id: string) {
     return { data: await this.registry.transition(requestPrincipal(), id, 'drain') };
+  }
+
+  // --- Phase 5.0 PR-C (T9): webhook ingress key and kill switch ---------------------------
+
+  @Post(':id/webhook-ingress-key')
+  @OptionalTenantContext()
+  @RequiresPermission(PERMISSIONS.PROVIDERS_MANAGE, {
+    target: 'deferred',
+    because: PLATFORM_CATALOGUE,
+  })
+  @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'no-store')
+  @AcceptedCredentials('userSession')
+  @ApiOperation({
+    summary: 'Create or rotate the provider webhook ingress key',
+    description:
+      'Returns the new key exactly once; only its peppered hash is stored. After a rotation the previous key stays valid until previousKeyValidUntil.',
+  })
+  @ApiData(ProviderWebhookIngressKeySchema)
+  @ApiErrors(400, 401, 403, 404, 429, 503)
+  async issueWebhookIngressKey(@Param('id', new ParseUUIDPipe()) id: string) {
+    return { data: await this.webhookIngress.issueKey(requestPrincipal(), id) };
+  }
+
+  @Post(':id/webhook-ingress/enable')
+  @OptionalTenantContext()
+  @RequiresPermission(PERMISSIONS.PROVIDERS_MANAGE, {
+    target: 'deferred',
+    because: PLATFORM_CATALOGUE,
+  })
+  @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession')
+  @ApiOperation({ summary: "Accept this provider's delivery receipts (requires an ingress key)" })
+  @ApiData(ProviderWebhookIngressSchema)
+  @ApiErrors(400, 401, 403, 404, 409, 429)
+  async enableWebhookIngress(@Param('id', new ParseUUIDPipe()) id: string) {
+    return { data: await this.webhookIngress.setEnabled(requestPrincipal(), id, true) };
+  }
+
+  @Post(':id/webhook-ingress/disable')
+  @OptionalTenantContext()
+  @RequiresPermission(PERMISSIONS.PROVIDERS_MANAGE, {
+    target: 'deferred',
+    because: PLATFORM_CATALOGUE,
+  })
+  @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession')
+  @ApiOperation({ summary: "Refuse this provider's delivery receipts (kill switch)" })
+  @ApiData(ProviderWebhookIngressSchema)
+  @ApiErrors(400, 401, 403, 404, 429)
+  async disableWebhookIngress(@Param('id', new ParseUUIDPipe()) id: string) {
+    return { data: await this.webhookIngress.setEnabled(requestPrincipal(), id, false) };
   }
 
   @Post(':id/test-send')

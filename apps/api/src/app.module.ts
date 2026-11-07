@@ -31,6 +31,8 @@ import { TemplatesModule } from './templates/templates.module';
 import { SuppressionsModule } from './suppressions/suppressions.module';
 import { MessagesModule } from './messages/messages.module';
 import { PlatformSupportModule } from './platform-support/platform-support.module';
+import { WebhookKeyMaterialModule } from './webhooks/webhook-key-material.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
 import { OPENAPI_MODULES } from './openapi/openapi.module';
 
 /**
@@ -69,6 +71,9 @@ import { OPENAPI_MODULES } from './openapi/openapi.module';
     SuppressionsModule,
     MessagesModule,
     PlatformSupportModule,
+    // Phase 5.0 PR-C: provider webhook ingress — disabled unless DELIVERY_WEBHOOKS_ENABLED.
+    WebhookKeyMaterialModule,
+    WebhooksModule,
     // The OpenAPI document route, when `OPENAPI_UI_ENABLED` is on (Phase 1C.3).
     ...OPENAPI_MODULES,
   ],

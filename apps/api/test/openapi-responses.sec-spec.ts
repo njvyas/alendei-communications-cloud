@@ -166,7 +166,15 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
   }
 
   beforeAll(async () => {
-    booted = await bootAppInFileRegistry({ APP_ENV: 'test', OPENAPI_UI_ENABLED: 'true' });
+    process.env.ACC_TEST_OPENAPI_WEBHOOK_PEPPER = 'test-only-openapi-webhook-pepper-0123456789';
+    booted = await bootAppInFileRegistry({
+      APP_ENV: 'test',
+      OPENAPI_UI_ENABLED: 'true',
+      // Phase 5.0 PR-C: a TEST-ONLY pepper so the ingress-key operation can be exercised. The
+      // reference is configuration (read at boot); its value is resolved lazily through
+      // SecretsPort on first use, so it is set for the suite's lifetime, not only for boot.
+      WEBHOOK_INGRESS_KEY_PEPPER_REF: 'env:ACC_TEST_OPENAPI_WEBHOOK_PEPPER',
+    });
     const document = await booted
       .resolve<{ get(): Promise<Json> }>(
         '../src/openapi/openapi-document.service',
@@ -263,6 +271,10 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
     });
     apiKey = `${keyPrefix}.${secret}`;
   }, 180_000);
+
+  afterAll(() => {
+    delete process.env.ACC_TEST_OPENAPI_WEBHOOK_PEPPER;
+  });
 
   afterAll(async () => {
     const orgs = created.orgs;
@@ -489,6 +501,19 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
           await hit('POST', `providers/${providerId}/${transition}`, credential),
           200,
           `provider ${transition}`,
+        );
+      }
+      // Phase 5.0 PR-C: the ingress key (shown once), then the per-provider switch on and off.
+      expectStatus(
+        await hit('POST', `providers/${providerId}/webhook-ingress-key`, credential),
+        200,
+        'provider webhook ingress key',
+      );
+      for (const transition of ['enable', 'disable']) {
+        expectStatus(
+          await hit('POST', `providers/${providerId}/webhook-ingress/${transition}`, credential),
+          200,
+          `provider webhook ingress ${transition}`,
         );
       }
       // Phase 2.2: test-send needs an active provider; an accepted and a

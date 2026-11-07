@@ -107,6 +107,17 @@ export class AppConfigService {
   get delivery() {
     return {
       webhooksEnabled: this.get('DELIVERY_WEBHOOKS_ENABLED'),
+      ingressKeyPepperRef: this.get('WEBHOOK_INGRESS_KEY_PEPPER_REF'),
+      simulatorSigningKeyRef: this.get('SIMULATOR_WEBHOOK_SIGNING_KEY_REF'),
+      maxBodyBytes: this.get('WEBHOOK_MAX_BODY_BYTES'),
+      keyRotationGraceSeconds: this.get('WEBHOOK_KEY_ROTATION_GRACE_SECONDS'),
+      rateLimit: {
+        windowSeconds: this.get('WEBHOOK_RATE_LIMIT_WINDOW_SECONDS'),
+        globalMax: this.get('WEBHOOK_RATE_LIMIT_GLOBAL_MAX'),
+        ipMax: this.get('WEBHOOK_RATE_LIMIT_IP_MAX'),
+        providerMax: this.get('WEBHOOK_RATE_LIMIT_PROVIDER_MAX'),
+        providerIpMax: this.get('WEBHOOK_RATE_LIMIT_PROVIDER_IP_MAX'),
+      },
     } as const;
   }
 

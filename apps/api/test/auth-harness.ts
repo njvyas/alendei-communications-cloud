@@ -23,6 +23,7 @@ import { AppConfigService } from '../src/config/app-config.service';
 import { CredentialService } from '../src/iam/credential.service';
 import { PROVIDER_CLOCK, type ProviderClock } from '../src/providers/provider-clock';
 import { REDIS_CLIENT } from '../src/redis/redis.module';
+import { configureWebhookBodyParsing } from '../src/webhooks/webhook-body-parsing';
 
 export const PASSWORD = 'a-sufficiently-long-test-passphrase';
 export const PREFIX = 'api/v1';
@@ -217,6 +218,8 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   const moduleRef = await builder.compile();
   const app = moduleRef.createNestApplication({ logger: false });
   app.use(cookieParser());
+  // Phase 5.0 PR-C: the same route-scoped raw-body capture as main.ts (plan §1.3).
+  configureWebhookBodyParsing(app, app.get(AppConfigService));
   app.useGlobalPipes(validationPipe());
   app.useGlobalFilters(new AllExceptionsFilter());
   app.setGlobalPrefix(PREFIX, { exclude: ['metrics', 'health', 'health/live', 'health/ready'] });

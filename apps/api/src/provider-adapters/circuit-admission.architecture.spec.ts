@@ -48,6 +48,8 @@ const LEDGER = 'provider-adapters/circuit-admission.ts';
 const MODULE = 'provider-adapters/provider-adapters.module.ts';
 const SIMULATOR = 'provider-adapters/simulator.adapter.ts';
 const REGISTRY = 'provider-adapters/adapter-registry.ts';
+/** Phase 5.0 PR-C: the webhook ingress pipeline (verification and parsing only). */
+const INGRESS = 'webhooks/webhook-ingress.service.ts';
 
 type Allowlist = Readonly<Record<string, readonly string[]>>;
 
@@ -67,6 +69,10 @@ const MEMBER_RULES: Allowlist = {
   'ProviderStateStore.admit': SUBMISSION_PATHS,
   'ProviderStateStore.recordSubmission': SUBMISSION_PATHS,
   'ProviderAdapterRegistry.resolve': [EXECUTOR],
+  // Phase 5.0 PR-C: webhook verification and parsing — they send nothing and need no
+  // admission — are reached only by the ingress pipeline.
+  'ProviderSubmissionExecutor.verifyWebhook': [INGRESS],
+  'ProviderSubmissionExecutor.parseWebhook': [INGRESS],
 };
 
 /** Who may import a module, and what. `*` is any name. */
@@ -89,10 +95,12 @@ const IMPORT_RULES: Readonly<Record<string, Allowlist>> = {
     'providers/provider-registry.service.ts': ['ProviderSubmissionExecutor'],
     'providers/provider-health.service.ts': ['ProviderSubmissionExecutor'],
     'messages/dispatch/dispatcher.service.ts': ['ProviderSubmissionExecutor'],
+    [INGRESS]: ['ProviderSubmissionExecutor', 'WebhookVerificationUnavailable'],
   },
   [MODULE]: {
     'providers/providers.module.ts': ['ProviderAdaptersModule'],
     'messages/messages.module.ts': ['ProviderAdaptersModule'],
+    'webhooks/webhooks.module.ts': ['ProviderAdaptersModule'],
   },
 };
 

@@ -448,6 +448,38 @@ const PROVIDER_FAILURE = {
   additionalProperties: false,
 } as const;
 
+const nullableDateTime = { type: 'string', format: 'date-time', nullable: true } as const;
+
+/** Phase 5.0 PR-C: a provider's webhook ingress state. Never carries a key or a hash. */
+@ApiSchema({ name: 'ProviderWebhookIngress' })
+export class ProviderWebhookIngressSchema {
+  @ApiProperty(uuid) providerId!: string;
+  @ApiProperty({
+    description: 'Whether this provider accepts delivery receipts (OD-12 kill switch)',
+  })
+  enabled!: boolean;
+  @ApiProperty({ description: 'Whether an ingress key exists (only its hash is stored)' })
+  keyConfigured!: boolean;
+  @ApiProperty(nullableDateTime) keyRotatedAt!: string | null;
+  @ApiProperty({
+    ...nullableDateTime,
+    description: 'While in the future, the previous key is still accepted (rotation grace)',
+  })
+  previousKeyValidUntil!: string | null;
+}
+
+/** Phase 5.0 PR-C: the one response that carries a plaintext ingress key — shown once. */
+@ApiSchema({ name: 'ProviderWebhookIngressKey' })
+export class ProviderWebhookIngressKeySchema extends ProviderWebhookIngressSchema {
+  @ApiProperty({
+    description:
+      'The ingress key, shown only in this response and never stored (only its peppered hash is). Treat as a secret.',
+  })
+  key!: string;
+  @ApiProperty({ description: 'The ingress route; replace :providerKey with the key' })
+  ingressPathTemplate!: string;
+}
+
 @ApiSchema({ name: 'ProviderTestSendResult' })
 export class ProviderTestSendResultSchema {
   @ApiProperty(uuid) providerId!: string;

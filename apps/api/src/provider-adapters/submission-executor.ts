@@ -3,13 +3,17 @@ import {
   PROVIDER_FAILURE_CATEGORIES,
   PROVIDER_HEALTH_DEFAULTS,
   RETRYABLE_FAILURE_CATEGORIES,
+  type ParsedWebhookRequest,
   type ProviderAdapterContext,
   type ProviderProbeOutcome,
   type ProviderSubmission,
   type ProviderSubmissionResult,
   type SimulatorBehavior,
   type SimulatorHealthBehavior,
+  type RawWebhookRequest,
   type SubmissionPermit,
+  type VerifiedWebhook,
+  type WebhookVerification,
 } from '@acc/contracts';
 
 import type { MetricsService } from '../observability/metrics.service';
@@ -24,8 +28,20 @@ import {
   type Redemption,
   type SettledSubmission,
 } from './circuit-admission';
-import { SimulatorAdapter } from './simulator.adapter';
+import { SimulatorAdapter, SimulatorWebhookKeyUnavailable } from './simulator.adapter';
+import { WebhookSigningKeyUnavailable } from '../webhooks/simulator-webhook-key';
 import type { SubmissionTimer } from './submission-timer';
+
+/**
+ * Phase 5.0 PR-C: the adapter cannot verify webhooks on this deployment (its signing key is
+ * not configured). The ingress answers 503; nothing about the request is disclosed.
+ */
+export class WebhookVerificationUnavailable extends Error {
+  constructor(readonly adapterKey: string) {
+    super(`${adapterKey}: webhook verification is not configured`);
+    this.name = 'WebhookVerificationUnavailable';
+  }
+}
 
 /** A behaviour was named for an adapter that takes none (only the simulator does). */
 export class ProviderAdapterVariantRefused extends Error {
@@ -84,6 +100,34 @@ export class ProviderSubmissionExecutor {
    */
   isSimulator(adapterKey: string): boolean {
     return this.#registry.resolve(adapterKey) instanceof SimulatorAdapter;
+  }
+
+  /**
+   * Phase 5.0 PR-C: verifies an inbound provider webhook with the adapter registered for
+   * `context.adapterKey` — the adapter-owned signature scheme over the exact raw bytes
+   * (spec §E.4). The webhooks module never parses a signature itself. Throws
+   * `ProviderAdapterNotRegistered` for an unregistered key.
+   */
+  async verifyWebhook(
+    context: ProviderAdapterContext,
+    request: RawWebhookRequest,
+  ): Promise<WebhookVerification> {
+    try {
+      return await this.#registry.resolve(context.adapterKey).verifyWebhook(context, request);
+    } catch (error) {
+      if (
+        error instanceof SimulatorWebhookKeyUnavailable ||
+        error instanceof WebhookSigningKeyUnavailable
+      ) {
+        throw new WebhookVerificationUnavailable(context.adapterKey);
+      }
+      throw error;
+    }
+  }
+
+  /** Phase 5.0 PR-C: the adapter's pure parse of a verified body (plan §1.2). */
+  parseWebhook(context: ProviderAdapterContext, verified: VerifiedWebhook): ParsedWebhookRequest {
+    return this.#registry.resolve(context.adapterKey).parseWebhook(context, verified);
   }
 
   /**

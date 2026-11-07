@@ -70,6 +70,9 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
       'apps/api/src/cli/bootstrap.ts', // the bootstrap administrator password
       'apps/api/src/cli/dev-fixture/environment.ts', // the dev/test fixture passwords
       'apps/api/src/common/http/http.module.ts', // the cursor-signing key
+      // Phase 5.0 PR-C: the ingress-key pepper (OD-6) and the simulator's NON-PRODUCTION
+      // receipt-signing key (spec §E.4) — deployment plane, not provider credentials.
+      'apps/api/src/webhooks/webhook-key-material.module.ts',
     ]);
     expect(users.filter(isProviderCode)).toEqual([]);
   });
@@ -86,6 +89,7 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
       'apps/api/src/cli/dev-fixture/environment.ts: secrets.resolve(operatorRef)',
       'apps/api/src/cli/dev-fixture/environment.ts: secrets.resolve(userRef)',
       'apps/api/src/common/http/http.module.ts: secrets.resolve(config.secrets.jwtSecretRef)',
+      'apps/api/src/webhooks/webhook-key-material.module.ts: secrets.resolve(reference)',
     ]);
   });
 

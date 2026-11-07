@@ -61,6 +61,17 @@ server {
 
 With exactly this one proxy, `TRUSTED_PROXY_HOPS=1`.
 
+**Phase 5.0 webhook ingress (OD-19) — required before `DELIVERY_WEBHOOKS_ENABLED=true`:** the ingress path segment after `/webhooks/providers/` is a provider's ingress key. nginx's default `combined` log format records the full request line, and its error log records it on upstream failures. Install `deploy/nginx/acc-webhook-ingress-redaction.conf` (the `map` and `log_format` in `http {}`, the `location ~ ^/api/v1/webhooks/providers/` block in this `server {}` above `location /api/`), `nginx -t`, reload, then verify on the host and record the result:
+
+```bash
+probe="od19-$(openssl rand -hex 8)"
+curl -sk -o /dev/null -X POST "https://<QA address>/api/v1/webhooks/providers/$probe" -H 'content-type: application/json' --data '{}'
+sudo grep -c "$probe" /var/log/nginx/*.log   # must print 0 for every file
+sudo tail -n 3 /var/log/nginx/access.log      # shows /api/v1/webhooks/providers/:providerKey
+```
+
+Applying this to the QA host is a separate, owner-authorised operator step.
+
 ## 4. Firewall and access restrictions
 
 - Inbound: 443 from the internal network/VPN ranges only; 22 from operator addresses only. Nothing else.
