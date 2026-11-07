@@ -395,6 +395,40 @@ describe('Phase 5.0 settlement — delivery axis, held receipts, lock order (PR-
       expect(await webhookRow(foreign)).toEqual({ outcome: 'unmatched', matched_attempt_id: null });
     });
 
+    it('a held receipt with contradictory references is left held; settlement succeeds and applies only the consistent one (PR #78 review)', async () => {
+      const p = await provider('contra', 'SUCCESS');
+      await assignOnly([p]);
+      const messageId = await queued();
+      let contradictory = '';
+      let consistent = '';
+      const dispatcher = dispatcherWith(async (s) => {
+        // Names this attempt by client reference, but another provider message id.
+        contradictory = await holdReceipt(p, 'unmatched', {
+          kind: 'undelivered',
+          clientReference: s.submissionId,
+          providerMessageId: `sim-${uuidv7()}`,
+        });
+        // Both references name this attempt.
+        consistent = await holdReceipt(p, 'unmatched', {
+          kind: 'delivered',
+          clientReference: s.submissionId,
+          providerMessageId: `sim-${s.submissionId}`,
+        });
+      });
+      expect((await dispatchOnce(dispatcher, messageId)).outcome).toBe('accepted');
+      const [a] = await attemptsOf(messageId);
+      expect(a!.deliveryStatus).toBe('delivered');
+      expect(await webhookRow(consistent)).toEqual({
+        outcome: 'applied',
+        matched_attempt_id: a!.id,
+      });
+      expect(await webhookRow(contradictory)).toEqual({
+        outcome: 'unmatched',
+        matched_attempt_id: null,
+      });
+      expect(await eventsOf(messageId, 'message.undelivered')).toHaveLength(0);
+    });
+
     it('a held receipt on a terminally failed attempt: recorded on the delivery axis, submission status stays failed (AC-ST-4)', async () => {
       const p = await provider('failheld', 'INVALID_REQUEST');
       await assignOnly([p]);

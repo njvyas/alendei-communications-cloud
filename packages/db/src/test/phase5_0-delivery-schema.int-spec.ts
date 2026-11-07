@@ -978,6 +978,34 @@ describe('Phase 5.0 delivery foundation (migrations 0044–0046)', () => {
           { kind: 'delivered', clientReference: aO },
           { attemptId: aO, orgId: B.orgId },
         );
+        // Review cases (PR #78): every reference a receipt carries must name the attempt.
+        await insertReceipt('crMatchPmConflict', providerP, 'unmatched', {
+          kind: 'delivered',
+          clientReference: aM2,
+          providerMessageId: pmN,
+        });
+        await insertReceipt('crConflictPmMatch', providerP, 'unmatched', {
+          kind: 'delivered',
+          clientReference: aN,
+          providerMessageId: pmM,
+        });
+        await insertReceipt('bothMatch', providerP, 'unmatched', {
+          kind: 'delivered',
+          clientReference: aM2,
+          providerMessageId: pmM,
+        });
+        await insertReceipt('neitherMatch', providerP, 'unmatched', {
+          kind: 'delivered',
+          clientReference: uuidv7(),
+          providerMessageId: `pm-x-${uuidv7()}`,
+        });
+        await insertReceipt(
+          'matchedConflict',
+          providerP,
+          'deferred',
+          { kind: 'delivered', clientReference: aM2, providerMessageId: pmN },
+          { attemptId: aM2, orgId: A.orgId },
+        );
         // A reference to M's attempt under another provider, and a receipt naming nothing.
         await insertReceipt('otherProvider', providerQ, 'unmatched', {
           kind: 'delivered',
@@ -1002,12 +1030,18 @@ describe('Phase 5.0 delivery foundation (migrations 0044–0046)', () => {
 
       it('sees exactly M’s receipts (held and settled); none of another message, organization or provider', async () => {
         const ids = await inTx(dispatchPool, claimCtx(token), visible);
+        // Visibility is the looser predicate: one reference naming an attempt of M suffices;
+        // settling is stricter (review cases below).
         expect(name(ids)).toEqual([
+          'bothMatch',
+          'crConflictPmMatch',
+          'crMatchPmConflict',
           'mAttempt1',
           'mByProviderId',
           'mByReference',
           'mDeferred',
           'mSettled',
+          'matchedConflict',
         ]);
       });
 
@@ -1026,11 +1060,15 @@ describe('Phase 5.0 delivery foundation (migrations 0044–0046)', () => {
           expect((await settle('mAttempt1', aM1)).rowCount).toBe(1);
           // Still visible once settled (the defect 0047 fixes), and final: never settled again.
           expect(name(await visible(c))).toEqual([
+            'bothMatch',
+            'crConflictPmMatch',
+            'crMatchPmConflict',
             'mAttempt1',
             'mByProviderId',
             'mByReference',
             'mDeferred',
             'mSettled',
+            'matchedConflict',
           ]);
           const again = await c.query(
             `UPDATE webhook_events SET outcome = 'no_change' WHERE id = ANY($1::uuid[])`,
@@ -1162,18 +1200,69 @@ describe('Phase 5.0 delivery foundation (migrations 0044–0046)', () => {
         expect(otherOrg.size).toBe(0);
       });
 
-      it('the predicate is an invoker function executable by acc_dispatch only; the policies are exactly 0047’s', async () => {
+      describe('PR #78 review: every reference a settled receipt carries must name the claimed attempt', () => {
+        const rls = /new row violates row-level security policy/;
+        const settleOnto = (key: string) =>
+          inTx(dispatchPool, claimCtx(token), async (c) => {
+            try {
+              const res = await c.query(
+                `UPDATE webhook_events SET outcome = 'applied', matched_attempt_id = $2, matched_org_id = $3, processed_at = now()
+                  WHERE id = $1`,
+                [r[key], M.attemptIds[1], A.orgId],
+              );
+              return { rows: res.rowCount, error: null as string | null };
+            } catch (error) {
+              return { rows: null, error: (error as Error).message };
+            }
+          });
+
+        it('1. matching clientReference + conflicting providerMessageId: rejected', async () => {
+          expect((await settleOnto('crMatchPmConflict')).error).toMatch(rls);
+        });
+
+        it('2. conflicting clientReference + matching providerMessageId: rejected', async () => {
+          expect((await settleOnto('crConflictPmMatch')).error).toMatch(rls);
+        });
+
+        it('3. both references matching: accepted', async () => {
+          expect(await settleOnto('bothMatch')).toEqual({ rows: 1, error: null });
+        });
+
+        it('4. one valid reference only (client reference, or provider message id): accepted', async () => {
+          expect(await settleOnto('mByReference')).toEqual({ rows: 1, error: null });
+          expect(await settleOnto('mByProviderId')).toEqual({ rows: 1, error: null });
+        });
+
+        it('5. neither reference matching: rejected (invisible, nothing updated)', async () => {
+          expect(await settleOnto('neitherMatch')).toEqual({ rows: 0, error: null });
+          const untouched = await admin(
+            `SELECT outcome, matched_attempt_id FROM webhook_events WHERE id = $1`,
+            [r.neitherMatch],
+          );
+          expect(untouched.rows[0]).toEqual({ outcome: 'unmatched', matched_attempt_id: null });
+        });
+
+        it('a receipt already matched to the attempt but carrying a contradictory reference cannot be settled', async () => {
+          expect((await settleOnto('matchedConflict')).error).toMatch(rls);
+        });
+      });
+
+      it('the predicates are invoker functions executable by acc_dispatch only; the policies are exactly 0047’s', async () => {
         const fn = await admin(
-          `SELECT p.prosecdef,
+          `SELECT p.proname, p.prosecdef,
                   has_function_privilege('public', p.oid, 'EXECUTE') AS pub,
                   has_function_privilege('acc_app', p.oid, 'EXECUTE') AS app,
                   has_function_privilege('acc_delivery', p.oid, 'EXECUTE') AS delivery,
                   has_function_privilege('acc_dispatch', p.oid, 'EXECUTE') AS dispatch
              FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-            WHERE n.nspname = 'public' AND p.proname = 'app_dispatch_owns_receipt'`,
+            WHERE n.nspname = 'public'
+              AND p.proname IN ('app_dispatch_owns_receipt', 'app_dispatch_receipt_names_attempt')
+            ORDER BY p.proname`,
         );
+        const only = { prosecdef: false, pub: false, app: false, delivery: false, dispatch: true };
         expect(fn.rows).toEqual([
-          { prosecdef: false, pub: false, app: false, delivery: false, dispatch: true },
+          { proname: 'app_dispatch_owns_receipt', ...only },
+          { proname: 'app_dispatch_receipt_names_attempt', ...only },
         ]);
         const pol = await admin(
           `SELECT policyname, cmd, roles::text[] AS roles, qual, with_check FROM pg_policies
@@ -1184,16 +1273,16 @@ describe('Phase 5.0 delivery foundation (migrations 0044–0046)', () => {
             policyname: 'webhook_events_dispatch_select',
             cmd: 'SELECT',
             roles: ['acc_dispatch'],
-            qual: 'app_dispatch_owns_receipt(provider_id, matched_attempt_id, normalized, false)',
+            qual: 'app_dispatch_owns_receipt(provider_id, matched_attempt_id, normalized)',
             with_check: null,
           },
           {
             policyname: 'webhook_events_dispatch_update',
             cmd: 'UPDATE',
             roles: ['acc_dispatch'],
-            qual: "((outcome = ANY (ARRAY['deferred'::webhook_event_outcome, 'unmatched'::webhook_event_outcome])) AND app_dispatch_owns_receipt(provider_id, matched_attempt_id, normalized, false))",
+            qual: "((outcome = ANY (ARRAY['deferred'::webhook_event_outcome, 'unmatched'::webhook_event_outcome])) AND app_dispatch_owns_receipt(provider_id, matched_attempt_id, normalized))",
             with_check:
-              '((matched_attempt_id IS NOT NULL) AND (matched_org_id = app_current_org_id()) AND app_dispatch_owns_receipt(provider_id, matched_attempt_id, normalized, true))',
+              '((matched_org_id = app_current_org_id()) AND app_dispatch_receipt_names_attempt(provider_id, matched_attempt_id, normalized))',
           },
         ]);
       });

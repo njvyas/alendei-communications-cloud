@@ -268,11 +268,14 @@ export interface HeldReceiptResult {
 /**
  * Settlement (§E.6): applies the `deferred` and `unmatched` receipts held for the attempt
  * being settled, in this transaction, oldest first, and settles their outcome. A held row
- * belongs to this attempt when it was matched to it, or — unmatched — when its provider
- * message id equals the one just recorded, or its client reference is this attempt and it
- * names no different provider message id. Rows of another provider are never considered
- * (and RLS hides them from `acc_dispatch` regardless). Locks follow the message and the
- * attempt (§B.8). Never creates, requeues or cancels an attempt (§B.6a).
+ * is applied to this attempt only when it is unmatched or matched to it, carries at least
+ * one reference, and EVERY reference it carries names this attempt (client reference =
+ * the attempt id; provider message id = the one just recorded) — the same rule the
+ * database enforces on the settling UPDATE (migration 0047,
+ * `app_dispatch_receipt_names_attempt`). A receipt with contradictory references is left
+ * held (visible to platform support), never applied. Rows of another provider are never
+ * considered (and RLS hides them from `acc_dispatch` regardless). Locks follow the message
+ * and the attempt (§B.8). Never creates, requeues or cancels an attempt (§B.6a).
  */
 export async function applyHeldReceipts(
   client: PoolClient,
@@ -295,12 +298,13 @@ export async function applyHeldReceipts(
        FROM webhook_events
       WHERE provider_id = $1
         AND outcome IN ('deferred', 'unmatched')
-        AND (matched_attempt_id = $2
-             OR (matched_attempt_id IS NULL AND (
-                   ($3::text IS NOT NULL AND normalized->>'providerMessageId' = $3::text)
-                   OR (normalized->>'clientReference' = $2::text
-                       AND (normalized->>'providerMessageId' IS NULL
-                            OR normalized->>'providerMessageId' = $3::text)))))
+        AND (matched_attempt_id IS NULL OR matched_attempt_id = $2)
+        AND (normalized->>'clientReference' IS NOT NULL
+             OR normalized->>'providerMessageId' IS NOT NULL)
+        AND (normalized->>'clientReference' IS NULL
+             OR normalized->>'clientReference' = $2::text)
+        AND (normalized->>'providerMessageId' IS NULL
+             OR ($3::text IS NOT NULL AND normalized->>'providerMessageId' = $3::text))
       ORDER BY received_at, request_id, event_index
       FOR UPDATE`,
     [input.providerId, input.attemptId, input.providerMessageId],

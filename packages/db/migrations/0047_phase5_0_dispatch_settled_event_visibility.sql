@@ -16,31 +16,38 @@
 --    matched to another message — and its WITH CHECK never verified that the attempt a
 --    receipt is matched to belongs to the claimed message.
 --
--- Fix (forward only, repository practice, spec §C.6): one predicate,
--- `app_dispatch_owns_receipt`, decides whether a receipt belongs to the message
--- acc_dispatch holds a live claim on: there must be an attempt of that message, of the
--- receipt's provider, under a live unexpired claim, that the receipt is matched to or —
--- unmatched — names by its own references (the client reference is the attempt id; or
--- the provider message id the attempt recorded). With `p_require_reference` the
--- references must name that very attempt even when the receipt is matched. acc_dispatch
--- has no grant on `normalized`, `provider_id` or the identity columns, so it cannot
--- forge the references it is checked against.
+-- Fix (forward only, repository practice, spec §C.6): two predicates, both invoker
+-- functions (no SECURITY DEFINER) that read message_attempts and the queue under
+-- acc_dispatch's own RLS, EXECUTE for acc_dispatch only. acc_dispatch has no grant on
+-- `normalized`, `provider_id` or the identity columns, so it cannot forge the references
+-- it is checked against.
+--
+--   app_dispatch_owns_receipt (visibility) — the receipt belongs to the message held
+--     under a live, unexpired claim: an attempt of that message, of the receipt's
+--     provider, is the one it is matched to, or — unmatched — one that at least one of
+--     its references names (client reference = attempt id; provider message id = the
+--     id that attempt recorded).
+--   app_dispatch_receipt_names_attempt (strict, settlement) — the receipt is matched to
+--     an attempt of the claimed message, of its provider, under the live claim, AND it
+--     carries at least one reference, AND every reference it carries names that attempt:
+--     a client reference must equal the attempt id; a provider message id must equal the
+--     id the attempt recorded. Contradictory references (one naming the attempt, the
+--     other naming anything else) never pass.
+--
 --   SELECT  USING      : owns the receipt (held or already settled).
 --   UPDATE  USING      : owns it AND it is still held ('deferred'/'unmatched') —
 --                        a settled receipt can never be settled again.
---   UPDATE  WITH CHECK : matched to an attempt of the claimed message that its own
---                        references name, attributed to the current organization —
---                        so a receipt can be settled only onto the attempt it reports on.
+--   UPDATE  WITH CHECK : names_attempt(the matched attempt), attributed to the current
+--                        organization — a receipt settles only onto the attempt all of
+--                        its references report on.
 -- Receipts of any other message — matched or not — are invisible and unmodifiable.
--- An invoker function (no SECURITY DEFINER): it reads message_attempts and the queue
--- under acc_dispatch's own RLS. ALTER POLICY: no gap, no table rewrite, metadata only.
--- acc_delivery's policies are unchanged.
+-- ALTER POLICY: no gap, no table rewrite, metadata only. acc_delivery's policies are
+-- unchanged.
 -- =============================================================================
 CREATE FUNCTION app_dispatch_owns_receipt(
   p_provider_id uuid,
   p_matched_attempt_id uuid,
-  p_normalized jsonb,
-  p_require_reference boolean
+  p_normalized jsonb
 ) RETURNS boolean
 LANGUAGE sql STABLE
 AS $$
@@ -53,28 +60,57 @@ AS $$
        AND a.provider_id = p_provider_id
        AND q.claim_token = app_dispatch_claim_token()
        AND q.claimed_until > now()
-       AND (p_matched_attempt_id IS NULL OR a.id = p_matched_attempt_id)
        AND (
-         (p_matched_attempt_id IS NOT NULL AND NOT p_require_reference)
-         OR a.id::text = p_normalized->>'clientReference'
-         OR (a.provider_message_id IS NOT NULL
-             AND a.provider_message_id = p_normalized->>'providerMessageId')
+         a.id = p_matched_attempt_id
+         OR (p_matched_attempt_id IS NULL AND (
+               a.id::text = p_normalized->>'clientReference'
+               OR (a.provider_message_id IS NOT NULL
+                   AND a.provider_message_id = p_normalized->>'providerMessageId')))
        )
   )
 $$;--> statement-breakpoint
-REVOKE ALL ON FUNCTION app_dispatch_owns_receipt(uuid, uuid, jsonb, boolean) FROM PUBLIC;--> statement-breakpoint
-GRANT EXECUTE ON FUNCTION app_dispatch_owns_receipt(uuid, uuid, jsonb, boolean) TO acc_dispatch;--> statement-breakpoint
+REVOKE ALL ON FUNCTION app_dispatch_owns_receipt(uuid, uuid, jsonb) FROM PUBLIC;--> statement-breakpoint
+GRANT EXECUTE ON FUNCTION app_dispatch_owns_receipt(uuid, uuid, jsonb) TO acc_dispatch;--> statement-breakpoint
+
+CREATE FUNCTION app_dispatch_receipt_names_attempt(
+  p_provider_id uuid,
+  p_matched_attempt_id uuid,
+  p_normalized jsonb
+) RETURNS boolean
+LANGUAGE sql STABLE
+AS $$
+  SELECT p_matched_attempt_id IS NOT NULL
+     AND (p_normalized->>'clientReference' IS NOT NULL
+          OR p_normalized->>'providerMessageId' IS NOT NULL)
+     AND EXISTS (
+       SELECT 1
+         FROM message_attempts a
+         JOIN message_dispatch_queue q ON q.message_id = a.message_id
+        WHERE a.id = p_matched_attempt_id
+          AND a.message_id = app_dispatch_message_id()
+          AND a.org_id = app_current_org_id()
+          AND a.provider_id = p_provider_id
+          AND q.claim_token = app_dispatch_claim_token()
+          AND q.claimed_until > now()
+          AND (p_normalized->>'clientReference' IS NULL
+               OR p_normalized->>'clientReference' = a.id::text)
+          AND (p_normalized->>'providerMessageId' IS NULL
+               OR (a.provider_message_id IS NOT NULL
+                   AND p_normalized->>'providerMessageId' = a.provider_message_id))
+     )
+$$;--> statement-breakpoint
+REVOKE ALL ON FUNCTION app_dispatch_receipt_names_attempt(uuid, uuid, jsonb) FROM PUBLIC;--> statement-breakpoint
+GRANT EXECUTE ON FUNCTION app_dispatch_receipt_names_attempt(uuid, uuid, jsonb) TO acc_dispatch;--> statement-breakpoint
 
 ALTER POLICY webhook_events_dispatch_select ON "webhook_events"
-  USING (app_dispatch_owns_receipt(provider_id, matched_attempt_id, normalized, false));--> statement-breakpoint
+  USING (app_dispatch_owns_receipt(provider_id, matched_attempt_id, normalized));--> statement-breakpoint
 
 ALTER POLICY webhook_events_dispatch_update ON "webhook_events"
   USING (
     outcome IN ('deferred', 'unmatched')
-    AND app_dispatch_owns_receipt(provider_id, matched_attempt_id, normalized, false)
+    AND app_dispatch_owns_receipt(provider_id, matched_attempt_id, normalized)
   )
   WITH CHECK (
-    matched_attempt_id IS NOT NULL
-    AND matched_org_id = app_current_org_id()
-    AND app_dispatch_owns_receipt(provider_id, matched_attempt_id, normalized, true)
+    matched_org_id = app_current_org_id()
+    AND app_dispatch_receipt_names_attempt(provider_id, matched_attempt_id, normalized)
   );
