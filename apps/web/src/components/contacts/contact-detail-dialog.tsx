@@ -1,10 +1,12 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, channelsApi, contactsApi } from '@/lib/api-client';
 import { toast } from '@/lib/toast';
 import { useModalDialog } from '@/components/ui/dialog';
+import { extractContactTags } from '@/lib/cdp';
 import type { ContactResponse } from '@acc/contracts';
 
 interface ContactDetailDialogProps {
@@ -316,6 +318,28 @@ export function ContactDetailDialog({
           )}
         </div>
 
+        {/* CDP Tags Section */}
+        {(() => {
+          const tags = extractContactTags(contact.metadata);
+          return tags.length > 0 ? (
+            <div className="space-y-1.5">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">
+                CDP Tags
+              </h3>
+              <div className="flex flex-wrap gap-1.5">
+                {tags.map((t) => (
+                  <span
+                    key={t}
+                    className="rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2.5 py-0.5 font-mono text-[10px] uppercase font-semibold"
+                  >
+                    {t}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null;
+        })()}
+
         {/* Metadata Section */}
         {contact.metadata && Object.keys(contact.metadata).length > 0 && (
           <div className="space-y-1.5">
@@ -329,21 +353,29 @@ export function ContactDetailDialog({
         )}
 
         {/* Actions footer */}
-        <div className="flex items-center justify-between border-t border-[var(--color-border-subtle)] pt-4">
-          {onRecordConsent ? (
-            <button
-              type="button"
-              onClick={() => {
-                handleClose();
-                onRecordConsent(contact);
-              }}
-              className="rounded-md border border-[var(--color-border-subtle)] px-3 py-1.5 text-xs text-[var(--color-ink)] hover:bg-[var(--color-surface-raised)]"
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border-subtle)] pt-4">
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/contacts/${contact.id}`}
+              onClick={handleClose}
+              data-testid="detail-open-profile-btn"
+              className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 transition-colors shadow-xs"
             >
-              Record Consent Event
-            </button>
-          ) : (
-            <span />
-          )}
+              Open Full CDP Profile →
+            </Link>
+            {onRecordConsent && (
+              <button
+                type="button"
+                onClick={() => {
+                  handleClose();
+                  onRecordConsent(contact);
+                }}
+                className="rounded-md border border-[var(--color-border-subtle)] px-3 py-1.5 text-xs text-[var(--color-ink)] hover:bg-[var(--color-surface-raised)]"
+              >
+                Record Consent Event
+              </button>
+            )}
+          </div>
 
           <button
             type="button"

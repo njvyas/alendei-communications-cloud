@@ -2,13 +2,18 @@ import type { ReactNode } from 'react';
 
 import { cn } from '@/lib/cn';
 
-export function Card({ className, children }: { className?: string; children: ReactNode }) {
+export function Card({
+  className,
+  children,
+  ...props
+}: { className?: string; children: ReactNode } & React.HTMLAttributes<HTMLElement>) {
   return (
     <section
       className={cn(
         'rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-5',
         className,
       )}
+      {...props}
     >
       {children}
     </section>
