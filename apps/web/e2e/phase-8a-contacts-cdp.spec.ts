@@ -488,7 +488,10 @@ test.describe('Phase 8A — Contacts & CDP Frontend Vertical Slice', () => {
       fullPage: true,
     });
 
-    // 2. Test Tag and Custom-Field persistence across page reload
+    // 2. Validate frontend PATCH request handling and simulated reload persistence
+    // Note: The Playwright test intercepts API calls and updates an in-memory mock fixture.
+    // This validates client mutation dispatch, query cache invalidation, and frontend state
+    // reconstruction across page reloads, rather than live backend/database persistence.
     await page.getByRole('tab', { name: 'Overview' }).click();
     await page.waitForSelector('[data-testid="contact-tags-card"]');
     await page.waitForSelector('[data-testid="contact-custom-fields-card"]');
@@ -507,7 +510,7 @@ test.describe('Phase 8A — Contacts & CDP Frontend Vertical Slice', () => {
     await expect(customFieldsCard.getByText('securityClearance', { exact: true })).toBeVisible();
     await expect(customFieldsCard.getByText('Tier-4', { exact: true })).toBeVisible();
 
-    // Reload the page and assert persistence through the existing APIs
+    // Reload the page and assert frontend state reconstruction from simulated persistence
     await page.reload();
     await page.waitForSelector('[data-testid="contact-profile-view"]');
     await expect(page.locator('[data-testid="contact-tag-wholesale-partner"]')).toBeVisible();

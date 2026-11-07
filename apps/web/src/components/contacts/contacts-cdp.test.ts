@@ -196,6 +196,11 @@ describe('Phase 8A Contacts / CDP Core & UI Components', () => {
     assert.ok(types.has('consent_granted'));
     assert.ok(types.has('field_updated'));
 
+    // Verify Contact Record Updated title and inferred description
+    const updatedEvent = timeline.find((e) => e.type === 'field_updated');
+    assert.equal(updatedEvent?.title, 'Contact Record Updated');
+    assert.ok(updatedEvent?.description?.includes('inferred from updatedAt'));
+
     // Verify absence of mock message events when no message records are supplied
     assert.equal(timeline.filter((e) => e.category === 'message').length, 0);
     assert.equal(types.has('message_delivered'), false);

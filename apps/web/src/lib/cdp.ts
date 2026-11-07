@@ -266,18 +266,18 @@ export function generateContactTimeline(
     });
   }
 
-  // 4. Contact profile/attribute updates
+  // 4. Contact record modification event (inferred from updatedAt timestamp)
   if (contact.updatedAt && contact.updatedAt !== contact.createdAt) {
     const tags = extractContactTags(contact.metadata);
     items.push({
       id: `event-updated-${contact.id}-${contact.updatedAt}`,
       type: 'field_updated',
       category: 'profile',
-      title: 'Profile Updated',
+      title: 'Contact Record Updated',
       description:
         tags.length > 0
-          ? `Attributes modified. Tags: ${tags.join(', ')}`
-          : 'Contact attributes modified.',
+          ? `Record timestamp updated. Current tags: ${tags.join(', ')} (inferred from updatedAt; granular attribute audit log pending backend support).`
+          : 'Record timestamp updated (inferred from updatedAt; granular attribute audit log pending backend support).',
       timestamp: contact.updatedAt,
       statusTone: 'neutral',
       metadata: contact.metadata,
