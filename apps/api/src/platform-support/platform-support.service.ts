@@ -406,7 +406,8 @@ export class PlatformSupportService {
             ${orgId}::uuid,
             ${query.channel ?? null},
             ${query.status ?? null},
-            ${limit}::integer
+            ${limit}::integer,
+            ${query.deliveryStatus ?? null}::text
           ) AS diagnostics`,
         );
         const raw = diagResult.rows[0]?.diagnostics;
@@ -430,6 +431,7 @@ export class PlatformSupportService {
               tool: 'dispatch',
               channel: query.channel ?? null,
               status: query.status ?? null,
+              deliveryStatus: query.deliveryStatus ?? null,
               limit,
             },
             outcome: 'success',

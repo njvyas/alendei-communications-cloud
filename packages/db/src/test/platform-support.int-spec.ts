@@ -146,7 +146,14 @@ describe('U13.4 platform support — direct PostgreSQL (migration 0040)', () => 
 
   async function plantMessage(
     t: TenantFixture,
-    m: { status: string; reason: string | null; recipient?: string; body?: string },
+    m: {
+      status: string;
+      reason: string | null;
+      recipient?: string;
+      body?: string;
+      /** Phase 5.0 delivery status (planted by the owner, which the insert guard admits). */
+      delivery?: 'pending' | 'delivered' | 'undelivered' | 'not_supported' | null;
+    },
   ) {
     const contactId = uuidv7();
     await admin(`INSERT INTO contacts (id, org_id, workspace_id) VALUES ($1, $2, $3)`, [
@@ -157,8 +164,11 @@ describe('U13.4 platform support — direct PostgreSQL (migration 0040)', () => 
     const id = uuidv7();
     await admin(
       `INSERT INTO messages (id, org_id, workspace_id, contact_id, channel_id, status, payload,
-                             recipient_address, failure_reason, correlation_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+                             recipient_address, failure_reason, correlation_id,
+                             delivery_status, delivered_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+               $11::message_delivery_status,
+               CASE WHEN $11::text = 'delivered' THEN now() END)`,
       [
         id,
         t.orgId,
@@ -170,6 +180,7 @@ describe('U13.4 platform support — direct PostgreSQL (migration 0040)', () => 
         m.recipient ?? RECIPIENT,
         m.reason,
         uuidv7(),
+        m.delivery ?? null,
       ],
     );
     return id;
@@ -410,7 +421,7 @@ describe('U13.4 platform support — direct PostgreSQL (migration 0040)', () => 
         (await diagnostics({ user: user.support }, B.orgId, 2_000_000_000)).recentMessages,
       ).toHaveLength(6);
       const { rows } = await admin(
-        `SELECT pg_get_functiondef('app_platform_support_dispatch_diagnostics(uuid,text,text,integer)'::regprocedure) AS d`,
+        `SELECT pg_get_functiondef('app_platform_support_dispatch_diagnostics(uuid,text,text,integer,text)'::regprocedure) AS d`,
       );
       expect(rows[0].d).toContain('least(greatest(coalesce(p_limit, 20), 1), 50)');
     });
@@ -441,14 +452,15 @@ describe('U13.4 platform support — direct PostgreSQL (migration 0040)', () => 
       expect(await diagnosticsCode({ user: user.auditOnly }, B.orgId)).toBe('42501');
     });
 
-    it('EXECUTE is held by acc_app alone; acc_auth and acc_relay are refused', async () => {
+    it('EXECUTE is held by acc_app alone; acc_auth, acc_relay, acc_dispatch and acc_delivery are refused', async () => {
       const { rows } = await admin(
         `SELECT p.proname, p.prosecdef, p.proconfig,
                 has_function_privilege('public', p.oid, 'EXECUTE') AS pub,
                 has_function_privilege('acc_app', p.oid, 'EXECUTE') AS app,
                 has_function_privilege('acc_auth', p.oid, 'EXECUTE') AS auth,
                 has_function_privilege('acc_relay', p.oid, 'EXECUTE') AS relay,
-                has_function_privilege('acc_dispatch', p.oid, 'EXECUTE') AS dispatch
+                has_function_privilege('acc_dispatch', p.oid, 'EXECUTE') AS dispatch,
+                has_function_privilege('acc_delivery', p.oid, 'EXECUTE') AS delivery
          FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public'
            AND p.proname IN ('app_platform_support_dispatch_diagnostics', 'app_support_failure_code')
@@ -464,6 +476,7 @@ describe('U13.4 platform support — direct PostgreSQL (migration 0040)', () => 
           auth: false,
           relay: false,
           dispatch: false,
+          delivery: false,
         },
         {
           proname: 'app_support_failure_code',
@@ -474,11 +487,238 @@ describe('U13.4 platform support — direct PostgreSQL (migration 0040)', () => 
           auth: false,
           relay: false,
           dispatch: false,
+          delivery: false,
         },
       ]);
       const call = 'SELECT app_platform_support_dispatch_diagnostics($1::uuid)';
       expect(await code(db.authPool.query(call, [B.orgId]))).toBe('42501');
       expect(await code(relayPool.query(call, [B.orgId]))).toBe('42501');
+    });
+  });
+
+  // ===========================================================================
+  describe('dispatch diagnostics: the delivery-status filter (migration 0049)', () => {
+    let C: TenantFixture;
+    const dm: Record<string, string> = {};
+    // A provider reference planted on an attempt: the function must never return it (OD-9).
+    const PROVIDER_REF = `u134-ref-${uuidv7().replace(/-/g, '').slice(-12)}`;
+    const DELIVERY = ['pending', 'delivered', 'undelivered', 'not_supported'] as const;
+
+    const filtered = (
+      ctx: Ctx,
+      orgId: string,
+      f: { delivery?: string | null; status?: string | null; channel?: string | null },
+    ) =>
+      asApp(ctx, async (c) => {
+        const { rows } = await c.query<{ d: DispatchResult }>(
+          'SELECT app_platform_support_dispatch_diagnostics($1::uuid, $2, $3, 50, $4) AS d',
+          [orgId, f.channel ?? null, f.status ?? null, f.delivery ?? null],
+        );
+        return rows[0]!.d;
+      });
+    const filteredCode = (ctx: Ctx, orgId: string, delivery: string) =>
+      asApp(ctx, (c) =>
+        code(
+          c.query(
+            'SELECT app_platform_support_dispatch_diagnostics($1::uuid, NULL, NULL, 20, $2)',
+            [orgId, delivery],
+          ),
+        ),
+      );
+    const idsOf = (d: DispatchResult) => d.recentMessages.map((m) => m.messageId as string).sort();
+    const support = () => ({ user: user.support });
+
+    beforeAll(async () => {
+      C = await createTenant(db.admin, 'u134-c', { resellerId: reseller });
+      await admin(
+        `INSERT INTO organization_provider_assignments (org_id, provider_id, channel_id, priority) VALUES ($1, $2, $3, 1)`,
+        [C.orgId, providerId, smsId],
+      );
+      dm.pending = await plantMessage(C, { status: 'accepted', reason: null, delivery: 'pending' });
+      dm.delivered = await plantMessage(C, {
+        status: 'accepted',
+        reason: null,
+        delivery: 'delivered',
+      });
+      dm.undelivered = await plantMessage(C, {
+        status: 'accepted',
+        reason: null,
+        delivery: 'undelivered',
+      });
+      dm.notSupported = await plantMessage(C, {
+        status: 'accepted',
+        reason: null,
+        delivery: 'not_supported',
+      });
+      // A superseded attempt reported delivered after the submission failed.
+      dm.failedDelivered = await plantMessage(C, {
+        status: 'failed',
+        reason: 'PROVIDER_ERROR: x',
+        delivery: 'delivered',
+      });
+      // Not tracked: legacy accepted, an in-flight queued and a failed message.
+      dm.legacy = await plantMessage(C, { status: 'accepted', reason: null, delivery: null });
+      dm.queued = await plantMessage(C, { status: 'queued', reason: null, delivery: null });
+      dm.failedUntracked = await plantMessage(C, {
+        status: 'failed',
+        reason: 'TIMEOUT: x',
+        delivery: null,
+      });
+      await admin(
+        `INSERT INTO message_attempts (message_id, org_id, provider_id, channel_id, attempt_number,
+                                       fencing_epoch, claim_token, status, latency_ms,
+                                       provider_message_id, delivery_status, delivered_at)
+         VALUES ($1, $2, $3, $4, 1, 1, $5, 'accepted', 40, $6, 'delivered', now())`,
+        [dm.delivered, C.orgId, providerId, smsId, uuidv7(), PROVIDER_REF],
+      );
+      // Organization A: a delivered message, which a diagnostic of C must not return.
+      dm.otherOrgDelivered = await plantMessage(A, {
+        status: 'accepted',
+        reason: null,
+        delivery: 'delivered',
+      });
+    }, 60_000);
+
+    afterAll(async () => {
+      if (!C) return;
+      await admin(`DELETE FROM message_attempts WHERE org_id = $1`, [C.orgId]);
+      await admin(`DELETE FROM messages WHERE org_id = $1`, [C.orgId]);
+      await admin(`DELETE FROM contacts WHERE org_id = $1`, [C.orgId]);
+      await admin(`DELETE FROM organization_provider_assignments WHERE org_id = $1`, [C.orgId]);
+      await destroyTenant(db.admin, C);
+    }, 60_000);
+
+    it('each delivery status returns exactly its messages, whatever their submission status', async () => {
+      const expected: Record<(typeof DELIVERY)[number], string[]> = {
+        pending: [dm.pending!],
+        delivered: [dm.delivered!, dm.failedDelivered!],
+        undelivered: [dm.undelivered!],
+        not_supported: [dm.notSupported!],
+      };
+      for (const value of DELIVERY) {
+        const d = await filtered(support(), C.orgId, { delivery: value });
+        expect([value, idsOf(d)]).toEqual([value, [...expected[value]].sort()]);
+      }
+    });
+
+    it('untracked messages (no delivery status) never match any filter value', async () => {
+      const untracked = [dm.legacy!, dm.queued!, dm.failedUntracked!];
+      for (const value of DELIVERY) {
+        const ids = idsOf(await filtered(support(), C.orgId, { delivery: value }));
+        for (const id of untracked) expect(ids).not.toContain(id);
+      }
+    });
+
+    it('filter omitted: exactly the 0040 behaviour — the default status set; the four-argument call is identical', async () => {
+      const omitted = await filtered(support(), C.orgId, {});
+      expect(idsOf(omitted)).toEqual([dm.failedDelivered!, dm.queued!, dm.failedUntracked!].sort());
+      const fourArgs = await asApp(support(), async (c) => {
+        const { rows } = await c.query<{ d: DispatchResult }>(
+          'SELECT app_platform_support_dispatch_diagnostics($1::uuid, NULL, NULL, 50) AS d',
+          [C.orgId],
+        );
+        return rows[0]!.d;
+      });
+      expect(fourArgs).toEqual(omitted);
+      // Organization B (no delivery state) is unchanged too: the six 0040 messages.
+      expect((await filtered(support(), B.orgId, {})).recentMessages).toHaveLength(6);
+    });
+
+    it('composes with the status and channel filters', async () => {
+      const del = (status: string) =>
+        filtered(support(), C.orgId, { delivery: 'delivered', status }).then(idsOf);
+      expect(await del('accepted')).toEqual([dm.delivered]);
+      expect(await del('failed')).toEqual([dm.failedDelivered]);
+      expect(await del('queued')).toEqual([]);
+      expect(
+        idsOf(await filtered(support(), C.orgId, { delivery: 'delivered', channel: 'rcs' })),
+      ).toEqual([]);
+    });
+
+    it('never crosses organizations', async () => {
+      const ids = idsOf(await filtered(support(), C.orgId, { delivery: 'delivered' }));
+      expect(ids).not.toContain(dm.otherOrgDelivered);
+      expect(idsOf(await filtered(support(), A.orgId, { delivery: 'delivered' }))).toEqual([
+        dm.otherOrgDelivered,
+      ]);
+      expect(idsOf(await filtered(support(), B.orgId, { delivery: 'delivered' }))).toEqual([]);
+    });
+
+    it('returns the 0040 shape only: no delivery field and no provider message reference', async () => {
+      const d = await filtered(support(), C.orgId, { delivery: 'delivered' });
+      for (const m of d.recentMessages) {
+        expect(Object.keys(m).sort()).toEqual(MESSAGE_KEYS);
+        for (const a of m.attempts) expect(Object.keys(a).sort()).toEqual(ATTEMPT_KEYS);
+      }
+      const text = JSON.stringify(d);
+      expect(text).not.toContain(PROVIDER_REF);
+      expect(text).not.toMatch(/delivery|providerMessage|recipient|payload/i);
+    });
+
+    it('a value outside message_delivery_status is refused with 22023', async () => {
+      for (const value of [
+        'read',
+        'not_tracked',
+        'expired',
+        'DELIVERED',
+        '',
+        ' delivered',
+        "delivered' OR '1'='1",
+      ]) {
+        expect([value, await filteredCode(support(), C.orgId, value)]).toEqual([value, '22023']);
+      }
+    });
+
+    it('the caller check still comes first: with any filter value, every non-support caller gets 42501', async () => {
+      for (const value of ['delivered', 'not-a-status']) {
+        for (const ctx of [
+          { org: C.orgId, user: user.memberA },
+          { user: user.memberB },
+          {},
+          { platform: true },
+          { user: user.memberA, platform: true },
+          { user: user.supportDisabled },
+          { user: user.auditOnly },
+        ] as Ctx[]) {
+          expect(await filteredCode(ctx, C.orgId, value)).toBe('42501');
+        }
+      }
+      const call = 'SELECT app_platform_support_dispatch_diagnostics($1::uuid, NULL, NULL, 20, $2)';
+      expect(await code(db.authPool.query(call, [C.orgId, 'delivered']))).toBe('42501');
+      expect(await code(relayPool.query(call, [C.orgId, 'delivered']))).toBe('42501');
+    });
+
+    it('one function remains: the 0040 four-argument signature is gone (no overload); security properties unchanged', async () => {
+      const { rows } = await admin(
+        `SELECT p.oid::regprocedure::text AS sig, p.prosecdef, p.provolatile, p.proconfig,
+                pg_get_userbyid(p.proowner) AS owner,
+                (SELECT pg_get_userbyid(s.proowner) FROM pg_proc s
+                  WHERE s.proname = 'app_support_failure_code') AS sibling_owner,
+                p.proacl::text[] AS acl
+           FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public' AND p.proname = 'app_platform_support_dispatch_diagnostics'`,
+      );
+      expect(rows).toHaveLength(1);
+      const row = rows[0];
+      expect(row).toMatchObject({
+        sig: 'app_platform_support_dispatch_diagnostics(uuid,text,text,integer,text)',
+        prosecdef: true,
+        provolatile: 's',
+        proconfig: ['search_path=public, pg_temp'],
+      });
+      // Same owner as the rest of migration 0040; EXECUTE for that owner and acc_app only —
+      // no PUBLIC entry ("=X/…") and no other grantee.
+      expect(row.owner).toBe(row.sibling_owner);
+      expect([...(row.acl as string[])].sort()).toEqual(
+        [`${row.owner}=X/${row.owner}`, `acc_app=X/${row.owner}`].sort(),
+      );
+    });
+
+    it('the database enum and the API filter list are the same closed list', async () => {
+      const { rows } = await admin(
+        `SELECT unnest(enum_range(NULL::message_delivery_status))::text AS v`,
+      );
+      expect(rows.map((r) => r.v)).toEqual([...DELIVERY]);
     });
   });
 

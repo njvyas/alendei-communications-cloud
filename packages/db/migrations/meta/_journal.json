@@ -344,6 +344,13 @@
       "when": 1793664000000,
       "tag": "0048_phase5_0_ingress_resolver_facts",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1793750400000,
+      "tag": "0049_phase5_0_support_delivery_filter",
+      "breakpoints": true
     }
   ]
 }

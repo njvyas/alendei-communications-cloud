@@ -19107,6 +19107,20 @@
           },
           {
             "in": "query",
+            "name": "deliveryStatus",
+            "required": false,
+            "schema": {
+              "enum": [
+                "pending",
+                "delivered",
+                "undelivered",
+                "not_supported"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
