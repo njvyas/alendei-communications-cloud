@@ -338,6 +338,104 @@ async function setupRoutes(page: Page) {
       });
     }
 
+    // Contact activities: /contacts/:id/activities
+    const activitiesMatch = pathname.match(/\/contacts\/([^/?]+)\/activities$/);
+    if (activitiesMatch && method === 'GET') {
+      const contactId = activitiesMatch[1];
+      const categoryParam = url.searchParams.get('category');
+      const contact = mockContacts.find((c) => c.id === contactId) || mockContacts[0];
+      const identities = mockIdentities.filter((i) => i.contactId === contactId);
+      const consents = mockConsentEvents.filter((c) => c.contactId === contactId);
+
+      const items: Record<string, unknown>[] = [];
+
+      if (!categoryParam || categoryParam === 'all' || categoryParam === 'profile') {
+        items.push({
+          id: `activity-contact-${contact.id}-created`,
+          contactId: contact.id,
+          workspaceId: contact.workspaceId,
+          type: 'contact_created',
+          category: 'profile',
+          title: 'Contact Created',
+          description: 'Contact record registered in workspace',
+          timestamp: contact.createdAt,
+          statusTone: 'neutral',
+          metadata: {},
+        });
+      }
+
+      if (!categoryParam || categoryParam === 'all' || categoryParam === 'identity') {
+        for (const ident of identities) {
+          items.push({
+            id: `activity-identity-${ident.id}-created`,
+            contactId: contact.id,
+            workspaceId: contact.workspaceId,
+            type: 'identity_added',
+            category: 'identity',
+            title: `Identity Added (${ident.rawAddress})`,
+            description: `Channel identifier ${ident.normalizedAddress || ident.rawAddress} linked${ident.isPrimary ? ' as primary address' : ''}`,
+            timestamp: ident.createdAt,
+            channelId: ident.channelId,
+            channelCode: ident.channelId.includes('wa')
+              ? 'whatsapp'
+              : ident.channelId.includes('sms')
+                ? 'sms'
+                : 'email',
+            statusTone: ident.status === 'active' ? 'accent' : 'warning',
+            metadata: {
+              rawAddress: ident.rawAddress,
+              normalizedAddress: ident.normalizedAddress,
+              isPrimary: ident.isPrimary,
+              status: ident.status,
+            },
+          });
+        }
+      }
+
+      if (!categoryParam || categoryParam === 'all' || categoryParam === 'consent') {
+        for (const consent of consents) {
+          const isGrant = consent.event === 'grant';
+          items.push({
+            id: `activity-consent-${consent.id}`,
+            contactId: contact.id,
+            workspaceId: contact.workspaceId,
+            type: isGrant ? 'consent_granted' : 'consent_revoked',
+            category: 'consent',
+            title: isGrant ? 'Consent Granted' : 'Consent Revoked',
+            description: `${consent.consentType.toUpperCase()} consent ${isGrant ? 'granted' : 'revoked'} (Source: ${consent.source})`,
+            timestamp: consent.occurredAt,
+            channelId: consent.channelId,
+            channelCode: consent.channelId.includes('wa')
+              ? 'whatsapp'
+              : consent.channelId.includes('sms')
+                ? 'sms'
+                : 'email',
+            statusTone: isGrant ? 'success' : 'error',
+            metadata: {
+              consentType: consent.consentType,
+              event: consent.event,
+              source: consent.source,
+            },
+          });
+        }
+      }
+
+      // No message records exist for this contact, so message activities remain empty []
+      items.sort(
+        (a, b) =>
+          new Date(b.timestamp as string).getTime() - new Date(a.timestamp as string).getTime(),
+      );
+
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: items,
+          page: { hasMore: false, nextCursor: null, limit: 50 },
+        }),
+      });
+    }
+
     // Consent effective: /contacts/:id/consent-effective
     if (pathname.includes('/consent-effective') && method === 'GET') {
       return route.fulfill({

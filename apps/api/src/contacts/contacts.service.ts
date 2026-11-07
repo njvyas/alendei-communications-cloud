@@ -1,23 +1,30 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   ERROR_CODES,
+  PAGE_LIMITS,
   PERMISSIONS,
+  isTerminalMessageStatus,
+  maskRecipientAddress,
+  sanitizeRecipientContent,
   type AuthPrincipal,
+  type ContactActivityResponse,
   type ContactResponse,
   type ContactIdentityResponse,
   type ConsentEventResponse,
   type EffectiveConsentResponse,
   type EffectiveConsentState,
+  type MessageStatus,
   type PageInfo,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
-import { and, desc, eq, lte, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 
 import { actorFromPrincipal } from '../audit/audit-actor';
 import { AuditWriter } from '../audit/audit-writer.service';
 import { AuthorizationService } from '../auth/authorization.service';
 import { AppException } from '../common/errors/app.exception';
+import { CursorCodec } from '../common/http/cursor';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
 import { TenantDatabase } from '../database/tenant-database.service';
 import { IdempotencyService, type IdempotentOutcome } from '../idempotency/idempotency.service';
@@ -30,6 +37,7 @@ import type {
   CreateContactIdentityDto,
   CreateConsentEventDto,
   GetEffectiveConsentDto,
+  ListContactActivitiesDto,
   UpdateContactDto,
   UpdateContactIdentityDto,
 } from './contacts.dto';
@@ -115,6 +123,7 @@ export class ContactsService {
     private readonly audit: AuditWriter,
     private readonly lists: ListQuery,
     private readonly idempotency: IdempotencyService,
+    private readonly cursors: CursorCodec,
   ) {}
 
   private readonly listSpec: ListQuerySpec = {
@@ -223,6 +232,438 @@ export class ContactsService {
         workspaceId,
       );
       return contactView(row);
+    });
+  }
+
+  // --- Contact Activities -----------------------------------------------------
+
+  async listActivities(
+    principal: AuthPrincipal,
+    contactId: string,
+    filter: ListContactActivitiesDto = {},
+    workspaceId?: string,
+  ): Promise<{ items: readonly ContactActivityResponse[]; page: PageInfo }> {
+    const orgId = requireOrganization(principal);
+    const limit = Math.min(
+      Math.max(filter.limit ?? PAGE_LIMITS.DEFAULT, PAGE_LIMITS.MIN),
+      PAGE_LIMITS.MAX,
+    );
+    const category = filter.category && filter.category !== 'all' ? filter.category : undefined;
+
+    return this.db.withRequestTenant(async (tx) => {
+      const contact = await this.loadContact(
+        tx,
+        principal,
+        contactId,
+        PERMISSIONS.CONTACTS_READ,
+        workspaceId,
+      );
+
+      const activities: ContactActivityResponse[] = [];
+      const knownAddresses = new Set<string>();
+
+      // 1. Profile events (contact_created from contacts.createdAt, contact_updated from audit_logs)
+      if (!category || category === 'profile') {
+        activities.push({
+          id: `activity-contact-${contact.id}-created`,
+          contactId: contact.id,
+          workspaceId: contact.workspaceId,
+          type: 'contact_created',
+          category: 'profile',
+          title: 'Contact Created',
+          description: 'Contact record registered in workspace',
+          timestamp: contact.createdAt.toISOString(),
+          statusTone: 'neutral',
+          metadata: {},
+        });
+
+        const contactAuditRows = await tx
+          .select()
+          .from(schema.auditLogs)
+          .where(
+            and(
+              eq(schema.auditLogs.orgId, orgId),
+              eq(schema.auditLogs.resourceType, 'Contact'),
+              eq(schema.auditLogs.resourceId, contact.id),
+              eq(schema.auditLogs.action, 'contact.updated'),
+              eq(schema.auditLogs.outcome, 'success'),
+            ),
+          );
+
+        for (const auditRow of contactAuditRows) {
+          activities.push({
+            id: `activity-audit-${auditRow.id}`,
+            contactId: contact.id,
+            workspaceId: contact.workspaceId,
+            type: 'contact_updated',
+            category: 'profile',
+            title: 'Contact Updated',
+            description: auditRow.actorLabel
+              ? `Contact record modified by ${auditRow.actorLabel}`
+              : 'Contact record modified',
+            timestamp: (auditRow.occurredAt ?? auditRow.createdAt).toISOString(),
+            statusTone: 'neutral',
+            metadata: (auditRow.metadata as Record<string, unknown>) ?? {},
+          });
+        }
+      }
+
+      // 2. Identity events (identity_added from contact_identities, identity_updated from audit_logs)
+      // Also populates knownAddresses for failureReason PII sanitisation when category is 'message'
+      if (!category || category === 'identity' || category === 'message') {
+        const identityRows = await tx
+          .select({
+            identity: schema.contactIdentities,
+            channelCode: schema.channels.code,
+          })
+          .from(schema.contactIdentities)
+          .leftJoin(schema.channels, eq(schema.contactIdentities.channelId, schema.channels.id))
+          .where(
+            and(
+              eq(schema.contactIdentities.orgId, orgId),
+              eq(schema.contactIdentities.contactId, contact.id),
+            ),
+          );
+
+        const identityIds: string[] = [];
+        for (const row of identityRows) {
+          const identity = row?.identity;
+          if (!identity) continue;
+          identityIds.push(identity.id);
+          const rawOrNorm = identity.normalizedAddress || identity.rawAddress;
+          if (rawOrNorm) {
+            knownAddresses.add(rawOrNorm);
+          }
+          if (!category || category === 'identity') {
+            const maskedAddress = maskRecipientAddress(rawOrNorm);
+            activities.push({
+              id: `activity-identity-${identity.id}-created`,
+              contactId: contact.id,
+              workspaceId: contact.workspaceId,
+              type: 'identity_added',
+              category: 'identity',
+              title: `Identity Added (${maskedAddress})`,
+              description: `Channel identifier ${maskedAddress} linked${identity.isPrimary ? ' as primary address' : ''}`,
+              timestamp: identity.createdAt.toISOString(),
+              channelId: identity.channelId,
+              channelCode: row.channelCode ?? null,
+              statusTone: identity.status === 'active' ? 'accent' : 'warning',
+              metadata: {
+                maskedAddress,
+                isPrimary: identity.isPrimary,
+                status: identity.status,
+              },
+            });
+          }
+        }
+
+        if ((!category || category === 'identity') && identityIds.length > 0) {
+          const identityAuditRows = await tx
+            .select()
+            .from(schema.auditLogs)
+            .where(
+              and(
+                eq(schema.auditLogs.orgId, orgId),
+                eq(schema.auditLogs.resourceType, 'ContactIdentity'),
+                eq(schema.auditLogs.action, 'contact_identity.updated'),
+                eq(schema.auditLogs.outcome, 'success'),
+                inArray(schema.auditLogs.resourceId, identityIds),
+              ),
+            );
+
+          for (const auditRow of identityAuditRows) {
+            const rawMeta = (auditRow.metadata as Record<string, unknown>) ?? {};
+            const sanitizedMeta: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(rawMeta)) {
+              if (
+                typeof v === 'string' &&
+                [
+                  'rawAddress',
+                  'normalizedAddress',
+                  'address',
+                  'recipientAddress',
+                  'recipient',
+                ].includes(k)
+              ) {
+                sanitizedMeta[k] = maskRecipientAddress(v);
+              } else {
+                sanitizedMeta[k] = v;
+              }
+            }
+            activities.push({
+              id: `activity-audit-${auditRow.id}`,
+              contactId: contact.id,
+              workspaceId: contact.workspaceId,
+              type: 'identity_updated',
+              category: 'identity',
+              title: 'Identity Updated',
+              description: auditRow.actorLabel
+                ? `Contact identity modified by ${auditRow.actorLabel}`
+                : 'Contact identity modified',
+              timestamp: (auditRow.occurredAt ?? auditRow.createdAt).toISOString(),
+              statusTone: 'warning',
+              metadata: sanitizedMeta,
+            });
+          }
+        }
+      }
+
+      // 3. Consent events (consent_granted / consent_revoked from consent_events)
+      if (!category || category === 'consent') {
+        const consentRows = await tx
+          .select({
+            consent: schema.consentEvents,
+            channelCode: schema.channels.code,
+          })
+          .from(schema.consentEvents)
+          .leftJoin(schema.channels, eq(schema.consentEvents.channelId, schema.channels.id))
+          .where(
+            and(
+              eq(schema.consentEvents.orgId, orgId),
+              eq(schema.consentEvents.contactId, contact.id),
+            ),
+          );
+
+        for (const { consent, channelCode } of consentRows) {
+          const isGrant = consent.event === 'grant';
+          activities.push({
+            id: `activity-consent-${consent.id}`,
+            contactId: contact.id,
+            workspaceId: contact.workspaceId,
+            type: isGrant ? 'consent_granted' : 'consent_revoked',
+            category: 'consent',
+            title: isGrant ? 'Consent Granted' : 'Consent Revoked',
+            description: `${consent.consentType.toUpperCase()} consent ${isGrant ? 'granted' : 'revoked'} (Source: ${consent.source})`,
+            timestamp: consent.occurredAt.toISOString(),
+            channelId: consent.channelId,
+            channelCode: channelCode ?? null,
+            statusTone: isGrant ? 'success' : 'error',
+            metadata: {
+              consentType: consent.consentType,
+              event: consent.event,
+              source: consent.source,
+            },
+          });
+        }
+      }
+
+      // 4. Message events (message_sent, message_delivered, message_read, message_failed from messages)
+      if (!category || category === 'message') {
+        const messageRows = await tx
+          .select({
+            message: schema.messages,
+            channelCode: schema.channels.code,
+            templateName: schema.templates.name,
+          })
+          .from(schema.messages)
+          .leftJoin(schema.channels, eq(schema.messages.channelId, schema.channels.id))
+          .leftJoin(schema.templates, eq(schema.messages.templateId, schema.templates.id))
+          .where(and(eq(schema.messages.orgId, orgId), eq(schema.messages.contactId, contact.id)));
+
+        for (const { message } of messageRows) {
+          if (message.recipientAddress) {
+            knownAddresses.add(message.recipientAddress);
+          }
+        }
+
+        for (const { message, channelCode, templateName } of messageRows) {
+          const channelLabel = (channelCode ?? 'message').toUpperCase();
+          const maskedRecipient = maskRecipientAddress(message.recipientAddress);
+
+          // 1. Dispatch event (message_sent) vs Pending Dispatch (message_pending)
+          if (message.status === 'accepted') {
+            // Established dispatch: message was submitted to and accepted by the upstream provider/carrier
+            activities.push({
+              id: `activity-msg-${message.id}-sent`,
+              contactId: contact.id,
+              workspaceId: contact.workspaceId,
+              type: 'message_sent',
+              category: 'message',
+              title: `${channelLabel} Dispatched`,
+              description: `Outbound message dispatched to recipient ${maskedRecipient}`,
+              timestamp: message.createdAt.toISOString(),
+              channelId: message.channelId,
+              channelCode: channelCode ?? null,
+              statusTone: 'neutral',
+              metadata: {
+                messageId: message.id,
+                recipientAddress: maskedRecipient,
+                status: message.status,
+                templateName: templateName ?? null,
+              },
+            });
+          } else if (!isTerminalMessageStatus(message.status as MessageStatus)) {
+            // Not yet dispatched: message is pending dispatch
+            activities.push({
+              id: `activity-msg-${message.id}-pending`,
+              contactId: contact.id,
+              workspaceId: contact.workspaceId,
+              type: 'message_pending',
+              category: 'message',
+              title: `${channelLabel} Pending Dispatch`,
+              description: `Outbound message awaiting dispatch to ${maskedRecipient}`,
+              timestamp: message.createdAt.toISOString(),
+              channelId: message.channelId,
+              channelCode: channelCode ?? null,
+              statusTone: 'neutral',
+              metadata: {
+                messageId: message.id,
+                recipientAddress: maskedRecipient,
+                status: message.status,
+                templateName: templateName ?? null,
+              },
+            });
+          }
+
+          // 2. Delivery event (message_delivered)
+          if (message.deliveredAt || message.deliveryStatus === 'delivered') {
+            activities.push({
+              id: `activity-msg-${message.id}-delivered`,
+              contactId: contact.id,
+              workspaceId: contact.workspaceId,
+              type: 'message_delivered',
+              category: 'message',
+              title: `${channelLabel} Delivered`,
+              description: 'Confirmed delivered to recipient endpoint',
+              timestamp: (message.deliveredAt ?? message.createdAt).toISOString(),
+              channelId: message.channelId,
+              channelCode: channelCode ?? null,
+              statusTone: 'success',
+              metadata: {
+                messageId: message.id,
+                recipientAddress: maskedRecipient,
+                deliveryStatus: message.deliveryStatus,
+              },
+            });
+          }
+
+          // 3. Read event (message_read)
+          if (message.readAt) {
+            activities.push({
+              id: `activity-msg-${message.id}-read`,
+              contactId: contact.id,
+              workspaceId: contact.workspaceId,
+              type: 'message_read',
+              category: 'message',
+              title: `${channelLabel} Message Read`,
+              description: 'Recipient read notification confirmed',
+              timestamp: message.readAt.toISOString(),
+              channelId: message.channelId,
+              channelCode: channelCode ?? null,
+              statusTone: 'accent',
+              metadata: {
+                messageId: message.id,
+                recipientAddress: maskedRecipient,
+              },
+            });
+          }
+
+          // 4. Failure event (message_failed)
+          if (message.status === 'failed' || message.deliveryStatus === 'undelivered') {
+            const isDownstreamFailure =
+              message.status === 'accepted' && message.deliveryStatus === 'undelivered';
+
+            let sanitizedFailureReason = message.failureReason || null;
+            if (sanitizedFailureReason) {
+              sanitizedFailureReason =
+                sanitizeRecipientContent(sanitizedFailureReason, message.recipientAddress) || null;
+              for (const addr of knownAddresses) {
+                if (sanitizedFailureReason && addr !== message.recipientAddress) {
+                  sanitizedFailureReason =
+                    sanitizeRecipientContent(sanitizedFailureReason, addr) || null;
+                }
+              }
+            }
+
+            activities.push({
+              id: `activity-msg-${message.id}-failed`,
+              contactId: contact.id,
+              workspaceId: contact.workspaceId,
+              type: 'message_failed',
+              category: 'message',
+              title: isDownstreamFailure
+                ? `${channelLabel} Delivery Failed`
+                : `${channelLabel} Submission Failed`,
+              description: isDownstreamFailure
+                ? sanitizedFailureReason || 'Message delivery failed at recipient endpoint'
+                : sanitizedFailureReason || 'Message submission failed before dispatch',
+              timestamp: (message.completedAt ?? message.createdAt).toISOString(),
+              channelId: message.channelId,
+              channelCode: channelCode ?? null,
+              statusTone: 'error',
+              metadata: {
+                messageId: message.id,
+                recipientAddress: maskedRecipient,
+                failureReason: sanitizedFailureReason,
+                status: message.status,
+                deliveryStatus: message.deliveryStatus,
+              },
+            });
+          } else if (message.status === 'outcome_unknown') {
+            activities.push({
+              id: `activity-msg-${message.id}-unknown`,
+              contactId: contact.id,
+              workspaceId: contact.workspaceId,
+              type: 'message_outcome_unknown',
+              category: 'message',
+              title: `${channelLabel} Dispatch Outcome Unknown`,
+              description: 'Message submission outcome unknown',
+              timestamp: (message.completedAt ?? message.createdAt).toISOString(),
+              channelId: message.channelId,
+              channelCode: channelCode ?? null,
+              statusTone: 'warning',
+              metadata: {
+                messageId: message.id,
+                recipientAddress: maskedRecipient,
+                status: message.status,
+              },
+            });
+          }
+        }
+      }
+
+      // Stable descending sort by timestamp, tie-break by ID descending
+      activities.sort((a, b) => {
+        const timeDiff = new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+        if (timeDiff !== 0) return timeDiff;
+        return b.id.localeCompare(a.id);
+      });
+
+      // Keyset cursor pagination
+      let startIndex = 0;
+      if (filter.cursor) {
+        const payload = this.cursors.decode(filter.cursor, '-timestamp');
+        const cursorTime = payload.v ? new Date(payload.v).getTime() : 0;
+        const cursorId = payload.i;
+        const foundIdx = activities.findIndex((act) => {
+          const actTime = new Date(act.timestamp).getTime();
+          return actTime < cursorTime || (actTime === cursorTime && act.id < cursorId);
+        });
+        startIndex = foundIdx === -1 ? activities.length : foundIdx;
+      }
+
+      const pagedSlice = activities.slice(startIndex, startIndex + limit + 1);
+      const hasMore = pagedSlice.length > limit;
+      const items = hasMore ? pagedSlice.slice(0, limit) : pagedSlice;
+      const lastItem = items[items.length - 1];
+
+      const nextCursor =
+        hasMore && lastItem
+          ? this.cursors.encode({
+              s: '-timestamp',
+              v: lastItem.timestamp,
+              i: lastItem.id,
+            })
+          : null;
+
+      return {
+        items,
+        page: {
+          nextCursor,
+          hasMore,
+          limit,
+        },
+      };
     });
   }
 

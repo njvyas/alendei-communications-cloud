@@ -1,7 +1,11 @@
-import type {
-  ConsentEventResponse,
-  ContactIdentityResponse,
-  ContactResponse,
+import {
+  maskRecipientAddress,
+  sanitizeRecipientContent,
+  type ConsentEventResponse,
+  type ContactIdentityResponse,
+  type ContactResponse,
+  type MessageDeliveryStatus,
+  type MessageStatus,
 } from '@acc/contracts';
 
 /**
@@ -154,10 +158,12 @@ export function removeCustomField(
  * Activity Timeline event definitions
  */
 export type ActivityEventType =
+  | 'message_pending'
   | 'message_sent'
   | 'message_delivered'
   | 'message_read'
   | 'message_failed'
+  | 'message_outcome_unknown'
   | 'consent_granted'
   | 'consent_revoked'
   | 'identity_added'
@@ -189,8 +195,8 @@ export interface ContactMessageActivityRecord {
   readonly id: string;
   readonly channelCode: 'whatsapp' | 'sms' | 'email' | 'rcs' | 'voice';
   readonly recipientAddress: string;
-  readonly status: 'pending' | 'submitted' | 'failed';
-  readonly deliveryStatus?: 'pending' | 'delivered' | 'undelivered' | 'not_supported' | null;
+  readonly status: MessageStatus | 'pending' | 'submitted';
+  readonly deliveryStatus?: MessageDeliveryStatus | null;
   readonly createdAt: string;
   readonly deliveredAt?: string | null;
   readonly readAt?: string | null;
@@ -226,17 +232,17 @@ export function generateContactTimeline(
 
   // 2. Identity events
   for (const ident of identities) {
+    const maskedAddress = maskRecipientAddress(ident.normalizedAddress || ident.rawAddress);
     items.push({
       id: `event-identity-${ident.id}`,
       type: 'identity_added',
       category: 'identity',
-      title: `Identity Added (${ident.rawAddress})`,
-      description: `Channel identifier ${ident.normalizedAddress || ident.rawAddress} linked${ident.isPrimary ? ' as primary address' : ''}.`,
+      title: `Identity Added (${maskedAddress})`,
+      description: `Channel identifier ${maskedAddress} linked${ident.isPrimary ? ' as primary address' : ''}.`,
       timestamp: ident.createdAt,
       statusTone: ident.status === 'active' ? 'accent' : 'warning',
       metadata: {
-        rawAddress: ident.rawAddress,
-        normalizedAddress: ident.normalizedAddress,
+        maskedAddress,
         isPrimary: ident.isPrimary,
         status: ident.status,
       },
@@ -266,26 +272,84 @@ export function generateContactTimeline(
     });
   }
 
-  // 4. Contact record modification event (inferred from updatedAt timestamp)
-  if (contact.updatedAt && contact.updatedAt !== contact.createdAt) {
-    const tags = extractContactTags(contact.metadata);
-    items.push({
-      id: `event-updated-${contact.id}-${contact.updatedAt}`,
-      type: 'field_updated',
-      category: 'profile',
-      title: 'Contact Record Updated',
-      description:
-        tags.length > 0
-          ? `Record timestamp updated. Current tags: ${tags.join(', ')} (inferred from updatedAt; granular attribute audit log pending backend support).`
-          : 'Record timestamp updated (inferred from updatedAt; granular attribute audit log pending backend support).',
-      timestamp: contact.updatedAt,
-      statusTone: 'neutral',
-      metadata: contact.metadata,
-    });
+  // Track known addresses for PII sanitization in failure reasons
+  const knownAddresses = new Set<string>();
+  for (const id of identities) {
+    const rawOrNorm = id.normalizedAddress || id.rawAddress;
+    if (rawOrNorm) knownAddresses.add(rawOrNorm);
+  }
+  for (const m of messages) {
+    if (m.recipientAddress) knownAddresses.add(m.recipientAddress);
   }
 
-  // 5. Authentic message events (only when real records are passed)
+  // 4. Authentic message events (only when real records are passed)
   for (const msg of messages) {
+    const maskedRecipient = maskRecipientAddress(msg.recipientAddress);
+
+    // 1. Dispatch event (message_sent) vs Pending Dispatch (message_pending)
+    // - accepted -> message_sent
+    // - queued, routing, submitting -> message_pending
+    if (msg.status === 'accepted' || (msg.status as string) === 'submitted') {
+      items.push({
+        id: `event-msg-sent-${msg.id}`,
+        type: 'message_sent',
+        category: 'message',
+        title: `${msg.channelCode.toUpperCase()} Dispatched`,
+        description: `Outbound message dispatched to recipient ${maskedRecipient}.`,
+        timestamp: msg.createdAt,
+        channelCode: msg.channelCode,
+        statusTone: 'neutral',
+        metadata: {
+          messageId: msg.id,
+          recipientAddress: maskedRecipient,
+          templateName: msg.templateName,
+          status: msg.status,
+        },
+      });
+    } else if (
+      msg.status === 'queued' ||
+      msg.status === 'routing' ||
+      msg.status === 'submitting' ||
+      (msg.status as string) === 'pending'
+    ) {
+      items.push({
+        id: `event-msg-pending-${msg.id}`,
+        type: 'message_pending',
+        category: 'message',
+        title: `${msg.channelCode.toUpperCase()} Pending Dispatch`,
+        description: `Outbound message awaiting dispatch to ${maskedRecipient}.`,
+        timestamp: msg.createdAt,
+        channelCode: msg.channelCode,
+        statusTone: 'neutral',
+        metadata: {
+          messageId: msg.id,
+          recipientAddress: maskedRecipient,
+          templateName: msg.templateName,
+          status: msg.status,
+        },
+      });
+    }
+
+    // 2. Delivery event (message_delivered)
+    if (msg.deliveredAt || msg.deliveryStatus === 'delivered') {
+      items.push({
+        id: `event-msg-deliv-${msg.id}`,
+        type: 'message_delivered',
+        category: 'message',
+        title: `${msg.channelCode.toUpperCase()} Delivered`,
+        description: 'Confirmed delivered to recipient endpoint.',
+        timestamp: msg.deliveredAt || msg.createdAt,
+        channelCode: msg.channelCode,
+        statusTone: 'success',
+        metadata: {
+          messageId: msg.id,
+          recipientAddress: maskedRecipient,
+          deliveryStatus: msg.deliveryStatus,
+        },
+      });
+    }
+
+    // 3. Read event (message_read)
     if (msg.readAt) {
       items.push({
         id: `event-msg-read-${msg.id}`,
@@ -298,62 +362,69 @@ export function generateContactTimeline(
         statusTone: 'accent',
         metadata: {
           messageId: msg.id,
-          recipientAddress: msg.recipientAddress,
+          recipientAddress: maskedRecipient,
           templateName: msg.templateName,
         },
       });
     }
 
-    if (msg.deliveredAt || msg.deliveryStatus === 'delivered') {
-      items.push({
-        id: `event-msg-deliv-${msg.id}`,
-        type: 'message_delivered',
-        category: 'message',
-        title: `${msg.channelCode.toUpperCase()} Delivered`,
-        description: `Confirmed delivered to recipient endpoint.`,
-        timestamp: msg.deliveredAt || msg.createdAt,
-        channelCode: msg.channelCode,
-        statusTone: 'success',
-        metadata: {
-          messageId: msg.id,
-          recipientAddress: msg.recipientAddress,
-          deliveryStatus: msg.deliveryStatus,
-        },
-      });
-    } else if (msg.deliveryStatus === 'undelivered' || msg.status === 'failed') {
+    // 4. Failure event (message_failed)
+    // - failed -> message_failed, never message_sent
+    // - undelivered -> delivery failure
+    if (msg.status === 'failed' || msg.deliveryStatus === 'undelivered') {
+      const isDownstreamFailure =
+        (msg.status === 'accepted' || (msg.status as string) === 'submitted') &&
+        msg.deliveryStatus === 'undelivered';
+
+      let sanitizedFailureReason = msg.failureReason || null;
+      if (sanitizedFailureReason) {
+        sanitizedFailureReason =
+          sanitizeRecipientContent(sanitizedFailureReason, msg.recipientAddress) || null;
+        for (const addr of knownAddresses) {
+          if (sanitizedFailureReason && addr !== msg.recipientAddress) {
+            sanitizedFailureReason = sanitizeRecipientContent(sanitizedFailureReason, addr) || null;
+          }
+        }
+      }
+
       items.push({
         id: `event-msg-fail-${msg.id}`,
         type: 'message_failed',
         category: 'message',
-        title: `${msg.channelCode.toUpperCase()} Delivery Failed`,
-        description: msg.failureReason || 'Message failed or undelivered.',
+        title: isDownstreamFailure
+          ? `${msg.channelCode.toUpperCase()} Delivery Failed`
+          : `${msg.channelCode.toUpperCase()} Submission Failed`,
+        description: isDownstreamFailure
+          ? sanitizedFailureReason || 'Message delivery failed at recipient endpoint.'
+          : sanitizedFailureReason || 'Message submission failed before dispatch.',
         timestamp: msg.createdAt,
         channelCode: msg.channelCode,
         statusTone: 'error',
         metadata: {
           messageId: msg.id,
-          recipientAddress: msg.recipientAddress,
-          failureReason: msg.failureReason,
+          recipientAddress: maskedRecipient,
+          failureReason: sanitizedFailureReason,
+          status: msg.status,
+          deliveryStatus: msg.deliveryStatus,
+        },
+      });
+    } else if (msg.status === 'outcome_unknown') {
+      items.push({
+        id: `event-msg-unknown-${msg.id}`,
+        type: 'message_outcome_unknown',
+        category: 'message',
+        title: `${msg.channelCode.toUpperCase()} Dispatch Outcome Unknown`,
+        description: 'Message submission outcome unknown.',
+        timestamp: msg.createdAt,
+        channelCode: msg.channelCode,
+        statusTone: 'warning',
+        metadata: {
+          messageId: msg.id,
+          recipientAddress: maskedRecipient,
+          status: msg.status,
         },
       });
     }
-
-    items.push({
-      id: `event-msg-sent-${msg.id}`,
-      type: 'message_sent',
-      category: 'message',
-      title: `${msg.channelCode.toUpperCase()} Dispatched`,
-      description: `Outbound message dispatched to recipient ${msg.recipientAddress}.`,
-      timestamp: msg.createdAt,
-      channelCode: msg.channelCode,
-      statusTone: 'neutral',
-      metadata: {
-        messageId: msg.id,
-        recipientAddress: msg.recipientAddress,
-        templateName: msg.templateName,
-        status: msg.status,
-      },
-    });
   }
 
   // Sort descending: newest first

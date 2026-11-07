@@ -1,59 +1,128 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { contactsApi } from '@/lib/api-client';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  generateContactTimeline,
-  type ActivityCategory,
-  type ActivityTimelineItem,
-  type ContactMessageActivityRecord,
-} from '@/lib/cdp';
-import type { ContactIdentityResponse, ContactResponse } from '@acc/contracts';
+import { type ActivityCategory, type ContactMessageActivityRecord } from '@/lib/cdp';
+import type {
+  ContactActivityResponse,
+  ContactIdentityResponse,
+  ContactResponse,
+} from '@acc/contracts';
 
 interface ContactTimelineCardProps {
   readonly contact: ContactResponse;
   readonly identities?: readonly ContactIdentityResponse[];
   readonly messages?: readonly ContactMessageActivityRecord[];
+  readonly initialActivities?: readonly ContactActivityResponse[];
 }
 
-export function ContactTimelineCard({
-  contact,
-  identities = [],
-  messages = [],
-}: ContactTimelineCardProps) {
+export function ContactTimelineCard({ contact, initialActivities }: ContactTimelineCardProps) {
   const [selectedCategory, setSelectedCategory] = useState<ActivityCategory | 'all'>('all');
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({});
+  const [appendedItems, setAppendedItems] = useState<ContactActivityResponse[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState<boolean>(false);
+  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
 
-  // Load consent events for this contact
-  const { data: consentData } = useQuery({
-    queryKey: ['contacts', 'consent-events', contact.id],
-    queryFn: ({ signal }) => contactsApi.listConsentEvents(contact.id, signal),
+  const initialCategoryData =
+    initialActivities && initialActivities.length > 0
+      ? {
+          data:
+            selectedCategory === 'all'
+              ? [...initialActivities]
+              : initialActivities.filter((item) => item.category === selectedCategory),
+          page: { hasMore: false, nextCursor: null, limit: initialActivities.length },
+        }
+      : undefined;
+
+  // 1. Fetch genuine activities for the selected category from the backend
+  const {
+    data: activitiesPage,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
+    queryKey: ['contacts', 'activities', contact.id, selectedCategory],
+    queryFn: ({ signal }) =>
+      contactsApi.listActivities(
+        contact.id,
+        {
+          category: selectedCategory === 'all' ? undefined : selectedCategory,
+        },
+        signal,
+        contact.workspaceId,
+      ),
+    initialData: initialCategoryData,
   });
-  const consentEvents = consentData?.data ?? [];
 
-  // Synthesize complete timeline from authentic records
-  const timelineItems = generateContactTimeline(contact, identities, consentEvents, messages);
+  // 2. Fetch all activities count summary
+  const { data: allActivitiesPage } = useQuery({
+    queryKey: ['contacts', 'activities', contact.id, 'all'],
+    queryFn: ({ signal }) =>
+      contactsApi.listActivities(contact.id, { category: 'all' }, signal, contact.workspaceId),
+    initialData:
+      initialActivities && initialActivities.length > 0
+        ? {
+            data: [...initialActivities],
+            page: { hasMore: false, nextCursor: null, limit: initialActivities.length },
+          }
+        : undefined,
+  });
 
-  const filteredItems =
-    selectedCategory === 'all'
-      ? timelineItems
-      : timelineItems.filter((item) => item.category === selectedCategory);
+  // Reset pagination state when switching categories or receiving fresh page
+  useEffect(() => {
+    if (activitiesPage) {
+      setAppendedItems([]);
+      setNextCursor(activitiesPage.page.nextCursor);
+      setHasMore(activitiesPage.page.hasMore);
+    }
+  }, [activitiesPage]);
+
+  const displayItems = activitiesPage?.data ? [...activitiesPage.data, ...appendedItems] : [];
+
+  const allSummaryItems =
+    allActivitiesPage?.data ??
+    (selectedCategory === 'all' ? activitiesPage?.data : undefined) ??
+    [];
+
+  const counts: Record<ActivityCategory | 'all', number> = {
+    all: allSummaryItems.length,
+    message: allSummaryItems.filter((i) => i.category === 'message').length,
+    consent: allSummaryItems.filter((i) => i.category === 'consent').length,
+    identity: allSummaryItems.filter((i) => i.category === 'identity').length,
+    profile: allSummaryItems.filter((i) => i.category === 'profile').length,
+  };
+
+  const handleLoadMore = async () => {
+    if (!nextCursor || isLoadingMore) return;
+    setIsLoadingMore(true);
+    try {
+      const response = await contactsApi.listActivities(
+        contact.id,
+        {
+          category: selectedCategory === 'all' ? undefined : selectedCategory,
+          cursor: nextCursor,
+        },
+        undefined,
+        contact.workspaceId,
+      );
+      setAppendedItems((prev) => [...prev, ...response.data]);
+      setNextCursor(response.page.nextCursor);
+      setHasMore(response.page.hasMore);
+    } catch {
+      // Retain existing state on load more failure
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
 
   const toggleExpand = (id: string) => {
     setExpandedItems((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const counts: Record<ActivityCategory | 'all', number> = {
-    all: timelineItems.length,
-    message: timelineItems.filter((i) => i.category === 'message').length,
-    consent: timelineItems.filter((i) => i.category === 'consent').length,
-    identity: timelineItems.filter((i) => i.category === 'identity').length,
-    profile: timelineItems.filter((i) => i.category === 'profile').length,
-  };
-
-  const getToneClasses = (tone: ActivityTimelineItem['statusTone']) => {
+  const getToneClasses = (tone: string) => {
     switch (tone) {
       case 'success':
         return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400';
@@ -68,7 +137,7 @@ export function ContactTimelineCard({
     }
   };
 
-  const getIconForType = (type: ActivityTimelineItem['type']) => {
+  const getIconForType = (type: string) => {
     switch (type) {
       case 'message_read':
         return '✓✓';
@@ -76,8 +145,12 @@ export function ContactTimelineCard({
         return '✓';
       case 'message_sent':
         return '✉';
+      case 'message_pending':
+        return '⏳';
       case 'message_failed':
         return '✕';
+      case 'message_outcome_unknown':
+        return '?';
       case 'consent_granted':
         return '🛡+';
       case 'consent_revoked':
@@ -86,6 +159,7 @@ export function ContactTimelineCard({
       case 'identity_updated':
         return '🔗';
       case 'contact_created':
+      case 'contact_updated':
         return '👤';
       case 'field_updated':
       case 'tag_added':
@@ -131,7 +205,30 @@ export function ContactTimelineCard({
       </CardHeader>
 
       <CardContent>
-        {filteredItems.length === 0 ? (
+        {isError ? (
+          <div
+            className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-6 text-center text-xs text-rose-400"
+            data-testid="timeline-error"
+            role="alert"
+          >
+            <p className="font-medium">Unable to load contact activity from server</p>
+            <button
+              type="button"
+              onClick={() => refetch()}
+              className="mt-2 text-indigo-400 underline hover:text-indigo-300 font-medium"
+            >
+              Retry
+            </button>
+          </div>
+        ) : isLoading && !displayItems.length ? (
+          <div
+            className="py-12 text-center text-xs text-[var(--color-ink-muted)]"
+            data-testid="timeline-loading"
+          >
+            <div className="mx-auto mb-2 size-5 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+            <p>Loading contact activity…</p>
+          </div>
+        ) : displayItems.length === 0 ? (
           selectedCategory === 'message' ? (
             <div
               className="rounded-lg border border-dashed border-[var(--color-border-subtle)] p-8 text-center"
@@ -161,7 +258,7 @@ export function ContactTimelineCard({
             className="relative pl-6 space-y-6 before:absolute before:left-2.5 before:top-3 before:bottom-3 before:w-0.5 before:bg-[var(--color-border-subtle)]"
             data-testid="activity-timeline"
           >
-            {filteredItems.map((item) => {
+            {displayItems.map((item) => {
               const isExpanded = Boolean(expandedItems[item.id]);
               const hasMetadata = item.metadata && Object.keys(item.metadata).length > 0;
 
@@ -234,6 +331,21 @@ export function ContactTimelineCard({
                 </div>
               );
             })}
+
+            {/* Keyset Cursor Pagination / Load Older Activities */}
+            {hasMore && (
+              <div className="pt-2 text-center">
+                <button
+                  type="button"
+                  onClick={handleLoadMore}
+                  disabled={isLoadingMore}
+                  data-testid="timeline-load-more"
+                  className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-3.5 py-1.5 text-xs font-medium text-[var(--color-ink)] hover:bg-[var(--color-surface-raised)] transition-colors disabled:opacity-50"
+                >
+                  {isLoadingMore ? 'Loading older activities…' : 'Load older activity ↓'}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </CardContent>

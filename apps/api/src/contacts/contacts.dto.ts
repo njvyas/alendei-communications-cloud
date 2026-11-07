@@ -19,6 +19,12 @@ import { ListQueryDto } from '../common/http/list-query.dto';
 
 export class ListContactsDto extends ListQueryDto {}
 
+export class ListContactActivitiesDto extends ListQueryDto {
+  @IsOptional()
+  @IsIn(['all', 'message', 'consent', 'identity', 'profile'])
+  category?: 'all' | 'message' | 'consent' | 'identity' | 'profile';
+}
+
 export class CreateContactDto {
   @IsOptional()
   @IsString()
