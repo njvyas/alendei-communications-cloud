@@ -470,6 +470,43 @@ export class ProviderWebhookIngressSchema {
 }
 
 /** Phase 5.0 PR-C: the one response that carries a plaintext ingress key — shown once. */
+@ApiSchema({ name: 'ProviderSimulatorDeliveryRequestOutcome' })
+export class ProviderSimulatorDeliveryRequestOutcomeSchema {
+  @ApiProperty({ type: 'integer', minimum: 0 }) index!: number;
+  @ApiProperty({ type: 'integer', minimum: 0, description: 'Receipt elements in this request.' })
+  elements!: number;
+  @ApiProperty({ type: 'integer', description: 'The HTTP status the ingress answered.' })
+  status!: number;
+  @ApiProperty({
+    type: 'integer',
+    minimum: 0,
+    nullable: true,
+    description: 'Elements received (200 only).',
+  })
+  received!: number | null;
+  @ApiProperty({
+    type: 'string',
+    nullable: true,
+    description: 'The ingress error code (non-200 only).',
+  })
+  errorCode!: string | null;
+}
+
+@ApiSchema({ name: 'ProviderSimulatorDeliveryEvents' })
+export class ProviderSimulatorDeliveryEventsSchema {
+  @ApiProperty(uuid) providerId!: string;
+  @ApiProperty(uuid) attemptId!: string;
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    description: 'The simulator_delivery scenario used.',
+  })
+  scenario!: Record<string, unknown>;
+  @ApiProperty({ type: 'integer', minimum: 0 }) elementCount!: number;
+  @ApiProperty({ type: ProviderSimulatorDeliveryRequestOutcomeSchema, isArray: true })
+  requests!: ProviderSimulatorDeliveryRequestOutcomeSchema[];
+}
+
 @ApiSchema({ name: 'ProviderWebhookIngressKey' })
 export class ProviderWebhookIngressKeySchema extends ProviderWebhookIngressSchema {
   @ApiProperty({

@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Header,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -13,7 +14,7 @@ import {
   Query,
 } from '@nestjs/common';
 import { PERMISSIONS } from '@acc/contracts';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
 
 import { OptionalTenantContext } from '../auth/public.decorator';
 import { RequiresPermission } from '../auth/requires-permission.decorator';
@@ -25,6 +26,7 @@ import {
   ProviderHealthCheckResultSchema,
   ProviderHealthSampleSchema,
   ProviderSchema,
+  ProviderSimulatorDeliveryEventsSchema,
   ProviderTestSendResultSchema,
   ProviderWebhookIngressKeySchema,
   ProviderWebhookIngressSchema,
@@ -35,6 +37,7 @@ import {
   ListProvidersQueryDto,
   ProviderHealthCheckDto,
   ProviderHealthOverrideDto,
+  ProviderSimulatorDeliveryEventsDto,
   ProviderTestSendDto,
   ReplaceProviderCapabilitiesDto,
   UpdateProviderDto,
@@ -42,6 +45,8 @@ import {
 import { ProviderHealthService } from './provider-health.service';
 import { ProviderRegistryService } from './provider-registry.service';
 import { ProviderWebhookIngressService } from './provider-webhook-ingress.service';
+import { ProviderSimulatorTriggerService } from './provider-simulator-trigger.service';
+import { INGRESS_KEY_HEADER } from '../webhooks/ingress-path';
 
 /**
  * Provider registry (Phase 2.1), test-send (2.2) and health/circuit (2.3) —
@@ -59,6 +64,7 @@ export class ProvidersController {
     private readonly registry: ProviderRegistryService,
     private readonly health: ProviderHealthService,
     private readonly webhookIngress: ProviderWebhookIngressService,
+    private readonly simulatorTrigger: ProviderSimulatorTriggerService,
   ) {}
 
   @Get()
@@ -257,6 +263,37 @@ export class ProvidersController {
   @ApiErrors(400, 401, 403, 404, 409, 422, 429)
   async testSend(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: ProviderTestSendDto) {
     return { data: await this.registry.testSend(requestPrincipal(), id, dto.behavior) };
+  }
+
+  @Post(':id/simulator/delivery-events')
+  @OptionalTenantContext()
+  @RequiresPermission(PERMISSIONS.PROVIDERS_TEST_SEND, {
+    target: 'deferred',
+    because: PLATFORM_CATALOGUE,
+  })
+  @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession')
+  @ApiHeader({
+    name: 'X-Acc-Webhook-Ingress-Key',
+    required: true,
+    description:
+      "The provider's ingress key, supplied transiently: forwarded only in the same header to this deployment's own loopback ingress; never stored, logged, audited or returned.",
+  })
+  @ApiOperation({
+    summary: 'Post simulator delivery receipts for an attempt through the webhook ingress',
+    description:
+      'Phase 5.0 (T11, OD-16): simulator providers only. Builds the signed receipts of the scenario (or of the provider simulator_delivery capability) for one attempt and posts them, in order, through the public webhook ingress over loopback. Target: attemptId only (a message id is not supported). Refused with 409 WEBHOOK_INGRESS_DISABLED while webhook ingress is disabled. Each ingress answer is reported; a refused receipt (for example 401) is a 200 here.',
+  })
+  @ApiData(ProviderSimulatorDeliveryEventsSchema)
+  @ApiErrors(400, 401, 403, 404, 409, 422, 429, 503)
+  async simulatorDeliveryEvents(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: ProviderSimulatorDeliveryEventsDto,
+    @Headers(INGRESS_KEY_HEADER) ingressKey: string | undefined,
+  ) {
+    return {
+      data: await this.simulatorTrigger.trigger(requestPrincipal(), id, dto, ingressKey),
+    };
   }
 
   @Post(':id/health-check')

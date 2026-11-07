@@ -204,6 +204,8 @@ CREATED → VALIDATED → QUEUED → ROUTING → PROVIDER_ACCEPTED → SENT
 
 ## 6a. Message state vs. attempt state — exactly how one derives from the other
 
+> **Phase 5.0 amendment (Option B, implemented 07-Nov-2026):** delivery is a **separate axis**, not a `messages.status` value. `delivery_status` (`pending`, `delivered`, `undelivered`, `not_supported`, or `NULL` = not tracked) and `read_at` live beside the unchanged submission status on messages and attempts; a delivery outcome never rewrites the submission status (`accepted`, `failed`, `outcome_unknown` stay what they were). The message aggregate is: any attempt delivered → delivered; otherwise the current attempt's delivery status. The target `DELIVERED`/`READ` statuses above are superseded by that axis. Detail: `DELIVERY_OUTCOMES.md` §1.
+
 A `message_attempts` row is created per provider/channel attempt, each independently progressing through its own `status` (`DATABASE.md` §6: `pending → sent → provider_accepted → {delivered | read | provider_rejected | delivery_failed | timed_out}`). The parent `messages.status` is **always derived from the current attempt's status by the Orchestrator, written transactionally alongside it** — no other code path sets `messages.status` directly. The derivation rule:
 
 - `messages.status` mirrors `current_attempt_id`'s status while that attempt is active (e.g. attempt `provider_accepted` → message `PROVIDER_ACCEPTED`).
@@ -263,6 +265,8 @@ ACC explicitly targets **exactly-once business outcome**, not exactly-once trans
 ACC has two structurally distinct webhook systems that must never be confused: **inbound** (providers telling ACC about delivery events) and **outbound** (ACC telling customer systems about business events). Full model, persistence, retry/DLQ, and replay semantics: `API.md` §6, `DATABASE.md` §12, `EVENTS.md` §5a–§5c. Summary:
 
 ### 10a. Inbound (provider → ACC)
+
+> **Phase 5.0 amendment (implemented; ingress disabled by default):** one route in two forms — `POST /api/v1/webhooks/providers/<key>` (URL form) and `POST /api/v1/webhooks/providers` with `X-Acc-Webhook-Ingress-Key` (header form, PR-E) — exactly one credential form per request; key stored hash-only; raw-body signature check, ±300 s replay window, per-element deduplication, strict correlation within the provider, synchronous ingestion under the message-then-attempt lock order (no internal event bus in 5.0). `webhook_events` stores a **redacted** normalised envelope plus its hash, never the raw payload or headers (OD-5). The bullets below describe the original target design. Detail: `DELIVERY_OUTCOMES.md` §2.
 
 - Provider webhooks land on provider-specific, signature-verified endpoints under `/api/v1/webhooks/{provider}`.
 - Every accepted webhook is persisted verbatim to `webhook_events` (raw payload + parsed envelope) before any processing — the raw record is the audit source of truth even if parsing logic changes later.

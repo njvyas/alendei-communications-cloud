@@ -1447,6 +1447,8 @@ The first mutation is the keystone: it is the behaviour in production today, so 
 
 ## 8. Webhook tests
 
+> **Phase 5.0 (implemented, provider receipts only):** the suites, what each proves and how to run them are listed in `DELIVERY_OUTCOMES.md` §6 (all database suites through `scripts/with-db-clone.mjs`). The simulator scenarios are driven by `SimulatorWebhookFactory` (tests) or the operator trigger (QA); "duplicate", "forged", "replay" and "out of order" below correspond to the `duplicates`, `signature: INVALID`/`STALE`/`REPLAY` and `order: REVERSED` scenario fields. Outbound (customer-facing) webhook tests remain future work.
+
 - Duplicate provider webhook (`DUPLICATE_WEBHOOK` simulator behavior) → processed exactly once, second delivery acknowledged but not reprocessed (`DATABASE.md` §12 unique constraint).
 - Forged webhook (invalid/missing signature) → rejected `401`, never persisted as a verified event.
 - Provider webhook replay (an admin replays a `webhook_events` row) → reprocesses idempotently, produces no second business event (`EVENTS.md` §5b).

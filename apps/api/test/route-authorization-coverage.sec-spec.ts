@@ -62,6 +62,10 @@ const PUBLIC_PATHS = new Set([
   // ingress key in the path and the adapter-owned signature over the raw body — never by a
   // session or API key. Disabled (404) unless DELIVERY_WEBHOOKS_ENABLED.
   'POST /api/v1/webhooks/providers/:providerKey',
+  // Phase 5.0 PR-E (owner-approved contract correction, 07-Nov-2026): the header form of the
+  // same ingress — the key in `X-Acc-Webhook-Ingress-Key` instead of the path, the same
+  // pipeline; exactly one form per request. Disabled (404) unless DELIVERY_WEBHOOKS_ENABLED.
+  'POST /api/v1/webhooks/providers',
 ]);
 
 const PREFIXED = new Set(['metrics', 'health', 'health/live', 'health/ready']);
@@ -293,9 +297,11 @@ describe('§6n case 30 — route authorization coverage', () => {
     // U13.4 (01-Nov-2026) added 4 platform operational support routes: 126 → 130.
     // Phase 5.0 PR-C added 3 platform ingress-key routes (key, enable, disable; target deferred,
     // platform catalogue): 130 → 133 scoped; and 1 public route (the webhook ingress): 7 → 8 open.
-    expect(scoped.length).toBe(133);
+    // Phase 5.0 PR-E added the operator simulator trigger (platform providers.test_send, target
+    // deferred): 133 → 134 scoped; and the ingress header form: 8 → 9 open.
+    expect(scoped.length).toBe(134);
     expect(exempt.length).toBe(7);
-    expect(open.length).toBe(8);
+    expect(open.length).toBe(9);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
 
     // Of the scoped routes, exactly the two grant/revoke handlers defer their
@@ -318,7 +324,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // U13.3 added 5, all deferred: each targets `platform`, like the catalogue: 96 → 101.
     // U13.4 added 4 platform operational support routes, all deferred: 101 → 105.
     // Phase 5.0 PR-C added 3 ingress-key routes, each targeting `platform`: 105 → 108.
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(108);
+    // Phase 5.0 PR-E added the operator simulator trigger (deferred, platform catalogue): 108 → 109.
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(109);
   });
 });
 

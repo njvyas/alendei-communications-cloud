@@ -58,6 +58,8 @@ A **retry** is distinct from a **new attempt** and must never be confused with o
 
 ## 4. Timer mechanics — PostgreSQL is the source of correctness, Redis is an accelerator only
 
+> **Phase 5.0 amendment (07-Nov-2026):** Phase 5.0 builds **no** timer, poller or escalation. It fixes the contract the Phase 5 engine must follow: escalation runs in one transaction under the lock order *message, then current attempt* (the same order as receipt ingestion and dispatcher settlement), and a message is eligible only when **E1** its current attempt is the expected one, **E2** `messages.status = 'accepted'`, **E3** the current attempt is `accepted` with `delivery_status = 'pending'`, and **E4** no attempt has delivered. Not eligible: in-flight (`queued`, `routing`, `submitting`), `failed`, `outcome_unknown` (D16), `not_supported` and `undelivered` (Phase 5 triggers, OD-20). The conditional status predicate in the SQL below (`DELIVERED`, `READ` …) is superseded by E1–E4 on the delivery axis. A test fixture proves the predicate and its serialisation with real ingestion (AC-LT-3, AC-LT-5); a real escalation also needs a Phase 5 change to the terminal guard. Detail: `DELIVERY_OUTCOMES.md` §5.
+
 A wait window is implemented as `message_attempts.deadline_at` (`DATABASE.md` §6, §13) — a plain column, not a fact that only exists inside Redis or a message broker. The **authoritative** mechanism for firing a fallback escalation is a scheduled poller querying Postgres directly:
 
 ```sql

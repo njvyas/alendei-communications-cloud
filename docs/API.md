@@ -31,7 +31,7 @@ All public and console APIs are served under `/api/v1`. Breaking changes ship as
 | `/wallets` | `billing` | Wallet balance, recharge, auto-recharge config |
 | `/resellers` | `resellers` | Reseller CRUD, markup config, branding |
 | `/reports` | cross-module read models | Delivery/cost/quality reporting |
-| `/webhooks/{provider}` | `webhooks` | Inbound provider webhook receivers, per-provider sub-path (`ARCHITECTURE.md` §10a) |
+| `/webhooks/{provider}` | `webhooks` | Inbound provider webhook receivers, per-provider sub-path (`ARCHITECTURE.md` §10a). **Phase 5.0 (implemented, disabled by default):** `POST /webhooks/providers/<key>` and the header form `POST /webhooks/providers` + `X-Acc-Webhook-Ingress-Key`; excluded from the customer OpenAPI document — internal appendix: `DELIVERY_OUTCOMES.md` §2 (OD-10). Operator simulator trigger: `POST /providers/:id/simulator/delivery-events` (§4 there) |
 | `/webhook-endpoints` | `webhooks` | Customer-facing outbound webhook subscription CRUD (`ARCHITECTURE.md` §10b) |
 | `/webhook-deliveries` | `webhooks` | Outbound delivery status query + replay (`EVENTS.md` §5d) |
 | `/health` | platform | Liveness/readiness, unauthenticated, minimal detail |

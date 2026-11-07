@@ -46,6 +46,12 @@ const EXCLUDED = [
     path: '/api/v1/webhooks/providers/{providerKey}',
     controller: 'ProviderWebhooksController',
   },
+  // Phase 5.0 PR-E: the header form of the same ingress (OD-10, same internal appendix).
+  {
+    method: 'POST',
+    path: '/api/v1/webhooks/providers',
+    controller: 'ProviderWebhooksController',
+  },
 ];
 
 interface Route {
@@ -180,13 +186,16 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * under `/platform/support`: 139 → 143.
      * Phase 5.0 PR-C, 07-Nov-2026: 3 provider webhook-ingress administration operations
      * (key, enable, disable): 143 → 146; the ingress route itself is the second exclusion
-     * (OD-10).)
+     * (OD-10).
+     * Phase 5.0 PR-E, 07-Nov-2026: the operator simulator trigger
+     * (`POST /providers/{id}/simulator/delivery-events`): 146 → 147; the ingress header form is
+     * the third exclusion (OD-10).)
      */
-    const APPLICATION_OPERATIONS = 146;
+    const APPLICATION_OPERATIONS = 147;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 
-    it('reconciles exactly: the application operations + 1 document operation; GET /metrics and the webhook ingress the only exclusions', () => {
+    it('reconciles exactly: the application operations + 1 document operation; GET /metrics and the webhook ingress (both forms) the only exclusions', () => {
       const all = routes.map(key);
       expect(new Set(all).size).toBe(all.length);
       const excluded = routes.filter(isExcluded).map(key);
@@ -196,6 +205,7 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
         .map(key);
       expect([...excluded].sort()).toEqual([
         'GET /metrics',
+        'POST /api/v1/webhooks/providers',
         'POST /api/v1/webhooks/providers/{providerKey}',
       ]);
       expect(document).toEqual([DOCUMENT_OPERATION]);

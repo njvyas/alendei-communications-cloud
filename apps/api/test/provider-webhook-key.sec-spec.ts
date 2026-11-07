@@ -144,6 +144,30 @@ describe('Phase 5.0 PR-C — webhook ingress key administration (ingress disable
     expect(JSON.stringify(res.body)).not.toContain('some-would-be-key-value');
   });
 
+  it('Phase 5.0 PR-E: with ingress disabled, the header form is the same 404, and the simulator trigger is refused (409) before anything is sent', async () => {
+    const key = 'some-would-be-header-key-value';
+    const header = await request(h.app.getHttpServer())
+      .post(url('/webhooks/providers'))
+      .set('x-acc-webhook-ingress-key', key)
+      .set('content-type', 'application/json')
+      .send('{"events":[]}');
+    expect(header.status).toBe(404);
+    expect(header.body.error.code).toBe('RESOURCE_NOT_FOUND');
+    expect(JSON.stringify(header.body)).not.toContain(key);
+
+    const id = await newProvider();
+    const res = await call('post', platformToken, `/providers/${id}/simulator/delivery-events`)
+      .set('x-acc-webhook-ingress-key', key)
+      .send({ attemptId: uuidv7(), scenario: { outcome: 'DELIVERED' } });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('WEBHOOK_INGRESS_DISABLED');
+    expect(JSON.stringify(res.body)).not.toContain(key);
+    const sent = await h.admin.execute(sql`SELECT 1 FROM webhook_events WHERE provider_id = ${id}`);
+    expect(sent.rows).toHaveLength(0);
+    // Refused before any audit record: nothing was exercised.
+    expect(await audits(id, 'provider.test_sent')).toHaveLength(0);
+  });
+
   it('issues a key shown once: never stored, only its peppered hash; never in a provider read; audited without it (AC-SV-5)', async () => {
     const id = await newProvider();
     const res = await call('post', platformToken, `/providers/${id}/webhook-ingress-key`).expect(

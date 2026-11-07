@@ -22,6 +22,8 @@ import { ProvidersController } from './providers.controller';
  * health and circuit breaker (Phase 2.3), and organization provider assignments
  * (Phase 3.2, ADR-014 §4), ADR-013.
  */
+import { ProviderSimulatorTriggerService } from './provider-simulator-trigger.service';
+
 @Module({
   imports: [ProviderAdaptersModule],
   controllers: [
@@ -43,6 +45,8 @@ import { ProvidersController } from './providers.controller';
     OrganizationProviderAssignmentsService,
     // Phase 5.0 PR-C (T9): ingress-key administration.
     ProviderWebhookIngressService,
+    // Phase 5.0 PR-E (T11): the operator simulator trigger.
+    ProviderSimulatorTriggerService,
   ],
   exports: [OrganizationProviderAssignmentsService, ProviderStateStore],
 })

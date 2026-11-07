@@ -23,6 +23,12 @@ const REDACTED_PATHS = [
   'req.headers.cookie',
   'req.headers["x-api-key"]',
   'req.headers["proxy-authorization"]',
+  // Phase 5.0 PR-E: the provider webhook ingress key in its header form (and the operator
+  // simulator trigger, which receives it the same way).
+  'req.headers["x-acc-webhook-ingress-key"]',
+  // …and wherever a headers object is logged ad hoc (one or two levels deep).
+  'headers["x-acc-webhook-ingress-key"]',
+  '*.headers["x-acc-webhook-ingress-key"]',
   'res.headers["set-cookie"]',
   'password',
   'passwordHash',

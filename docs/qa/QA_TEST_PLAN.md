@@ -195,6 +195,26 @@ The verifier checks the configuration read-only before each run. The operator re
 
 Wait at least 30 s after a `QA SMS 500` or `QA RCS 500` failure series before K-05 or K-09: a provider's circuit opens after five failures in a minute and admits one trial after 30 s (circuit policy). Fallback tests during that pause pass with one attempt and do not test fallback.
 
+## L. Phase 5.0 delivery outcomes (simulator only; run only after S0–S7 are authorised and done, `DELIVERY_OUTCOMES.md` §3)
+
+Simulator verification only: these rows say nothing about real carrier behaviour (`DELIVERY_OUTCOMES.md` §7). Never record an ingress key in evidence; redact it as `<key>`.
+
+| ID | Role / prerequisites | Steps | Expected result | Actual | Sev. if fail | Evidence |
+|---|---|---|---|---|---|---|
+| QA-L-01 | OPS | With `DELIVERY_WEBHOOKS_ENABLED=false`, POST to `/api/v1/webhooks/providers/<random>` and to `/api/v1/webhooks/providers` with header `X-Acc-Webhook-Ingress-Key: <random>` | Both 404 `RESOURCE_NOT_FOUND`; neither value in any API or proxy log | | S1 | status lines; `grep` of logs (no match) |
+| QA-L-02 | qa-platform-admin (API), ingress disabled | Call the simulator trigger for any attempt | 409 `WEBHOOK_INGRESS_DISABLED`; nothing sent | | S2 | status + body |
+| QA-L-03 | OPS (S5) | Run the host verification for both ingress forms (`deploy/nginx/acc-webhook-ingress-redaction.conf` header) | Access log shows `/api/v1/webhooks/providers/:providerKey` and `/api/v1/webhooks/providers`; no key in any log | | S1 | log sample |
+| QA-L-04 | qa-org-a2-admin (UI/API), pre-5.0 messages | Open an existing message | Delivery shown as **not tracked** (`deliveryStatus: null`), never as pending; submission status unchanged | | S2 | screenshot / body |
+| QA-L-05 | qa-platform-admin (API) + a new simulator message in QA Org A2 | Trigger `{"outcome":"DELIVERED","read":true}` (WhatsApp/RCS provider) for its attempt | Requests 200; message `deliveryStatus: delivered`, `readAt` set; `status` still `accepted` | | S2 | trigger body; `GET /messages/:id` |
+| QA-L-06 | as L-05, new message | Trigger `{"outcome":"UNDELIVERED"}` | `undelivered`; no new attempt; no fallback | | S2 | bodies |
+| QA-L-07 | as L-05, new message | Trigger with `"signature":"INVALID"`, then `"STALE"` | Each request reported 401 `WEBHOOK_NOT_ACCEPTED`; message unchanged | | S1 | trigger bodies |
+| QA-L-08 | as L-05 | Repeat L-05's exact trigger | Requests 200 but nothing changes (duplicates) | | S2 | bodies before/after |
+| QA-L-09 | qa-org-a2-admin (API) | `GET /messages?deliveryStatus=delivered`; `GET /usage/messages?from=…&to=…` | Only delivered messages; the `delivery` block counts add up to `totals.total`; existing usage fields unchanged | | S2 | bodies |
+| QA-L-10 | qa-org-b2-admin (API) | Read A2's delivered message id; list with `deliveryStatus=delivered` | 404; A2's message never listed | | S1 | bodies |
+| QA-L-11 | qa-org-a2-admin; a support persona without `providers.test_send` | Call the simulator trigger | 403 for both; nothing sent | | S1 | status lines |
+| QA-L-12 | qa-platform-admin | Trigger with a wrong key | Request reported 401; nothing changes; the audit row (`provider.test_sent`, tool `simulator_delivery_events`) carries no key | | S1 | body; audit row |
+| QA-L-13 | — | Delivery receipts from a real provider | **DEFERRED** — no real adapter or credentials exist | | — | — |
+
 ## Exit criteria for QA round 1
 
 - Every non-deferred test executed with a result and evidence.

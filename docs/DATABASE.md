@@ -293,6 +293,8 @@ Roles are created `NOLOGIN` and passwordless by the migration; the migration run
 
 ## 6. Domain: Messaging Core
 
+> **Phase 5.0 (migrations 0044–0049, implemented):** `messages` and `message_attempts` gain `delivery_status` (`message_delivery_status`: `pending`, `delivered`, `undelivered`, `not_supported`; `NULL` = not tracked, no backfill), `delivered_at` and `read_at`; `messages.delivered_attempt_id` (composite FK to the attempt, 0046); `message_attempts.provider_message_id` (write-once, unique per provider) and `delivery_updated_at`. Guards (0044): the terminal guards admit only delivery-column changes on settled rows; delivery state is monotonic (rank `pending`/`not_supported` < `undelivered` < `delivered`) and write-once; only `acc_dispatch` (settlement) and `acc_delivery` (ingestion) may change it. See `DELIVERY_OUTCOMES.md` §1.
+
 > **Phase 3 (ADR-014, frozen 06-Oct-2026; PLANNED, not built):** new structures `organization_provider_assignments` (organization-owned, `active|disabled`, unique `(org_id, provider_id)`), `message_dispatch_queue` (content-free claim table: `message_id, org_id, available_at, dispatch_epoch, claim_token, claimed_until, claimed_by`), `message_attempts` additions (`org_id`, `fencing_epoch`, `claim_token`, composite FKs `(message_id, org_id) → messages` and `(org_id, provider_id) → organization_provider_assignments`), and `provider_health.attempt_id` (composite FK `(attempt_id, provider_id) → message_attempts(id, provider_id)`, one `submission` sample per attempt). The routing-policy, pricing, campaign and journey columns below are not part of Phase 3 (ADR-014 F13, F14, F18); exact Phase 3 message and attempt columns are increment decisions D10/D11.
 
 **`conversations`** — `id, org_id FK, workspace_id FK, contact_id FK, channel_id FK, status ENUM(open,closed), last_message_at`.
@@ -469,6 +471,8 @@ The Pricing & Rating Engine is conceptually independent of `usage_ledger`: it de
 **`ai_usage`** — append-only: `id, org_id FK, ai_model_id FK, request_type, units_used, cost, correlation_id, occurred_at`.
 
 ## 12. Domain: Webhooks (inbound & outbound) & Audit
+
+> **Phase 5.0 (implemented, 0044):** `webhook_events` is implemented differently from the target line below: one row per **element** of a request (`request_id`, `event_index` 0–99), `provider_event_id` or `event_sha256` as the deduplication key (insert-or-count with `duplicate_count`), `outcome` (`applied`, `no_change`, `deferred`, `unmatched`, `rejected_malformed`, `conflict`, `informational`; a repeated event is counted in `duplicate_count` on the original row, not stored again), `matched_attempt_id`/`matched_org_id`, and a redacted `normalized` envelope — no raw payload, no headers (OD-5). Readable by `acc_delivery`/`acc_dispatch` and, redacted, through `app_platform_support_webhook_events`; never by tenant roles. `providers` gains `webhook_ingress_key_hash` (HMAC-SHA256 with a server pepper), the previous hash with its grace expiry, and `webhook_ingress_enabled` (kill switch). Retention (OD-15) is not implemented.
 
 **`webhook_events`** — inbound provider webhooks, append-only: `id, provider_id FK, provider_event_id, raw_payload JSONB, parsed_envelope JSONB, verified BOOL, received_at, processed_at NULL`. Unique constraint `(provider_id, provider_event_id)` for dedup/replay protection.
 
