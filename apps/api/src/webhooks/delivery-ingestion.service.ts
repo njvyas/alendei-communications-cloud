@@ -13,11 +13,13 @@
  *  2. A malformed element is recorded `rejected_malformed` with its reason code only.
  *     An informational element (an unsupported provider status) is recorded
  *     `informational` and needs no matching.
- *  3. Correlation through `app_delivery_resolve` (definer): the provider resolved from the
+ *  3. Correlation through `app_delivery_resolve` (definer, strict since 0048): every
+ *     reference the event carries must name the SAME attempt; the provider resolved from the
  *     ingress key is the routing boundary — an attempt of another provider can never match
  *     (AC-TI-1) — and the organization comes ONLY from the matched attempt, never from the
- *     payload (AC-TI-2). No match: the row stays `unmatched`; settlement may apply it
- *     later (§E.6).
+ *     payload (AC-TI-2). Contradictory references never match, so they never change delivery
+ *     state or attribute an organization. No match: the row stays `unmatched`; settlement may
+ *     apply it later under the same rule (§E.6).
  *  4. Matched: the transaction takes the message lock, then the attempt lock (§B.8, via
  *     the shared writer), and applies the receipt with the shared delivery rules — the same
  *     code the dispatcher's settlement uses. A still-`submitting` attempt is `deferred`; a
@@ -147,8 +149,11 @@ export class DeliveryIngestionService {
     if (!element.ok || initial === 'informational') return initial;
 
     const event = element.event;
-    const reference =
-      event.clientReference && UUID.test(event.clientReference) ? event.clientReference : null;
+    // A client reference that is present but not an attempt id cannot name any attempt: the
+    // event is unmatched — it is never dropped so that the provider message id alone decides.
+    if (event.clientReference !== undefined && !UUID.test(event.clientReference))
+      return 'unmatched';
+    const reference = event.clientReference ?? null;
     const resolved = await client.query<{
       attempt_id: string;
       message_id: string;

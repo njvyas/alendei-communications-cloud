@@ -559,6 +559,126 @@ describe('Phase 5.0 PR-C — provider webhook ingress (enabled for this suite)',
   });
 
   // ===========================================================================
+  describe('strict correlation: contradictory references never apply or attribute (PR #81 review)', () => {
+    /** Posts one receipt and returns its row; asserts the named attempts and messages are untouched. */
+    async function expectUnmatched(
+      p: { id: string; key: string },
+      element: Record<string, unknown>,
+      untouched: Array<{ messageId: string; attemptIds: string[] }>,
+    ) {
+      const before = await Promise.all(
+        untouched.flatMap((m) => [message(m.messageId), ...m.attemptIds.map((a) => attempt(a))]),
+      );
+      const delivered = await Promise.all(
+        untouched.map((m) => events(m.messageId, 'message.delivered')),
+      );
+      await post(h, p.key, [
+        { type: 'delivery', status: 'DELIVERED', eventId: `evt-${uuidv7()}`, ...element },
+      ]).expect(200);
+      const r = await rows(p.id);
+      const row = r.at(-1)!;
+      expect(row).toMatchObject({
+        outcome: 'unmatched',
+        matched_attempt_id: null,
+        matched_org_id: null,
+      });
+      const after = await Promise.all(
+        untouched.flatMap((m) => [message(m.messageId), ...m.attemptIds.map((a) => attempt(a))]),
+      );
+      expect(after).toEqual(before); // no delivery state written anywhere
+      for (const [i, m] of untouched.entries()) {
+        expect(await events(m.messageId, 'message.delivered')).toHaveLength(delivered[i]!.length);
+      }
+    }
+
+    it('both references naming the same attempt: applied', async () => {
+      const p = await ingressProvider(h, world);
+      const m = await plantMessage(h, world, A, [{ provider: p.id, status: 'accepted' }]);
+      const a = m.attemptIds[0]!;
+      await post(h, p.key, [
+        {
+          type: 'delivery',
+          status: 'DELIVERED',
+          providerMessageId: `sim-${a}`,
+          clientReference: a,
+        },
+      ]).expect(200);
+      expect((await rows(p.id))[0]).toMatchObject({
+        outcome: 'applied',
+        matched_attempt_id: a,
+        matched_org_id: A.orgId,
+      });
+      expect((await attempt(a)).deliveryStatus).toBe('delivered');
+    });
+
+    it('both references naming different attempts: unmatched, nothing applied, no organization attributed', async () => {
+      const p = await ingressProvider(h, world);
+      const ma = await plantMessage(h, world, A, [{ provider: p.id, status: 'accepted' }]);
+      const mb = await plantMessage(h, world, B, [{ provider: p.id, status: 'accepted' }]);
+      await expectUnmatched(
+        p,
+        { providerMessageId: `sim-${ma.attemptIds[0]}`, clientReference: mb.attemptIds[0] },
+        [ma, mb],
+      );
+    });
+
+    it('provider message id of A with the client reference of B (NULL provider message id): unmatched', async () => {
+      const p = await ingressProvider(h, world);
+      const ma = await plantMessage(h, world, A, [{ provider: p.id, status: 'accepted' }]);
+      const mb = await plantMessage(h, world, B, [
+        { provider: p.id, status: 'outcome_unknown', pmid: null },
+      ]);
+      await expectUnmatched(
+        p,
+        { providerMessageId: `sim-${ma.attemptIds[0]}`, clientReference: mb.attemptIds[0] },
+        [ma, mb],
+      );
+      // An unknown provider message id does not fall back to the client reference either.
+      await expectUnmatched(
+        p,
+        { providerMessageId: `sim-${uuidv7()}`, clientReference: mb.attemptIds[0] },
+        [mb],
+      );
+    });
+
+    it('each reference valid on its own, contradictory together: unmatched together; each alone applies', async () => {
+      const p = await ingressProvider(h, world);
+      const ma = await plantMessage(h, world, A, [{ provider: p.id, status: 'accepted' }]);
+      const mb = await plantMessage(h, world, A, [
+        { provider: p.id, status: 'outcome_unknown', pmid: null },
+      ]);
+      await expectUnmatched(
+        p,
+        { providerMessageId: `sim-${ma.attemptIds[0]}`, clientReference: mb.attemptIds[0] },
+        [ma, mb],
+      );
+      await post(h, p.key, [
+        { type: 'delivery', status: 'DELIVERED', providerMessageId: `sim-${ma.attemptIds[0]}` },
+      ]).expect(200);
+      await post(h, p.key, [
+        { type: 'delivery', status: 'UNDELIVERED', clientReference: mb.attemptIds[0] },
+      ]).expect(200);
+      expect((await attempt(ma.attemptIds[0]!)).deliveryStatus).toBe('delivered');
+      expect((await attempt(mb.attemptIds[0]!)).deliveryStatus).toBe('undelivered');
+    });
+
+    it("cross-provider: no reference form under provider P reaches provider Q's attempt", async () => {
+      const P = await ingressProvider(h, world);
+      const Q = await ingressProvider(h, world);
+      const mq = await plantMessage(h, world, B, [{ provider: Q.id, status: 'accepted' }]);
+      const q = mq.attemptIds[0]!;
+      for (const refs of [
+        { providerMessageId: `sim-${q}` },
+        { clientReference: q },
+        { providerMessageId: `sim-${q}`, clientReference: q },
+      ]) {
+        await expectUnmatched(P, refs, [mq]);
+      }
+      expect(await rows(Q.id)).toEqual([]);
+    });
+  });
+
+  // ===========================================================================
   describe('the key never leaves the request (AC-SV-6: bodies and metrics)', () => {
     it('no response body and no metric carries the key', async () => {
       const p = await ingressProvider(h, world);

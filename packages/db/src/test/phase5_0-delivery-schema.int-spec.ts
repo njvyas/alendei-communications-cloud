@@ -1497,11 +1497,95 @@ describe('Phase 5.0 delivery foundation (migrations 0044–0046)', () => {
             attempt_status: 'outcome_unknown',
           },
         ]);
-        // A provider message id wins over a client reference that points elsewhere.
-        expect((await resolve(providerP, pmid, noPmid.attemptIds[0]!))[0]?.attempt_id).toBe(
-          m.attemptIds[0],
-        );
+        // 0048 (PR #81 review): a provider message id no longer wins over a client reference
+        // that points elsewhere — contradictory references match nothing.
+        expect(await resolve(providerP, pmid, noPmid.attemptIds[0]!)).toEqual([]);
         expect(await resolve(providerP, 'unknown', null)).toEqual([]);
+      });
+    });
+
+    describe('strict correlation: every supplied reference must name the same attempt (0048, PR #81 review)', () => {
+      const resolveIn = async (
+        c: PoolClient,
+        provider: string,
+        providerMessageId: string | null,
+        clientReference: string | null,
+      ) =>
+        (
+          await c.query<{ attempt_id: string; org_id: string }>(
+            `SELECT attempt_id, org_id FROM app_delivery_resolve($1, $2, $3)`,
+            [provider, providerMessageId, clientReference],
+          )
+        ).rows;
+
+      it('both references naming the same attempt: matched', async () => {
+        await inTx(db.adminPool, {}, async (c) => {
+          const pmA = `pm-a-${uuidv7()}`;
+          const a = await plant(c, A, {
+            attempts: [{ provider: providerP, status: 'accepted', pmid: pmA }],
+          });
+          expect(await resolveIn(c, providerP, pmA, a.attemptIds[0]!)).toEqual([
+            { attempt_id: a.attemptIds[0], org_id: A.orgId },
+          ]);
+        });
+      });
+
+      it('both references naming different attempts (each with its own provider message id): no match', async () => {
+        await inTx(db.adminPool, {}, async (c) => {
+          const pmA = `pm-a-${uuidv7()}`;
+          const pmB = `pm-b-${uuidv7()}`;
+          const a = await plant(c, A, {
+            attempts: [{ provider: providerP, status: 'accepted', pmid: pmA }],
+          });
+          const b = await plant(c, B, {
+            attempts: [{ provider: providerP, status: 'accepted', pmid: pmB }],
+          });
+          // Each reference is individually valid…
+          expect(await resolveIn(c, providerP, pmA, null)).toHaveLength(1);
+          expect(await resolveIn(c, providerP, null, b.attemptIds[0]!)).toHaveLength(1);
+          // …but contradictory together, in either combination.
+          expect(await resolveIn(c, providerP, pmA, b.attemptIds[0]!)).toEqual([]);
+          expect(await resolveIn(c, providerP, pmB, a.attemptIds[0]!)).toEqual([]);
+        });
+      });
+
+      it('provider message id of A with the client reference of B whose provider message id is NULL: no match', async () => {
+        await inTx(db.adminPool, {}, async (c) => {
+          const pmA = `pm-a-${uuidv7()}`;
+          const a = await plant(c, A, {
+            attempts: [{ provider: providerP, status: 'accepted', pmid: pmA }],
+          });
+          const b = await plant(c, B, {
+            attempts: [{ provider: providerP, status: 'outcome_unknown' }],
+          });
+          expect(await resolveIn(c, providerP, null, b.attemptIds[0]!)).toHaveLength(1); // B alone: valid
+          expect(await resolveIn(c, providerP, pmA, b.attemptIds[0]!)).toEqual([]);
+          // A provider message id naming nothing does not fall back to the client reference either.
+          expect(await resolveIn(c, providerP, `pm-unknown-${uuidv7()}`, b.attemptIds[0]!)).toEqual(
+            [],
+          );
+          // …and A is not reachable through the contradictory pair.
+          expect(await resolveIn(c, providerP, pmA, a.attemptIds[0]!)).toHaveLength(1);
+        });
+      });
+
+      it('one reference alone matches only inside the provider boundary; neither reference matches nothing', async () => {
+        await inTx(db.adminPool, {}, async (c) => {
+          const pmA = `pm-a-${uuidv7()}`;
+          const a = await plant(c, A, {
+            attempts: [{ provider: providerP, status: 'accepted', pmid: pmA }],
+          });
+          expect(await resolveIn(c, providerP, pmA, null)).toHaveLength(1);
+          expect(await resolveIn(c, providerP, null, a.attemptIds[0]!)).toHaveLength(1);
+          for (const [pm, ref] of [
+            [pmA, null],
+            [null, a.attemptIds[0]!],
+            [pmA, a.attemptIds[0]!],
+          ] as const) {
+            expect(await resolveIn(c, providerQ, pm, ref)).toEqual([]); // cross-provider: isolated
+          }
+          expect(await resolveIn(c, providerP, null, null)).toEqual([]);
+        });
       });
     });
   });

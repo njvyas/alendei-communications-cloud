@@ -12,10 +12,12 @@
 --      advisory in-memory configuration snapshot.
 --   2. app_delivery_resolve also returns the matched attempt's organization
 --      status, so a receipt for a CLOSED organization is recorded as informational
---      without changing that organization's rows (implementation plan §4.3 default).
+--      without changing that organization's rows (implementation plan §4.3 default);
+--      and its correlation becomes strict: every supplied reference must name the same
+--      attempt (see below).
 --
 -- Both functions change their result type, so they are dropped and recreated in
--- this one transaction, with identical bodies otherwise, identical security
+-- this one transaction, with identical security
 -- (SECURITY DEFINER, fixed search_path) and identical grants (EXECUTE for
 -- acc_delivery only, never PUBLIC). No caller exists yet outside tests: the
 -- ingress ships disabled. Metadata only; no table is touched.
@@ -42,6 +44,15 @@ REVOKE ALL ON FUNCTION app_webhook_provider_resolve(bytea) FROM PUBLIC;--> state
 GRANT EXECUTE ON FUNCTION app_webhook_provider_resolve(bytea) TO acc_delivery;--> statement-breakpoint
 
 DROP FUNCTION app_delivery_resolve(uuid, text, uuid);--> statement-breakpoint
+-- Strict correlation (PR #81 review): EVERY reference the event carries must name the SAME
+-- attempt, inside the authenticated provider boundary. 0044's resolver let a provider message
+-- id win over a contradictory client reference, and let a client reference win when the named
+-- attempt had no provider message id yet; both are refused here. With both references the
+-- attempt must carry that provider message id AND be the referenced attempt — so a receipt
+-- naming an attempt whose provider message id is not yet recorded stays unmatched, and
+-- settlement (whose rule is the same: app_dispatch_receipt_names_attempt, 0047) applies it once
+-- the id is recorded and consistent. Neither reference: no match. The provider message id is
+-- unique per provider (0045) and the attempt id is the key, so at most one row can match.
 CREATE FUNCTION app_delivery_resolve(p_provider_id uuid, p_provider_message_id text, p_client_reference uuid)
 RETURNS TABLE (attempt_id uuid, message_id uuid, org_id uuid, attempt_status text, org_status text)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
@@ -51,13 +62,9 @@ AS $$
     JOIN organizations o ON o.id = a.org_id
    WHERE p_provider_id IS NOT NULL
      AND a.provider_id = p_provider_id
-     AND (
-       (p_provider_message_id IS NOT NULL AND a.provider_message_id = p_provider_message_id)
-       OR (p_provider_message_id IS NULL AND p_client_reference IS NOT NULL AND a.id = p_client_reference)
-       OR (p_provider_message_id IS NOT NULL AND p_client_reference IS NOT NULL
-           AND a.id = p_client_reference AND a.provider_message_id IS NULL)
-     )
-   ORDER BY (a.provider_message_id = p_provider_message_id) DESC NULLS LAST
+     AND (p_provider_message_id IS NOT NULL OR p_client_reference IS NOT NULL)
+     AND (p_provider_message_id IS NULL OR a.provider_message_id = p_provider_message_id)
+     AND (p_client_reference IS NULL OR a.id = p_client_reference)
    LIMIT 1
 $$;--> statement-breakpoint
 REVOKE ALL ON FUNCTION app_delivery_resolve(uuid, text, uuid) FROM PUBLIC;--> statement-breakpoint
