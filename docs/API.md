@@ -57,8 +57,9 @@ The request organization's message consumption over a period, for the console's 
   - `byDay`: per-day counts by channel. Days with no messages are omitted.
   - `acceptanceRate`: accepted ÷ settled, or `null`.
   - `topFailureReasons`: the top ten failure reason codes. A reason that does not start with an upper-case code is reported as `OTHER`, because free text can contain a recipient.
+  - `delivery` (Phase 5.0, additive): totals on the delivery axis — `delivered`, `undelivered`, `pending`, `notSupported`, `notTracked` (which together partition `totals.total`) and `deliveryRate` = delivered ÷ (delivered + undelivered), or `null`. Every field above is unchanged.
 - **Meaning:**
-  - `accepted` means a provider accepted the submission. No handset receipt data exists yet.
+  - `accepted` means a provider accepted the submission. Handset receipt outcomes are reported only in `delivery`, never in the submission counts.
   - These are operational counts, not metered or rated usage. The Phase 7 usage ledger remains the billing source.
 - **Not included:** reseller-wide or platform-wide aggregation. Counting across organizations needs an RLS and authorization decision (Phase 9 "reseller reporting").
 - **Export:** the console exports the daily breakdown as CSV client-side, with formula-injection protection.

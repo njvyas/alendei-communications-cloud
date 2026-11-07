@@ -5,6 +5,7 @@ import {
   type MessageUsageChannelRow,
   type MessageUsageCounts,
   type MessageUsageDayRow,
+  type MessageUsageDeliveryCounts,
   type MessageUsageReportResponse,
   type AuthPrincipal,
 } from '@acc/contracts';
@@ -24,6 +25,8 @@ export interface UsageCountRow {
   readonly day: string;
   readonly channelCode: string;
   readonly status: string;
+  /** Phase 5.0: the message delivery status; `null` = not tracked. */
+  readonly deliveryStatus?: string | null;
   readonly count: number;
 }
 
@@ -48,18 +51,51 @@ function add(counts: MessageUsageCounts, status: string, n: number): MessageUsag
   };
 }
 
+type DeliveryTally = Omit<MessageUsageDeliveryCounts, 'deliveryRate'>;
+
+/**
+ * Phase 5.0: one row's contribution on the delivery axis. Every row lands in exactly one
+ * bucket, so the five counts always sum to `totals.total`; an unrecognised value is
+ * counted as not tracked rather than dropped.
+ */
+function addDelivery(t: DeliveryTally, deliveryStatus: string | null | undefined, n: number) {
+  return {
+    delivered: t.delivered + (deliveryStatus === 'delivered' ? n : 0),
+    undelivered: t.undelivered + (deliveryStatus === 'undelivered' ? n : 0),
+    pending: t.pending + (deliveryStatus === 'pending' ? n : 0),
+    notSupported: t.notSupported + (deliveryStatus === 'not_supported' ? n : 0),
+    notTracked:
+      t.notTracked +
+      (deliveryStatus === 'delivered' ||
+      deliveryStatus === 'undelivered' ||
+      deliveryStatus === 'pending' ||
+      deliveryStatus === 'not_supported'
+        ? 0
+        : n),
+  };
+}
+
 /** Pure aggregation of the grouped rows; exported for unit tests. */
 export function summarizeUsage(counted: readonly UsageCountRow[]): {
   totals: MessageUsageCounts;
   acceptanceRate: number | null;
   byChannel: MessageUsageChannelRow[];
   byDay: MessageUsageDayRow[];
+  delivery: MessageUsageDeliveryCounts;
 } {
   let totals = zero();
+  let delivery: DeliveryTally = {
+    delivered: 0,
+    undelivered: 0,
+    pending: 0,
+    notSupported: 0,
+    notTracked: 0,
+  };
   const channels = new Map<string, MessageUsageCounts>();
   const days = new Map<string, MessageUsageCounts>();
   for (const row of counted) {
     totals = add(totals, row.status, row.count);
+    delivery = addDelivery(delivery, row.deliveryStatus, row.count);
     channels.set(
       row.channelCode,
       add(channels.get(row.channelCode) ?? zero(), row.status, row.count),
@@ -68,6 +104,7 @@ export function summarizeUsage(counted: readonly UsageCountRow[]): {
     days.set(key, add(days.get(key) ?? zero(), row.status, row.count));
   }
   const settled = totals.accepted + totals.failed + totals.outcomeUnknown;
+  const finalDelivery = delivery.delivered + delivery.undelivered;
   return {
     totals,
     acceptanceRate:
@@ -81,6 +118,13 @@ export function summarizeUsage(counted: readonly UsageCountRow[]): {
         return { day, channelCode, ...counts };
       })
       .sort((a, b) => a.day.localeCompare(b.day) || a.channelCode.localeCompare(b.channelCode)),
+    delivery: {
+      ...delivery,
+      deliveryRate:
+        finalDelivery === 0
+          ? null
+          : Math.round((delivery.delivered / finalDelivery) * 10_000) / 10_000,
+    },
   };
 }
 
@@ -147,15 +191,17 @@ export class MessageUsageService {
         day: string;
         channelCode: string;
         status: string;
+        deliveryStatus: string | null;
         count: number;
       }>(sql`
         SELECT to_char(date_trunc('day', m.created_at AT TIME ZONE ${timeZone}), 'YYYY-MM-DD') AS "day",
                app_channel_code(m.channel_id) AS "channelCode",
                m.status::text AS "status",
+               m.delivery_status::text AS "deliveryStatus",
                count(*)::int AS "count"
         FROM messages m
         WHERE ${where}
-        GROUP BY 1, 2, 3`);
+        GROUP BY 1, 2, 3, 4`);
 
       // Only a leading upper-case code is returned; free text could carry a recipient.
       const reasons = await tx.execute<{ reason: string; count: number }>(sql`

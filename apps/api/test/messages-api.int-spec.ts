@@ -678,9 +678,13 @@ describe('Messages API Suite (Phase 3.3)', () => {
           'completedAt',
           'contactId',
           'createdAt',
+          // Phase 5.0 PR-D: the delivery axis, always present (null = not tracked).
+          'deliveredAt',
+          'deliveryStatus',
           'failureReason',
           'id',
           'orgId',
+          'readAt',
           'recipientAddress',
           'status',
           'templateId',
@@ -691,6 +695,9 @@ describe('Messages API Suite (Phase 3.3)', () => {
         orgId: tenantC.orgId,
         channelCode: 'whatsapp',
         attemptCount: 0,
+        deliveryStatus: null,
+        deliveredAt: null,
+        readAt: null,
       });
       expect(JSON.stringify(res.body)).not.toContain('secret body');
     });

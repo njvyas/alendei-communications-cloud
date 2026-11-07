@@ -113,6 +113,17 @@ export interface MessageAttemptResponse {
   readonly failureReason: string | null;
   readonly latencyMs: number | null;
   readonly completedAt: string | null;
+  /**
+   * Phase 5.0 delivery axis (Option B), independent of the submission `status`. Always
+   * present in responses from this API version: `null` means delivery is not tracked for
+   * this record (it predates Phase 5.0, or it never reached a provider); a string is a
+   * tracked delivery status. Optional in the type only so older clients stay compatible.
+   */
+  readonly deliveryStatus?: MessageDeliveryStatus | null;
+  /** Earliest positive-delivery time; `null` when not delivered. */
+  readonly deliveredAt?: string | null;
+  /** Earliest read time reported by the provider; `null` when not read or not reported. */
+  readonly readAt?: string | null;
 }
 
 /**
@@ -133,6 +144,17 @@ export interface MessageSummaryResponse {
   readonly attemptCount: number;
   readonly createdAt: string;
   readonly completedAt: string | null;
+  /**
+   * Phase 5.0 delivery axis (Option B), independent of the submission `status`. Always
+   * present in responses from this API version: `null` means delivery is not tracked for
+   * this record (it predates Phase 5.0, or it never reached a provider); a string is a
+   * tracked delivery status. Optional in the type only so older clients stay compatible.
+   */
+  readonly deliveryStatus?: MessageDeliveryStatus | null;
+  /** Earliest positive-delivery time; `null` when not delivered. */
+  readonly deliveredAt?: string | null;
+  /** Earliest read time reported by the provider; `null` when not read or not reported. */
+  readonly readAt?: string | null;
 }
 
 /** `GET /messages/:id` — exactly the fields `MessagesService.getMessage` returns. */
@@ -149,6 +171,17 @@ export interface MessageDetailResponse {
   readonly failureReason: string | null;
   readonly createdAt: string;
   readonly completedAt: string | null;
+  /**
+   * Phase 5.0 delivery axis (Option B), independent of the submission `status`. Always
+   * present in responses from this API version: `null` means delivery is not tracked for
+   * this record (it predates Phase 5.0, or it never reached a provider); a string is a
+   * tracked delivery status. Optional in the type only so older clients stay compatible.
+   */
+  readonly deliveryStatus?: MessageDeliveryStatus | null;
+  /** Earliest positive-delivery time; `null` when not delivered. */
+  readonly deliveredAt?: string | null;
+  /** Earliest read time reported by the provider; `null` when not read or not reported. */
+  readonly readAt?: string | null;
   readonly attempts: readonly MessageAttemptResponse[];
 }
 
@@ -394,7 +427,7 @@ export function sanitizeRecipientData<T>(data: T, rawRecipient: string | null | 
  * (owner-directed usage reporting, 31-Oct-2026). Counts are computed from the
  * messages the caller can already read; they are operational usage, not a
  * metered or rated quantity. "Accepted" means a provider accepted the
- * submission; no end-user receipt data exists yet.
+ * submission; end-user receipt outcomes are counted separately (`delivery`).
  */
 export const MESSAGE_USAGE_MAX_DAYS = 366;
 
@@ -422,6 +455,21 @@ export interface MessageUsageFailureReason {
   readonly count: number;
 }
 
+/**
+ * Phase 5.0: message counts on the delivery axis (`messages.delivery_status`), beside the
+ * unchanged submission counts. The five counts partition `totals.total`: `notTracked` is
+ * every message with no delivery status (predates Phase 5.0, or never reached a provider).
+ */
+export interface MessageUsageDeliveryCounts {
+  readonly delivered: number;
+  readonly undelivered: number;
+  readonly pending: number;
+  readonly notSupported: number;
+  readonly notTracked: number;
+  /** delivered ÷ (delivered + undelivered); null when no message has a final delivery outcome. */
+  readonly deliveryRate: number | null;
+}
+
 export interface MessageUsageReportResponse {
   readonly orgId: string;
   readonly from: string;
@@ -435,4 +483,6 @@ export interface MessageUsageReportResponse {
   readonly byChannel: readonly MessageUsageChannelRow[];
   readonly byDay: readonly MessageUsageDayRow[];
   readonly topFailureReasons: readonly MessageUsageFailureReason[];
+  /** Phase 5.0: totals on the delivery axis (additive; every existing field is unchanged). */
+  readonly delivery?: MessageUsageDeliveryCounts;
 }

@@ -4,6 +4,7 @@ import {
   CHANNEL_CODES,
   CHANNEL_STATUSES,
   MESSAGE_ATTEMPT_STATUSES,
+  MESSAGE_DELIVERY_STATUSES,
   MESSAGE_STATUSES,
   PROVIDER_CIRCUIT_POLICY_BOUNDS,
   PROVIDER_CIRCUIT_STATES,
@@ -598,6 +599,34 @@ export class QueuedMessageSchema {
   @ApiProperty() correlationId!: string;
 }
 
+/**
+ * Phase 5.0 delivery-axis fields (Option B), shared by messages and attempts. Optional in
+ * the schema (AC-API-1: additive), but always present in this API version's responses:
+ * `null` delivery status means not tracked; the submission `status` is independent.
+ */
+const deliveryStatusProperty = {
+  required: false,
+  // OpenAPI 3.0: a nullable enum must list null among its values.
+  enum: [...MESSAGE_DELIVERY_STATUSES, null],
+  nullable: true,
+  description:
+    'Delivery outcome, independent of `status`. null = not tracked (the record predates delivery tracking, or never reached a provider). not_supported = the provider or channel reports no delivery receipts.',
+} as const;
+const deliveredAtProperty = {
+  required: false,
+  type: 'string',
+  format: 'date-time',
+  nullable: true,
+  description: 'Earliest positive-delivery time; null when not delivered.',
+} as const;
+const readAtProperty = {
+  required: false,
+  type: 'string',
+  format: 'date-time',
+  nullable: true,
+  description: 'Earliest read time reported by the provider; null when not read or not reported.',
+} as const;
+
 @ApiSchema({ name: 'MessageSummary' })
 export class MessageSummarySchema {
   @ApiProperty(uuid) id!: string;
@@ -618,6 +647,9 @@ export class MessageSummarySchema {
   @ApiProperty({ type: 'integer', minimum: 0 }) attemptCount!: number;
   @ApiProperty(timestamp) createdAt!: string;
   @ApiProperty(nullableTimestamp) completedAt!: string | null;
+  @ApiProperty(deliveryStatusProperty) deliveryStatus?: string | null;
+  @ApiProperty(deliveredAtProperty) deliveredAt?: string | null;
+  @ApiProperty(readAtProperty) readAt?: string | null;
 }
 
 @ApiSchema({ name: 'MessageAttempt' })
@@ -629,6 +661,9 @@ export class MessageAttemptSchema {
   @ApiProperty(nullableString) failureReason!: string | null;
   @ApiProperty({ type: 'integer', minimum: 0, nullable: true }) latencyMs!: number | null;
   @ApiProperty(nullableTimestamp) completedAt!: string | null;
+  @ApiProperty(deliveryStatusProperty) deliveryStatus?: string | null;
+  @ApiProperty(deliveredAtProperty) deliveredAt?: string | null;
+  @ApiProperty(readAtProperty) readAt?: string | null;
 }
 
 @ApiSchema({ name: 'MessageDetail' })
@@ -651,6 +686,9 @@ export class MessageDetailSchema {
   @ApiProperty(nullableString) failureReason!: string | null;
   @ApiProperty(timestamp) createdAt!: string;
   @ApiProperty(nullableTimestamp) completedAt!: string | null;
+  @ApiProperty(deliveryStatusProperty) deliveryStatus?: string | null;
+  @ApiProperty(deliveredAtProperty) deliveredAt?: string | null;
+  @ApiProperty(readAtProperty) readAt?: string | null;
   @ApiProperty({
     type: MessageAttemptSchema,
     isArray: true,
@@ -696,6 +734,31 @@ export class MessageUsageFailureReasonSchema {
   @ApiProperty(count) count!: number;
 }
 
+@ApiSchema({ name: 'MessageUsageDelivery' })
+export class MessageUsageDeliverySchema {
+  @ApiProperty({ ...count, description: 'Positive delivery evidence.' }) delivered!: number;
+  @ApiProperty({ ...count, description: 'Final non-delivery reported by the provider.' })
+  undelivered!: number;
+  @ApiProperty({ ...count, description: 'Awaiting a delivery receipt.' }) pending!: number;
+  @ApiProperty({ ...count, description: 'The provider or channel reports no delivery receipts.' })
+  notSupported!: number;
+  @ApiProperty({
+    ...count,
+    description:
+      'No delivery status: the message predates delivery tracking or never reached a provider.',
+  })
+  notTracked!: number;
+  @ApiProperty({
+    type: 'number',
+    minimum: 0,
+    maximum: 1,
+    nullable: true,
+    description:
+      'delivered / (delivered + undelivered); null when no message has a final delivery outcome.',
+  })
+  deliveryRate!: number | null;
+}
+
 @ApiSchema({ name: 'MessageUsageReport' })
 export class MessageUsageReportSchema {
   @ApiProperty(uuid) orgId!: string;
@@ -724,6 +787,13 @@ export class MessageUsageReportSchema {
   byDay!: MessageUsageDayRowSchema[];
   @ApiProperty({ type: MessageUsageFailureReasonSchema, isArray: true })
   topFailureReasons!: MessageUsageFailureReasonSchema[];
+  @ApiProperty({
+    type: MessageUsageDeliverySchema,
+    required: false,
+    description:
+      'Totals on the delivery axis (additive; always present in this API version). The five counts sum to totals.total; every submission field above is unchanged.',
+  })
+  delivery?: MessageUsageDeliverySchema;
 }
 
 // --- domains, branding & onboarding (Phase 4, U12) --------------------------
