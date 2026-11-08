@@ -2620,6 +2620,7 @@ The owner approved these for the PR 7-1 design and then authorised PR 7-1 as one
   - The four keys are in `INERT_PERMISSION_KEYS`, so the HTTP API neither accepts nor lists them, and no custom role or API key can carry them.
   - No route, enforcement, account creation or money movement exists.
   - `acc_app` may execute only the read-only `app_ledger_partition_report` (SECURITY INVOKER; it reads the system catalogues), for the startup verification (RQ-4).
+- **One message, one lock (final review, 08-Nov-2026).** `app_ledger_post` locks the message row (`FOR NO KEY UPDATE`) before the billing account, so every posting for a message is serialised whatever its account. Without it, two concurrent first postings to different accounts took different account locks, both passed the account-consistency check (`BL005`) and could split a message's reservation (reproduced, then fixed). The order is message → account, as recorded in §1zi.1.
 - **Charge accounting.** `wallets.reserved` / `credit_accounts.reserved` are the sum of *open* reservations (§10). A `customer_charge` therefore also consumes its share of the message's reservation (`reserved −= amount`), and the release is reservation − charges (`BILLING.md` §8). A settled message leaves `reserved` as it was. This corrects a balance-effect table in the PR 7-1 design that changed only `balance` on a charge; the integration suite proves the derivation.
 - **Partition creation and locks.**
   - `db:migrate` ends with an owner step that ensures 24 months ahead (lock timeout 10 s) and verifies the partitions. An ensure failure is reported, and fails the run only when the verdict is critical (headroom below two months, a gap, an orphan or an unprotected partition).
@@ -2631,7 +2632,7 @@ The owner approved these for the PR 7-1 design and then authorised PR 7-1 as one
 - **C2.** `tax` and `discount` facts must carry a line suffix (`tax:<line>`); every other entry type's fact kind is the entry type.
 - **Metrics** (no labels, set by the startup verification): `acc_billing_ledger_partition_headroom_months`, `acc_billing_ledger_partition_unprotected`, `acc_billing_ledger_partition_check_failures_total`.
 - **Message deletion.** Deleting a message or attempt now also checks the ledger's RESTRICT foreign keys across every monthly partition. No production path deletes messages; two index-test teardowns were given a longer hook timeout. Any future retention work must account for this.
-- **History proof:** `51|3593636d69a4a79eb4d86cc9adef66d0` (`0000`–`0050`), recorded in `RELEASE.md`.
+- **History proof:** `51|b1f2a7a36c020f3833f86d942d689a56` (`0000`–`0050`), recorded in `RELEASE.md`.
 
 ## 3. Risks explicitly accepted by design (not oversights)
 

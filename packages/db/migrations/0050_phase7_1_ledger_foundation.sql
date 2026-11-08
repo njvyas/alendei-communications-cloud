@@ -475,6 +475,14 @@ BEGIN
   END IF;
   SELECT o.reseller_id INTO v_reseller FROM organizations o WHERE o.id = p_org_id;
 
+  -- One message, one lock: every posting for a message (any fact, any account) is serialised on
+  -- the message row, taken before the account (lock order message → account, §1zi). Without it,
+  -- two first postings to different accounts would take different account locks, both pass the
+  -- account-consistency check (BL005) and split the message's reservation between accounts.
+  -- FOR NO KEY UPDATE: it does not conflict with the KEY SHARE locks that inserts of attempts and
+  -- events referencing the message take.
+  PERFORM 1 FROM messages m WHERE m.id = p_message_id FOR NO KEY UPDATE;
+
   -- 3. Account: the last row lock this transaction takes (account-last rule).
   IF p_account = 'wallet' THEN
     SELECT * INTO v_wallet FROM wallets w WHERE w.org_id = p_org_id FOR UPDATE;

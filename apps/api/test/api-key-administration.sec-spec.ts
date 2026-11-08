@@ -950,6 +950,17 @@ describe('api-key administration', () => {
       expect(res.body.error.code).toBe(ERROR_CODES.VALIDATION_FAILED);
     });
 
+    // Phase 7 PR 7-1: the four billing and pricing keys are catalogued but inert on the HTTP
+    // surface until the Phase 7 PR that adds their routes; no API key may request them.
+    it('rejects each inert Phase 7 billing and pricing key in scopes (fail-closed)', async () => {
+      for (const key of ['billing.read', 'billing.manage', 'pricing.read', 'pricing.manage']) {
+        const res = await api(adminToken)
+          .create(validCreate(`inert-${key.replace('.', '-')}`, { scopes: [key] }))
+          .expect(400);
+        expect([key, res.body.error.code]).toEqual([key, ERROR_CODES.VALIDATION_FAILED]);
+      }
+    });
+
     it('rejects unknown properties on the body', async () => {
       const res = await api(adminToken)
         .create(validCreate('extra', { keyHash: 'x', secret: 'y' }))

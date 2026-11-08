@@ -626,6 +626,78 @@ describe('Phase 7 PR 7-1 — ledger and billing-account foundation (migration 00
       expect(await count()).toBe(before);
     }, 600_000);
 
+    it('final review: a failed ensure with insufficient coverage fails db:migrate and the operator command visibly', async () => {
+      const partitions = async () =>
+        (
+          await admin(
+            `SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
+              WHERE i.inhparent = 'usage_ledger'::regclass ORDER BY c.relname`,
+          )
+        ).rows.map((r) => r.relname as string);
+      const all = await partitions();
+      expect(all).toHaveLength(25);
+      // Keep the current and next month only: one month of headroom, below the critical threshold.
+      const now = new Date();
+      const keep = new Set(
+        [0, 1].map((i) => {
+          const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + i, 1));
+          return `usage_ledger_p${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+        }),
+      );
+      try {
+        for (const p of all) if (!keep.has(p)) await admin(`DROP TABLE ${p}`);
+        // A transaction writing messages holds the lock ATTACH needs, so every ensure fails.
+        const writer = await db.adminPool.connect();
+        try {
+          await writer.query('BEGIN');
+          await plant(writer, A);
+          const failure = (await run('npx', ['tsx', 'src/cli/migrate.ts'], {
+            cwd: PACKAGE_ROOT,
+            env: process.env,
+            timeout: 300_000,
+          }).then(
+            () => null,
+            (error: unknown) => error,
+          )) as { code?: number; stdout?: string; stderr?: string } | null;
+          expect(failure).not.toBeNull();
+          expect(failure!.code).toBe(1);
+          expect(failure!.stderr).toMatch(/Ledger partition ensure failed: .*lock timeout/);
+          expect(failure!.stderr).toMatch(
+            /Refusing: usage_ledger partitions critical: headroom 1 month\(s\); 2 partition\(s\)/,
+          );
+          expect(`${failure!.stdout}${failure!.stderr}`).not.toMatch(/usage_ledger partitions ok/);
+
+          const lines: string[] = [];
+          expect(
+            await runLedgerPartitions(db.adminPool, { kind: 'ensure', monthsAhead: 24 }, (l) =>
+              lines.push(l),
+            ),
+          ).toBe(false);
+          expect(lines.some((l) => /^ensure failed: .*lock timeout/.test(l))).toBe(true);
+          expect(
+            lines.some((l) => /^usage_ledger partitions critical: headroom 1 month/.test(l)),
+          ).toBe(true);
+          const checkLines: string[] = [];
+          expect(
+            await runLedgerPartitions(db.adminPool, { kind: 'check' }, (l) => checkLines.push(l)),
+          ).toBe(false);
+          expect(checkLines.some((l) => /^usage_ledger partitions critical/.test(l))).toBe(true);
+        } finally {
+          await writer.query('ROLLBACK');
+          writer.release();
+        }
+      } finally {
+        // Restore the 25 months through the operator command.
+        const restored: string[] = [];
+        expect(
+          await runLedgerPartitions(db.adminPool, { kind: 'ensure', monthsAhead: 24 }, (l) =>
+            restored.push(l),
+          ),
+        ).toBe(true);
+        expect(await partitions()).toEqual(all);
+      }
+    }, 300_000);
+
     it('the operator command ensures as the owner and is refused under acc_app', async () => {
       const lines: string[] = [];
       expect(
@@ -1728,6 +1800,168 @@ describe('Phase 7 PR 7-1 — ledger and billing-account foundation (migration 00
         ).rows[0];
         expect(s).toEqual({ b: 1000, r: 900 });
       } finally {
+        await pool.end();
+      }
+    });
+
+    /** Opens a transaction on its own connection and posts; `settle` commits or rolls back. */
+    const open: Array<{ c: PoolClient; done: boolean }> = [];
+    async function openPost(pool: Pool, p: Post) {
+      const c = await pool.connect();
+      const h = { c, done: false };
+      open.push(h);
+      await c.query('BEGIN');
+      const outcome = postCode(c, p);
+      return { ...h, h, outcome };
+    }
+    const settle = async (
+      x: { h: { c: PoolClient; done: boolean } },
+      how: 'COMMIT' | 'ROLLBACK',
+    ) => {
+      await x.h.c.query(how);
+      x.h.done = true;
+      x.h.c.release();
+    };
+    /** Never leaves a connection checked out, even when an assertion fails mid-test. */
+    async function releaseOpen(): Promise<void> {
+      for (const h of open.splice(0)) {
+        if (h.done) continue;
+        await h.c.query('ROLLBACK').catch(() => undefined);
+        h.c.release();
+      }
+    }
+
+    it('final review: concurrent first postings for one message to different accounts cannot split its reservation', async () => {
+      committedOrgs.push(A.orgId);
+      const m = await committed(async (c) => {
+        // Self-sufficient: the wallet may already exist from F-4.
+        await c.query(
+          `INSERT INTO wallets (org_id, balance_paise) VALUES ($1, 1000) ON CONFLICT (org_id) DO NOTHING`,
+          [A.orgId],
+        );
+        await c.query(
+          `INSERT INTO credit_accounts (org_id, credit_limit_paise) VALUES ($1, 10000) ON CONFLICT (org_id) DO NOTHING`,
+          [A.orgId],
+        );
+        return plant(c, A, 1);
+      });
+      const pool = new Pool({ connectionString: process.env.DATABASE_ADMIN_URL, max: 2 });
+      try {
+        // T1 reserves on the message, to the wallet, and stays open.
+        const t1 = await openPost(pool, {
+          org: A.orgId,
+          type: 'reservation',
+          anchor: m.messageId,
+          amount: 50,
+          account: 'wallet',
+          message: m.messageId,
+        });
+        expect(await t1.outcome).toBe('OK');
+        // T2 reserves on the attempt, to the credit account, while T1 is still open.
+        const t2 = await openPost(pool, {
+          org: A.orgId,
+          type: 'reservation',
+          anchor: m.attemptIds[0]!,
+          attempt: m.attemptIds[0]!,
+          amount: 50,
+          account: 'credit',
+          message: m.messageId,
+        });
+        await new Promise((r) => setTimeout(r, 300));
+        await settle(t1, 'COMMIT');
+        // T2 must have waited for T1 (one message, one lock) and then refuse the other account.
+        expect(await t2.outcome).toBe('BL005');
+        await settle(t2, 'ROLLBACK');
+        const accounts = (
+          await admin(
+            `SELECT count(DISTINCT coalesce(wallet_id, credit_account_id))::int AS n FROM usage_ledger WHERE message_id = $1`,
+            [m.messageId],
+          )
+        ).rows[0].n;
+        expect(accounts).toBe(1);
+        const cr = (
+          await admin(`SELECT reserved_paise::int AS r FROM credit_accounts WHERE org_id = $1`, [
+            A.orgId,
+          ])
+        ).rows[0].r;
+        expect(cr).toBe(0);
+      } finally {
+        await releaseOpen();
+        await pool.end();
+      }
+    });
+
+    it('final review: a concurrent charge and release on one reservation never consume it twice; retries are no-ops', async () => {
+      const m = await committed(async (c) => {
+        const mm = await plant(c, A);
+        await post(c, {
+          org: A.orgId,
+          type: 'reservation',
+          anchor: mm.messageId,
+          amount: 100,
+          account: 'credit',
+          message: mm.messageId,
+        });
+        return mm;
+      });
+      const before = (
+        await admin(
+          `SELECT used_paise::int AS u, reserved_paise::int AS r FROM credit_accounts WHERE org_id = $1`,
+          [A.orgId],
+        )
+      ).rows[0];
+      const pool = new Pool({ connectionString: process.env.DATABASE_ADMIN_URL, max: 2 });
+      try {
+        const charge = {
+          org: A.orgId,
+          type: 'customer_charge',
+          anchor: m.messageId,
+          amount: 60,
+          account: 'credit' as const,
+          message: m.messageId,
+        };
+        const release = {
+          org: A.orgId,
+          type: 'reservation_release',
+          anchor: m.messageId,
+          amount: null,
+          account: 'credit' as const,
+          message: m.messageId,
+        };
+        const t1 = await openPost(pool, charge);
+        expect(await t1.outcome).toBe('OK');
+        const t2 = await openPost(pool, release);
+        await new Promise((r) => setTimeout(r, 300));
+        await settle(t1, 'COMMIT');
+        expect(await t2.outcome).toBe('OK');
+        await settle(t2, 'COMMIT');
+        // Retries of both, and a second charge, change nothing.
+        await committed(async (c) => {
+          expect((await post(c, charge)).inserted).toBe(false);
+          expect((await post(c, release)).inserted).toBe(false);
+          const again = await post(c, { ...charge, amount: 1 });
+          expect([again.inserted, Number(again.amount_paise)]).toEqual([false, 60]);
+        });
+        const facts = (
+          await admin(
+            `SELECT fact_kind, amount_paise::int AS a FROM usage_ledger WHERE message_id = $1 ORDER BY fact_kind`,
+            [m.messageId],
+          )
+        ).rows;
+        expect(facts).toEqual([
+          { fact_kind: 'customer_charge', a: 60 },
+          { fact_kind: 'reservation', a: 100 },
+          { fact_kind: 'reservation_release', a: 40 },
+        ]);
+        const after = (
+          await admin(
+            `SELECT used_paise::int AS u, reserved_paise::int AS r FROM credit_accounts WHERE org_id = $1`,
+            [A.orgId],
+          )
+        ).rows[0];
+        expect(after).toEqual({ u: before.u + 60, r: before.r - 100 });
+      } finally {
+        await releaseOpen();
         await pool.end();
       }
     });
