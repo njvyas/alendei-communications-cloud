@@ -475,7 +475,7 @@ describe('Phase 1C.4a development/test fixture', () => {
         'public.workspaces': 3,
         'public.teams': 1,
         'public.roles': 15,
-        'public.role_permissions': 201, // 174 + 3 organizations × 9 org_admin keys (8 content + billing.read, Phase 7 PR 7-1)
+        'public.role_permissions': 207, // 174 + 3 organizations × 11 org_admin keys (8 content + billing.read + 2 campaigns, Phase 8B.1)
         // Five fixture users and the bootstrap operator.
         'public.users': 6,
         // Six fixture grants through the API, one platform grant by the bootstrap.

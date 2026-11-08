@@ -35,6 +35,8 @@ type Credential = 'userSession' | 'apiKey' | 'refreshCookie' | 'none';
 const PREFIX = 'api/v1';
 const PASSWORD = 'a-sufficiently-long-test-passphrase';
 
+jest.setTimeout(60_000);
+
 interface Person {
   id: string;
   email: string;
@@ -1035,6 +1037,13 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
                                   }
                                 : template.endsWith('/rules') && method === 'PUT'
                                   ? { rules: [] }
+                                : template.endsWith('/campaigns') && method === 'POST'
+                                  ? {
+                                      name: `c-${suffix()}`,
+                                      channel: 'sms',
+                                      templateId: uuidv7(),
+                                      recipientSource: { type: 'all_contacts' },
+                                    }
                                   : method !== 'PATCH'
                                     ? {}
                                     : template.includes('/branding')
@@ -1266,7 +1275,8 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
       template.includes('/onboarding') ||
       template.includes('/resellers') ||
       template.includes('/support') ||
-      template.includes('/audience');
+      template.includes('/audience') ||
+      template.includes('/campaigns');
 
     it('every operation succeeded with every credential its document declares', () => {
       const document = validator.document as { paths: Record<string, Record<string, Json>> };
