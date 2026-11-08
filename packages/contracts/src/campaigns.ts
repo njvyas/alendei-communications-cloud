@@ -52,7 +52,6 @@ export interface CampaignRecipientSource {
   readonly tag?: string;
   readonly tags?: readonly string[];
   readonly tagMatchMode?: 'any' | 'all';
-  readonly contactCount: number | null;
   readonly segmentName?: string;
   readonly requireOptIn?: boolean;
 }

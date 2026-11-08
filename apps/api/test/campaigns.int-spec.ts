@@ -218,9 +218,25 @@ describe('Phase 8B.1: Campaigns Foundation Integration Suite', () => {
       expect(res.body.data.templateName).toBe('Promo WhatsApp Template');
       expect(res.body.data.throttling.rateLimitPerSecond).toBe(50);
       expect(res.body.data.throttling.maxAttemptsPerRecipient).toBe(2);
-      expect(res.body.data.recipientSource.contactCount).toBe(100);
+      expect(
+        (res.body.data.recipientSource as Record<string, unknown>).contactCount,
+      ).toBeUndefined();
+      expect(res.body.data.recipientSource.type).toBe('all_contacts');
       expect(res.body.data.metrics.totalRecipients).toBeNull();
       expect(res.body.data.isSimulatedPreview).toBe(false);
+
+      // Verify contactCount was stripped and NOT stored in the database
+      const [dbRow] = await h.admin
+        .select({
+          recipientSource: schema.campaigns.recipientSource,
+          metrics: schema.campaigns.metrics,
+        })
+        .from(schema.campaigns)
+        .where(eq(schema.campaigns.id, createdCampaignId));
+      const dbRecipientSource = dbRow.recipientSource as Record<string, unknown>;
+      expect(dbRecipientSource.contactCount).toBeUndefined();
+      expect(dbRecipientSource.type).toBe('all_contacts');
+      expect((dbRow.metrics as { totalRecipients: number | null }).totalRecipients).toBeNull();
     });
 
     it('retrieves the created campaign by id', async () => {
@@ -233,15 +249,26 @@ describe('Phase 8B.1: Campaigns Foundation Integration Suite', () => {
       expect(res.body.data.name).toBe('Spring Flash Sale');
       expect(res.body.data.templateName).toBe('Promo WhatsApp Template');
       expect(res.body.data.channel).toBe('whatsapp');
+      expect(
+        (res.body.data.recipientSource as Record<string, unknown>).contactCount,
+      ).toBeUndefined();
+      expect(res.body.data.recipientSource.type).toBe('all_contacts');
+      expect(res.body.data.metrics.totalRecipients).toBeNull();
     });
 
-    it('updates draft campaign parameters', async () => {
+    it('updates draft campaign parameters and strips supplied contactCount on update', async () => {
       const res = await request(h.app.getHttpServer())
         .patch(url(`/workspaces/${tenantA.workspaceId}/campaigns/${createdCampaignId}`))
         .set('authorization', `Bearer ${tokenA}`)
         .send({
           name: 'Updated Flash Sale',
           description: 'Updated sale description',
+          recipientSource: {
+            type: 'tag_segment',
+            tags: ['vip'],
+            tagMatchMode: 'any',
+            contactCount: 250,
+          },
           throttling: {
             rateLimitPerSecond: 30,
           },
@@ -252,6 +279,74 @@ describe('Phase 8B.1: Campaigns Foundation Integration Suite', () => {
       expect(res.body.data.description).toBe('Updated sale description');
       expect(res.body.data.throttling.rateLimitPerSecond).toBe(30);
       expect(res.body.data.throttling.maxAttemptsPerRecipient).toBe(2);
+      expect(
+        (res.body.data.recipientSource as Record<string, unknown>).contactCount,
+      ).toBeUndefined();
+      expect(res.body.data.recipientSource.type).toBe('tag_segment');
+      expect(res.body.data.recipientSource.tags).toEqual(['vip']);
+      expect(res.body.data.recipientSource.tagMatchMode).toBe('any');
+      expect(res.body.data.metrics.totalRecipients).toBeNull();
+
+      // Verify database update stripped contactCount
+      const [updatedDbRow] = await h.admin
+        .select({
+          recipientSource: schema.campaigns.recipientSource,
+          metrics: schema.campaigns.metrics,
+        })
+        .from(schema.campaigns)
+        .where(eq(schema.campaigns.id, createdCampaignId));
+      const updatedDbRecipientSource = updatedDbRow.recipientSource as Record<string, unknown>;
+      expect(updatedDbRecipientSource.contactCount).toBeUndefined();
+      expect(updatedDbRecipientSource.tags).toEqual(['vip']);
+      expect(
+        (updatedDbRow.metrics as { totalRecipients: number | null }).totalRecipients,
+      ).toBeNull();
+    });
+
+    it('strips caller-supplied contactCount while preserving legitimate criteria and keeping metrics.totalRecipients null', async () => {
+      const res = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({
+          name: 'Audience Integrity Test Campaign',
+          channel: 'sms',
+          templateId: templateSmsA,
+          recipientSource: {
+            type: 'tag_segment',
+            tags: ['priority_customers', 'tier1'],
+            tagMatchMode: 'all',
+            requireOptIn: true,
+            segmentName: 'Tier 1 Priority',
+            contactCount: 50000,
+          },
+        });
+
+      expect(res.status).toBe(201);
+      const data = res.body.data;
+      expect((data.recipientSource as Record<string, unknown>).contactCount).toBeUndefined();
+      expect(data.recipientSource.type).toBe('tag_segment');
+      expect(data.recipientSource.tags).toEqual(['priority_customers', 'tier1']);
+      expect(data.recipientSource.tagMatchMode).toBe('all');
+      expect(data.recipientSource.requireOptIn).toBe(true);
+      expect(data.recipientSource.segmentName).toBe('Tier 1 Priority');
+      expect(data.metrics.totalRecipients).toBeNull();
+
+      // Assert directly against persistent storage
+      const [row] = await h.admin
+        .select({
+          recipientSource: schema.campaigns.recipientSource,
+          metrics: schema.campaigns.metrics,
+        })
+        .from(schema.campaigns)
+        .where(eq(schema.campaigns.id, data.id));
+      const storedSource = row.recipientSource as Record<string, unknown>;
+      expect(storedSource.contactCount).toBeUndefined();
+      expect(storedSource.type).toBe('tag_segment');
+      expect(storedSource.tags).toEqual(['priority_customers', 'tier1']);
+      expect(storedSource.tagMatchMode).toBe('all');
+      expect(storedSource.requireOptIn).toBe(true);
+      expect(storedSource.segmentName).toBe('Tier 1 Priority');
+      expect((row.metrics as { totalRecipients: number | null }).totalRecipients).toBeNull();
     });
 
     it('lists campaigns with workspace isolation and query filtering', async () => {
@@ -311,6 +406,12 @@ describe('Phase 8B.1: Campaigns Foundation Integration Suite', () => {
       expect(res.body.data.status).toBe('scheduled');
       expect(res.body.data.scheduleMode).toBe('scheduled');
       expect(res.body.data.scheduledAt).toBe(futureDate);
+      expect(
+        (res.body.data.recipientSource as Record<string, unknown>).contactCount,
+      ).toBeUndefined();
+      expect(res.body.data.recipientSource.type).toBe('tag_segment');
+      expect(res.body.data.recipientSource.tag).toBe('VIP');
+      expect(res.body.data.metrics.totalRecipients).toBeNull();
     });
 
     it('refuses scheduled campaign without scheduledAt', async () => {
@@ -489,6 +590,11 @@ describe('Phase 8B.1: Campaigns Foundation Integration Suite', () => {
       expect(second.body.data.id).toBe(first.body.data.id);
       expect(second.body.data.name).toBe(payload.name);
       expect(second.body.data.metrics.totalRecipients).toBeNull();
+      expect(
+        (second.body.data.recipientSource as Record<string, unknown>).contactCount,
+      ).toBeUndefined();
+      expect(second.body.data.recipientSource.type).toBe('tag_segment');
+      expect(second.body.data.recipientSource.tags).toEqual(['vip', 'newsletter']);
     });
 
     it('same key + changed name is refused with 422', async () => {

@@ -66,7 +66,19 @@ function templateNotFound(id: string): AppException {
   });
 }
 
+function stripRecipientSourceContactCount<T extends Record<string, unknown>>(
+  source: T,
+): Record<string, unknown> {
+  const { contactCount: _discarded, ...criteria } = source;
+  return criteria;
+}
+
 function campaignView(row: CampaignJoinedRow): CampaignRecordResponse {
+  const rawRecipientSource = (row.recipientSource as Record<string, unknown>) ?? {
+    type: 'all_contacts',
+  };
+  const { contactCount: _discarded, ...recipientSource } = rawRecipientSource;
+
   return {
     id: row.id,
     orgId: row.orgId,
@@ -80,7 +92,7 @@ function campaignView(row: CampaignJoinedRow): CampaignRecordResponse {
     templateBody: row.templateBody ?? '',
     templateVariables: (row.templateVariables as Record<string, string>) ?? {},
     status: row.status,
-    recipientSource: row.recipientSource as CampaignRecipientSource,
+    recipientSource: recipientSource as unknown as CampaignRecipientSource,
     scheduleMode: row.scheduleMode,
     scheduledAt: row.scheduledAt ? row.scheduledAt.toISOString() : null,
     throttling: row.throttling as CampaignThrottling,
@@ -279,6 +291,9 @@ export class CampaignsService {
     idempotencyKey: string | null,
   ): Promise<IdempotentOutcome<{ data: CampaignRecordResponse }>> {
     const orgId = requireOrganization(principal);
+    const sanitizedRecipientSource = stripRecipientSourceContactCount(
+      dto.recipientSource as unknown as Record<string, unknown>,
+    );
 
     const authorize = (tx: Transaction) =>
       this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.CAMPAIGNS_MANAGE);
@@ -300,7 +315,7 @@ export class CampaignsService {
           channelId: dto.channelId ?? null,
           templateId: dto.templateId,
           templateVariables: dto.templateVariables ?? {},
-          recipientSource: dto.recipientSource,
+          recipientSource: sanitizedRecipientSource,
           scheduleMode: dto.scheduleMode ?? 'immediate',
           scheduledAt: dto.scheduledAt ?? null,
           throttling: dto.throttling ?? null,
@@ -401,7 +416,7 @@ export class CampaignsService {
             templateId: dto.templateId,
             templateVariables: dto.templateVariables ?? {},
             status: initialStatus,
-            recipientSource: dto.recipientSource,
+            recipientSource: sanitizedRecipientSource,
             scheduleMode,
             scheduledAt: scheduledAtDate,
             throttling,
@@ -494,7 +509,9 @@ export class CampaignsService {
       if (dto.description !== undefined) updates.description = dto.description;
       if (dto.templateVariables !== undefined) updates.templateVariables = dto.templateVariables;
       if (dto.recipientSource !== undefined) {
-        updates.recipientSource = dto.recipientSource;
+        updates.recipientSource = stripRecipientSourceContactCount(
+          dto.recipientSource as unknown as Record<string, unknown>,
+        );
       }
 
       const effectiveScheduleMode = dto.scheduleMode ?? campaign.scheduleMode;
