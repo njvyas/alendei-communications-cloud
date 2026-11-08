@@ -450,9 +450,13 @@ describe('the message keys in Phase 3.3 are referenced only by the messages modu
     // Usage reporting (owner-directed, 31-Oct-2026): GET /usage/messages counts
     // the messages a messages.read holder can already list, inside the messages
     // module. Read only; no new permission key.
+    // Phase 7 PR 7-3 (owner approval 08-Nov-2026): the existing messages.send
+    // check of POST /messages moved, unchanged, into the shared submission core's
+    // authorization proof. No new permission key or check.
     expect(hits.sort()).toEqual([
       'apps/api/src/messages/messages.controller.ts',
       'apps/api/src/messages/messages.service.ts',
+      'apps/api/src/messages/submission/submission-authorization.ts',
       'apps/api/src/messages/usage/message-usage.controller.ts',
       'apps/api/src/messages/usage/message-usage.service.ts',
       'apps/api/src/providers/channels.controller.ts',

@@ -99,7 +99,7 @@ const CATEGORIES: Category[] = [
     forbids:
       'a worker/job harness or new messaging worker infrastructure (ADR-013 PD-1, ADR-004 D-5)',
     exceptions:
-      'Pre-existing: the hot-reload listener reconnect timer and an ioredis option. No queue, processor, cron, interval or job runner exists; `@nestjs/schedule` is a declared but unused dependency (pinned below). Phase 3.3: message_dispatch_queue table class and dispatcher worker (ADR-014 §9). B1 (first release, 20-Oct-2026): the in-process loop that runs that dispatcher (`DispatchWorker`, ADR-014 D18 — poll 1 s ±20 %, batch ≤ 10, lease 30 s) and its three configuration keys. It is a single setTimeout chain over the existing PostgreSQL queue: no queue library, job framework, cron or `@nestjs/schedule`. UI readiness (20-Oct-2026): the documentation-only `QueuedMessage` OpenAPI schema describing the existing `POST /messages` 202 body, and the `queued` value of the `GET /messages` `status` filter enum in the generated `metadata.ts`.',
+      'Pre-existing: the hot-reload listener reconnect timer and an ioredis option. No queue, processor, cron, interval or job runner exists; `@nestjs/schedule` is a declared but unused dependency (pinned below). Phase 3.3: message_dispatch_queue table class and dispatcher worker (ADR-014 §9). B1 (first release, 20-Oct-2026): the in-process loop that runs that dispatcher (`DispatchWorker`, ADR-014 D18 — poll 1 s ±20 %, batch ≤ 10, lease 30 s) and its three configuration keys. It is a single setTimeout chain over the existing PostgreSQL queue: no queue library, job framework, cron or `@nestjs/schedule`. UI readiness (20-Oct-2026): the documentation-only `QueuedMessage` OpenAPI schema describing the existing `POST /messages` 202 body, and the `queued` value of the `GET /messages` `status` filter enum in the generated `metadata.ts`. Phase 7 PR 7-3 (owner approval 08-Nov-2026): the enqueue (`messageDispatchQueue`, the `queued` status) moved unchanged from `messages.service.ts` into the shared submission core (`messages/submission/`); no new queue, worker or behaviour.',
     pattern: /[\w-]*(?:worker|queue|bullmq|processor|cron|setInterval|schedul|job)[\w-]*/gi,
     providerCodeOnly: false,
     pinned: {
@@ -144,11 +144,12 @@ const CATEGORIES: Category[] = [
       ],
       'apps/api/src/messages/messages.controller.ts': ['QueuedMessageSchema'],
       'apps/api/src/messages/messages.module.ts': ['DispatchWorker', 'worker'],
-      'apps/api/src/messages/messages.service.ts': [
-        'QueuedMessageResponse',
+      'apps/api/src/messages/messages.service.ts': ['QueuedMessageResponse'],
+      'apps/api/src/messages/submission/message-submission.core.ts': [
         'messageDispatchQueue',
         'queued',
       ],
+      'apps/api/src/messages/submission/submission.types.ts': ['queued'],
       'apps/api/src/metadata.ts': ['queued', 'scheduleMode', 'scheduled', 'scheduledAt'],
       'apps/api/src/openapi/openapi-schemas.ts': ['QueuedMessage', 'QueuedMessageSchema', 'queued'],
       'apps/api/src/platform-support/platform-support-schemas.ts': ['queue'],

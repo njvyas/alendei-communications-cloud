@@ -2672,6 +2672,54 @@ Owner approval 08-Nov-2026: OD-P-1, OD-P-2 and OD-P-3 approved, PR 7-2 authorise
   5. **`created_by` / `activated_by` are not stored.** The audit log records the actor of every catalogue mutation.
 - **History proof:** `52|599f200526136d721a9a0a065f5f2768` (`0000`–`0051`), recorded in `RELEASE.md`.
 
+### 1zi.6 PR 7-3 as built: the shared message submission core (no migration)
+**Owner decisions, 08-Nov-2026.** D-1, D-2 and D-3 of `docs/PHASE-7-3-SEND-PATH-HANDOVER.md` were approved, with these clarifications:
+1. **Sequence.** The approved sequence stands: 7-3 shared send-path refactor, 7-4 reservation, 7-5 settlement, Gate 7-A, then 8B-3 campaign execution.
+2. **One reservation path.** Campaign-specific chunked reservation (proposed in `PHASE-8B-CAMPAIGNS-BACKEND-HANDOVER.md` §6.2) is withdrawn. There is one authoritative per-message reservation path, shared by ordinary and campaign-originated messages.
+3. **Pure refactor.** 7-3 is a pure refactor. The core calls no billing, pricing or ledger function, and 7-3 introduces no reservation.
+4. **No campaign fields.** Campaign ids, recipient fields and campaign-specific behaviour stay out of the 7-3 core.
+5. **Blockers for 8B-3** (not 7-3 scope):
+   - database-enforced organisation consistency for `messages.campaign_id` (`0052` adds a single-column foreign key);
+   - database-level protection against duplicate messages for one campaign recipient;
+   - a properly authorised campaign executor identity compatible with RLS and tenant isolation (`app_content_context_valid` admits only an org-level user or an API key).
+6. **Timing of open decisions.** D-4 (a mandatory `Idempotency-Key` on `POST /messages`) is decided before 7-4 starts. D-5 (campaign executor identity) is decided before 8B-3.
+
+**As built.**
+- **The core.** `MessageSubmissionCore.submit(tx, ctx, request)` (`apps/api/src/messages/submission/`) holds the pre-7-3 checks and inserts:
+  - the code moved mechanically, in the same order and with the same errors;
+  - `ctx` carries only the organization, correlation id and authorization proof;
+  - it is a provider of `MessagesModule` and is not exported.
+- **The adapter.** `MessagesService.sendMessage` is now the HTTP adapter. It keeps the organization from the principal, the `messages.send` check, the optional `Idempotency-Key` (same five-field fingerprint, route and `202`) and the response shape.
+- **Authorization proof.** `authorizeSubmission` makes the unchanged `messages.send` assertion and returns an opaque proof bound to that transaction and organization. The core refuses a forged, missing or foreign proof before touching the transaction. This is a programming-error guard, not a new rule.
+- **The core never:**
+  - opens, commits or releases a transaction (its only nesting is the contact savepoint);
+  - reads request context;
+  - references billing, pricing, ledger, provider-adapter, dispatcher or campaign code.
+- **Structural tests** (`message-submission.architecture.spec.ts`):
+  - only the core inserts into `messages` or `message_dispatch_queue`;
+  - `message.queued` is written only by the core and the dispatcher's pre-existing fallback requeue.
+
+  A planted second insert path fails the suite.
+- **Unchanged:** no migration, contract, OpenAPI, configuration, dispatcher or `apps/web` change; no 7.1 or 7.2 object or behaviour. The migration history stays `53|8b3f4018a42c3c46607b956d3dc7fdae` (`0000`–`0052`), computed on a disposable clone. Recording it in `RELEASE.md` is outside this PR (handover DEP-6).
+
+**Characterisation-first.**
+- `apps/api/test/message-submission-parity.int-spec.ts` (40 tests) was committed against the unmodified send path and was green there.
+- It was then left byte-identical through the refactor and stayed green.
+- It asserts:
+  - the complete success contract per channel and workspace route;
+  - every refusal (status, code, exact message, and no row in any table the path writes);
+  - error precedence;
+  - idempotency: replay, mismatch, concurrency, the stored request fingerprint and unkeyed duplicates;
+  - the concurrent first-send contact race;
+  - user-session, API-key and unauthorised principals.
+
+**Deviations from the handover.**
+1. **Error precedence list.** §9 omitted the address-normalisation refusals (`400 PHONE_MISSING_COUNTRY_CODE`, `400 INVALID_PHONE_NUMBER`), which run after the workspace check and before suppression. They are characterised; the handover list is corrected. Behaviour is unchanged.
+2. **A second pinned structural test changed.** Besides the scope-creep allowlist, `permission-classification.spec.ts` pins the files that name the `messages.*` keys. `submission-authorization.ts` is added there, because the existing `messages.send` check moved into it. No key or check was added.
+3. **Replay check.** `IdempotencyService` requires its replay `authorize` to return nothing, so the adapter wraps the same check and discards the proof on replay.
+4. **Key compatibility across the deploy.** That keys stored before the deploy still replay is proved by pinning the stored fingerprint to the five-field body (an equality test). A cross-deploy run is not used.
+5. **Documentation scope.** The handover also proposed several documentation items: the `ROADMAP.md` status line, an `ARCHITECTURE.md` note, the `0052` proof in `RELEASE.md` and a correction note to the Phase 8B handover. They are not in this PR, by the owner's instruction not to broaden it.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.
