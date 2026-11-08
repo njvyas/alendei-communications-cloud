@@ -78,4 +78,12 @@ export const ORG_ID_EXEMPT_TABLES: readonly string[] = [
   'usage_ledger',
   'wallets',
   'credit_accounts',
+  // Phase 7 PR 7-2 (migration 0051): `customer_pricing_assignments` is platform
+  // pricing administration (org_id NULL = the platform default); acc_app reaches
+  // it only under a validated platform-scope claim (`app_has_platform_scope()`),
+  // like the provider catalogue — neither tenant content nor a tenancy record.
+  // `pricing_evaluations` has no application-role privilege at all: it is
+  // written and read only by the SECURITY DEFINER rating functions.
+  'customer_pricing_assignments',
+  'pricing_evaluations',
 ];

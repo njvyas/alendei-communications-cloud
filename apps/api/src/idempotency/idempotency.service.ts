@@ -1,7 +1,7 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ERROR_CODES } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 
 import { AppException } from '../common/errors/app.exception';
 import { RequestContext } from '../common/context/request-context';
@@ -199,6 +199,90 @@ export class IdempotencyService {
   }
 
   /**
+   * Idempotent execution in the **platform namespace** — for platform-scope
+   * operations that act in no organization (Phase 7 PR 7-2: the pricing
+   * catalogue; migration `0051`).
+   *
+   * The same mechanism as {@link execute} — claim, `work` and finalize in one
+   * transaction; replay on the same key and request; `422` on a different
+   * request; `409` while the original is in flight; only successes stored — with
+   * three differences:
+   *
+   *   1. the record carries `org_id NULL` and is unique on `(endpoint, key)` among
+   *      platform records (`idempotency_keys_platform_scope_key`); RLS admits it
+   *      only under a validated platform-scope claim;
+   *   2. the key is **required**: these operations create append-only, effective-
+   *      dated rows, so a retry must always be recognisable;
+   *   3. `authorize` runs **before** the claim, so a principal without the
+   *      permission is refused with its audited `403` and never reaches the key
+   *      table (whose platform policy would otherwise answer first).
+   */
+  async executePlatform<T>(execution: IdempotentExecution<T>): Promise<IdempotentOutcome<T>> {
+    if (execution.key === null) {
+      throw new AppException({
+        status: HttpStatus.BAD_REQUEST,
+        code: ERROR_CODES.IDEMPOTENCY_KEY_REQUIRED,
+        message: 'This operation requires an Idempotency-Key header',
+      });
+    }
+    if (execution.request.orgId !== null) {
+      throw new Error('executePlatform: a platform-namespace request carries no organization');
+    }
+    const endpoint = `${execution.request.method.toUpperCase()} ${execution.request.route}`;
+    const hash = fingerprint(execution.request);
+    const key = execution.key;
+
+    return this.db.withRequestTenant(async (tx) => {
+      await execution.authorize(tx);
+      await tx.execute(
+        sql`set local lock_timeout = ${sql.raw(String(IdempotencyService.LOCK_WAIT_MS))}`,
+      );
+      const principal = execution.request.principal;
+      const correlationId = RequestContext.get()?.correlationId ?? null;
+      const [claimed] = await tx
+        .insert(schema.idempotencyKeys)
+        .values({
+          orgId: null,
+          endpoint,
+          idempotencyKey: key,
+          requestHash: hash,
+          status: 'pending',
+          actorUserId: principal.userId,
+          actorApiKeyId: principal.apiKeyId,
+          correlationId,
+        })
+        .onConflictDoUpdate({
+          target: [schema.idempotencyKeys.endpoint, schema.idempotencyKeys.idempotencyKey],
+          targetWhere: sql`org_id IS NULL`,
+          set: {
+            requestHash: hash,
+            status: 'pending',
+            responseStatusCode: null,
+            responseSnapshot: null,
+            completedAt: null,
+            failureReason: null,
+            actorUserId: principal.userId,
+            actorApiKeyId: principal.apiKeyId,
+            correlationId,
+            expiresAt: sql`now() + interval '24 hours'`,
+          },
+          setWhere: sql`${schema.idempotencyKeys.expiresAt} <= now()`,
+        })
+        .returning({ id: schema.idempotencyKeys.id })
+        .catch((error: unknown) => {
+          throw this.translateLockTimeout(error);
+        });
+
+      if (claimed) {
+        const body = await execution.work(tx);
+        await this.finalize(tx, claimed.id, execution.successStatus, body);
+        return { body, status: execution.successStatus, replayed: false };
+      }
+      return this.replay<T>(tx, execution, endpoint, key, hash);
+    });
+  }
+
+  /**
    * Takes the claim, or returns `null` because a live record already holds it.
    *
    * `DO UPDATE … WHERE expires_at <= now()` makes expiry a reclaim rather than a
@@ -372,7 +456,9 @@ export class IdempotencyService {
       .from(schema.idempotencyKeys)
       .where(
         and(
-          eq(schema.idempotencyKeys.orgId, execution.request.orgId!),
+          execution.request.orgId === null
+            ? isNull(schema.idempotencyKeys.orgId)
+            : eq(schema.idempotencyKeys.orgId, execution.request.orgId),
           eq(schema.idempotencyKeys.endpoint, endpoint),
           eq(schema.idempotencyKeys.idempotencyKey, key),
         ),

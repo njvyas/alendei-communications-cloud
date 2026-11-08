@@ -68,6 +68,7 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
     orgs: [] as string[],
     resellers: [] as string[],
     providers: [] as string[],
+    pricingPlans: [] as string[],
   };
   const suffix = () => uuidv7().replace(/-/g, '').slice(-10);
 
@@ -282,6 +283,36 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
   });
 
   afterAll(async () => {
+    // Phase 7 PR 7-2: the pricing catalogue is append-only and immutable once active; the owner
+    // removes this suite's rows with triggers suspended (session_replication_role), before the
+    // organizations and providers they reference.
+    if (created.pricingPlans.length > 0 || created.providers.length > 0) {
+      const ids = (xs: string[]) =>
+        sql.join(
+          (xs.length > 0 ? xs : ['00000000-0000-0000-0000-000000000000']).map((id) => sql`${id}`),
+          sql`, `,
+        );
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`SET LOCAL session_replication_role = replica`);
+        await tx.execute(
+          sql`DELETE FROM customer_pricing_assignments WHERE plan_id IN (${ids(created.pricingPlans)})`,
+        );
+        await tx.execute(
+          sql`DELETE FROM pricing_rules WHERE plan_version_id IN (SELECT id FROM pricing_plan_versions WHERE plan_id IN (${ids(created.pricingPlans)}))`,
+        );
+        await tx.execute(
+          sql`DELETE FROM pricing_plan_versions WHERE plan_id IN (${ids(created.pricingPlans)})`,
+        );
+        await tx.execute(sql`DELETE FROM pricing_plans WHERE id IN (${ids(created.pricingPlans)})`);
+        await tx.execute(
+          sql`DELETE FROM provider_cost_rates WHERE provider_id IN (${ids(created.providers)})`,
+        );
+      });
+      // The pricing POSTs' idempotency records (platform namespace, Phase 7 PR 7-2).
+      await db.execute(
+        sql`DELETE FROM idempotency_keys WHERE org_id IS NULL AND endpoint LIKE 'POST /platform/pricing/%' AND idempotency_key LIKE 'oa-%'`,
+      );
+    }
     const orgs = created.orgs;
     const users = created.users;
     const list = (ids: string[]) =>
@@ -585,6 +616,90 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
       );
     });
 
+    it('the pricing catalogue (Phase 7 PR 7-2, platform scope only)', async () => {
+      const credential = as.session(platform);
+      const channels = await hit('GET', 'channels', credential);
+      const sms = (channels.body.data as Json[]).find((c) => c.code === 'sms')!.id as string;
+      const keyed = () => ({ 'idempotency-key': `oa-pricing-${suffix()}-${suffix()}` });
+      const plan = await hit('POST', 'platform/pricing/plans', {
+        ...credential,
+        headers: keyed(),
+        body: { name: `OA plan ${suffix()}`, description: 'OpenAPI suite' },
+      });
+      expectStatus(plan, 201, 'pricing plan create');
+      const planId = plan.body.data.id as string;
+      created.pricingPlans.push(planId);
+      expectStatus(await hit('GET', 'platform/pricing/plans', credential), 200, 'pricing plans');
+      const version = await hit('POST', `platform/pricing/plans/${planId}/versions`, {
+        ...credential,
+        headers: keyed(),
+      });
+      expectStatus(version, 201, 'pricing version create');
+      const versionId = version.body.data.id as string;
+      expectStatus(
+        await hit('PUT', `platform/pricing/versions/${versionId}/rules`, {
+          ...credential,
+          body: { rules: [{ channelId: sms, unitPriceE4: 1150 }] },
+        }),
+        200,
+        'pricing rules replace',
+      );
+      expectStatus(
+        await hit('POST', `platform/pricing/versions/${versionId}/activate`, {
+          ...credential,
+          headers: keyed(),
+          body: {},
+        }),
+        200,
+        'pricing version activate',
+      );
+      expectStatus(
+        await hit('GET', `platform/pricing/versions/${versionId}`, credential),
+        200,
+        'pricing version get',
+      );
+      expectStatus(
+        await hit('GET', `platform/pricing/plans/${planId}`, credential),
+        200,
+        'pricing plan get',
+      );
+      const provider = await hit('POST', 'providers', {
+        ...credential,
+        body: { channelId: sms, name: `OA pricing provider ${suffix()}`, adapterKey: 'simulator' },
+      });
+      expectStatus(provider, 201, 'pricing provider create');
+      const providerId = provider.body.data.id as string;
+      created.providers.push(providerId);
+      expectStatus(
+        await hit('POST', 'platform/pricing/provider-cost-rates', {
+          ...credential,
+          headers: keyed(),
+          body: { providerId, unitCostE4: 900 },
+        }),
+        201,
+        'provider cost rate create',
+      );
+      expectStatus(
+        await hit('GET', 'platform/pricing/provider-cost-rates', credential),
+        200,
+        'provider cost rates',
+      );
+      expectStatus(
+        await hit('POST', 'platform/pricing/assignments', {
+          ...credential,
+          headers: keyed(),
+          body: { orgId, planId, effectiveFrom: new Date(Date.now() + 86_400_000).toISOString() },
+        }),
+        201,
+        'pricing assignment create',
+      );
+      expectStatus(
+        await hit('GET', 'platform/pricing/assignments', credential),
+        200,
+        'pricing assignments',
+      );
+    });
+
     it('workspaces, teams and the deprecated tenancy aliases', async () => {
       for (const credential of [as.session(admin), as.key()]) {
         expectStatus(await hit('GET', 'workspaces', credential), 200, 'list workspaces');
@@ -809,7 +924,10 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
         }
       }
       expect(checked).toBeGreaterThanOrEqual(10);
-    });
+      // One sequential API-key request per session-only operation (~70 since Phase 7 PR 7-2's
+      // eleven pricing routes), each verifying the key's hash: past Jest's 5 s default on a
+      // loaded host, so the probe states its own bound.
+    }, 60_000);
 
     it('the refresh cookie alone authenticates nothing but refresh and logout', async () => {
       const res = await hit('GET', 'auth/me', { as: 'refreshCookie', cookie: admin.cookie });
@@ -859,13 +977,19 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
       for (const { method, template, op } of operations()) {
         if (!template.includes('{')) continue;
         const bearer =
-          /^(Organizations|Domains|Providers|Channels|Resellers|PlatformSupport)_/.test(
+          /^(Organizations|Domains|Providers|Channels|Resellers|PlatformSupport|Pricing)_/.test(
             String(op.operationId),
           )
             ? platform
             : admin;
+        // An operation that requires an Idempotency-Key (Phase 7 PR 7-2) gets one, so the
+        // probe reaches the resource lookup rather than the missing-key refusal.
+        const requiresKey = ((op.parameters as Json[] | undefined) ?? []).some(
+          (p) => p.name === 'Idempotency-Key' && p.required === true,
+        );
         const res = await hit(method, concrete(template, uuidv7), {
           ...as.session(bearer),
+          headers: requiresKey ? { 'idempotency-key': `oa-unknown-${suffix()}-${suffix()}` } : {},
           query: template.endsWith('/consent-effective')
             ? { channelId: uuidv7(), consentType: 'marketing' }
             : undefined,
@@ -909,19 +1033,21 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
                                     providerId: uuidv7(),
                                     priority: 1,
                                   }
-                                : method !== 'PATCH'
-                                  ? {}
-                                  : template.includes('/branding')
-                                    ? { brandName: `Brand ${suffix()}` }
-                                    : template.includes('/users/')
-                                      ? { phone: '+15551234567' }
-                                      : template.includes('/contacts/')
-                                        ? { firstName: `x ${suffix()}` }
-                                        : template.includes('/identities/')
-                                          ? { isPrimary: true }
-                                          : template.includes('/provider-assignments/')
-                                            ? { priority: 2 }
-                                            : { name: `x ${suffix()}` },
+                                : template.endsWith('/rules') && method === 'PUT'
+                                  ? { rules: [] }
+                                  : method !== 'PATCH'
+                                    ? {}
+                                    : template.includes('/branding')
+                                      ? { brandName: `Brand ${suffix()}` }
+                                      : template.includes('/users/')
+                                        ? { phone: '+15551234567' }
+                                        : template.includes('/contacts/')
+                                          ? { firstName: `x ${suffix()}` }
+                                          : template.includes('/identities/')
+                                            ? { isPrimary: true }
+                                            : template.includes('/provider-assignments/')
+                                              ? { priority: 2 }
+                                              : { name: `x ${suffix()}` },
         });
         expect(`${method} ${template} → ${res.status}`).toMatch(/→ (404|403)$/);
       }

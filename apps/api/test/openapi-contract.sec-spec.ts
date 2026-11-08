@@ -190,9 +190,12 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * Phase 5.0 PR-E, 07-Nov-2026: the operator simulator trigger
      * (`POST /providers/{id}/simulator/delivery-events`): 146 → 147; the ingress header form is
      * the third exclusion (OD-10).
-     * Phase 8A, 07-Nov-2026: 2 genuine contact activity timeline operations: 147 → 149.)
+     * Phase 8A, 07-Nov-2026: 2 genuine contact activity timeline operations: 147 → 149.
+     * (Phase 8A-S then brought the total to 154.)
+     * Phase 7 PR 7-2, 08-Nov-2026: 11 platform pricing catalogue operations under
+     * `/platform/pricing`: 154 → 165.)
      */
-    const APPLICATION_OPERATIONS = 154;
+    const APPLICATION_OPERATIONS = 165;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 
@@ -439,7 +442,8 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
       expect(problems).toEqual([]);
       expect(
         documented().filter((r) => refs(operationOf(r)!).includes('header:Idempotency-Key')).length,
-      ).toBe(11);
+        // Phase 7 PR 7-2 (PR #90 correction): the five creating pricing POSTs, where it is required.
+      ).toBe(16);
     });
   });
 

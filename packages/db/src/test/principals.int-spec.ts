@@ -50,6 +50,9 @@ const TABLES = [
   // policy. The monthly partitions are not listed (they are their parent's), but each must have
   // RLS enabled too, which the RLS assertion below covers.
   'credit_accounts',
+  // Phase 7 PR 7-2 (migration 0051): the pricing catalogue (acc_app only under a validated
+  // platform-scope claim) and the definer-only pricing evaluations.
+  'customer_pricing_assignments',
   'idempotency_keys',
   // Phase 3.3 (migration 0033): message orchestrator and dispatch tables
   'message_attempts',
@@ -62,11 +65,17 @@ const TABLES = [
   'organization_provider_assignments',
   'organizations',
   'permissions',
+  'pricing_evaluation_components',
+  'pricing_evaluations',
+  'pricing_plan_versions',
+  'pricing_plans',
+  'pricing_rules',
   'provider_capabilities',
   // Gate D.3 remediation (migration 0023): the platform circuit policy, one row.
   'provider_circuit_policy',
   // Phase 2.4 (migration 0024): the configuration revision, one row.
   'provider_configuration_revision',
+  'provider_cost_rates',
   // Phase 2.3 (migration 0022): append-only health samples, same global posture.
   'provider_health',
   'providers',
@@ -105,6 +114,8 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
     consent_events: 'INSERT,SELECT',
     contact_identities: 'INSERT,SELECT,UPDATE',
     contacts: 'INSERT,SELECT,UPDATE',
+    // Phase 7 PR 7-2: append-only; platform scope only (RLS).
+    customer_pricing_assignments: 'INSERT,SELECT',
     idempotency_keys: 'INSERT,SELECT',
     message_attempts: 'INSERT,SELECT,UPDATE',
     message_dispatch_queue: 'DELETE,INSERT,SELECT,UPDATE',
@@ -114,6 +125,12 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
     organization_provider_assignments: 'INSERT,SELECT,UPDATE',
     organizations: 'INSERT,SELECT',
     permissions: 'SELECT',
+    // Phase 7 PR 7-2: the pricing catalogue, platform scope only (RLS). A version is updated
+    // only to activate it; a draft's rules are replaced; nothing is ever deleted otherwise.
+    // pricing_evaluations and pricing_evaluation_components carry no grant at all.
+    pricing_plan_versions: 'INSERT,SELECT,UPDATE',
+    pricing_plans: 'INSERT,SELECT',
+    pricing_rules: 'DELETE,INSERT,SELECT',
     provider_capabilities: 'DELETE,INSERT,SELECT,UPDATE',
     // Gate D.3 remediation: seeded by migration, read and replaced, never added or removed.
     provider_circuit_policy: 'SELECT,UPDATE',
@@ -121,6 +138,8 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
     provider_configuration_revision: 'SELECT,UPDATE',
     // Phase 2.3: samples are appended, never changed or removed.
     provider_health: 'INSERT,SELECT',
+    // Phase 7 PR 7-2: append-only.
+    provider_cost_rates: 'INSERT,SELECT',
     providers: 'INSERT,SELECT,UPDATE',
     resellers: 'INSERT,SELECT',
     role_permissions: 'DELETE,INSERT,SELECT',

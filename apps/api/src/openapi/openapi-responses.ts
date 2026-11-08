@@ -116,12 +116,19 @@ export function ApiErrors(...statuses: number[]) {
   );
 }
 
-/** `Idempotency-Key` (`API.md` §4) — on the creating `POST`s that accept it. */
-export function ApiIdempotencyKey() {
+/**
+ * `Idempotency-Key` (`API.md` §4) — on the creating `POST`s that accept it.
+ * `required: true` documents an operation that refuses a request without one
+ * (`400 IDEMPOTENCY_KEY_REQUIRED`; Phase 7 PR 7-2, the platform pricing catalogue).
+ */
+export function ApiIdempotencyKey(options: { required?: boolean } = {}) {
   return ApiHeader({
     name: 'Idempotency-Key',
-    required: false,
+    required: options.required ?? false,
     description:
+      (options.required
+        ? 'Required: without it the request is refused with `400 IDEMPOTENCY_KEY_REQUIRED` and nothing runs. '
+        : '') +
       '16–255 characters of letters, digits, `-`, `_`, `.` or `:` (surrounding whitespace is trimmed; otherwise `400 IDEMPOTENCY_KEY_INVALID`). A repeat with the same key and payload replays the stored response; a different payload is `422 IDEMPOTENCY_KEY_PAYLOAD_MISMATCH`; a repeat while the first is still running is `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`.',
     schema: { type: 'string', pattern: '^[A-Za-z0-9_.:-]{16,255}$' },
   });

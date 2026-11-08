@@ -10,3 +10,4 @@ export * from './suppressions';
 export * from './assignments';
 export * from './messages';
 export * from './webhooks';
+export * from './pricing';

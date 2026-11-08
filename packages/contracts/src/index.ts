@@ -20,3 +20,4 @@ export * from './domains';
 export * from './resellers';
 export * from './domain-oversight';
 export * from './platform-support';
+export * from './pricing';

@@ -95,6 +95,14 @@ export const AUDIT_ACTIONS = {
   RESELLER_SUSPENDED: 'reseller.suspended',
   RESELLER_REACTIVATED: 'reseller.reactivated',
 
+  // Phase 7 PR 7-2 — pricing catalogue administration (platform scope).
+  PRICING_PLAN_CREATED: 'pricing.plan_created',
+  PRICING_VERSION_CREATED: 'pricing.version_created',
+  PRICING_RULES_REPLACED: 'pricing.rules_replaced',
+  PRICING_VERSION_ACTIVATED: 'pricing.version_activated',
+  PRICING_PROVIDER_COST_RATE_CREATED: 'pricing.provider_cost_rate_created',
+  PRICING_ASSIGNMENT_CREATED: 'pricing.assignment_created',
+
   AUTHORIZATION_DENIED: 'authorization.denied',
 } as const;
 
@@ -243,6 +251,14 @@ export const SECURITY_SENSITIVE_AUDIT_ACTIONS: readonly AuditAction[] = Object.f
   AUDIT_ACTIONS.RESELLER_UPDATED,
   AUDIT_ACTIONS.RESELLER_SUSPENDED,
   AUDIT_ACTIONS.RESELLER_REACTIVATED,
+  // Phase 7 PR 7-2: each decides what customers are charged or what providers
+  // are recorded as costing, so each is recorded in its mutation's transaction.
+  AUDIT_ACTIONS.PRICING_PLAN_CREATED,
+  AUDIT_ACTIONS.PRICING_VERSION_CREATED,
+  AUDIT_ACTIONS.PRICING_RULES_REPLACED,
+  AUDIT_ACTIONS.PRICING_VERSION_ACTIVATED,
+  AUDIT_ACTIONS.PRICING_PROVIDER_COST_RATE_CREATED,
+  AUDIT_ACTIONS.PRICING_ASSIGNMENT_CREATED,
 ]);
 
 export function isSecuritySensitiveAction(action: string): boolean {

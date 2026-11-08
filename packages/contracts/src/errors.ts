@@ -188,6 +188,12 @@ export const ERROR_CODES = {
    * mismatch: nothing was looked up, because the value could not be one.
    */
   IDEMPOTENCY_KEY_INVALID: 'IDEMPOTENCY_KEY_INVALID',
+  /**
+   * The operation requires an `Idempotency-Key` and none was sent (Phase 7 PR
+   * 7-2: the platform pricing catalogue's creating `POST`s). Without one a retry
+   * could not be told apart from a second request; nothing was executed.
+   */
+  IDEMPOTENCY_KEY_REQUIRED: 'IDEMPOTENCY_KEY_REQUIRED',
 
   // --- Pagination (`API.md` §8a) -------------------------------------------
   /**

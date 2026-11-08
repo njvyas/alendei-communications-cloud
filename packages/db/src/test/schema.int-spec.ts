@@ -103,6 +103,16 @@ describe('Phase 1 schema', () => {
       // helpers, so no expression can be satisfied by a value in the query.
       const expression = `${row.qual ?? ''} ${row.with_check ?? ''}`.trim();
       expect(expression).not.toBe('');
+      if (row.tablename === 'idempotency_keys' && row.policyname === 'idempotency_keys_platform') {
+        // Phase 7 PR 7-2 (migration 0051): the platform namespace — rows with no organization,
+        // reachable only under a validated platform-scope claim (a session-variable helper too).
+        // Pinned exactly, so it can never admit an organization's row.
+        expect([row.qual, row.with_check]).toEqual([
+          '((org_id IS NULL) AND app_has_platform_scope())',
+          '((org_id IS NULL) AND app_has_platform_scope())',
+        ]);
+        continue;
+      }
       expect(expression).toMatch(
         /app_org_in_scope|app_is_platform_admin|app_current_|app_is_provisioning/,
       );
