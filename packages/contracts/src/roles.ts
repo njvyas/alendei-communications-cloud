@@ -163,6 +163,8 @@ export const TENANT_ROLE_DEFINITIONS: readonly RoleDefinition[] = Object.freeze(
       P.SUPPRESSIONS_MANAGE,
       P.MESSAGES_READ,
       P.MESSAGES_SEND,
+      P.CAMPAIGNS_READ,
+      P.CAMPAIGNS_MANAGE,
       // Phase 7 PR 7-1 (DECISIONS.md §1zi): the organization's own billing read.
       // Inert on the HTTP surface until a later Phase 7 PR adds billing routes.
       P.BILLING_READ,

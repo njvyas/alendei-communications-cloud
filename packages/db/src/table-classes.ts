@@ -49,6 +49,8 @@ export const TENANCY_RECORD_TABLES = [
  * Phase 3.1 Data Foundation tables + Phase 3.3 Message Orchestrator tables.
  */
 export const CONTENT_TABLES = [
+  'campaigns',
+  'campaign_recipients',
   'contacts',
   'contact_identities',
   'consent_events',

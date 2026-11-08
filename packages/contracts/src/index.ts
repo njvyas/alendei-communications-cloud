@@ -21,3 +21,4 @@ export * from './resellers';
 export * from './domain-oversight';
 export * from './platform-support';
 export * from './pricing';
+export * from './campaigns';

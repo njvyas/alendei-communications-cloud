@@ -3437,4 +3437,104 @@ export const campaignsApi = {
     previewCampaigns.unshift(newRecord);
     return { data: newRecord };
   },
+
+  // --- Live Backend Persistence (Phase 8B.1) --------------------------------
+
+  async listLive(
+    workspaceId: string,
+    params: {
+      channel?: string;
+      status?: string;
+      query?: string;
+      cursor?: string;
+      limit?: number;
+    } = {},
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<CampaignRecord>> {
+    const search = new URLSearchParams();
+    if (params.channel) search.set('channel', params.channel);
+    if (params.status) search.set('status', params.status);
+    if (params.query) search.set('query', params.query);
+    if (params.cursor) search.set('cursor', params.cursor);
+    if (params.limit) search.set('limit', String(params.limit));
+
+    const qs = search.toString();
+    const path = `/workspaces/${encodeURIComponent(workspaceId)}/campaigns${qs ? `?${qs}` : ''}`;
+    return apiFetch<ApiPagedResponse<CampaignRecord>>(path, { method: 'GET', signal });
+  },
+
+  async getLive(
+    workspaceId: string,
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<CampaignRecord>> {
+    return apiFetch<ApiDataResponse<CampaignRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/campaigns/${encodeURIComponent(id)}`,
+      { method: 'GET', signal },
+    );
+  },
+
+  async createLive(
+    workspaceId: string,
+    params: CreateCampaignParams,
+    idempotencyKey?: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<CampaignRecord>> {
+    const headers: Record<string, string> = {};
+    if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+
+    return apiFetch<ApiDataResponse<CampaignRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/campaigns`,
+      {
+        method: 'POST',
+        body: {
+          name: params.name,
+          description: params.description,
+          channel: params.channel,
+          templateId: params.templateId,
+          templateVariables: params.templateVariables,
+          recipientSource: params.recipientSource,
+          scheduleMode: params.scheduleMode,
+          scheduledAt: params.scheduledAt,
+          throttling: params.throttling,
+        },
+        headers,
+        signal,
+      },
+    );
+  },
+
+  async updateLive(
+    workspaceId: string,
+    id: string,
+    params: Partial<CreateCampaignParams>,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<CampaignRecord>> {
+    return apiFetch<ApiDataResponse<CampaignRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/campaigns/${encodeURIComponent(id)}`,
+      {
+        method: 'PATCH',
+        body: params,
+        signal,
+      },
+    );
+  },
+
+  async deleteLive(
+    workspaceId: string,
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<{ success: boolean }> {
+    return apiFetch<{ success: boolean }>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/campaigns/${encodeURIComponent(id)}`,
+      { method: 'DELETE', signal },
+    );
+  },
+
+  async dispatchLive(workspaceId: string, id: string, signal?: AbortSignal): Promise<never> {
+    return apiFetch<never>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/campaigns/${encodeURIComponent(id)}/dispatch`,
+      { method: 'POST', signal },
+    );
+  },
 };

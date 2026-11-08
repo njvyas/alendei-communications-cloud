@@ -1,0 +1,75 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { CreateCampaignDto, UpdateCampaignDto } from './campaigns.dto';
+
+const codeOf = (file: string): string =>
+  readFileSync(join(__dirname, file), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+const serviceCode = codeOf('campaigns.service.ts');
+const controllerCode = codeOf('campaigns.controller.ts');
+
+const errorsFor = async (cls: new () => object, body: Record<string, unknown>) =>
+  (await validate(plainToInstance(cls, body), { whitelist: true, forbidNonWhitelisted: true })).map(
+    (e) => e.property,
+  );
+
+describe('Campaigns boundary and structural guarantees', () => {
+  it('finds the files it is asserting over', () => {
+    expect(serviceCode.length).toBeGreaterThan(1000);
+    expect(controllerCode.length).toBeGreaterThan(500);
+  });
+
+  it('implements soft-deletion with deletedAt rather than SQL DELETE', () => {
+    expect(serviceCode).not.toMatch(/\.delete\(\s*schema\.campaigns\)/);
+    expect(serviceCode).toMatch(/deletedAt/);
+  });
+
+  it('controller enforces CAMPAIGNS_READ and CAMPAIGNS_MANAGE permissions', () => {
+    expect(controllerCode).toContain('PERMISSIONS.CAMPAIGNS_READ');
+    expect(controllerCode).toContain('PERMISSIONS.CAMPAIGNS_MANAGE');
+  });
+
+  it('dispatch endpoint is disabled and fails with explicit notice', () => {
+    expect(serviceCode).toContain('ERROR_CODES.CAMPAIGN_DISPATCH_DISABLED');
+    expect(serviceCode).toContain('Campaign dispatch remains disabled');
+  });
+
+  describe('DTO validation', () => {
+    it('validates valid CreateCampaignDto', async () => {
+      expect(
+        await errorsFor(CreateCampaignDto, {
+          name: 'Summer Promotion',
+          channel: 'whatsapp',
+          templateId: '01900000-0000-7000-8000-000000000001',
+          recipientSource: {
+            type: 'all_contacts',
+            contactCount: 150,
+          },
+          scheduleMode: 'immediate',
+        }),
+      ).toEqual([]);
+    });
+
+    it('rejects invalid CreateCampaignDto missing required fields', async () => {
+      const errors = await errorsFor(CreateCampaignDto, {
+        description: 'Missing name and template',
+      });
+      expect(errors).toContain('name');
+      expect(errors).toContain('templateId');
+      expect(errors).toContain('recipientSource');
+    });
+
+    it('validates UpdateCampaignDto', async () => {
+      expect(
+        await errorsFor(UpdateCampaignDto, {
+          name: 'Updated Campaign Name',
+          description: 'Updated description',
+        }),
+      ).toEqual([]);
+    });
+  });
+});

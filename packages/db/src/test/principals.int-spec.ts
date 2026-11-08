@@ -38,6 +38,9 @@ import {
 const TABLES = [
   'api_keys',
   'audit_logs',
+  // Phase 8B.1 (migration 0052): campaigns and campaign recipients
+  'campaign_recipients',
+  'campaigns',
   // Phase 2.1 (migration 0018): the global provider/channel catalogue. No tenant
   // column; RLS admits only a validated platform-scope claim (ADR-013 F-3).
   'channels',
@@ -108,6 +111,8 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
   acc_app: {
     api_keys: 'INSERT,SELECT',
     audit_logs: 'INSERT,SELECT',
+    campaign_recipients: 'INSERT,SELECT,UPDATE',
+    campaigns: 'INSERT,SELECT,UPDATE',
     // Phase 2.1: the channel catalogue is read-only (seeded by migration); a
     // provider is never deleted; its capability set is replaced as a whole.
     channels: 'SELECT',

@@ -103,6 +103,19 @@ const CATEGORIES: Category[] = [
     pattern: /[\w-]*(?:worker|queue|bullmq|processor|cron|setInterval|schedul|job)[\w-]*/gi,
     providerCodeOnly: false,
     pinned: {
+      'apps/api/src/campaigns/campaigns.dto.ts': [
+        'ALL_CAMPAIGN_SCHEDULE_MODES',
+        'CampaignScheduleMode',
+        'scheduleMode',
+        'scheduledAt',
+      ],
+      'apps/api/src/campaigns/campaigns.service.ts': [
+        'effectiveScheduleMode',
+        'scheduleMode',
+        'scheduled',
+        'scheduledAt',
+        'scheduledAtDate',
+      ],
       'apps/api/src/config/app-config.service.ts': [
         'DISPATCH_WORKER_BATCH_SIZE',
         'DISPATCH_WORKER_ENABLED',
@@ -136,15 +149,34 @@ const CATEGORIES: Category[] = [
         'messageDispatchQueue',
         'queued',
       ],
-      'apps/api/src/metadata.ts': ['queued'],
+      'apps/api/src/metadata.ts': ['queued', 'scheduleMode', 'scheduled', 'scheduledAt'],
       'apps/api/src/openapi/openapi-schemas.ts': ['QueuedMessage', 'QueuedMessageSchema', 'queued'],
       'apps/api/src/platform-support/platform-support-schemas.ts': ['queue'],
       'apps/api/src/platform-support/platform-support.controller.ts': ['queue'],
       'apps/api/src/platform-support/platform-support.service.ts': ['queue'],
       'apps/api/src/providers/provider-configuration.listener.ts': ['scheduleReconnect'],
       'apps/api/src/redis/redis.module.ts': ['enableOfflineQueue'],
+      'packages/contracts/src/campaigns.ts': [
+        'ALL_CAMPAIGN_SCHEDULE_MODES',
+        'CampaignScheduleMode',
+        'enqueued',
+        'scheduleMode',
+        'scheduled',
+        'scheduledAt',
+      ],
       'packages/contracts/src/messages.ts': ['QUEUED', 'QueuedMessageResponse', 'queued'],
       'packages/contracts/src/platform-support.ts': ['queue'],
+      'packages/db/src/schema/campaigns.ts': [
+        'campaignScheduleMode',
+        'campaign_schedule_mode',
+        'campaigns_scheduled_idx',
+        'enqueued',
+        'scheduleMode',
+        'schedule_mode',
+        'scheduled',
+        'scheduledAt',
+        'scheduled_at',
+      ],
       'packages/db/src/schema/messages.ts': [
         'messageDispatchQueue',
         'message_dispatch_queue',
@@ -172,6 +204,7 @@ const CATEGORIES: Category[] = [
     pattern: /[\w-]*(?:rout(?:er|ing)|failover|fallback|priorit|weight|canary)[\w-]*/gi,
     providerCodeOnly: false,
     pinned: {
+      'apps/api/src/campaigns/campaigns.service.ts': ['routingPolicyId'],
       'apps/api/src/common/filters/all-exceptions.filter.ts': ['STATUS_CODE_FALLBACKS', 'fallback'],
       'apps/api/src/messages/dispatch/dispatcher.service.ts': [
         'fallback',
@@ -232,6 +265,7 @@ const CATEGORIES: Category[] = [
         'priority',
         'uq_org_provider_assignments_org_channel_priority',
       ],
+      'packages/db/src/schema/campaigns.ts': ['routingPolicyId', 'routing_policy_id'],
       'packages/db/src/schema/messages.ts': ['routing'],
     },
   },
@@ -264,6 +298,7 @@ const CATEGORIES: Category[] = [
         'readLedgerPartitionReport',
         'usage_ledger',
       ],
+      'apps/api/src/campaigns/campaigns.service.ts': ['billing'],
       'apps/api/src/metadata.ts': [
         'ActivatePricingVersionDto',
         'CreatePricingAssignmentDto',
@@ -577,6 +612,7 @@ const CATEGORIES: Category[] = [
         'acc_delivery_dev_password',
         'deliveryCredentialProblems',
       ],
+      'apps/api/src/campaigns/campaigns.service.ts': ['delivered', 'deliveryRate'],
       'apps/api/src/contacts/contacts.service.ts': [
         '-delivered',
         'Delivered',
@@ -1028,6 +1064,7 @@ const CATEGORIES: Category[] = [
         'webhook_ingress_enabled',
         'webhook_ingress_key_rotated',
       ],
+      'packages/contracts/src/campaigns.ts': ['delivered', 'deliveryRate'],
       'packages/contracts/src/contacts.ts': ['message_delivered'],
       'packages/contracts/src/errors.ts': [
         'WEBHOOK_INGRESS_DISABLED',
@@ -1038,6 +1075,7 @@ const CATEGORIES: Category[] = [
         'WEBHOOK_PAYLOAD_TOO_LARGE',
         'WEBHOOK_UNSUPPORTED_MEDIA_TYPE',
       ],
+      'packages/db/src/schema/campaigns.ts': ['delivered', 'deliveryRate'],
       'packages/contracts/src/messages.ts': [
         'DELIVERED',
         'DELIVERED_AFTER_ESCALATION',
@@ -1367,6 +1405,8 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       'auth',
       // Phase 7 PR 7-1 (DECISIONS.md §1zi): the ledger partition startup check; no routes.
       'billing',
+      // Phase 8B.1 PR 8B-1: Campaigns foundation & CRUD APIs
+      'campaigns',
       'cli',
       'common',
       'config',
@@ -1424,6 +1464,8 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
     expect([...created].sort()).toEqual([
       'api_keys',
       'audit_logs',
+      'campaign_recipients',
+      'campaigns',
       'channels',
       'consent_events',
       'contact_identities',

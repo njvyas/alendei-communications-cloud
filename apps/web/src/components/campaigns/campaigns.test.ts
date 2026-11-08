@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
@@ -331,6 +331,17 @@ describe('Phase 8B Campaigns Module — Unit & Component Tests', () => {
       assert.strictEqual(canReadCampaigns(), true);
     });
 
+    it('canReadCampaigns admits actors with dedicated campaigns.read permission', () => {
+      setSessionGrants(['campaigns.read']);
+      assert.strictEqual(canReadCampaigns(), true);
+    });
+
+    it('canManageCampaigns admits actors with dedicated campaigns.manage permission', () => {
+      setSessionGrants(['campaigns.manage']);
+      assert.strictEqual(canManageCampaigns(), true);
+      assert.strictEqual(canReadCampaigns(), true);
+    });
+
     it('canReadCampaigns refuses actors who only hold workspaces.read or organizations.read', () => {
       setSessionGrants(['workspaces.read']);
       assert.strictEqual(canReadCampaigns(), false);
@@ -567,6 +578,91 @@ describe('Phase 8B Campaigns Module — Unit & Component Tests', () => {
           return apiErr.status === 404 && apiErr.code === 'NOT_FOUND';
         },
       );
+    });
+  });
+
+  describe('7. Live Backend Persistence & Endpoint Contracts (Phase 8B.1)', () => {
+    const originalFetch = globalThis.fetch;
+    let fetchCalls: { url: string; options: RequestInit }[] = [];
+
+    beforeEach(() => {
+      fetchCalls = [];
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        const options = init ?? {};
+        fetchCalls.push({ url, options });
+
+        return new Response(JSON.stringify({ data: { id: 'cmp-live-1', name: 'Live Campaign' } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      };
+    });
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    it('campaignsApi.listLive targets /workspaces/:workspaceId/campaigns with query parameters', async () => {
+      await campaignsApi.listLive('ws-live-1', {
+        channel: 'whatsapp',
+        status: 'draft',
+        query: 'sale',
+      });
+
+      assert.strictEqual(fetchCalls.length, 1);
+      assert.ok(fetchCalls[0]?.url.includes('/workspaces/ws-live-1/campaigns'));
+      assert.ok(fetchCalls[0]?.url.includes('channel=whatsapp'));
+      assert.ok(fetchCalls[0]?.url.includes('status=draft'));
+      assert.ok(fetchCalls[0]?.url.includes('query=sale'));
+      assert.strictEqual(fetchCalls[0]?.options.method, 'GET');
+    });
+
+    it('campaignsApi.getLive targets /workspaces/:workspaceId/campaigns/:id', async () => {
+      await campaignsApi.getLive('ws-live-1', 'cmp-123');
+
+      assert.strictEqual(fetchCalls.length, 1);
+      assert.ok(fetchCalls[0]?.url.endsWith('/workspaces/ws-live-1/campaigns/cmp-123'));
+      assert.strictEqual(fetchCalls[0]?.options.method, 'GET');
+    });
+
+    it('campaignsApi.createLive dispatches POST with Idempotency-Key header', async () => {
+      await campaignsApi.createLive(
+        'ws-live-1',
+        {
+          workspaceId: 'ws-live-1',
+          name: 'Live Flash Campaign',
+          channel: 'whatsapp',
+          templateId: '01900000-0000-7000-8000-000000000001',
+          templateName: 'live_tpl',
+          templateBody: 'Live template body',
+          recipientSource: { type: 'all_contacts', contactCount: 50 },
+          scheduleMode: 'immediate',
+        },
+        'test-idem-key',
+      );
+
+      assert.strictEqual(fetchCalls.length, 1);
+      assert.ok(fetchCalls[0]?.url.endsWith('/workspaces/ws-live-1/campaigns'));
+      assert.strictEqual(fetchCalls[0]?.options.method, 'POST');
+      const headers = (fetchCalls[0]?.options.headers ?? {}) as Record<string, string>;
+      assert.strictEqual(headers['Idempotency-Key'], 'test-idem-key');
+    });
+
+    it('campaignsApi.deleteLive dispatches DELETE to /workspaces/:workspaceId/campaigns/:id', async () => {
+      await campaignsApi.deleteLive('ws-live-1', 'cmp-123');
+
+      assert.strictEqual(fetchCalls.length, 1);
+      assert.ok(fetchCalls[0]?.url.endsWith('/workspaces/ws-live-1/campaigns/cmp-123'));
+      assert.strictEqual(fetchCalls[0]?.options.method, 'DELETE');
+    });
+
+    it('campaignsApi.dispatchLive dispatches POST to /workspaces/:workspaceId/campaigns/:id/dispatch', async () => {
+      await campaignsApi.dispatchLive('ws-live-1', 'cmp-123');
+
+      assert.strictEqual(fetchCalls.length, 1);
+      assert.ok(fetchCalls[0]?.url.endsWith('/workspaces/ws-live-1/campaigns/cmp-123/dispatch'));
+      assert.strictEqual(fetchCalls[0]?.options.method, 'POST');
     });
   });
 });

@@ -264,6 +264,11 @@ export const ERROR_CODES = {
   RESELLER_NOT_FOUND: 'RESELLER_NOT_FOUND',
   RESELLER_LIFECYCLE_CONFLICT: 'RESELLER_LIFECYCLE_CONFLICT',
 
+  // --- Campaigns (Phase 8B) --------------------------------------------------
+  CAMPAIGN_NOT_FOUND: 'CAMPAIGN_NOT_FOUND',
+  CAMPAIGN_LIFECYCLE_CONFLICT: 'CAMPAIGN_LIFECYCLE_CONFLICT',
+  CAMPAIGN_DISPATCH_DISABLED: 'CAMPAIGN_DISPATCH_DISABLED',
+
   // --- Generic -------------------------------------------------------------
 
   // Phase 5.0 provider webhook ingress (design spec Rev 2 §E). The 401 code is the same for

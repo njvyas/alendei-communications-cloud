@@ -738,31 +738,37 @@ export function useCanSendMessages(): boolean {
  * messaging/content access.
  */
 export function canReadCampaigns(): boolean {
-  return hasPermission('messages.read') || hasPermission('messages.send');
+  return (
+    hasPermission('campaigns.read') ||
+    hasPermission('campaigns.manage') ||
+    hasPermission('messages.read') ||
+    hasPermission('messages.send')
+  );
 }
 
 export function useCanReadCampaigns(): boolean {
+  const canReadCampaignsPerm = useHasPermission('campaigns.read');
+  const canManageCampaignsPerm = useHasPermission('campaigns.manage');
   const canReadMessages = useHasPermission('messages.read');
   const canSendMessages = useHasPermission('messages.send');
-  return canReadMessages || canSendMessages;
+  return canReadCampaignsPerm || canManageCampaignsPerm || canReadMessages || canSendMessages;
 }
 
 /**
  * Evaluates whether the actor can manage/create campaigns in the active organization.
  *
  * Frontend Visibility vs. Server-Side Authorization:
- * In accordance with ACC Architecture (§11), campaigns are callers of core communication
- * APIs and orchestrate message dispatch. Managing and initiating campaigns requires outbound
- * sending authority (`messages.send`).
- * Holding `templates.manage` alone is insufficient: template authoring does not confer message
- * sending rights. Server-side authorization remains unenforced pending Phase 8B backend endpoints.
+ * Phase 8B.1 introduces dedicated `campaigns.manage` server-side permission.
+ * For backwards compatibility and outbound sending authority, `messages.send` also confers visibility.
  */
 export function canManageCampaigns(): boolean {
-  return hasPermission('messages.send');
+  return hasPermission('campaigns.manage') || hasPermission('messages.send');
 }
 
 export function useCanManageCampaigns(): boolean {
-  return useHasPermission('messages.send');
+  const canManageCampaignsPerm = useHasPermission('campaigns.manage');
+  const canSendMessages = useHasPermission('messages.send');
+  return canManageCampaignsPerm || canSendMessages;
 }
 
 /**
