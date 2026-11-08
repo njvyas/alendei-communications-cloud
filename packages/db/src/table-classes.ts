@@ -61,6 +61,21 @@ export const CONTENT_TABLES = [
 
 /**
  * Tables with an `org_id` column that are in neither class, each with its
- * reason. Empty: every such table today is a tenancy record.
+ * reason.
+ *
+ * Phase 7 PR 7-1 (DP-3, `DECISIONS.md` §1zi) — the financial tables
+ * `usage_ledger`, `wallets` and `credit_accounts`: no application role holds any
+ * privilege on them, and they are reached only through SECURITY DEFINER
+ * functions (`app_ledger_post`, executable by no application role in PR 7-1).
+ * They fit neither class: tenant content requires `acc_app` SELECT, INSERT and
+ * UPDATE, and a tenancy record is reachable through `app_org_in_scope`. RLS is
+ * enabled with no policy, so a role that is ever granted access still sees
+ * nothing until a policy is approved. The monthly `usage_ledger` partitions are
+ * not listed: the census treats each partition as its parent, and every
+ * partition carries the parent's protections (`app_ledger_partition_report`).
  */
-export const ORG_ID_EXEMPT_TABLES: readonly string[] = [];
+export const ORG_ID_EXEMPT_TABLES: readonly string[] = [
+  'usage_ledger',
+  'wallets',
+  'credit_accounts',
+];

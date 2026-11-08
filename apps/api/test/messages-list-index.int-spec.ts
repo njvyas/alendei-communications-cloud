@@ -202,6 +202,8 @@ describe('U14.1a: GET /messages on (org_id, id DESC) — behaviour unchanged, pl
   }, 120_000);
 
   // destroyTenant deletes each organization; its roles, role permissions and grants cascade with it.
+  // Phase 7 PR 7-1: each deleted message is now checked against the ledger's RESTRICT FKs
+  // across every monthly partition, so the bulk teardown needs more than the 5 s default.
   afterAll(async () => {
     jest.restoreAllMocks();
     if (!h) return;
@@ -212,7 +214,7 @@ describe('U14.1a: GET /messages on (org_id, id DESC) — behaviour unchanged, pl
     }
     for (const tenant of [dense, sparse]) if (tenant) await destroyTenant(h.admin, tenant);
     await h.close();
-  });
+  }, 120_000);
 
   const page = async (token: string, query: Record<string, string | number>) => {
     const res = await request(h.app.getHttpServer())

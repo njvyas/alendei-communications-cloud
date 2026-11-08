@@ -115,6 +115,10 @@ export class MetricsService implements OnModuleInit {
   readonly webhookVerificationFailures: Counter<'adapter' | 'reason'>;
   readonly deliveryTransitions: Counter<'channel' | 'to'>;
   readonly deliveryReceiptLatency: Histogram<'channel'>;
+  // Phase 7 PR 7-1 — read-only ledger partition startup verification (DECISIONS.md §1zi RQ-4, RQ-6).
+  readonly ledgerPartitionHeadroomMonths: Gauge<never>;
+  readonly ledgerPartitionUnprotected: Gauge<never>;
+  readonly ledgerPartitionCheckFailures: Counter<never>;
 
   constructor(private readonly config: AppConfigService) {
     this.registry.setDefaultLabels({
@@ -286,6 +290,22 @@ export class MetricsService implements OnModuleInit {
       help: 'Time from the provider-reported event time to its receipt by the ingress, for receipts that changed delivery state.',
       labelNames: ['channel'],
       buckets: [0.5, 1, 2, 5, 10, 30, 60, 300, 900, 3600, 21600, 86400],
+    });
+
+    this.ledgerPartitionHeadroomMonths = this.gauge({
+      name: 'acc_billing_ledger_partition_headroom_months',
+      help: 'Whole months of contiguous usage_ledger partitions after the current month, at the last startup verification.',
+      labelNames: [],
+    });
+    this.ledgerPartitionUnprotected = this.gauge({
+      name: 'acc_billing_ledger_partition_unprotected',
+      help: 'usage_ledger partitions or same-named tables failing a protection or attachment check, at the last startup verification.',
+      labelNames: [],
+    });
+    this.ledgerPartitionCheckFailures = this.counter({
+      name: 'acc_billing_ledger_partition_check_failures_total',
+      help: 'Startup partition verifications that could not read the partition report.',
+      labelNames: [],
     });
   }
 

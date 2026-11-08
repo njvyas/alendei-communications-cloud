@@ -28,7 +28,11 @@ async function classification(client: PoolClient): Promise<{
     `SELECT c.table_name FROM information_schema.columns c
        JOIN information_schema.tables t
          ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+       JOIN pg_class pc
+         ON pc.relname = c.table_name AND pc.relnamespace = 'public'::regnamespace
      WHERE c.table_schema = 'public' AND c.column_name = 'org_id' AND t.table_type = 'BASE TABLE'
+       -- A partition is classified as its parent (Phase 7 PR 7-1, DP-3).
+       AND NOT pc.relispartition
      ORDER BY 1`,
   );
   const { rows: all } = await client.query<{ tablename: string }>(
@@ -83,7 +87,7 @@ describe('table classes — tenancy records, tenant content, exemptions', () => 
       expect(result).toEqual({ unclassified: [], multiplyClassified: [], unknown: [] });
     });
 
-    it('CONTENT_TABLES contains the Phase 3.1 and Phase 3.3 content tables, and no exemption is granted', () => {
+    it('CONTENT_TABLES contains the Phase 3.1 and Phase 3.3 content tables; the only exemptions are the Phase 7 financial tables', () => {
       expect([...CONTENT_TABLES].sort()).toEqual([
         'consent_events',
         'contact_identities',
@@ -94,7 +98,34 @@ describe('table classes — tenancy records, tenant content, exemptions', () => 
         'suppressions',
         'templates',
       ]);
-      expect(ORG_ID_EXEMPT_TABLES).toEqual([]);
+      expect([...ORG_ID_EXEMPT_TABLES].sort()).toEqual([
+        'credit_accounts',
+        'usage_ledger',
+        'wallets',
+      ]);
+    });
+
+    it('every partitioned table with an org_id column is listed, and none of its partitions is', async () => {
+      const result = await rolledBack(async (c) => {
+        const { rows } = await c.query<{ parent: string; partition: string }>(
+          `SELECT p.relname AS parent, ch.relname AS partition
+             FROM pg_inherits i
+             JOIN pg_class p ON p.oid = i.inhparent
+             JOIN pg_class ch ON ch.oid = i.inhrelid
+            WHERE p.relnamespace = 'public'::regnamespace AND p.relkind = 'p'`,
+        );
+        return rows;
+      });
+      const listed = new Set([
+        ...TENANCY_RECORD_TABLES,
+        ...CONTENT_TABLES,
+        ...ORG_ID_EXEMPT_TABLES,
+      ]);
+      expect(result.length).toBeGreaterThan(0);
+      for (const { parent, partition } of result) {
+        expect([parent, listed.has(parent)]).toEqual([parent, true]);
+        expect([partition, listed.has(partition)]).toEqual([partition, false]);
+      }
     });
 
     it('a new table with an org_id column is reported unclassified — it cannot default silently', async () => {

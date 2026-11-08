@@ -323,6 +323,27 @@ describe('role administration', () => {
         .expect(400);
     });
 
+    // Phase 7 PR 7-1: the four billing and pricing keys are inert on the HTTP surface; no custom
+    // role may carry them, on create or on update, until the Phase 7 PR that adds their routes.
+    it('rejects each inert Phase 7 billing and pricing key, on create and on update (fail-closed)', async () => {
+      for (const key of ['billing.read', 'billing.manage', 'pricing.read', 'pricing.manage']) {
+        const res = await api(adminToken)
+          .create({
+            ...customRole(`custom_inert_${key.replace('.', '_')}`, [key]),
+            allowedScopeTypes: ['organization'],
+          })
+          .expect(400);
+        expect([key, res.body.error.code]).toEqual([key, ERROR_CODES.VALIDATION_FAILED]);
+      }
+      const created = await api(adminToken).create(customRole('custom_inert_update')).expect(201);
+      for (const key of ['billing.read', 'billing.manage', 'pricing.read', 'pricing.manage']) {
+        const res = await api(adminToken)
+          .update((created.body.data as RoleBody).id, { permissions: [key] })
+          .expect(400);
+        expect([key, res.body.error.code]).toEqual([key, ERROR_CODES.VALIDATION_FAILED]);
+      }
+    });
+
     it('rejects an empty allowedScopeTypes', async () => {
       await api(adminToken)
         .create({ ...customRole('custom_empty'), allowedScopeTypes: [] })

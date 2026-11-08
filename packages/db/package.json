@@ -21,6 +21,7 @@
     "db:index:messages-org-id-desc": "tsx src/cli/index-messages-org-id-desc.ts",
     "db:index:messages-org-created-at": "tsx src/cli/index-messages-org-created-at.ts",
     "db:index:message-attempts-delivery": "tsx src/cli/index-message-attempts-delivery.ts",
+    "db:ledger:partitions": "tsx src/cli/ledger-partitions.ts",
     "test": "npm run test:unit && npm run test:integration",
     "test:unit": "jest --selectProjects unit --passWithNoTests",
     "test:integration": "jest --selectProjects integration --runInBand --passWithNoTests",

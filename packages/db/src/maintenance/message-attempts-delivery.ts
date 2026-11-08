@@ -71,7 +71,13 @@ export const MESSAGE_ATTEMPTS_ID_MESSAGE_ID_UQ = {
   recoveryCommand: RECOVERY,
   requiresMigration: DELIVERY_FOUNDATION_MIGRATION,
   // 0046 attaches the index as this UNIQUE constraint and adds the FK that references it.
-  allowedConstraints: ['uq_message_attempts_id_message_id', 'messages_delivered_attempt_fk'],
+  // 0050 (Phase 7 PR 7-1) adds the ledger's attempt FK, which PostgreSQL clones onto every
+  // usage_ledger partition under the same name.
+  allowedConstraints: [
+    'uq_message_attempts_id_message_id',
+    'messages_delivered_attempt_fk',
+    'usage_ledger_message_attempt_fkey',
+  ],
 } as const satisfies ConcurrentIndexSpec;
 
 export const MESSAGE_ATTEMPTS_DELIVERY_INDEXES: readonly ConcurrentIndexSpec[] = [
