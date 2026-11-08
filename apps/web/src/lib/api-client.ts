@@ -141,28 +141,15 @@ export {
 };
 
 /**
- * Phase 5.0 (Option B): Extended message types with two-axis delivery outcomes.
+ * Phase 5.0 (Option B): tenant-facing message types are the `@acc/contracts` types
+ * unchanged — the two-axis delivery fields (`deliveryStatus`, `deliveredAt`, `readAt`)
+ * are defined there. Provider message references and the delivering attempt id are
+ * deliberately absent: under OD-9 (DECISIONS.md §1zh.2) provider message references
+ * are platform-staff-only and are never served on tenant responses.
  */
-export interface MessageSummaryResponse extends ContractsMessageSummaryResponse {
-  readonly deliveryStatus?: MessageDeliveryStatus | null;
-  readonly deliveredAt?: string | null;
-  readonly readAt?: string | null;
-}
-
-export interface MessageAttemptResponse extends ContractsMessageAttemptResponse {
-  readonly deliveryStatus?: MessageDeliveryStatus | null;
-  readonly deliveredAt?: string | null;
-  readonly readAt?: string | null;
-  readonly providerMessageId?: string | null;
-}
-
-export interface MessageDetailResponse extends Omit<ContractsMessageDetailResponse, 'attempts'> {
-  readonly deliveryStatus?: MessageDeliveryStatus | null;
-  readonly deliveredAt?: string | null;
-  readonly readAt?: string | null;
-  readonly deliveredAttemptId?: string | null;
-  readonly attempts: readonly MessageAttemptResponse[];
-}
+export type MessageSummaryResponse = ContractsMessageSummaryResponse;
+export type MessageAttemptResponse = ContractsMessageAttemptResponse;
+export type MessageDetailResponse = ContractsMessageDetailResponse;
 
 /**
  * Browser-side API client for Alendei Communications Cloud.
@@ -2622,7 +2609,7 @@ export interface MessageAttemptDetail {
   readonly deliveryStatus?: MessageDeliveryStatus | null;
   readonly deliveredAt?: string | null;
   readonly readAt?: string | null;
-  readonly providerMessageId?: string | null;
+  // No providerMessageId: provider message references are platform-staff-only (OD-9).
 }
 
 export interface MessageDetailWithAttempts {
@@ -2642,7 +2629,7 @@ export interface MessageDetailWithAttempts {
   readonly deliveryStatus?: MessageDeliveryStatus | null;
   readonly deliveredAt?: string | null;
   readonly readAt?: string | null;
-  readonly deliveredAttemptId?: string | null;
+  // No deliveredAttemptId: not part of the tenant-facing MessageDetailResponse contract.
 }
 
 export interface ListMessagesParams {

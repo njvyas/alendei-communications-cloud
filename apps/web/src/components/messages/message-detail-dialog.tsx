@@ -359,9 +359,6 @@ export function MessageDetailDialog({
                             Provider Ref
                           </th>
                           <th scope="col" className="px-3 py-2 font-medium">
-                            Provider Msg ID
-                          </th>
-                          <th scope="col" className="px-3 py-2 font-medium">
                             Delivery
                           </th>
                           <th scope="col" className="px-3 py-2 font-medium">
@@ -400,21 +397,6 @@ export function MessageDetailDialog({
                                     );
                                   })()
                                 : '—'}
-                            </td>
-                            <td
-                              className="px-3 py-2 font-mono text-[11px] text-[var(--color-ink)]"
-                              data-testid={`attempt-provider-msg-id-${att.attemptNumber}`}
-                            >
-                              {att.providerMessageId ? (
-                                <span
-                                  title={att.providerMessageId}
-                                  className="truncate max-w-[140px] inline-block"
-                                >
-                                  {att.providerMessageId}
-                                </span>
-                              ) : (
-                                <span className="opacity-50">—</span>
-                              )}
                             </td>
                             <td
                               className="px-3 py-2"

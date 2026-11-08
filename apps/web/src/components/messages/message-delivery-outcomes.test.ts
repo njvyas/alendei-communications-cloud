@@ -268,7 +268,7 @@ describe('ACC Phase 5.0: Two-Axis Delivery Outcomes Integration & Component Test
     assert.ok(html.includes('data-delivery-status="delivered"'));
   });
 
-  it('4. MessageDetailDialog renders delivery metadata and attempt-level delivery outcomes with providerMessageId', () => {
+  it('4. MessageDetailDialog renders delivery metadata and attempt-level delivery outcomes without provider message references (OD-9)', () => {
     const queryClient: QueryClient = createAppQueryClient();
 
     const detailWithDelivery: MessageDetailWithAttempts = {
@@ -299,7 +299,6 @@ describe('ACC Phase 5.0: Two-Axis Delivery Outcomes Integration & Component Test
           deliveryStatus: 'delivered',
           deliveredAt: '2026-11-07T10:00:06.000Z',
           readAt: '2026-11-07T10:01:15.000Z',
-          providerMessageId: 'wamid.HBgLMTEwMDAwMDAwMBICABEYEjFDNDhGOUU4NDUzM0IwMDYA',
         },
       ],
     };
@@ -328,13 +327,12 @@ describe('ACC Phase 5.0: Two-Axis Delivery Outcomes Integration & Component Test
     assert.ok(html.includes('data-testid="detail-read-receipt"'));
     assert.ok(html.includes('Read Receipt'));
 
-    // Attempts table headers include Provider Msg ID and Delivery
-    assert.ok(html.includes('Provider Msg ID'));
+    // Attempts table has a Delivery column and no provider message reference column (OD-9)
     assert.ok(html.includes('Delivery'));
+    assert.ok(!html.includes('Provider Msg ID'));
+    assert.ok(!html.includes('attempt-provider-msg-id-'));
 
-    // Attempt row displays providerMessageId and delivery outcome
-    assert.ok(html.includes('data-testid="attempt-provider-msg-id-1"'));
-    assert.ok(html.includes('wamid.HBgLMTEwMDAwMDAwMBICABEYEjFDNDhGOUU4NDUzM0IwMDYA'));
+    // Attempt row displays the delivery outcome
     assert.ok(html.includes('data-testid="attempt-delivery-1"'));
   });
 
@@ -367,7 +365,6 @@ describe('ACC Phase 5.0: Two-Axis Delivery Outcomes Integration & Component Test
           deliveryStatus: 'delivered',
           deliveredAt: '2026-11-07T10:00:05.000Z',
           readAt: '2026-11-07T10:00:15.000Z',
-          providerMessageId: 'wamid.HBgL987654321',
         },
       ],
     };
@@ -386,9 +383,9 @@ describe('ACC Phase 5.0: Two-Axis Delivery Outcomes Integration & Component Test
     assert.ok(html.includes('DELIVERED'));
     assert.ok(html.includes('READ'));
 
-    // Attempts table has Provider Msg ID and Delivery outcome
-    assert.ok(html.includes('Provider Msg ID'));
-    assert.ok(html.includes('wamid.HBgL987654321'));
+    // Attempts table has the Delivery outcome and no provider message reference column (OD-9)
+    assert.ok(!html.includes('Provider Msg ID'));
+    assert.ok(!html.includes('attempt-provider-msg-id-'));
     assert.ok(html.includes('data-testid="attempt-delivery-1"'));
   });
 
@@ -454,7 +451,6 @@ describe('ACC Phase 5.0: Two-Axis Delivery Outcomes Integration & Component Test
       deliveryStatus: 'delivered',
       deliveredAt: '2026-11-07T10:04:12.000Z',
       readAt: null,
-      deliveredAttemptId: 'att-multi-1',
       attempts: [
         {
           id: 'att-multi-1',
@@ -467,7 +463,6 @@ describe('ACC Phase 5.0: Two-Axis Delivery Outcomes Integration & Component Test
           deliveryStatus: 'delivered',
           deliveredAt: '2026-11-07T10:04:12.000Z',
           readAt: null,
-          providerMessageId: 'wamid.HBgL5550155META01',
         },
         {
           id: 'att-multi-2',
@@ -480,7 +475,6 @@ describe('ACC Phase 5.0: Two-Axis Delivery Outcomes Integration & Component Test
           deliveryStatus: 'pending',
           deliveredAt: null,
           readAt: null,
-          providerMessageId: null,
         },
       ],
     };
@@ -504,13 +498,10 @@ describe('ACC Phase 5.0: Two-Axis Delivery Outcomes Integration & Component Test
     assert.ok(html.includes('DELIVERED'));
 
     // Attempt 1 specifics
-    assert.ok(html.includes('data-testid="attempt-provider-msg-id-1"'));
-    assert.ok(html.includes('wamid.HBgL5550155META01'));
     assert.ok(html.includes('data-testid="attempt-delivery-1"'));
     assert.ok(html.includes('OUTCOME_UNKNOWN'));
 
-    // Attempt 2 specifics: no provider message ID, pending delivery, circuit open failure
-    assert.ok(html.includes('data-testid="attempt-provider-msg-id-2"'));
+    // Attempt 2 specifics: pending delivery, circuit open failure
     assert.ok(html.includes('data-testid="attempt-delivery-2"'));
     assert.ok(html.includes('CIRCUIT_OPEN'));
 
@@ -653,5 +644,63 @@ describe('ACC Phase 5.0: Two-Axis Delivery Outcomes Integration & Component Test
     assert.ok(html.includes('aria-label="Delivery status: Undelivered"'));
     assert.ok(html.includes('aria-label="Delivery status: Receipts not supported"'));
     assert.ok(html.includes('aria-label="Delivery status: Not tracked"'));
+  });
+
+  it('OD-9: provider message references are never rendered, even if a response carried them', () => {
+    // The tenant-facing contract has no providerMessageId or deliveredAttemptId. This
+    // simulates an unexpected server response carrying them anyway (cast past the type).
+    const leaked = {
+      id: 'od9-msg',
+      orgId: ORG_ID,
+      workspaceId: WORKSPACE_ID,
+      contactId: 'ct-1',
+      channelId: CHANNEL_ID,
+      templateId: null,
+      status: 'accepted',
+      recipientAddress: '+12025550101',
+      payload: {},
+      failureReason: null,
+      createdAt: '2026-11-07T10:00:00.000Z',
+      completedAt: '2026-11-07T10:00:02.000Z',
+      deliveryStatus: 'delivered',
+      deliveredAt: '2026-11-07T10:00:05.000Z',
+      readAt: null,
+      deliveredAttemptId: 'att-od9-1',
+      attempts: [
+        {
+          id: 'att-od9-1',
+          attemptNumber: 1,
+          providerId: 'prv-sim-01',
+          status: 'accepted',
+          failureReason: null,
+          latencyMs: 10,
+          completedAt: '2026-11-07T10:00:02.000Z',
+          deliveryStatus: 'delivered',
+          deliveredAt: '2026-11-07T10:00:05.000Z',
+          readAt: null,
+          providerMessageId: 'od9-provider-ref-must-not-render',
+        },
+      ],
+    } as unknown as MessageDetailWithAttempts;
+
+    const queryClient: QueryClient = createAppQueryClient();
+    queryClient.setQueryData(['messages', 'detail', 'od9-msg'], { data: leaked });
+    const dialogHtml = renderWithQueryClient(
+      React.createElement(MessageDetailDialog, {
+        messageId: 'od9-msg',
+        onClose: () => {},
+        channels: [mockChannel],
+      }),
+      queryClient,
+    );
+    const cardHtml = renderToStaticMarkup(
+      React.createElement(AttemptHistoryCard, { message: leaked, isPolling: false }),
+    );
+
+    for (const html of [dialogHtml, cardHtml]) {
+      assert.ok(html.includes('data-testid="attempt-delivery-1"'));
+      assert.ok(!html.includes('od9-provider-ref-must-not-render'));
+      assert.ok(!html.includes('Provider Msg ID'));
+    }
   });
 });
