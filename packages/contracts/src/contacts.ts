@@ -6,7 +6,6 @@
 
 import type { PageInfo } from './api';
 
-
 export const CONTACT_IDENTITY_STATUSES = ['active', 'inactive'] as const;
 export type ContactIdentityStatus = (typeof CONTACT_IDENTITY_STATUSES)[number];
 
