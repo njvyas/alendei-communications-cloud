@@ -89,6 +89,7 @@ export interface CampaignRecord {
 }
 
 export interface CreateCampaignParams {
+  readonly orgId?: string;
   readonly workspaceId: string;
   readonly name: string;
   readonly description?: string;
@@ -102,6 +103,10 @@ export interface CreateCampaignParams {
   readonly scheduledAt?: string | null;
   readonly throttling?: Partial<CampaignThrottling>;
 }
+
+/** Canonical preview organization IDs for isolated multi-tenant preview testing */
+export const DEFAULT_PREVIEW_ORG_ID = '01955b0a-7b3b-7411-9a4f-9e67d4f91111';
+export const SECONDARY_PREVIEW_ORG_ID = '01955b0a-7b3b-7411-9a4f-9e67d4f92222';
 
 /**
  * Explicit blocker descriptor identifying missing backend API contracts and schemas.
@@ -229,11 +234,12 @@ export function calculateCampaignKPIs(campaigns: readonly CampaignRecord[]): {
 }
 
 /**
- * Filters campaigns by workspace, channel, status, and query string.
+ * Filters campaigns by organization, workspace, channel, status, and query string.
  */
 export function filterCampaigns(
   campaigns: readonly CampaignRecord[],
   filters: {
+    readonly orgId?: string;
     readonly workspaceId?: string;
     readonly channel?: string;
     readonly status?: string;
@@ -243,7 +249,14 @@ export function filterCampaigns(
   const queryLower = filters.query?.trim().toLowerCase();
 
   return campaigns.filter((c) => {
-    if (filters.workspaceId && c.workspaceId !== filters.workspaceId) {
+    if (filters.orgId && c.orgId !== filters.orgId) {
+      return false;
+    }
+    if (
+      filters.workspaceId &&
+      filters.workspaceId !== 'all' &&
+      c.workspaceId !== filters.workspaceId
+    ) {
       return false;
     }
     if (filters.channel && filters.channel !== 'all' && c.channel !== filters.channel) {
@@ -271,7 +284,7 @@ export function filterCampaigns(
 export const INITIAL_MOCK_CAMPAIGNS: readonly CampaignRecord[] = [
   {
     id: 'cmp-001',
-    orgId: 'org-demo',
+    orgId: DEFAULT_PREVIEW_ORG_ID,
     workspaceId: 'ws-prod',
     name: 'Diwali Festive Sale 2026',
     description: 'Festive promotion broadcast with special discounts for VIP and loyalty contacts.',
@@ -312,7 +325,7 @@ export const INITIAL_MOCK_CAMPAIGNS: readonly CampaignRecord[] = [
   },
   {
     id: 'cmp-002',
-    orgId: 'org-demo',
+    orgId: DEFAULT_PREVIEW_ORG_ID,
     workspaceId: 'ws-prod',
     name: 'Black Friday Flash Sale Alert',
     description:
@@ -349,7 +362,7 @@ export const INITIAL_MOCK_CAMPAIGNS: readonly CampaignRecord[] = [
   },
   {
     id: 'cmp-003',
-    orgId: 'org-demo',
+    orgId: DEFAULT_PREVIEW_ORG_ID,
     workspaceId: 'ws-prod',
     name: 'Monthly Product Digest — November',
     description: 'Rich email campaign highlighting product improvements and customer stories.',
@@ -385,8 +398,8 @@ export const INITIAL_MOCK_CAMPAIGNS: readonly CampaignRecord[] = [
   },
   {
     id: 'cmp-004',
-    orgId: 'org-demo',
-    workspaceId: 'ws-prod',
+    orgId: DEFAULT_PREVIEW_ORG_ID,
+    workspaceId: 'ws-marketing',
     name: 'Scheduled Infrastructure Maintenance Advisory',
     description: 'Operational advisory regarding upcoming planned provider window.',
     channel: 'whatsapp',
@@ -421,8 +434,8 @@ export const INITIAL_MOCK_CAMPAIGNS: readonly CampaignRecord[] = [
   },
   {
     id: 'cmp-005',
-    orgId: 'org-demo',
-    workspaceId: 'ws-prod',
+    orgId: DEFAULT_PREVIEW_ORG_ID,
+    workspaceId: 'ws-marketing',
     name: 'Q4 Customer Experience Survey',
     description: 'Interactive rich card RCS survey sent to beta testers and loyalty members.',
     channel: 'rcs',
@@ -457,9 +470,9 @@ export const INITIAL_MOCK_CAMPAIGNS: readonly CampaignRecord[] = [
   },
   {
     id: 'cmp-006',
-    orgId: 'org-demo',
-    workspaceId: 'ws-prod',
-    name: 'Deprecating Legacy Sandbox Notice',
+    orgId: SECONDARY_PREVIEW_ORG_ID,
+    workspaceId: 'ws-beta-1',
+    name: 'Beta Organization Flash Onboarding',
     description: 'Emergency broadcast cancelled prior to complete dispatch.',
     channel: 'sms',
     templateId: 'tmpl-sms-legacy',
@@ -487,6 +500,42 @@ export const INITIAL_MOCK_CAMPAIGNS: readonly CampaignRecord[] = [
     },
     createdAt: '2026-11-03T16:00:00.000Z',
     updatedAt: '2026-11-03T16:05:00.000Z',
+    completedAt: null,
+    isSimulatedPreview: true,
+  },
+  {
+    id: 'cmp-007',
+    orgId: SECONDARY_PREVIEW_ORG_ID,
+    workspaceId: 'ws-beta-2',
+    name: 'Beta Customer Survey',
+    description: 'Quarterly review survey for secondary organization workspace.',
+    channel: 'whatsapp',
+    templateId: 'tmpl-diwali-01',
+    templateName: 'beta_survey',
+    templateBody: 'Hello {{1}}, please let us know how we did this month.',
+    status: 'draft',
+    recipientSource: {
+      type: 'tag_segment',
+      tag: 'VIP',
+      contactCount: 300,
+      segmentName: 'Beta Feedback Group',
+    },
+    scheduleMode: 'immediate',
+    scheduledAt: null,
+    throttling: {
+      rateLimitPerSecond: 10,
+      maxAttemptsPerRecipient: 1,
+    },
+    metrics: {
+      totalRecipients: 300,
+      sent: 0,
+      delivered: 0,
+      read: 0,
+      failed: 0,
+      deliveryRate: 0,
+    },
+    createdAt: '2026-11-08T09:00:00.000Z',
+    updatedAt: '2026-11-08T09:00:00.000Z',
     completedAt: null,
     isSimulatedPreview: true,
   },

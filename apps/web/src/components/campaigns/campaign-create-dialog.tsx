@@ -7,6 +7,7 @@ import { campaignsApi, contactsApi, templatesApi } from '@/lib/api-client';
 import {
   ALL_CAMPAIGN_CHANNELS,
   BACKEND_CAMPAIGN_SUPPORT_STATUS,
+  DEFAULT_PREVIEW_ORG_ID,
   getChannelDisplayName,
   type CampaignChannel,
   type CampaignRecord,
@@ -14,12 +15,14 @@ import {
   type CampaignScheduleMode,
 } from '@/lib/campaigns';
 import { RECOMMENDED_CDP_TAGS } from '@/lib/cdp';
+import { useSession } from '@/lib/session-store';
 import { useModalDialog } from '@/components/ui/dialog';
 import { toast } from '@/lib/toast';
 
 export interface CampaignCreateDialogProps {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
+  readonly orgId?: string;
   readonly workspaces: readonly { readonly id: string; readonly name: string }[];
   readonly defaultWorkspaceId?: string;
   readonly onCreated?: (campaign: CampaignRecord) => void;
@@ -28,10 +31,14 @@ export interface CampaignCreateDialogProps {
 export function CampaignCreateDialog({
   open,
   onOpenChange,
+  orgId,
   workspaces,
   defaultWorkspaceId = '',
   onCreated,
 }: CampaignCreateDialogProps) {
+  const sessionOrgId = useSession((state) => state.selectedOrganizationId);
+  const targetOrgId = orgId || sessionOrgId || DEFAULT_PREVIEW_ORG_ID;
+
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [workspaceId, setWorkspaceId] = useState(defaultWorkspaceId || workspaces[0]?.id || '');
@@ -138,6 +145,7 @@ export function CampaignCreateDialog({
       };
 
       const res = await campaignsApi.create({
+        orgId: targetOrgId,
         workspaceId: effectiveWorkspaceId,
         name: trimmedName,
         description: description.trim() || undefined,

@@ -85,6 +85,7 @@ import { maskRecipientAddress } from './address-masking';
 import {
   type CampaignRecord,
   type CreateCampaignParams,
+  DEFAULT_PREVIEW_ORG_ID,
   INITIAL_MOCK_CAMPAIGNS,
   filterCampaigns,
 } from './campaigns';
@@ -3334,10 +3335,12 @@ export const campaignsApi = {
 
   async list(
     workspaceId?: string,
-    params: { channel?: string; status?: string; query?: string } = {},
+    params: { orgId?: string; channel?: string; status?: string; query?: string } = {},
     _signal?: AbortSignal,
   ): Promise<ApiPagedResponse<CampaignRecord>> {
+    const effectiveOrgId = params.orgId ?? getSelectedOrganization() ?? undefined;
     const filtered = filterCampaigns(previewCampaigns, {
+      orgId: effectiveOrgId,
       workspaceId,
       channel: params.channel,
       status: params.status,
@@ -3354,8 +3357,23 @@ export const campaignsApi = {
     };
   },
 
-  async get(id: string, _signal?: AbortSignal): Promise<ApiDataResponse<CampaignRecord>> {
-    const campaign = previewCampaigns.find((c) => c.id === id);
+  async get(
+    id: string,
+    contextOrSignal?: { orgId?: string; workspaceId?: string } | AbortSignal,
+    _signal?: AbortSignal,
+  ): Promise<ApiDataResponse<CampaignRecord>> {
+    const options =
+      contextOrSignal && !(contextOrSignal instanceof AbortSignal) ? contextOrSignal : undefined;
+    const effectiveOrgId = options?.orgId ?? getSelectedOrganization() ?? undefined;
+    const effectiveWorkspaceId = options?.workspaceId;
+
+    const campaign = previewCampaigns.find((c) => {
+      if (c.id !== id) return false;
+      if (effectiveOrgId && c.orgId !== effectiveOrgId) return false;
+      if (effectiveWorkspaceId && c.workspaceId !== effectiveWorkspaceId) return false;
+      return true;
+    });
+
     if (!campaign) {
       throw new ApiError(404, 'NOT_FOUND', 'Campaign not found', 'preview-corr-id', false);
     }
@@ -3366,10 +3384,11 @@ export const campaignsApi = {
     params: CreateCampaignParams,
     _signal?: AbortSignal,
   ): Promise<ApiDataResponse<CampaignRecord>> {
+    const effectiveOrgId = params.orgId || getSelectedOrganization() || DEFAULT_PREVIEW_ORG_ID;
     const now = new Date().toISOString();
     const newRecord: CampaignRecord = {
       id: `cmp-prev-${Date.now().toString(36)}`,
-      orgId: 'org-demo',
+      orgId: effectiveOrgId,
       workspaceId: params.workspaceId,
       name: params.name,
       description: params.description,

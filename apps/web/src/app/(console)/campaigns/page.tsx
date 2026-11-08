@@ -61,6 +61,7 @@ export default function CampaignsDirectoryPage() {
       campaignsApi.list(
         selectedWorkspaceId === 'all' ? undefined : selectedWorkspaceId,
         {
+          orgId: selectedOrganizationId ?? undefined,
           channel: selectedChannel === 'all' ? undefined : selectedChannel,
           status: selectedStatus === 'all' ? undefined : selectedStatus,
           query: searchQuery || undefined,
@@ -416,6 +417,7 @@ export default function CampaignsDirectoryPage() {
       <CampaignCreateDialog
         open={isCreateOpen}
         onOpenChange={setIsCreateOpen}
+        orgId={selectedOrganizationId ?? undefined}
         workspaces={workspaces}
         defaultWorkspaceId={selectedWorkspaceId !== 'all' ? selectedWorkspaceId : undefined}
         onCreated={() => {

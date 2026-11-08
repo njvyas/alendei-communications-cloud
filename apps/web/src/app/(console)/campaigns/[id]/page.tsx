@@ -4,6 +4,7 @@ import { use } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { campaignsApi } from '@/lib/api-client';
+import { useCanReadCampaigns, useSession } from '@/lib/session-store';
 import { CampaignDetailView } from '@/components/campaigns/campaign-detail-view';
 
 interface CampaignDetailPageProps {
@@ -12,6 +13,8 @@ interface CampaignDetailPageProps {
 
 export default function CampaignDetailPage({ params }: CampaignDetailPageProps) {
   const { id } = use(params);
+  const canReadCampaigns = useCanReadCampaigns();
+  const selectedOrganizationId = useSession((state) => state.selectedOrganizationId);
 
   const {
     data: campaignData,
@@ -19,11 +22,22 @@ export default function CampaignDetailPage({ params }: CampaignDetailPageProps) 
     error,
     refetch,
   } = useQuery({
-    queryKey: ['campaigns', 'detail', id],
-    queryFn: ({ signal }) => campaignsApi.get(id, signal),
+    queryKey: ['campaigns', 'detail', selectedOrganizationId, id],
+    queryFn: ({ signal }) =>
+      campaignsApi.get(id, { orgId: selectedOrganizationId ?? undefined }, signal),
+    enabled: Boolean(canReadCampaigns && selectedOrganizationId),
   });
 
-  if (isLoading) {
+  if (!canReadCampaigns) {
+    return (
+      <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-6 text-sm text-rose-300">
+        <h2 className="font-semibold text-rose-200">Access Denied</h2>
+        <p className="mt-1">You do not hold permissions to view campaigns in this organization.</p>
+      </div>
+    );
+  }
+
+  if (isLoading || !selectedOrganizationId) {
     return (
       <div className="space-y-6">
         <div className="h-5 w-32 animate-pulse rounded bg-acc-surface-raised" />

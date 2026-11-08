@@ -9,7 +9,9 @@ import {
   ALL_CAMPAIGN_CHANNELS,
   ALL_CAMPAIGN_STATUSES,
   BACKEND_CAMPAIGN_SUPPORT_STATUS,
+  DEFAULT_PREVIEW_ORG_ID,
   INITIAL_MOCK_CAMPAIGNS,
+  SECONDARY_PREVIEW_ORG_ID,
   calculateCampaignKPIs,
   filterCampaigns,
   getCampaignStatusLabel,
@@ -25,6 +27,7 @@ import { CampaignDetailView } from './campaign-detail-view';
 describe('Phase 8B Campaigns Module — Unit & Component Tests', () => {
   beforeEach(() => {
     campaignsApi.resetPreview();
+    useSession.getState().clearSession();
   });
 
   describe('1. Invariants & Backend Blocker Status', () => {
@@ -344,6 +347,184 @@ describe('Phase 8B Campaigns Module — Unit & Component Tests', () => {
 
       setSessionGrants(['messages.read']);
       assert.strictEqual(canManageCampaigns(), false);
+    });
+  });
+
+  describe('6. Tenant-Scoped Isolation (Two Organizations & Two Workspaces)', () => {
+    function setupSession(orgId: string) {
+      useSession.getState().setSession({
+        accessToken: 'synth-token',
+        user: {
+          userId: 'usr-isolated-test',
+          actorType: 'user',
+          authMethod: 'session',
+          sessionId: 'ses-isolated-test',
+          authenticatedAt: new Date().toISOString(),
+          tenant: { orgId, workspaceId: null, resellerId: null, isPlatformAdmin: false },
+          authorizedOrganizationIds: [DEFAULT_PREVIEW_ORG_ID, SECONDARY_PREVIEW_ORG_ID],
+          roles: [],
+          permissions: ['messages.read', 'messages.send'],
+        },
+        authorization: {
+          actorType: 'user',
+          userId: 'usr-isolated-test',
+          apiKeyId: null,
+          isPlatformAdmin: false,
+          organizationIds: [DEFAULT_PREVIEW_ORG_ID, SECONDARY_PREVIEW_ORG_ID],
+          grants: [
+            {
+              roleId: 'role-test',
+              roleKey: 'test_role',
+              scopeType: 'organization',
+              scopeId: orgId,
+              orgId,
+              permissions: ['messages.read', 'messages.send'],
+            },
+          ],
+        },
+        selectedOrgId: orgId,
+      });
+    }
+
+    it('scopes preview list strictly to the active organization context', async () => {
+      // Organization A query
+      const orgAList = await campaignsApi.list(undefined, { orgId: DEFAULT_PREVIEW_ORG_ID });
+      assert.strictEqual(orgAList.data.length, 5);
+      assert.ok(orgAList.data.every((c) => c.orgId === DEFAULT_PREVIEW_ORG_ID));
+      assert.ok(orgAList.data.some((c) => c.id === 'cmp-001'));
+      assert.ok(!orgAList.data.some((c) => c.id === 'cmp-006'));
+
+      // Organization B query
+      const orgBList = await campaignsApi.list(undefined, { orgId: SECONDARY_PREVIEW_ORG_ID });
+      assert.strictEqual(orgBList.data.length, 2);
+      assert.ok(orgBList.data.every((c) => c.orgId === SECONDARY_PREVIEW_ORG_ID));
+      assert.ok(orgBList.data.some((c) => c.id === 'cmp-006'));
+      assert.ok(!orgBList.data.some((c) => c.id === 'cmp-001'));
+    });
+
+    it('scopes preview list to specific workspaces within active organization', async () => {
+      // Org A workspaces: ws-prod vs ws-marketing
+      const wsProdList = await campaignsApi.list('ws-prod', { orgId: DEFAULT_PREVIEW_ORG_ID });
+      assert.strictEqual(wsProdList.data.length, 3);
+      assert.ok(
+        wsProdList.data.every(
+          (c) => c.orgId === DEFAULT_PREVIEW_ORG_ID && c.workspaceId === 'ws-prod',
+        ),
+      );
+
+      const wsMarketingList = await campaignsApi.list('ws-marketing', {
+        orgId: DEFAULT_PREVIEW_ORG_ID,
+      });
+      assert.strictEqual(wsMarketingList.data.length, 2);
+      assert.ok(
+        wsMarketingList.data.every(
+          (c) => c.orgId === DEFAULT_PREVIEW_ORG_ID && c.workspaceId === 'ws-marketing',
+        ),
+      );
+
+      // Org B workspaces: ws-beta-1 vs ws-beta-2
+      const wsBeta1List = await campaignsApi.list('ws-beta-1', {
+        orgId: SECONDARY_PREVIEW_ORG_ID,
+      });
+      assert.strictEqual(wsBeta1List.data.length, 1);
+      assert.strictEqual(wsBeta1List.data[0]?.id, 'cmp-006');
+
+      const wsBeta2List = await campaignsApi.list('ws-beta-2', {
+        orgId: SECONDARY_PREVIEW_ORG_ID,
+      });
+      assert.strictEqual(wsBeta2List.data.length, 1);
+      assert.strictEqual(wsBeta2List.data[0]?.id, 'cmp-007');
+    });
+
+    it('prevents cross-tenant record leakage when switching organizations in session store', async () => {
+      // 1. Set session to Organization A
+      setupSession(DEFAULT_PREVIEW_ORG_ID);
+      const resA = await campaignsApi.list();
+      assert.strictEqual(resA.data.length, 5);
+      assert.ok(resA.data.every((c) => c.orgId === DEFAULT_PREVIEW_ORG_ID));
+      assert.ok(resA.data.some((c) => c.id === 'cmp-001'));
+      assert.ok(!resA.data.some((c) => c.id === 'cmp-006'));
+
+      // 2. Switch session to Organization B
+      setupSession(SECONDARY_PREVIEW_ORG_ID);
+      const resB = await campaignsApi.list();
+      assert.strictEqual(resB.data.length, 2);
+      assert.ok(resB.data.every((c) => c.orgId === SECONDARY_PREVIEW_ORG_ID));
+      assert.ok(resB.data.some((c) => c.id === 'cmp-006'));
+      assert.ok(!resB.data.some((c) => c.id === 'cmp-001'));
+    });
+
+    it('campaignsApi.get enforces tenant and workspace isolation on detail lookups', async () => {
+      // Org A campaign can be fetched by Org A
+      const resA = await campaignsApi.get('cmp-001', { orgId: DEFAULT_PREVIEW_ORG_ID });
+      assert.strictEqual(resA.data.id, 'cmp-001');
+
+      // Org A campaign cannot be fetched by Org B (throws 404 NOT_FOUND)
+      await assert.rejects(
+        () => campaignsApi.get('cmp-001', { orgId: SECONDARY_PREVIEW_ORG_ID }),
+        (err: unknown) => {
+          const apiErr = err as { status?: number; code?: string };
+          return apiErr.status === 404 && apiErr.code === 'NOT_FOUND';
+        },
+      );
+
+      // Org B campaign can be fetched by Org B
+      const resB = await campaignsApi.get('cmp-006', { orgId: SECONDARY_PREVIEW_ORG_ID });
+      assert.strictEqual(resB.data.id, 'cmp-006');
+
+      // Org B campaign cannot be fetched by Org A (throws 404 NOT_FOUND)
+      await assert.rejects(
+        () => campaignsApi.get('cmp-006', { orgId: DEFAULT_PREVIEW_ORG_ID }),
+        (err: unknown) => {
+          const apiErr = err as { status?: number; code?: string };
+          return apiErr.status === 404 && apiErr.code === 'NOT_FOUND';
+        },
+      );
+
+      // Workspace mismatch within same organization throws 404 NOT_FOUND
+      await assert.rejects(
+        () =>
+          campaignsApi.get('cmp-001', {
+            orgId: DEFAULT_PREVIEW_ORG_ID,
+            workspaceId: 'ws-marketing',
+          }),
+        (err: unknown) => {
+          const apiErr = err as { status?: number; code?: string };
+          return apiErr.status === 404 && apiErr.code === 'NOT_FOUND';
+        },
+      );
+    });
+
+    it('campaignsApi.create assigns the active session organization and selected workspace', async () => {
+      setupSession(SECONDARY_PREVIEW_ORG_ID);
+
+      const createdRes = await campaignsApi.create({
+        workspaceId: 'ws-beta-1',
+        name: 'Secondary Org Exclusive Campaign',
+        description: 'Verifying orgId assignment on create',
+        channel: 'sms',
+        templateId: 'tmpl-sms-beta',
+        templateName: 'beta_sms',
+        templateBody: 'SMS test for Org B',
+        recipientSource: {
+          type: 'all_contacts',
+          contactCount: 150,
+          segmentName: 'All Workspace Contacts',
+        },
+        scheduleMode: 'immediate',
+      });
+
+      assert.strictEqual(createdRes.data.orgId, SECONDARY_PREVIEW_ORG_ID);
+      assert.strictEqual(createdRes.data.workspaceId, 'ws-beta-1');
+      assert.strictEqual(createdRes.data.isSimulatedPreview, true);
+
+      // Verify campaign is visible to Org B
+      const orgBList = await campaignsApi.list(undefined, { orgId: SECONDARY_PREVIEW_ORG_ID });
+      assert.ok(orgBList.data.some((c) => c.id === createdRes.data.id));
+
+      // Verify campaign is invisible to Org A
+      const orgAList = await campaignsApi.list(undefined, { orgId: DEFAULT_PREVIEW_ORG_ID });
+      assert.ok(!orgAList.data.some((c) => c.id === createdRes.data.id));
     });
   });
 });
