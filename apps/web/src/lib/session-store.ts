@@ -727,30 +727,42 @@ export function useCanSendMessages(): boolean {
 
 /**
  * Evaluates whether the actor can view campaigns in the active organization.
- * In Phase 8B frontend preview, allows tenant users who hold messages.read or workspaces.read.
+ *
+ * Frontend Visibility vs. Server-Side Authorization:
+ * Phase 8B native campaign permissions (e.g. `campaigns.read`) do not exist in the catalog
+ * and no backend endpoints yet exist to enforce them.
+ * For client-side navigation and view visibility, we reuse the established communications
+ * pattern: an actor holding `messages.read` or `messages.send` (identical to `/whatsapp`)
+ * is granted console visibility. Tenancy-only permissions such as `workspaces.read` are
+ * deliberately excluded because they confer workspace metadata access rather than
+ * messaging/content access.
  */
 export function canReadCampaigns(): boolean {
-  return hasPermission('messages.read') || hasPermission('workspaces.read');
+  return hasPermission('messages.read') || hasPermission('messages.send');
 }
 
 export function useCanReadCampaigns(): boolean {
   const canReadMessages = useHasPermission('messages.read');
-  const canReadWorkspaces = useHasPermission('workspaces.read');
-  return canReadMessages || canReadWorkspaces;
+  const canSendMessages = useHasPermission('messages.send');
+  return canReadMessages || canSendMessages;
 }
 
 /**
  * Evaluates whether the actor can manage/create campaigns in the active organization.
- * Requires messages.send or templates.manage authority.
+ *
+ * Frontend Visibility vs. Server-Side Authorization:
+ * In accordance with ACC Architecture (§11), campaigns are callers of core communication
+ * APIs and orchestrate message dispatch. Managing and initiating campaigns requires outbound
+ * sending authority (`messages.send`).
+ * Holding `templates.manage` alone is insufficient: template authoring does not confer message
+ * sending rights. Server-side authorization remains unenforced pending Phase 8B backend endpoints.
  */
 export function canManageCampaigns(): boolean {
-  return hasPermission('messages.send') || hasPermission('templates.manage');
+  return hasPermission('messages.send');
 }
 
 export function useCanManageCampaigns(): boolean {
-  const canSendMessages = useHasPermission('messages.send');
-  const canManageTemplates = useHasPermission('templates.manage');
-  return canSendMessages || canManageTemplates;
+  return useHasPermission('messages.send');
 }
 
 /**

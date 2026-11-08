@@ -120,6 +120,11 @@ export default function CampaignsDirectoryPage() {
               </span>
               .
             </p>
+            <p className="mt-1 text-amber-900/90 dark:text-amber-200/90 leading-relaxed">
+              <strong>Phase 7 Billing Dependency:</strong> Bulk send dispatch depends on Phase 7
+              billing (wallets and rating engine). Wallet checks and ledger deductions are
+              unavailable in this preview.
+            </p>
           </div>
         </div>
       </div>
@@ -313,12 +318,19 @@ export default function CampaignsDirectoryPage() {
                       className="hover:bg-[var(--color-surface-raised)]/50 transition-colors"
                     >
                       <td className="px-4 py-3">
-                        <Link
-                          href={`/campaigns/${c.id}`}
-                          className="font-semibold text-acc-primary hover:underline"
-                        >
-                          {c.name}
-                        </Link>
+                        <div className="flex items-center gap-2">
+                          <Link
+                            href={`/campaigns/${c.id}`}
+                            className="font-semibold text-acc-primary hover:underline"
+                          >
+                            {c.name}
+                          </Link>
+                          {c.isSimulatedPreview && (
+                            <span className="inline-flex items-center rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                              Preview Fixture
+                            </span>
+                          )}
+                        </div>
                         {c.description && (
                           <p className="mt-0.5 line-clamp-1 text-[11px] text-[var(--color-ink-muted)]">
                             {c.description}
@@ -336,23 +348,44 @@ export default function CampaignsDirectoryPage() {
                           {c.recipientSource.segmentName || c.recipientSource.type}
                         </div>
                         <div className="text-[11px] text-[var(--color-ink-muted)]">
-                          {c.recipientSource.contactCount.toLocaleString()} recipients
+                          {c.recipientSource.contactCount != null ? (
+                            <>
+                              {c.recipientSource.contactCount.toLocaleString()} recipients
+                              {c.isSimulatedPreview && (
+                                <span className="ml-1 text-[10px] text-amber-600 dark:text-amber-400">
+                                  (Preview Fixture)
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-amber-600 dark:text-amber-400">
+                              Audience count unavailable — backend preview required
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{deliveryPct}%</span>
-                          <span className="text-[11px] text-[var(--color-ink-muted)]">
-                            ({c.metrics.delivered.toLocaleString()} /{' '}
-                            {c.metrics.totalRecipients.toLocaleString()})
-                          </span>
-                        </div>
-                        <div className="mt-1 h-1.5 w-24 overflow-hidden rounded-full bg-[var(--color-surface-raised)]">
-                          <div
-                            className="h-full bg-acc-primary"
-                            style={{ width: `${Math.min(deliveryPct, 100)}%` }}
-                          />
-                        </div>
+                        {c.metrics.totalRecipients != null && c.metrics.totalRecipients > 0 ? (
+                          <>
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{deliveryPct}%</span>
+                              <span className="text-[11px] text-[var(--color-ink-muted)]">
+                                ({c.metrics.delivered.toLocaleString()} /{' '}
+                                {c.metrics.totalRecipients.toLocaleString()})
+                              </span>
+                            </div>
+                            <div className="mt-1 h-1.5 w-24 overflow-hidden rounded-full bg-[var(--color-surface-raised)]">
+                              <div
+                                className="h-full bg-acc-primary"
+                                style={{ width: `${Math.min(deliveryPct, 100)}%` }}
+                              />
+                            </div>
+                          </>
+                        ) : (
+                          <div className="text-[11px] text-[var(--color-ink-muted)]">
+                            {c.metrics.sent > 0 ? `${c.metrics.sent.toLocaleString()} sent` : '—'}
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-[var(--color-ink-muted)]">
                         <div>{new Date(c.createdAt).toLocaleDateString()}</div>

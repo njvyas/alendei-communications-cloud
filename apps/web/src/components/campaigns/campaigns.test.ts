@@ -17,6 +17,7 @@ import {
   getChannelDisplayName,
 } from '@/lib/campaigns';
 import { campaignsApi } from '@/lib/api-client';
+import { useSession, canReadCampaigns, canManageCampaigns } from '@/lib/session-store';
 import { CampaignStatusBadge } from './campaign-status-badge';
 import { CampaignChannelBadge } from './campaign-channel-badge';
 import { CampaignDetailView } from './campaign-detail-view';
@@ -56,6 +57,15 @@ describe('Phase 8B Campaigns Module — Unit & Component Tests', () => {
       assert.ok(
         BACKEND_CAMPAIGN_SUPPORT_STATUS.notice.includes('Preview mode'),
         'Notice banner text must explicitly mention preview mode',
+      );
+      assert.strictEqual(
+        BACKEND_CAMPAIGN_SUPPORT_STATUS.billingDependency.isBillingEnforced,
+        false,
+        'Phase 7 billing must be marked as not enforced in preview',
+      );
+      assert.strictEqual(
+        BACKEND_CAMPAIGN_SUPPORT_STATUS.billingDependency.phase,
+        'Phase 7 (Billing)',
       );
     });
 
@@ -235,6 +245,105 @@ describe('Phase 8B Campaigns Module — Unit & Component Tests', () => {
         audienceHtml.includes('Suppression List Filtering'),
         'Must emphasize suppression list filtering',
       );
+      assert.ok(
+        audienceHtml.includes('Pre-Dispatch Billing &amp; Wallet Gate') ||
+          audienceHtml.includes('Pre-Dispatch Billing & Wallet Gate'),
+        'Must include Phase 7 billing dependency invariant in checklist',
+      );
+    });
+
+    it('CampaignDetailView renders unavailable state when audience count cannot be established', () => {
+      const mockWithoutCount = INITIAL_MOCK_CAMPAIGNS.find(
+        (c) => c.recipientSource.contactCount === null,
+      )!;
+      assert.ok(mockWithoutCount, 'Fixture with null contactCount must exist');
+      const html = renderToStaticMarkup(
+        React.createElement(CampaignDetailView, {
+          campaign: mockWithoutCount,
+          defaultTab: 'audience',
+        }),
+      );
+      assert.ok(
+        html.includes('Audience count unavailable — backend preview required'),
+        'Must display audience count unavailable notice',
+      );
+    });
+
+    it('CampaignDetailView renders Illustrative Preview Fixture badge when isSimulatedPreview is true', () => {
+      const mockCampaign = INITIAL_MOCK_CAMPAIGNS[0]!;
+      const html = renderToStaticMarkup(
+        React.createElement(CampaignDetailView, { campaign: mockCampaign }),
+      );
+      assert.ok(
+        html.includes('Illustrative Preview Fixture'),
+        'Must display Illustrative Preview Fixture badge in header',
+      );
+    });
+  });
+
+  describe('5. Permission Mapping & Gating Discipline', () => {
+    const ORG = '01955b0a-7b3b-7411-9a4f-9e67d4f91111';
+
+    function setSessionGrants(permissions: string[]) {
+      useSession.getState().setSession({
+        accessToken: 'synth-token',
+        user: {
+          userId: 'u-1',
+          actorType: 'user',
+          authMethod: 'session',
+          sessionId: 's-1',
+          authenticatedAt: new Date().toISOString(),
+          tenant: { orgId: null, workspaceId: null, resellerId: null, isPlatformAdmin: false },
+          authorizedOrganizationIds: [ORG],
+          roles: [],
+          permissions,
+        },
+        authorization: {
+          actorType: 'user',
+          userId: 'u-1',
+          apiKeyId: null,
+          isPlatformAdmin: false,
+          organizationIds: [ORG],
+          grants: [
+            {
+              roleId: 'role-test',
+              roleKey: 'test_role',
+              scopeType: 'organization',
+              scopeId: ORG,
+              orgId: ORG,
+              permissions,
+            },
+          ],
+        },
+        selectedOrgId: ORG,
+      });
+    }
+
+    it('canReadCampaigns admits actors with messages.read or messages.send', () => {
+      setSessionGrants(['messages.read']);
+      assert.strictEqual(canReadCampaigns(), true);
+
+      setSessionGrants(['messages.send']);
+      assert.strictEqual(canReadCampaigns(), true);
+    });
+
+    it('canReadCampaigns refuses actors who only hold workspaces.read or organizations.read', () => {
+      setSessionGrants(['workspaces.read']);
+      assert.strictEqual(canReadCampaigns(), false);
+
+      setSessionGrants(['organizations.read']);
+      assert.strictEqual(canReadCampaigns(), false);
+    });
+
+    it('canManageCampaigns requires messages.send and refuses actors who only hold templates.manage', () => {
+      setSessionGrants(['messages.send']);
+      assert.strictEqual(canManageCampaigns(), true);
+
+      setSessionGrants(['templates.manage']);
+      assert.strictEqual(canManageCampaigns(), false);
+
+      setSessionGrants(['messages.read']);
+      assert.strictEqual(canManageCampaigns(), false);
     });
   });
 });

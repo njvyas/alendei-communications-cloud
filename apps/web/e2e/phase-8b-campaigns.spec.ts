@@ -5,7 +5,7 @@ import path from 'node:path';
 /**
  * Portable screenshot output resolver:
  * Uses Playwright's testInfo.outputPath(...) as canonical portable destination,
- * and additionally mirrors to ACC_SCREENSHOT_DIR or the artifact directory.
+ * and additionally mirrors to process.env.ACC_SCREENSHOT_DIR if explicitly configured.
  */
 async function captureScreenshot(
   page: Page,
@@ -17,9 +17,7 @@ async function captureScreenshot(
   await page.screenshot({ path: outputPath, fullPage: options?.fullPage });
   await testInfo.attach(filename, { path: outputPath, contentType: 'image/png' });
 
-  const customDir =
-    process.env.ACC_SCREENSHOT_DIR ||
-    '/home/alendei-admin/.gemini/antigravity-cli/brain/936f4ad8-fcf8-487b-88f7-a46cc17adc12/screenshots';
+  const customDir = process.env.ACC_SCREENSHOT_DIR;
   if (customDir) {
     if (!existsSync(customDir)) {
       mkdirSync(customDir, { recursive: true });

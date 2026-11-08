@@ -23,7 +23,7 @@ export function CampaignDetailView({ campaign, defaultTab = 'overview' }: Campai
 
   const deliveryPercent = campaign.metrics.deliveryRate;
   const dispatchProgress =
-    campaign.metrics.totalRecipients > 0
+    campaign.metrics.totalRecipients != null && campaign.metrics.totalRecipients > 0
       ? Math.round((campaign.metrics.sent / campaign.metrics.totalRecipients) * 100)
       : 0;
 
@@ -48,6 +48,11 @@ export function CampaignDetailView({ campaign, defaultTab = 'overview' }: Campai
             </h1>
             <CampaignChannelBadge channel={campaign.channel} />
             <CampaignStatusBadge status={campaign.status} />
+            {campaign.isSimulatedPreview && (
+              <span className="inline-flex items-center rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
+                Illustrative Preview Fixture
+              </span>
+            )}
           </div>
           {campaign.description && (
             <p className="mt-1 text-sm text-[var(--color-ink-muted)]">{campaign.description}</p>
@@ -96,6 +101,11 @@ export function CampaignDetailView({ campaign, defaultTab = 'overview' }: Campai
               database tables). The data presented below is rendered from isolated frontend preview
               fixtures.
             </p>
+            <p className="mt-1.5 text-amber-900/90 dark:text-amber-200/90 leading-relaxed">
+              <strong>Phase 7 Billing Dependency:</strong> Bulk campaign dispatch depends on Phase 7
+              billing (wallets, credit reservation, pricing rating engine). In this preview, wallet
+              balance enforcement and rate deductions are unavailable.
+            </p>
           </div>
         </div>
       </div>
@@ -104,13 +114,27 @@ export function CampaignDetailView({ campaign, defaultTab = 'overview' }: Campai
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
         <StatCard
           label="Total Target"
-          value={campaign.metrics.totalRecipients.toLocaleString()}
-          description="Audience pool"
+          value={
+            campaign.recipientSource.contactCount != null
+              ? campaign.recipientSource.contactCount.toLocaleString()
+              : 'Unavailable'
+          }
+          description={
+            campaign.recipientSource.contactCount != null
+              ? campaign.isSimulatedPreview
+                ? 'Illustrative preview fixture'
+                : 'Audience pool'
+              : 'Audience count unavailable — backend preview required'
+          }
         />
         <StatCard
           label="Dispatched"
           value={campaign.metrics.sent.toLocaleString()}
-          description={`${dispatchProgress}% of total`}
+          description={
+            campaign.metrics.totalRecipients != null && campaign.metrics.totalRecipients > 0
+              ? `${dispatchProgress}% of total`
+              : 'Messages sent'
+          }
         />
         <StatCard
           label="Delivered"
@@ -323,7 +347,20 @@ export function CampaignDetailView({ campaign, defaultTab = 'overview' }: Campai
                 <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-3">
                   <div className="text-xs text-[var(--color-ink-muted)]">Audience Pool Size</div>
                   <div className="mt-1 text-sm font-semibold text-[var(--color-ink)]">
-                    {campaign.recipientSource.contactCount.toLocaleString()} contacts
+                    {campaign.recipientSource.contactCount != null ? (
+                      <>
+                        {campaign.recipientSource.contactCount.toLocaleString()} contacts
+                        {campaign.isSimulatedPreview && (
+                          <span className="ml-2 text-xs font-normal text-amber-600 dark:text-amber-400">
+                            (Illustrative Preview Fixture)
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-xs font-normal text-amber-600 dark:text-amber-400">
+                        Audience count unavailable — backend preview required
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -364,6 +401,15 @@ export function CampaignDetailView({ campaign, defaultTab = 'overview' }: Campai
                   <span>
                     <strong>DLT & Sender Registration:</strong> Channel pre-registration and
                     approved template binding enforced prior to dispatch.
+                  </span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-amber-500">⚠️</span>
+                  <span>
+                    <strong>Pre-Dispatch Billing & Wallet Gate (Phase 7 Dependency):</strong> Per
+                    ROADMAP.md §11b, bulk campaign dispatch depends on Phase 7 billing to ensure
+                    sends are charged against organization wallets or credit accounts. Wallet
+                    enforcement is pending backend implementation.
                   </span>
                 </li>
               </ul>

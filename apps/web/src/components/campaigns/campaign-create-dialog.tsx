@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { TemplateResponse } from '@acc/contracts';
-import { campaignsApi, templatesApi } from '@/lib/api-client';
+import { campaignsApi, contactsApi, templatesApi } from '@/lib/api-client';
 import {
   ALL_CAMPAIGN_CHANNELS,
   BACKEND_CAMPAIGN_SUPPORT_STATUS,
@@ -41,13 +41,21 @@ export function CampaignCreateDialog({
     useState<CampaignRecipientSourceType>('all_contacts');
   const [selectedTag, setSelectedTag] = useState<string>(RECOMMENDED_CDP_TAGS[0] ?? 'VIP');
   const [customTag, setCustomTag] = useState('');
-  const [customRecipientCount, setCustomRecipientCount] = useState<number>(2500);
   const [scheduleMode, setScheduleMode] = useState<CampaignScheduleMode>('immediate');
   const [scheduledAt, setScheduledAt] = useState<string>('');
   const [rateLimitPerSecond, setRateLimitPerSecond] = useState<number>(25);
 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const effectiveWorkspaceId = workspaceId || workspaces[0]?.id || '';
+
+  // Query contacts in the selected workspace to evaluate defensible audience count
+  const { data: contactsData, isLoading: isContactsLoading } = useQuery({
+    queryKey: ['contacts', 'list', effectiveWorkspaceId, { limit: 100 }],
+    queryFn: ({ signal }) => contactsApi.list(effectiveWorkspaceId, { limit: 100 }, signal),
+    enabled: open && Boolean(effectiveWorkspaceId),
+  });
 
   // Fetch real templates available in the tenant
   const { data: templatesData, isLoading: isTemplatesLoading } = useQuery({
@@ -111,21 +119,22 @@ export function CampaignCreateDialog({
         selectedTemplate?.body ??
         `Special campaign update for our valued customers. Reply STOP to opt out.`;
 
+      // Defensible contact count: only established if all_contacts is chosen and contactsApi enumerated all without truncation
+      const defensibleCount =
+        recipientSourceType === 'all_contacts' && contactsData?.page?.nextCursor === null
+          ? contactsData.data.length
+          : null;
+
       const recipientSource = {
         type: recipientSourceType,
         tag: recipientSourceType === 'tag_segment' ? effectiveTag : undefined,
-        contactCount:
-          recipientSourceType === 'all_contacts'
-            ? 12500
-            : recipientSourceType === 'tag_segment'
-              ? 3400
-              : customRecipientCount,
+        contactCount: defensibleCount,
         segmentName:
           recipientSourceType === 'all_contacts'
             ? 'All Workspace Contacts'
             : recipientSourceType === 'tag_segment'
               ? `Segment: ${effectiveTag}`
-              : `Custom List (${customRecipientCount.toLocaleString()})`,
+              : 'Custom Target List',
       };
 
       const res = await campaignsApi.create({
@@ -201,6 +210,11 @@ export function CampaignCreateDialog({
           </p>
           <p className="mt-1 text-amber-900/90 dark:text-amber-200/90">
             {BACKEND_CAMPAIGN_SUPPORT_STATUS.notice}
+          </p>
+          <p className="mt-1.5 text-amber-900/80 dark:text-amber-200/80">
+            <strong>Phase 7 Billing Dependency:</strong> Wallet reservation and per-message debit
+            enforcement are pending Phase 7 backend implementation and are unavailable in this
+            preview.
           </p>
         </div>
 
@@ -353,38 +367,63 @@ export function CampaignCreateDialog({
             <label className="block text-xs font-medium text-[var(--color-ink)]">
               Target Audience Selection
             </label>
-            <div className="mt-2 space-y-2 text-xs">
-              <label className="flex items-center gap-2 text-[var(--color-ink)]">
+            <div className="mt-2 space-y-3 text-xs">
+              <label className="flex items-start gap-2 text-[var(--color-ink)] cursor-pointer">
                 <input
                   type="radio"
                   name="recipientSource"
                   checked={recipientSourceType === 'all_contacts'}
                   onChange={() => setRecipientSourceType('all_contacts')}
-                  className="text-acc-primary"
+                  className="mt-0.5 text-acc-primary"
                 />
-                <span>All Contacts in Workspace (~12,500 contacts)</span>
+                <div>
+                  <span className="font-medium">All Contacts in Workspace</span>
+                  {isContactsLoading ? (
+                    <div role="status" className="text-[11px] text-[var(--color-ink-muted)]">
+                      Checking contact pool...
+                    </div>
+                  ) : contactsData?.page?.nextCursor === null ? (
+                    <div className="text-[11px] text-emerald-600 dark:text-emerald-400">
+                      {contactsData.data.length} contacts available in workspace
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-amber-600 dark:text-amber-400">
+                      Audience count unavailable — backend preview required
+                    </div>
+                  )}
+                </div>
               </label>
 
-              <label className="flex items-center gap-2 text-[var(--color-ink)]">
+              <label className="flex items-start gap-2 text-[var(--color-ink)] cursor-pointer">
                 <input
                   type="radio"
                   name="recipientSource"
                   checked={recipientSourceType === 'tag_segment'}
                   onChange={() => setRecipientSourceType('tag_segment')}
-                  className="text-acc-primary"
+                  className="mt-0.5 text-acc-primary"
                 />
-                <span>Segment by Contact Tag (CDP Tag)</span>
+                <div>
+                  <span className="font-medium">Segment by Contact Tag (CDP Tag)</span>
+                  <div className="text-[11px] text-amber-600 dark:text-amber-400">
+                    Audience count unavailable — backend preview required
+                  </div>
+                </div>
               </label>
 
-              <label className="flex items-center gap-2 text-[var(--color-ink)]">
+              <label className="flex items-start gap-2 text-[var(--color-ink)] cursor-pointer">
                 <input
                   type="radio"
                   name="recipientSource"
                   checked={recipientSourceType === 'custom_list'}
                   onChange={() => setRecipientSourceType('custom_list')}
-                  className="text-acc-primary"
+                  className="mt-0.5 text-acc-primary"
                 />
-                <span>Custom Target List</span>
+                <div>
+                  <span className="font-medium">Custom Target List</span>
+                  <div className="text-[11px] text-amber-600 dark:text-amber-400">
+                    Audience count unavailable — backend preview required
+                  </div>
+                </div>
               </label>
             </div>
 
@@ -425,21 +464,13 @@ export function CampaignCreateDialog({
 
             {recipientSourceType === 'custom_list' && (
               <div className="mt-3 border-t border-[var(--color-border-subtle)] pt-3">
-                <label
-                  htmlFor="campaign-recipient-count"
-                  className="block text-xs font-medium text-[var(--color-ink)]"
-                >
-                  Simulated Recipient Pool Size
-                </label>
-                <input
-                  id="campaign-recipient-count"
-                  type="number"
-                  min={1}
-                  max={500000}
-                  value={customRecipientCount}
-                  onChange={(e) => setCustomRecipientCount(Number(e.target.value))}
-                  className="mt-1 w-full rounded border border-[var(--color-border-subtle)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs text-[var(--color-ink)] focus:border-acc-primary focus:outline-none"
-                />
+                <p className="text-xs text-[var(--color-ink-muted)]">
+                  Custom recipient lists and CSV imports will be processed by the Phase 8B backend
+                  audience manifest engine.
+                </p>
+                <div className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+                  Audience count unavailable — backend preview required
+                </div>
               </div>
             )}
           </div>

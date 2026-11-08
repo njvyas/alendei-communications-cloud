@@ -44,7 +44,7 @@ export type CampaignRecipientSourceType = 'all_contacts' | 'tag_segment' | 'cust
 export interface CampaignRecipientSource {
   readonly type: CampaignRecipientSourceType;
   readonly tag?: string;
-  readonly contactCount: number;
+  readonly contactCount: number | null;
   readonly segmentName?: string;
 }
 
@@ -56,7 +56,7 @@ export interface CampaignThrottling {
 }
 
 export interface CampaignMetrics {
-  readonly totalRecipients: number;
+  readonly totalRecipients: number | null;
   readonly sent: number;
   readonly delivered: number;
   readonly read: number;
@@ -116,6 +116,19 @@ export const BACKEND_CAMPAIGN_SUPPORT_STATUS = {
     'POST /workspaces/:workspaceId/campaigns/:id/dispatch',
   ],
   missingSchemaTables: ['campaigns', 'campaign_recipients'],
+  billingDependency: {
+    phase: 'Phase 7 (Billing)',
+    isBillingEnforced: false,
+    missingCapabilities: [
+      'Wallets & credit balance authorization (/wallets)',
+      'Pricing & Rating Engine evaluation',
+      'Usage ledger reservation before dispatch',
+    ],
+    notice:
+      'Phase 7 billing pipeline has not been implemented. Pre-dispatch wallet balance checks and per-message ledger rating are unavailable.',
+  },
+  audienceResolutionNotice:
+    'Audience segmentation query engine (POST /workspaces/:workspaceId/audience/preview) is pending Phase 8B backend. Where an exact count cannot be established, counts are flagged as unavailable.',
   notice:
     'Preview mode: Backend campaign persistence and orchestration engine arrive with Phase 8B backend. Records created here exist only in the active browser session.',
 } as const;
@@ -197,7 +210,9 @@ export function calculateCampaignKPIs(campaigns: readonly CampaignRecord[]): {
     if (cmp.status === 'running' || cmp.status === 'scheduled') {
       activeCampaigns += 1;
     }
-    totalRecipientsTargeted += cmp.metrics.totalRecipients;
+    if (cmp.metrics.totalRecipients != null) {
+      totalRecipientsTargeted += cmp.metrics.totalRecipients;
+    }
     totalDelivered += cmp.metrics.delivered;
     totalSent += cmp.metrics.sent;
   }
@@ -418,7 +433,7 @@ export const INITIAL_MOCK_CAMPAIGNS: readonly CampaignRecord[] = [
     recipientSource: {
       type: 'tag_segment',
       tag: 'Beta-Tester',
-      contactCount: 1200,
+      contactCount: null,
       segmentName: 'Beta Testers Community',
     },
     scheduleMode: 'immediate',
@@ -428,7 +443,7 @@ export const INITIAL_MOCK_CAMPAIGNS: readonly CampaignRecord[] = [
       maxAttemptsPerRecipient: 1,
     },
     metrics: {
-      totalRecipients: 1200,
+      totalRecipients: null,
       sent: 0,
       delivered: 0,
       read: 0,
