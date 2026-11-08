@@ -1390,6 +1390,17 @@ export class ContactsService {
       const identityPredicates = [
         inArray(schema.contactIdentities.contactId, contactIds),
         eq(schema.contactIdentities.status, 'active'),
+        // The same active-suppression exclusion as the eligibility predicate above, applied to
+        // each identity on its own channel: a suppressed address is never returned, even when its
+        // contact stays eligible through another, unsuppressed identity.
+        sql`NOT EXISTS (
+          SELECT 1
+          FROM ${schema.suppressions} s
+          WHERE s.org_id = ${schema.contactIdentities.orgId}
+            AND (s.channel_id = ${schema.contactIdentities.channelId} OR s.channel_id IS NULL)
+            AND s.normalized_address = ${schema.contactIdentities.normalizedAddress}
+            AND s.status = 'active'
+        )`,
       ];
       if (resolvedChannel) {
         identityPredicates.push(eq(schema.contactIdentities.channelId, resolvedChannel.id));

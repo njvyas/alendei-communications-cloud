@@ -673,4 +673,75 @@ describe('Phase 8A-S: Contact Audience Resolution Integration Suite', () => {
       expect(res.body.totalCount).toBe(3);
     });
   });
+  describe('7. Suppressed identities are never returned (review observation A)', () => {
+    it('keeps a contact eligible through its unsuppressed identity and returns only that identity', async () => {
+      const server = h.app.getHttpServer();
+      const created = await request(server)
+        .post(url(`/workspaces/${tenantA.workspaceId}/contacts`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({
+          firstName: 'Hana',
+          lastName: 'DualIdentity',
+          metadata: { tags: ['dual-identity'] },
+        })
+        .expect(201);
+      const dual = created.body.data.id as string;
+      await request(server)
+        .post(url(`/workspaces/${tenantA.workspaceId}/contacts/${dual}/identities`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ channelId: whatsappChannelId, rawAddress: '+15551110081', isPrimary: true })
+        .expect(201);
+      await request(server)
+        .post(url(`/workspaces/${tenantA.workspaceId}/contacts/${dual}/identities`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ channelId: whatsappChannelId, rawAddress: '+15551110082' })
+        .expect(201);
+      await h.admin.insert(schema.suppressions).values({
+        id: uuidv7(),
+        orgId: tenantA.orgId,
+        channelId: whatsappChannelId,
+        rawAddress: '+15551110082',
+        normalizedAddress: '+15551110082',
+        reason: 'Review observation A',
+        status: 'active',
+      });
+
+      for (const body of [
+        { tags: ['dual-identity'], channel: 'whatsapp' },
+        { tags: ['dual-identity'] },
+      ]) {
+        const res = await request(server)
+          .post(url(`/workspaces/${tenantA.workspaceId}/contacts/audience/resolve`))
+          .set('authorization', `Bearer ${tokenA}`)
+          .send(body)
+          .expect(200);
+        // Eligibility, deduplication and counts are unchanged: one contact, counted once.
+        expect(res.body.totalCount).toBe(1);
+        expect(res.body.data).toHaveLength(1);
+        expect(res.body.data[0].contactId).toBe(dual);
+        expect(
+          res.body.data[0].identities.map(
+            (i: { normalizedAddress: string }) => i.normalizedAddress,
+          ),
+        ).toEqual(['+15551110081']);
+      }
+
+      // An organization-wide suppression (no channel) also removes the identity.
+      await h.admin
+        .update(schema.suppressions)
+        .set({ channelId: null })
+        .where(eq(schema.suppressions.normalizedAddress, '+15551110082'));
+      const orgWide = await request(server)
+        .post(url(`/workspaces/${tenantA.workspaceId}/contacts/audience/resolve`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ tags: ['dual-identity'], channel: 'whatsapp' })
+        .expect(200);
+      expect(orgWide.body.totalCount).toBe(1);
+      expect(
+        orgWide.body.data[0].identities.map(
+          (i: { normalizedAddress: string }) => i.normalizedAddress,
+        ),
+      ).toEqual(['+15551110081']);
+    });
+  });
 });
