@@ -471,6 +471,24 @@ A send is authorized via: `SELECT ... FOR UPDATE` on the org's `wallets`/`credit
 
 ### 10b. Pricing & Rating (conceptual — full schema finalized at Phase 7 design stage; `BILLING.md` §§10–17)
 
+> **As built, Phase 7 PR 7-2 (migration `0051`, `DECISIONS.md` §1zi.5).** This takes precedence over the conceptual description below where they differ.
+>
+> - **Catalogue** (platform only; `acc_app` policies gated by `app_has_platform_scope()`, the `0018` pattern):
+>   - `pricing_plans`: `name` unique, case-insensitive.
+>   - `pricing_plan_versions`: `draft` → `active`; at most one draft per plan. `effective_from` and `activated_at` are set at activation, never in the past, and frozen from then on. `superseded` is derived (a later version in force), not stored.
+>   - `pricing_rules`: `(channel_id, provider_id NULL)` → `unit_price_e4`, unique per version (NULLs not distinct). Editable only while the version is a draft. A provider must belong to the rule's channel.
+>   - `provider_cost_rates`: `(provider_id, effective_from)` unique; append-only.
+>   - `customer_pricing_assignments`: `org_id NULL` is the platform default; `(org_id, effective_from)` unique (NULLs not distinct); append-only.
+>   - Reseller, workspace and contract scopes are deferred (reseller pricing is Phase 9).
+> - **Rates** are `bigint` in 1/10,000 paisa (0 to 10¹²). The unit follows the channel (`app_pricing_unit_for_channel`: `sms` → `sms_segment`, `whatsapp`/`rcs` → `message`); no other channel is priced.
+> - **`pricing_evaluations`**:
+>   - Columns: `org_id`, `message_id`, `message_attempt_id NULL`, `subject` (`message`/`attempt`), `plan_version_id`, `rating_timestamp`, `currency = 'INR'`, `units`, `unit`, and the totals in whole paise.
+>   - One per message subject and one per attempt subject.
+>   - Composite `RESTRICT` foreign keys to `messages` and `message_attempts`.
+> - **`pricing_evaluation_components`** (`customer_price`, `provider_cost`): the rule or cost-rate reference, `quantity`, `unit_rate_e4`, `amount_exact_e4 = quantity × rate` and `amount_paise = (amount_exact_e4 + 5000) / 10000`. Both formulas are enforced by CHECK.
+> - **Access:** evaluations and components carry RLS with no policy and no application grants. They are written only by `app_rate_message` and read by `app_price_lookup`, both SECURITY DEFINER and executable by no application role until 7-4/7-5. Catalogue, cost-rate, assignment, evaluation and component rows are immutable where stated (UPDATE/DELETE/TRUNCATE refused).
+> - **Not yet:** `usage_ledger.pricing_evaluation_id` (arrives with 7-4/7-5), `rate_card_ref` (dropped: the evaluation names the plan version), multi-component pricing models beyond the two components, and partitioning.
+
 The Pricing & Rating Engine is conceptually independent of `usage_ledger`: it determines what a transaction is *worth*; the ledger records what was actually, financially charged. This independence must hold structurally — the engine is never hard-wired to compute one universal price per message. Conceptual entities (deliberately not exhaustively specified in this Phase 0.2 pass — Part 28's "do not over-specify future features" applies; these are named now only so `usage_ledger.pricing_evaluation_id` and `message_attempts.pricing_evaluation_id` above have a coherent target to reference):
 
 - **`pricing_plans`** — a named commercial offering (an org's, reseller's, or the platform's rate card), scoped like `routing_policies`/`fallback_policies` (`scope_type`/`scope_id` — platform, reseller, organization, workspace, channel, contract).

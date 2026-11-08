@@ -77,6 +77,8 @@ export const MESSAGE_ATTEMPTS_ID_MESSAGE_ID_UQ = {
     'uq_message_attempts_id_message_id',
     'messages_delivered_attempt_fk',
     'usage_ledger_message_attempt_fkey',
+    // 0051 (Phase 7 PR 7-2): the pricing evaluation's attempt FK.
+    'pricing_evaluations_message_attempt_fkey',
   ],
 } as const satisfies ConcurrentIndexSpec;
 

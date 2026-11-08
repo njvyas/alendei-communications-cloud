@@ -2634,6 +2634,42 @@ The owner approved these for the PR 7-1 design and then authorised PR 7-1 as one
 - **Message deletion.** Deleting a message or attempt now also checks the ledger's RESTRICT foreign keys across every monthly partition. No production path deletes messages; two index-test teardowns were given a longer hook timeout. Any future retention work must account for this.
 - **History proof:** `51|b1f2a7a36c020f3833f86d942d689a56` (`0000`–`0050`), recorded in `RELEASE.md`.
 
+### 1zi.5 PR 7-2 as built: pricing and rating (migration `0051`)
+Owner approval 08-Nov-2026: OD-P-1, OD-P-2 and OD-P-3 approved, PR 7-2 authorised as one draft PR on the Phase 7.2 handover.
+- **Financial rules (OD-P-1, OD-P-2).**
+  - Rates are integers in 1/10,000 paisa (`*_e4`, `bigint`, 0 to 10¹²).
+  - Arithmetic is integer only. Each component is rounded half up to whole paise once per rated transaction (`(exact + 5000) / 10000`), never per SMS segment and never on totals. A CHECK on `pricing_evaluation_components` proves the rounding of every stored row.
+  - SMS units are the approved segment count; WhatsApp and RCS are one unit per message.
+  - A zero-paise result records the evaluation; posting nothing for it is the 7-4/7-5 writer's contract.
+  - Provider cost comes only from `provider_cost_rates`. `estimateCost` is not used.
+- **Resolution and fail-closed behaviour.** An organisation assignment beats the platform default. The active version in force at the rating time applies, with an inclusive `effective_from` boundary. A provider rule beats the channel default. A missing price raises `BL007`; a missing provider cost rate raises `BL008`. Nothing is written on failure.
+- **Immutability (rule 9).**
+  - Activation freezes a version and its rules. Cost rates, assignments, evaluations and components reject UPDATE, DELETE and TRUNCATE (`fn_billing_immutable` and row guards).
+  - `effective_from` is never in the past, and `created_at` is always the database clock.
+  - `app_rate_message` never re-rates: an existing evaluation for the subject is returned unchanged with `inserted = false`.
+- **Idempotency and concurrency.** Partial unique indexes give one evaluation per message (`subject = 'message'`) and per attempt (`subject = 'attempt'`); `INSERT … ON CONFLICT DO NOTHING` then re-read. Eight concurrent calls produce one evaluation. A rule change takes the version row `FOR SHARE`, so it cannot interleave with activation.
+- **Privileges (inert, as in 7-1).**
+  - Neither `app_price_lookup` nor `app_rate_message` is executable by any application role. 7-4 and 7-5 grant them with caller checks.
+  - No application role holds any privilege on the evaluation tables (RLS on, no policy).
+  - The catalogue tables follow the `0018` pattern: `acc_app` policies are gated by `app_has_platform_scope()`.
+  - Both rating functions are SECURITY DEFINER without dynamic SQL, ALTER, `set_config` or `SET ROLE`, so invariant D holds unchanged.
+- **API.**
+  - 11 routes under `/platform/pricing`, all user-session only and platform scope, with `pricing.read` / `pricing.manage`. Both keys stay in `INERT_PERMISSION_KEYS`.
+  - Every mutation writes a security-sensitive audit row at platform scope.
+  - No route rates a transaction or exposes evaluations.
+- **Phase 7.1 unchanged.** No 7.1 object is altered. The 0045 index guard admits `pricing_evaluations_message_attempt_fkey`, as it did the ledger's key in 7-1.
+- **Deviations from the handover** (each keeps the approved decisions and invariants):
+  1. **No mandatory `Idempotency-Key` on the pricing POSTs.**
+     - Every pricing POST is naturally idempotent instead: plan names, `(provider, effective_from)` and `(org, effective_from)` are unique, and one draft per plan is enforced (`pricing_plan_versions_one_draft`). A retry is therefore 409 and creates nothing.
+     - The existing header is opt-in by design (`API.md` §4; `idempotency.decorator.ts`), which records that requiring it where a unique constraint already refuses the duplicate buys nothing. The provider catalogue follows the same convention.
+  2. **The unit is derived from the channel.** `app_pricing_unit_for_channel` maps `sms` to `sms_segment` and `whatsapp`/`rcs` to `message`. It is not a column on rules or cost rates and not a parameter of the functions, so a unit can never contradict its channel.
+     - `acc_app` may execute this helper because the catalogue triggers run as the caller. It is a STABLE `sql` function, not SECURITY DEFINER, and it rates nothing.
+     - The cost-rate key is `(provider_id, effective_from)`, because a provider belongs to one channel.
+  3. **`app_rate_message` takes the channel from the message and the provider from the attempt.** It does not take them from arguments. The subject is `attempt` when an attempt is given, otherwise `message`. Callers therefore cannot rate a message against another channel or provider.
+  4. **`superseded` is derived, not stored.** It means a later version in force. Storing it would require updating active rows, which rule 9 forbids.
+  5. **`created_by` / `activated_by` are not stored.** The audit log records the actor of every catalogue mutation.
+- **History proof:** `52|68697da8a18c2190391ad94a643563c1` (`0000`–`0051`), recorded in `RELEASE.md`.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

@@ -358,6 +358,13 @@
       "when": 1793836800000,
       "tag": "0050_phase7_1_ledger_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1793923200000,
+      "tag": "0051_phase7_2_pricing_rating",
+      "breakpoints": true
     }
   ]
 }

@@ -603,7 +603,7 @@ describe('Phase 7 PR 7-1 — ledger and billing-account foundation (migration 00
       ]);
     });
 
-    it('db:migrate is idempotent: re-runs verify 51 migrations, create no partition and keep 25 protected months', async () => {
+    it('db:migrate is idempotent: re-runs verify every migration, create no partition and keep 25 protected months', async () => {
       const count = async () =>
         (
           await admin(
@@ -617,7 +617,7 @@ describe('Phase 7 PR 7-1 — ledger and billing-account foundation (migration 00
           env: process.env,
           timeout: 300_000,
         });
-        expect(stdout).toContain('Schema up to date (51 migrations verified).');
+        expect(stdout).toContain('Schema up to date (52 migrations verified).');
         expect(stdout).toContain('Ledger partitions: created 0 partition(s).');
         expect(stdout).toMatch(
           /usage_ledger partitions ok: headroom 24 month\(s\); 25 partition\(s\); no gaps; all protected; no orphans/,

@@ -24,6 +24,9 @@ import {
   DOMAIN_STATUSES,
   DOMAIN_VERIFICATION_METHODS,
   DOMAIN_VERIFICATION_STATUSES,
+  PRICING_RATE_MAX_E4,
+  PRICING_UNITS,
+  PRICING_VERSION_STATUSES,
 } from '@acc/contracts';
 import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 
@@ -963,4 +966,70 @@ export class ResellerOrganizationSchema {
   @ApiProperty() status!: string;
   @ApiProperty(timestamp) createdAt!: string;
   @ApiProperty(timestamp) updatedAt!: string;
+}
+
+// --- pricing (Phase 7 PR 7-2) ----------------------------------------------------
+
+const rateE4 = { type: 'integer', minimum: 0, maximum: PRICING_RATE_MAX_E4 } as const;
+
+@ApiSchema({ name: 'PricingPlan' })
+export class PricingPlanSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty() name!: string;
+  @ApiProperty(nullableString) description!: string | null;
+  @ApiProperty(timestamp) createdAt!: string;
+}
+
+@ApiSchema({ name: 'PricingPlanVersionSummary' })
+export class PricingPlanVersionSummarySchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty(uuid) planId!: string;
+  @ApiProperty({ type: 'integer', minimum: 1 }) versionNumber!: number;
+  @ApiProperty({ enum: PRICING_VERSION_STATUSES }) status!: string;
+  @ApiProperty(nullableTimestamp) effectiveFrom!: string | null;
+  @ApiProperty(nullableTimestamp) activatedAt!: string | null;
+  @ApiProperty(timestamp) createdAt!: string;
+}
+
+@ApiSchema({ name: 'PricingPlanDetail' })
+export class PricingPlanDetailSchema extends PricingPlanSchema {
+  @ApiProperty({ type: [PricingPlanVersionSummarySchema] })
+  versions!: PricingPlanVersionSummarySchema[];
+}
+
+@ApiSchema({ name: 'PricingRule' })
+export class PricingRuleSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty(uuid) channelId!: string;
+  @ApiProperty() channelCode!: string;
+  @ApiProperty(nullableUuid) providerId!: string | null;
+  @ApiProperty({ enum: PRICING_UNITS }) unit!: string;
+  @ApiProperty({ ...rateE4, description: 'Unit price in 1/10,000 paisa.' }) unitPriceE4!: number;
+}
+
+@ApiSchema({ name: 'PricingPlanVersion' })
+export class PricingPlanVersionSchema extends PricingPlanVersionSummarySchema {
+  @ApiProperty({ type: [PricingRuleSchema] }) rules!: PricingRuleSchema[];
+}
+
+@ApiSchema({ name: 'ProviderCostRate' })
+export class ProviderCostRateSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty(uuid) providerId!: string;
+  @ApiProperty(uuid) channelId!: string;
+  @ApiProperty() channelCode!: string;
+  @ApiProperty({ enum: PRICING_UNITS }) unit!: string;
+  @ApiProperty({ ...rateE4, description: 'Unit cost in 1/10,000 paisa.' }) unitCostE4!: number;
+  @ApiProperty(timestamp) effectiveFrom!: string;
+  @ApiProperty(timestamp) createdAt!: string;
+}
+
+@ApiSchema({ name: 'PricingAssignment' })
+export class PricingAssignmentSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty({ ...nullableUuid, description: '`null` is the platform default rate card.' })
+  orgId!: string | null;
+  @ApiProperty(uuid) planId!: string;
+  @ApiProperty(timestamp) effectiveFrom!: string;
+  @ApiProperty(timestamp) createdAt!: string;
 }

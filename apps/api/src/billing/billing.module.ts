@@ -1,13 +1,22 @@
 import { Module } from '@nestjs/common';
 
 import { LedgerPartitionStartupCheck } from './ledger-partition-startup.check';
+import { PricingController } from './pricing.controller';
+import { PricingService } from './pricing.service';
 
 /**
- * Phase 7 billing (PR 7-1, `DECISIONS.md` §1zi). PR 7-1 contributes only the
- * ledger partition startup check: no controller, no route, no billing
- * enforcement, no account creation and no money movement.
+ * Phase 7 billing (`DECISIONS.md` §1zi).
+ *
+ * - PR 7-1: the read-only ledger partition startup check.
+ * - PR 7-2: platform pricing administration (rate cards, provider cost rates,
+ *   assignments). Rating itself is a database function no application role may
+ *   execute yet.
+ *
+ * No billing enforcement, reservation, settlement, account creation or money
+ * movement.
  */
 @Module({
-  providers: [LedgerPartitionStartupCheck],
+  controllers: [PricingController],
+  providers: [LedgerPartitionStartupCheck, PricingService],
 })
 export class BillingModule {}

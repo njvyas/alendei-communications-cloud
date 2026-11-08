@@ -100,6 +100,9 @@ describe('table classes — tenancy records, tenant content, exemptions', () => 
       ]);
       expect([...ORG_ID_EXEMPT_TABLES].sort()).toEqual([
         'credit_accounts',
+        // Phase 7 PR 7-2 (0051): platform pricing administration and the definer-only evaluations.
+        'customer_pricing_assignments',
+        'pricing_evaluations',
         'usage_ledger',
         'wallets',
       ]);
