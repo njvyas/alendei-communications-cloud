@@ -68,7 +68,7 @@ export default function CampaignsDirectoryPage() {
         },
         signal,
       ),
-    enabled: Boolean(canReadCampaigns),
+    enabled: Boolean(canReadCampaigns && selectedOrganizationId),
   });
 
   const campaigns: readonly CampaignRecord[] = campaignsData?.data ?? [];
@@ -79,6 +79,19 @@ export default function CampaignsDirectoryPage() {
       <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-6 text-sm text-rose-300">
         <h2 className="font-semibold text-rose-200">Access Denied</h2>
         <p className="mt-1">You do not hold permissions to view campaigns in this organization.</p>
+      </div>
+    );
+  }
+
+  if (!selectedOrganizationId) {
+    return (
+      <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface)] p-8 text-center shadow-xs">
+        <h2 className="text-base font-semibold text-[var(--color-ink)]">
+          Organization Context Required
+        </h2>
+        <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
+          Please select an organization from the header switcher to view its campaigns.
+        </p>
       </div>
     );
   }

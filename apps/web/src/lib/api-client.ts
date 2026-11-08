@@ -3339,6 +3339,17 @@ export const campaignsApi = {
     _signal?: AbortSignal,
   ): Promise<ApiPagedResponse<CampaignRecord>> {
     const effectiveOrgId = params.orgId ?? getSelectedOrganization() ?? undefined;
+    if (!effectiveOrgId) {
+      return {
+        data: [],
+        page: {
+          hasMore: false,
+          nextCursor: null,
+          limit: 50,
+        },
+      };
+    }
+
     const filtered = filterCampaigns(previewCampaigns, {
       orgId: effectiveOrgId,
       workspaceId,
@@ -3367,9 +3378,13 @@ export const campaignsApi = {
     const effectiveOrgId = options?.orgId ?? getSelectedOrganization() ?? undefined;
     const effectiveWorkspaceId = options?.workspaceId;
 
+    if (!effectiveOrgId) {
+      throw new ApiError(404, 'NOT_FOUND', 'Campaign not found', 'preview-corr-id', false);
+    }
+
     const campaign = previewCampaigns.find((c) => {
       if (c.id !== id) return false;
-      if (effectiveOrgId && c.orgId !== effectiveOrgId) return false;
+      if (c.orgId !== effectiveOrgId) return false;
       if (effectiveWorkspaceId && c.workspaceId !== effectiveWorkspaceId) return false;
       return true;
     });

@@ -134,19 +134,19 @@ describe('Phase 8B Campaigns Module — Unit & Component Tests', () => {
 
   describe('3. Isolated Preview Client & Persistence Boundary', () => {
     it('campaignsApi.list returns mock preview records clearly flagged as simulated preview', async () => {
-      const res = await campaignsApi.list();
-      assert.ok(res.data.length >= 6);
+      const res = await campaignsApi.list(undefined, { orgId: DEFAULT_PREVIEW_ORG_ID });
+      assert.ok(res.data.length >= 5);
       assert.ok(res.data.every((c) => c.isSimulatedPreview === true));
       assert.strictEqual(res.page.hasMore, false);
     });
 
     it('campaignsApi.get retrieves individual campaign record and rejects unknown IDs', async () => {
-      const res = await campaignsApi.get('cmp-001');
+      const res = await campaignsApi.get('cmp-001', { orgId: DEFAULT_PREVIEW_ORG_ID });
       assert.strictEqual(res.data.name, 'Diwali Festive Sale 2026');
       assert.strictEqual(res.data.channel, 'whatsapp');
 
       await assert.rejects(
-        () => campaignsApi.get('non-existent-campaign-id'),
+        () => campaignsApi.get('non-existent-campaign-id', { orgId: DEFAULT_PREVIEW_ORG_ID }),
         (err: unknown) => {
           const apiErr = err as { status?: number; message?: string };
           return apiErr.status === 404 && apiErr.message === 'Campaign not found';
@@ -155,10 +155,11 @@ describe('Phase 8B Campaigns Module — Unit & Component Tests', () => {
     });
 
     it('campaignsApi.create prepends a new preview campaign and marks it as simulated preview', async () => {
-      const beforeList = await campaignsApi.list();
+      const beforeList = await campaignsApi.list(undefined, { orgId: DEFAULT_PREVIEW_ORG_ID });
       const initialCount = beforeList.data.length;
 
       const createdRes = await campaignsApi.create({
+        orgId: DEFAULT_PREVIEW_ORG_ID,
         workspaceId: 'ws-prod',
         name: 'Unit Test Flash Promo',
         description: 'Temporary preview campaign created during unit test',
@@ -180,7 +181,7 @@ describe('Phase 8B Campaigns Module — Unit & Component Tests', () => {
       assert.strictEqual(createdRes.data.isSimulatedPreview, true);
       assert.strictEqual(createdRes.data.status, 'draft');
 
-      const afterList = await campaignsApi.list();
+      const afterList = await campaignsApi.list(undefined, { orgId: DEFAULT_PREVIEW_ORG_ID });
       assert.strictEqual(afterList.data.length, initialCount + 1);
       assert.strictEqual(afterList.data[0]?.id, createdRes.data.id);
     });
@@ -525,6 +526,47 @@ describe('Phase 8B Campaigns Module — Unit & Component Tests', () => {
       // Verify campaign is invisible to Org A
       const orgAList = await campaignsApi.list(undefined, { orgId: DEFAULT_PREVIEW_ORG_ID });
       assert.ok(!orgAList.data.some((c) => c.id === createdRes.data.id));
+    });
+
+    it('campaignsApi.list fails closed and returns empty result when organization context is null or unselected', async () => {
+      // Ensure session has no selected organization
+      useSession.getState().clearSession();
+
+      // 1. Direct call with no arguments and no session
+      const noArgList = await campaignsApi.list();
+      assert.deepStrictEqual(noArgList.data, []);
+      assert.strictEqual(noArgList.page.hasMore, false);
+
+      // 2. Direct call with workspace specified but no org
+      const wsList = await campaignsApi.list('ws-prod');
+      assert.deepStrictEqual(wsList.data, []);
+
+      // 3. Explicit undefined orgId in params
+      const explicitUndefinedList = await campaignsApi.list(undefined, { orgId: undefined });
+      assert.deepStrictEqual(explicitUndefinedList.data, []);
+    });
+
+    it('campaignsApi.get fails closed when organization context is null or unselected', async () => {
+      // Ensure session has no selected organization
+      useSession.getState().clearSession();
+
+      // 1. Attempt unscoped lookup with no context and no session
+      await assert.rejects(
+        () => campaignsApi.get('cmp-001'),
+        (err: unknown) => {
+          const apiErr = err as { status?: number; code?: string };
+          return apiErr.status === 404 && apiErr.code === 'NOT_FOUND';
+        },
+      );
+
+      // 2. Attempt lookup with explicit undefined orgId
+      await assert.rejects(
+        () => campaignsApi.get('cmp-001', { orgId: undefined }),
+        (err: unknown) => {
+          const apiErr = err as { status?: number; code?: string };
+          return apiErr.status === 404 && apiErr.code === 'NOT_FOUND';
+        },
+      );
     });
   });
 });
