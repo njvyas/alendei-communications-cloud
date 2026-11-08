@@ -1037,26 +1037,26 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
                                   }
                                 : template.endsWith('/rules') && method === 'PUT'
                                   ? { rules: [] }
-                                : template.endsWith('/campaigns') && method === 'POST'
-                                  ? {
-                                      name: `c-${suffix()}`,
-                                      channel: 'sms',
-                                      templateId: uuidv7(),
-                                      recipientSource: { type: 'all_contacts' },
-                                    }
-                                  : method !== 'PATCH'
-                                    ? {}
-                                    : template.includes('/branding')
-                                      ? { brandName: `Brand ${suffix()}` }
-                                      : template.includes('/users/')
-                                        ? { phone: '+15551234567' }
-                                        : template.includes('/contacts/')
-                                          ? { firstName: `x ${suffix()}` }
-                                          : template.includes('/identities/')
-                                            ? { isPrimary: true }
-                                            : template.includes('/provider-assignments/')
-                                              ? { priority: 2 }
-                                              : { name: `x ${suffix()}` },
+                                  : template.endsWith('/campaigns') && method === 'POST'
+                                    ? {
+                                        name: `c-${suffix()}`,
+                                        channel: 'sms',
+                                        templateId: uuidv7(),
+                                        recipientSource: { type: 'all_contacts' },
+                                      }
+                                    : method !== 'PATCH'
+                                      ? {}
+                                      : template.includes('/branding')
+                                        ? { brandName: `Brand ${suffix()}` }
+                                        : template.includes('/users/')
+                                          ? { phone: '+15551234567' }
+                                          : template.includes('/contacts/')
+                                            ? { firstName: `x ${suffix()}` }
+                                            : template.includes('/identities/')
+                                              ? { isPrimary: true }
+                                              : template.includes('/provider-assignments/')
+                                                ? { priority: 2 }
+                                                : { name: `x ${suffix()}` },
         });
         expect(`${method} ${template} → ${res.status}`).toMatch(/→ (404|403)$/);
       }
