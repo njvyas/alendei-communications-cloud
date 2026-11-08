@@ -612,6 +612,42 @@ describe('Phase 8A-S: Contact Audience Resolution Integration Suite', () => {
     });
   });
 
+  describe('5b. Consent filters require a channel (fail closed)', () => {
+    it.each([
+      [{ requireOptIn: true }],
+      [{ consentType: 'marketing' }],
+      [{ requireOptIn: true, consentType: 'marketing', tags: ['VIP'] }],
+    ])('rejects %j without channel or channelId (400), on every route', async (body) => {
+      const routes = [
+        `/workspaces/${tenantA.workspaceId}/contacts/audience/resolve`,
+        `/workspaces/${tenantA.workspaceId}/audience/preview`,
+        '/contacts/audience/resolve',
+      ];
+      for (const route of routes) {
+        const res = await request(h.app.getHttpServer())
+          .post(url(route))
+          .set('authorization', `Bearer ${tokenA}`)
+          .send(body)
+          .expect(400);
+        expect([route, res.body.error.code]).toEqual([route, ERROR_CODES.VALIDATION_FAILED]);
+      }
+      const get = await request(h.app.getHttpServer())
+        .get(url(`/workspaces/${tenantA.workspaceId}/contacts/audience/resolve`))
+        .query(body)
+        .set('authorization', `Bearer ${tokenA}`)
+        .expect(400);
+      expect(get.body.error.code).toBe(ERROR_CODES.VALIDATION_FAILED);
+    });
+
+    it('still allows requireOptIn: false without a channel (no consent filter requested)', async () => {
+      await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/contacts/audience/resolve`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ requireOptIn: false })
+        .expect(200);
+    });
+  });
+
   describe('6. Phase 8B Campaign Preview Endpoint Contract', () => {
     it('POST /workspaces/:workspaceId/audience/preview conforms to resolution response contract', async () => {
       const res = await request(h.app.getHttpServer())

@@ -1176,6 +1176,22 @@ export class ContactsService {
     const orgId = requireOrganization(principal);
     const effectiveWorkspaceId = targetWorkspaceId ?? dto.workspaceId;
 
+    // Consent filters are evaluated per channel. Without a channel they would be silently
+    // ignored and the audience would include unconsented and revoked contacts, so refuse
+    // (fail closed) instead.
+    if (
+      (dto.requireOptIn === true || dto.consentType !== undefined) &&
+      !dto.channelId &&
+      !dto.channel
+    ) {
+      throw new AppException({
+        status: HttpStatus.BAD_REQUEST,
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: 'requireOptIn and consentType require channel or channelId',
+        logContext: { requireOptIn: dto.requireOptIn === true, consentType: dto.consentType },
+      });
+    }
+
     return this.db.withRequestTenant(async (tx) => {
       // 1. Tenancy & Workspace Access Assertion
       if (effectiveWorkspaceId) {
