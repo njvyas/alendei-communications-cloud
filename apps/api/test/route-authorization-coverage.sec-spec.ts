@@ -300,7 +300,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 5.0 PR-E added the operator simulator trigger (platform providers.test_send, target
     // deferred): 133 → 134 scoped; and the ingress header form: 8 → 9 open.
     // Phase 8A added 2 scoped contact activities routes (workspace-scoped and direct; target deferred): 134 → 136 scoped.
-    expect(scoped.length).toBe(136);
+    // Phase 8A-S added 5 scoped contact audience resolution routes (workspace-scoped resolve POST/GET, preview POST, direct resolve POST/GET; target deferred): 136 → 141 scoped.
+    expect(scoped.length).toBe(141);
     expect(exempt.length).toBe(7);
     expect(open.length).toBe(9);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
@@ -327,7 +328,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 5.0 PR-C added 3 ingress-key routes, each targeting `platform`: 105 → 108.
     // Phase 5.0 PR-E added the operator simulator trigger (deferred, platform catalogue): 108 → 109.
     // Phase 8A added 2 contact activities routes, each targeting deferred workspace context: 109 → 111.
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(111);
+    // Phase 8A-S added 5 contact audience resolution routes, each targeting deferred workspace context: 111 → 116.
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(116);
   });
 });
 
