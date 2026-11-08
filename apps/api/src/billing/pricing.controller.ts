@@ -9,15 +9,18 @@ import {
   Post,
   Put,
   Query,
+  Res,
 } from '@nestjs/common';
 import { PERMISSIONS } from '@acc/contracts';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
 
 import { OptionalTenantContext } from '../auth/public.decorator';
 import { RequiresPermission } from '../auth/requires-permission.decorator';
 import { ListQueryDto } from '../common/http/list-query.dto';
+import { IdempotencyKey } from '../idempotency/idempotency.decorator';
 import { AcceptedCredentials } from '../openapi/accepted-credentials.decorator';
-import { ApiData, ApiErrors, ApiPaged } from '../openapi/openapi-responses';
+import { ApiData, ApiErrors, ApiIdempotencyKey, ApiPaged } from '../openapi/openapi-responses';
 import {
   PricingAssignmentSchema,
   PricingPlanDetailSchema,
@@ -40,9 +43,19 @@ import { PricingService } from './pricing.service';
 export const PRICING_CATALOGUE =
   'the pricing catalogue is global; every route authorizes at platform scope (Phase 7 PR 7-2, OD-P-3)';
 
+const KEYED =
+  'Requires `Idempotency-Key` (`400 IDEMPOTENCY_KEY_REQUIRED` without one): the same key and request replay the original response and create nothing; the same key with a different request is `422`.';
+
+/** Sets the status of an idempotent outcome (the original's, on a replay) and returns its body. */
+function send<T>(response: Response, outcome: { status: number; body: T }): T {
+  response.status(outcome.status);
+  return outcome.body;
+}
+
 /**
  * Phase 7 PR 7-2 — platform pricing administration. Platform scope only, signed-in
- * users only; every mutation is audited. No tenant-facing pricing route exists,
+ * users only; every mutation is audited; every creating `POST` requires an
+ * `Idempotency-Key` (the repository mechanism, platform namespace). No tenant-facing pricing route exists,
  * and nothing here rates a transaction or touches the ledger.
  */
 @ApiTags('pricing')
@@ -70,14 +83,19 @@ export class PricingController {
   })
   @HttpCode(HttpStatus.CREATED)
   @AcceptedCredentials('userSession')
+  @ApiIdempotencyKey({ required: true })
   @ApiOperation({
     summary: 'Create a rate card (pricing plan)',
-    description: 'Naturally idempotent: names are unique, so a retry is 409 and creates nothing.',
+    description: `${KEYED} Names are unique (case-insensitive): a new request with an existing name is 409.`,
   })
   @ApiData(PricingPlanDetailSchema, { status: 201 })
-  @ApiErrors(400, 401, 403, 409, 429)
-  async createPlan(@Body() dto: CreatePricingPlanDto) {
-    return { data: await this.pricing.createPlan(requestPrincipal(), dto) };
+  @ApiErrors(400, 401, 403, 409, 422, 429)
+  async createPlan(
+    @Body() dto: CreatePricingPlanDto,
+    @IdempotencyKey() key: string | null,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    return send(response, await this.pricing.createPlan(requestPrincipal(), dto, key));
   }
 
   @Get('plans/:id')
@@ -99,15 +117,19 @@ export class PricingController {
   })
   @HttpCode(HttpStatus.CREATED)
   @AcceptedCredentials('userSession')
+  @ApiIdempotencyKey({ required: true })
   @ApiOperation({
     summary: 'Create the next draft version of a rate card',
-    description:
-      'A draft prices nothing until activated. One draft per plan: a retry, or a create while a draft exists, is 409.',
+    description: `${KEYED} A retry replays the original draft even after it was activated. A draft prices nothing until activated; one draft per plan, so a new create while a draft exists is 409.`,
   })
   @ApiData(PricingPlanVersionSchema, { status: 201 })
-  @ApiErrors(400, 401, 403, 404, 409, 429)
-  async createVersion(@Param('id', new ParseUUIDPipe()) id: string) {
-    return { data: await this.pricing.createVersion(requestPrincipal(), id) };
+  @ApiErrors(400, 401, 403, 404, 409, 422, 429)
+  async createVersion(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @IdempotencyKey() key: string | null,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    return send(response, await this.pricing.createVersion(requestPrincipal(), id, key));
   }
 
   @Get('versions/:id')
@@ -131,7 +153,7 @@ export class PricingController {
   @ApiOperation({
     summary: "Replace a draft version's rules",
     description:
-      'Rates are integers in 1/10,000 paisa. A provider rule beats the channel default. Refused (409) once active.',
+      'Replaces the whole rule set, so a retry leaves the same rules. Rates are integers in 1/10,000 paisa. A provider rule beats the channel default. Refused (409) once active.',
   })
   @ApiData(PricingPlanVersionSchema)
   @ApiErrors(400, 401, 403, 404, 409, 429)
@@ -150,18 +172,20 @@ export class PricingController {
   })
   @HttpCode(HttpStatus.OK)
   @AcceptedCredentials('userSession')
+  @ApiIdempotencyKey({ required: true })
   @ApiOperation({
     summary: 'Activate a draft version',
-    description:
-      'Frozen from then on. effectiveFrom defaults to now and may not be in the past; a second activation is 409.',
+    description: `${KEYED} Frozen from then on. effectiveFrom defaults to now and may not be in the past; activating an active version under a new key is 409.`,
   })
   @ApiData(PricingPlanVersionSchema)
-  @ApiErrors(400, 401, 403, 404, 409, 429)
+  @ApiErrors(400, 401, 403, 404, 409, 422, 429)
   async activateVersion(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ActivatePricingVersionDto,
+    @IdempotencyKey() key: string | null,
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return { data: await this.pricing.activateVersion(requestPrincipal(), id, dto) };
+    return send(response, await this.pricing.activateVersion(requestPrincipal(), id, dto, key));
   }
 
   @Get('provider-cost-rates')
@@ -184,15 +208,19 @@ export class PricingController {
   })
   @HttpCode(HttpStatus.CREATED)
   @AcceptedCredentials('userSession')
+  @ApiIdempotencyKey({ required: true })
   @ApiOperation({
     summary: 'Record a provider cost rate',
-    description:
-      'Append-only; effectiveFrom defaults to now and may not be in the past. One rate per provider and effective time (a retry is 409).',
+    description: `${KEYED} Append-only; effectiveFrom defaults to now and may not be in the past. One rate per provider and effective time (409).`,
   })
   @ApiData(ProviderCostRateSchema, { status: 201 })
-  @ApiErrors(400, 401, 403, 404, 409, 429)
-  async createProviderCostRate(@Body() dto: CreateProviderCostRateDto) {
-    return { data: await this.pricing.createProviderCostRate(requestPrincipal(), dto) };
+  @ApiErrors(400, 401, 403, 404, 409, 422, 429)
+  async createProviderCostRate(
+    @Body() dto: CreateProviderCostRateDto,
+    @IdempotencyKey() key: string | null,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    return send(response, await this.pricing.createProviderCostRate(requestPrincipal(), dto, key));
   }
 
   @Get('assignments')
@@ -215,14 +243,18 @@ export class PricingController {
   })
   @HttpCode(HttpStatus.CREATED)
   @AcceptedCredentials('userSession')
+  @ApiIdempotencyKey({ required: true })
   @ApiOperation({
     summary: 'Assign a rate card to an organization or as the platform default',
-    description:
-      'Append-only; effectiveFrom defaults to now and may not be in the past. One assignment per organization (or the default) and effective time.',
+    description: `${KEYED} Append-only; effectiveFrom defaults to now and may not be in the past. One assignment per organization (or the default) and effective time (409).`,
   })
   @ApiData(PricingAssignmentSchema, { status: 201 })
-  @ApiErrors(400, 401, 403, 404, 409, 429)
-  async createAssignment(@Body() dto: CreatePricingAssignmentDto) {
-    return { data: await this.pricing.createAssignment(requestPrincipal(), dto) };
+  @ApiErrors(400, 401, 403, 404, 409, 422, 429)
+  async createAssignment(
+    @Body() dto: CreatePricingAssignmentDto,
+    @IdempotencyKey() key: string | null,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    return send(response, await this.pricing.createAssignment(requestPrincipal(), dto, key));
   }
 }

@@ -2659,16 +2659,18 @@ Owner approval 08-Nov-2026: OD-P-1, OD-P-2 and OD-P-3 approved, PR 7-2 authorise
   - No route rates a transaction or exposes evaluations.
 - **Phase 7.1 unchanged.** No 7.1 object is altered. The 0045 index guard admits `pricing_evaluations_message_attempt_fkey`, as it did the ledger's key in 7-1.
 - **Deviations from the handover** (each keeps the approved decisions and invariants):
-  1. **No mandatory `Idempotency-Key` on the pricing POSTs.**
-     - Every pricing POST is naturally idempotent instead: plan names, `(provider, effective_from)` and `(org, effective_from)` are unique, and one draft per plan is enforced (`pricing_plan_versions_one_draft`). A retry is therefore 409 and creates nothing.
-     - The existing header is opt-in by design (`API.md` §4; `idempotency.decorator.ts`), which records that requiring it where a unique constraint already refuses the duplicate buys nothing. The provider catalogue follows the same convention.
+  1. **`Idempotency-Key` is required on the five creating POSTs (owner correction to PR #90, 08-Nov-2026).** As first opened, PR #90 relied on unique constraints and a 409 instead. The owner's review showed that this was not safe: an assignment or cost rate posted without `effectiveFrom` takes a new database timestamp on every retry, and a draft-version create retried after activation made another draft. So:
+     - The five creating POSTs (plan, draft version, activation, provider cost rate and assignment) require the key (`400 IDEMPOTENCY_KEY_REQUIRED` without one). They run through the repository mechanism (`IdempotencyService.executePlatform`), with no parallel framework. The same key and request replay the original response and create nothing; the same key with a different request (body, path or principal) is `422`; concurrent duplicates serialise on the key's unique index, so exactly one record is created; only successes are stored.
+     - **Platform namespace.** Key records are namespaced by organization and the catalogue has none, so `0051` lets `idempotency_keys.org_id` be `NULL` for platform records only. Such a record is unique on `(endpoint, idempotency_key)` (`idempotency_keys_platform_scope_key`), must be a `/platform/` endpoint, must never belong to an API key (`idempotency_keys_platform_shape`), and is reachable by `acc_app` only under a validated platform-scope claim (`idempotency_keys_platform`). Every organization row, policy, index, column grant and trigger is unchanged. This revisits the 2.1 choice recorded in `provider-registry.service.ts`, by owner direction, for the pricing catalogue only.
+     - `pricing.manage` is asserted before the key is claimed, so a refused principal never reaches the key table.
+     - `PUT …/rules` stays unkeyed: it replaces the whole rule set, so a retry converges on the same rules.
   2. **The unit is derived from the channel.** `app_pricing_unit_for_channel` maps `sms` to `sms_segment` and `whatsapp`/`rcs` to `message`. It is not a column on rules or cost rates and not a parameter of the functions, so a unit can never contradict its channel.
      - `acc_app` may execute this helper because the catalogue triggers run as the caller. It is a STABLE `sql` function, not SECURITY DEFINER, and it rates nothing.
      - The cost-rate key is `(provider_id, effective_from)`, because a provider belongs to one channel.
   3. **`app_rate_message` takes the channel from the message and the provider from the attempt.** It does not take them from arguments. The subject is `attempt` when an attempt is given, otherwise `message`. Callers therefore cannot rate a message against another channel or provider.
   4. **`superseded` is derived, not stored.** It means a later version in force. Storing it would require updating active rows, which rule 9 forbids.
   5. **`created_by` / `activated_by` are not stored.** The audit log records the actor of every catalogue mutation.
-- **History proof:** `52|68697da8a18c2190391ad94a643563c1` (`0000`–`0051`), recorded in `RELEASE.md`.
+- **History proof:** `52|599f200526136d721a9a0a065f5f2768` (`0000`–`0051`), recorded in `RELEASE.md`.
 
 ## 3. Risks explicitly accepted by design (not oversights)
 

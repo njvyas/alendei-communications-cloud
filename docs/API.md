@@ -110,7 +110,7 @@ Platform administration of rate cards, provider cost rates and rate-card assignm
 - **Money:** rates are integers in 1/10,000 paisa (`unitPriceE4`, `unitCostE4`, 0 to 10¹²); INR only. The unit (`sms_segment` or `message`) follows the channel.
 - **Authorization:** `pricing.read` / `pricing.manage` at platform scope, signed-in users only. `alendei_super_admin` holds both; `alendei_support` holds `pricing.read`. Tenant and reseller administrators get `403`; API keys are refused. Both keys remain inert (`INERT_PERMISSION_KEYS`): no custom role or API key can carry them.
 - **Audit:** every mutation is recorded as a security-sensitive `pricing.*` action at platform scope.
-- **Idempotency:** natural, through unique constraints (plan name, one draft per plan, `(provider, effectiveFrom)`, `(organization, effectiveFrom)`); a retry is `409` and creates nothing. `Idempotency-Key` is not read.
+- **Idempotency:** every creating `POST` (plan, draft version, activation, provider cost rate, assignment) **requires** `Idempotency-Key` (`400 IDEMPOTENCY_KEY_REQUIRED` without one), with the semantics of §4. The same key and request replay the original response and status, even after the state has moved on (for example a draft retried after its activation), and create nothing. The same key with a different body, path or principal is `422 IDEMPOTENCY_KEY_PAYLOAD_MISMATCH`; a duplicate still in flight is `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`. Records live in the platform namespace of `idempotency_keys` (`org_id NULL`; `DATABASE.md` §7.1). A different request that collides with an existing record (plan name, a second draft, the same effective time) is `409`. `PUT …/rules` is unkeyed: it replaces the whole set.
 - **Append-only:** cost rates and assignments are never updated or deleted; a change is a new row with a later `effectiveFrom`.
 
 ## 3. Authentication & request identity
@@ -527,6 +527,8 @@ Idempotency is **execution/replay coordination**: it records that a request ran 
 | `POST /role-assignments` | Confers privilege; the same |
 | `POST /users` | Creates an identity (and its initial grant); the same (Phase 1B.6.1) |
 | `POST /api-keys` | Mints a credential; the replay returns `secret: null` (ADR-008, Phase 1B.6.2) |
+
+**Required** (Phase 7 PR 7-2, owner correction to PR #90): the platform pricing catalogue's creating `POST`s (`/platform/pricing/plans`, `/platform/pricing/plans/:id/versions`, `/platform/pricing/versions/:id/activate`, `/platform/pricing/provider-cost-rates`, `/platform/pricing/assignments`) refuse a request without the header (`400 IDEMPOTENCY_KEY_REQUIRED`). Each creates append-only, effective-dated or one-shot financial configuration, where a retry must never be mistaken for a second request. Records are kept in the platform namespace (`org_id NULL`, `DATABASE.md` §7.1); the semantics are otherwise exactly those above (§2d).
 
 **Deliberately not supported, with reasons** — this is a classification, not an omission:
 

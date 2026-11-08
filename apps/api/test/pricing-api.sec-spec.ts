@@ -28,8 +28,15 @@ import {
  * Proves: platform scope only (super admin manages; support reads; tenant administrators,
  * resellers and API keys are refused); signed-in users only; every mutation audited as
  * security-sensitive; drafts editable, activation freezes; effective dates never in the past;
- * natural idempotency (409 on retry); validation of rules and rates; and that no route rates a
- * transaction or exposes pricing evaluations.
+ * validation of rules and rates; and that no route rates a transaction or exposes pricing
+ * evaluations.
+ *
+ * Idempotency (owner correction to PR #90, 08-Nov-2026): every creating POST requires an
+ * `Idempotency-Key` and runs through the repository mechanism in its platform namespace. The
+ * same key and request replay the original response and create nothing — including the three
+ * defects the review found (an assignment or cost rate without `effectiveFrom`, and a draft
+ * version retried after activation); the same key with a different request is 422; concurrent
+ * identical requests create exactly one record.
  */
 describe('Phase 7 PR 7-2 — platform pricing API', () => {
   let h: Harness;
@@ -46,11 +53,25 @@ describe('Phase 7 PR 7-2 — platform pricing API', () => {
 
   const url = (p: string) => `/${PREFIX}${p}`;
   const suffix = () => uuidv7().replace(/-/g, '').slice(-10);
-  const call = (method: 'get' | 'post' | 'put', credential: string | null, path: string) => {
+  const newKey = () => `p72-${randomBytes(12).toString('hex')}`;
+  /**
+   * A request. Every POST carries a fresh `Idempotency-Key` unless `key` names one (a retry) or
+   * is `null` (none at all).
+   */
+  const call = (
+    method: 'get' | 'post' | 'put',
+    credential: string | null,
+    path: string,
+    key?: string | null,
+  ) => {
     let r = request(h.app.getHttpServer())[method](url(path));
     if (credential) r = r.set('authorization', `Bearer ${credential}`);
+    const k = key === undefined ? (method === 'post' ? newKey() : null) : key;
+    if (k) r = r.set('idempotency-key', k);
     return r;
   };
+  const count = async (query: ReturnType<typeof sql>) =>
+    Number((await h.admin.execute<{ n: string }>(query)).rows[0]!.n);
 
   async function platformUser(label: string, roleKey: string) {
     const email = `p72-${label}-${suffix()}@example.test`;
@@ -103,6 +124,9 @@ describe('Phase 7 PR 7-2 — platform pricing API', () => {
     tenant = await createTenant(h.admin, 'p72api', credentials);
     tokens.platform = await login(
       await platformUser('platform', PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN),
+    );
+    tokens.platform2 = await login(
+      await platformUser('platform2', PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN),
     );
     tokens.support = await login(await platformUser('support', PLATFORM_ROLE_KEYS.ALENDEI_SUPPORT));
     tokens.reseller = await login(
@@ -170,6 +194,12 @@ describe('Phase 7 PR 7-2 — platform pricing API', () => {
       sql`resource_type IN ('PricingPlan', 'PricingPlanVersion', 'ProviderCostRate', 'PricingAssignment', 'Pricing')`,
     );
     await purgeAudit(h.admin, sql`actor_api_key_id = ${apiKeyId}`);
+    await h.admin.execute(
+      sql`DELETE FROM idempotency_keys WHERE org_id IS NULL AND actor_user_id IN (${sql.join(
+        users.map((u) => sql`${u}`),
+        sql`, `,
+      )})`,
+    );
     await h.admin.execute(sql`DELETE FROM api_keys WHERE id = ${apiKeyId}`);
     await removeIdentities(h.admin, users);
     await destroyTenant(h.admin, tenant);
@@ -281,7 +311,7 @@ describe('Phase 7 PR 7-2 — platform pricing API', () => {
     const v = (
       await call('post', tokens.platform!, `/platform/pricing/plans/${p.id}/versions`).expect(201)
     ).body.data;
-    // One draft per plan: a retried create is refused and creates nothing.
+    // One draft per plan: a new create (new key) while a draft exists is refused.
     await call('post', tokens.platform!, `/platform/pricing/plans/${p.id}/versions`).expect(409);
     const put = (rules: unknown[]) =>
       call('put', tokens.platform!, `/platform/pricing/versions/${v.id}/rules`).send({ rules });
@@ -319,7 +349,7 @@ describe('Phase 7 PR 7-2 — platform pricing API', () => {
     expect(a.orgId).toBeNull();
     await call('post', tokens.platform!, '/platform/pricing/assignments')
       .send({ planId: p.id, effectiveFrom: future })
-      .expect(409); // retry
+      .expect(409); // a new request (new key) for the same organization and effective time
     await call('post', tokens.platform!, '/platform/pricing/assignments')
       .send({ orgId: uuidv7(), planId: p.id })
       .expect(404);
@@ -367,6 +397,290 @@ describe('Phase 7 PR 7-2 — platform pricing API', () => {
         .status,
     );
     for (const path of reads) expect((await call('get', null, path)).status).toBe(401);
+  });
+
+  describe('idempotency (owner correction to PR #90)', () => {
+    const assignmentsOf = (planId: string) =>
+      count(
+        sql`SELECT count(*)::text AS n FROM customer_pricing_assignments WHERE plan_id = ${planId}`,
+      );
+    const ratesOf = (providerId: string) =>
+      count(
+        sql`SELECT count(*)::text AS n FROM provider_cost_rates WHERE provider_id = ${providerId}`,
+      );
+    const versionsOf = (planId: string) =>
+      count(sql`SELECT count(*)::text AS n FROM pricing_plan_versions WHERE plan_id = ${planId}`);
+    const auditsOf = (resourceId: string, action: string) =>
+      count(
+        sql`SELECT count(*)::text AS n FROM audit_logs WHERE resource_id = ${resourceId} AND action = ${action}`,
+      );
+    /** Eight identical requests at once: one record, every success the same answer. */
+    async function concurrently(send: () => request.Test, status: number) {
+      const responses = await Promise.all(Array.from({ length: 8 }, () => send()));
+      const ok = responses.filter((r) => r.status === status);
+      const other = responses.filter((r) => r.status !== status);
+      // Only the documented, retryable in-progress answer may stand in for a replay.
+      for (const r of other) {
+        expect([r.status, r.body.error?.code]).toEqual([409, 'IDEMPOTENCY_REQUEST_IN_PROGRESS']);
+      }
+      expect(ok.length).toBeGreaterThan(0);
+      expect(new Set(ok.map((r) => r.body.data.id)).size).toBe(1);
+      return ok[0]!.body.data as { id: string };
+    }
+
+    it('every creating POST requires a key: 400 IDEMPOTENCY_KEY_REQUIRED and nothing is created', async () => {
+      const p = await newPlan();
+      const name = `p72-nokey-${suffix()}`;
+      const before = {
+        rates: await ratesOf(waProvider),
+        assignments: await assignmentsOf(p.id),
+        versions: await versionsOf(p.id),
+      };
+      const refusals = [
+        call('post', tokens.platform!, '/platform/pricing/plans', null).send({ name }),
+        call('post', tokens.platform!, `/platform/pricing/plans/${p.id}/versions`, null),
+        call('post', tokens.platform!, '/platform/pricing/provider-cost-rates', null).send({
+          providerId: waProvider,
+          unitCostE4: 1,
+        }),
+        call('post', tokens.platform!, '/platform/pricing/assignments', null).send({
+          orgId: tenant.orgId,
+          planId: p.id,
+        }),
+        call(
+          'post',
+          tokens.platform!,
+          `/platform/pricing/versions/${uuidv7()}/activate`,
+          null,
+        ).send({}),
+      ];
+      for (const res of await Promise.all(refusals)) {
+        expect([res.status, res.body.error.code]).toEqual([400, 'IDEMPOTENCY_KEY_REQUIRED']);
+      }
+      expect(
+        await count(sql`SELECT count(*)::text AS n FROM pricing_plans WHERE name = ${name}`),
+      ).toBe(0);
+      expect({
+        rates: await ratesOf(waProvider),
+        assignments: await assignmentsOf(p.id),
+        versions: await versionsOf(p.id),
+      }).toEqual(before);
+    });
+
+    it('assignment without effectiveFrom (defect 1): a retry replays the original; a different request under the key is 422; 8 concurrent create one', async () => {
+      const p = await newPlan();
+      const other = await newPlan();
+      const key = newKey();
+      const body = { orgId: tenant.orgId, planId: p.id };
+      const first = await call('post', tokens.platform!, '/platform/pricing/assignments', key)
+        .send(body)
+        .expect(201);
+      await new Promise((r) => setTimeout(r, 25)); // a later database clock than the original
+      const retry = await call('post', tokens.platform!, '/platform/pricing/assignments', key)
+        .send(body)
+        .expect(201);
+      expect(retry.body).toEqual(first.body);
+      expect(await assignmentsOf(p.id)).toBe(1);
+      expect(await auditsOf(first.body.data.id, AUDIT_ACTIONS.PRICING_ASSIGNMENT_CREATED)).toBe(1);
+      // Same key, different request: another plan, or another principal.
+      const mismatch = await call('post', tokens.platform!, '/platform/pricing/assignments', key)
+        .send({ orgId: tenant.orgId, planId: other.id })
+        .expect(422);
+      expect(mismatch.body.error.code).toBe('IDEMPOTENCY_KEY_PAYLOAD_MISMATCH');
+      await call('post', tokens.platform2!, '/platform/pricing/assignments', key)
+        .send(body)
+        .expect(422);
+      expect([await assignmentsOf(p.id), await assignmentsOf(other.id)]).toEqual([1, 0]);
+      // Concurrency: one key, eight identical requests, one assignment.
+      const concurrentKey = newKey();
+      const created = await concurrently(
+        () =>
+          call('post', tokens.platform!, '/platform/pricing/assignments', concurrentKey).send({
+            orgId: tenant.orgId,
+            planId: other.id,
+          }),
+        201,
+      );
+      expect(await assignmentsOf(other.id)).toBe(1);
+      expect(await auditsOf(created.id, AUDIT_ACTIONS.PRICING_ASSIGNMENT_CREATED)).toBe(1);
+    });
+
+    it('provider cost rate without effectiveFrom (defect 2): a retry replays the original; a different request under the key is 422; 8 concurrent create one', async () => {
+      const key = newKey();
+      const before = await ratesOf(waProvider);
+      const body = { providerId: waProvider, unitCostE4: 4321 };
+      const first = await call(
+        'post',
+        tokens.platform!,
+        '/platform/pricing/provider-cost-rates',
+        key,
+      )
+        .send(body)
+        .expect(201);
+      await new Promise((r) => setTimeout(r, 25));
+      const retry = await call(
+        'post',
+        tokens.platform!,
+        '/platform/pricing/provider-cost-rates',
+        key,
+      )
+        .send(body)
+        .expect(201);
+      expect(retry.body).toEqual(first.body);
+      expect(await ratesOf(waProvider)).toBe(before + 1);
+      expect(
+        await auditsOf(first.body.data.id, AUDIT_ACTIONS.PRICING_PROVIDER_COST_RATE_CREATED),
+      ).toBe(1);
+      const mismatch = await call(
+        'post',
+        tokens.platform!,
+        '/platform/pricing/provider-cost-rates',
+        key,
+      )
+        .send({ providerId: waProvider, unitCostE4: 4322 })
+        .expect(422);
+      expect(mismatch.body.error.code).toBe('IDEMPOTENCY_KEY_PAYLOAD_MISMATCH');
+      expect(await ratesOf(waProvider)).toBe(before + 1);
+      const concurrentKey = newKey();
+      const created = await concurrently(
+        () =>
+          call(
+            'post',
+            tokens.platform!,
+            '/platform/pricing/provider-cost-rates',
+            concurrentKey,
+          ).send({ providerId: waProvider, unitCostE4: 9999 }),
+        201,
+      );
+      expect(await ratesOf(waProvider)).toBe(before + 2);
+      expect(await auditsOf(created.id, AUDIT_ACTIONS.PRICING_PROVIDER_COST_RATE_CREATED)).toBe(1);
+    });
+
+    it('draft version retried after activation (defect 3): the retry replays the original draft and creates no version; 8 concurrent create one', async () => {
+      const p = await newPlan();
+      const key = newKey();
+      const first = await call(
+        'post',
+        tokens.platform!,
+        `/platform/pricing/plans/${p.id}/versions`,
+        key,
+      ).expect(201);
+      const versionId = first.body.data.id as string;
+      await call('put', tokens.platform!, `/platform/pricing/versions/${versionId}/rules`)
+        .send({ rules: [{ channelId: channels.sms, unitPriceE4: 100 }] })
+        .expect(200);
+      await call('post', tokens.platform!, `/platform/pricing/versions/${versionId}/activate`)
+        .send({})
+        .expect(200);
+      const retry = await call(
+        'post',
+        tokens.platform!,
+        `/platform/pricing/plans/${p.id}/versions`,
+        key,
+      ).expect(201);
+      expect(retry.body).toEqual(first.body); // the original answer, verbatim
+      expect(await versionsOf(p.id)).toBe(1);
+      expect(await auditsOf(versionId, AUDIT_ACTIONS.PRICING_VERSION_CREATED)).toBe(1);
+      // The same key against another plan is a different request.
+      const other = await newPlan();
+      await call(
+        'post',
+        tokens.platform!,
+        `/platform/pricing/plans/${other.id}/versions`,
+        key,
+      ).expect(422);
+      expect(await versionsOf(other.id)).toBe(0);
+      // A genuinely new request (new key) creates the next draft.
+      const next = await call(
+        'post',
+        tokens.platform!,
+        `/platform/pricing/plans/${p.id}/versions`,
+      ).expect(201);
+      expect([next.body.data.versionNumber, await versionsOf(p.id)]).toEqual([2, 2]);
+      // Concurrency: eight identical creates on a fresh plan, one draft.
+      const fresh = await newPlan();
+      const concurrentKey = newKey();
+      const created = await concurrently(
+        () =>
+          call(
+            'post',
+            tokens.platform!,
+            `/platform/pricing/plans/${fresh.id}/versions`,
+            concurrentKey,
+          ),
+        201,
+      );
+      expect(await versionsOf(fresh.id)).toBe(1);
+      expect(await auditsOf(created.id, AUDIT_ACTIONS.PRICING_VERSION_CREATED)).toBe(1);
+    });
+
+    it('plan creation and activation replay too; records live in the platform namespace; a refused principal claims no key', async () => {
+      const key = newKey();
+      const body = { name: `p72-keyed-${suffix()}` };
+      const first = await call('post', tokens.platform!, '/platform/pricing/plans', key)
+        .send(body)
+        .expect(201);
+      plans.push(first.body.data.id);
+      const again = await call('post', tokens.platform!, '/platform/pricing/plans', key)
+        .send(body)
+        .expect(201);
+      expect(again.body).toEqual(first.body);
+      const v = (
+        await call(
+          'post',
+          tokens.platform!,
+          `/platform/pricing/plans/${first.body.data.id}/versions`,
+        ).expect(201)
+      ).body.data;
+      await call('put', tokens.platform!, `/platform/pricing/versions/${v.id}/rules`)
+        .send({ rules: [{ channelId: channels.sms, unitPriceE4: 1 }] })
+        .expect(200);
+      const activationKey = newKey();
+      const activated = await call(
+        'post',
+        tokens.platform!,
+        `/platform/pricing/versions/${v.id}/activate`,
+        activationKey,
+      )
+        .send({})
+        .expect(200);
+      const replayed = await call(
+        'post',
+        tokens.platform!,
+        `/platform/pricing/versions/${v.id}/activate`,
+        activationKey,
+      )
+        .send({})
+        .expect(200);
+      expect(replayed.body).toEqual(activated.body);
+      expect(await auditsOf(v.id, AUDIT_ACTIONS.PRICING_VERSION_ACTIVATED)).toBe(1);
+      // The records: platform namespace (org_id NULL), completed, owned by the user.
+      const rows = (
+        await h.admin.execute<{ org_id: string | null; status: string; endpoint: string }>(
+          sql`SELECT org_id, status, endpoint FROM idempotency_keys WHERE idempotency_key IN (${key}, ${activationKey}) ORDER BY endpoint`,
+        )
+      ).rows;
+      expect(rows).toEqual([
+        { org_id: null, status: 'completed', endpoint: 'POST /platform/pricing/plans' },
+        {
+          org_id: null,
+          status: 'completed',
+          endpoint: 'POST /platform/pricing/versions/:id/activate',
+        },
+      ]);
+      // A principal without pricing.manage is refused before any key is claimed.
+      const refusedKey = newKey();
+      for (const who of ['support', 'orgAdmin'] as const) {
+        await call('post', tokens[who]!, '/platform/pricing/plans', refusedKey)
+          .send({ name: `p72-refused-${suffix()}` })
+          .expect(403);
+      }
+      expect(
+        await count(
+          sql`SELECT count(*)::text AS n FROM idempotency_keys WHERE idempotency_key = ${refusedKey}`,
+        ),
+      ).toBe(0);
+    });
   });
 
   it('no route rates a transaction or exposes pricing evaluations', () => {

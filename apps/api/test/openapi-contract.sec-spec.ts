@@ -442,7 +442,8 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
       expect(problems).toEqual([]);
       expect(
         documented().filter((r) => refs(operationOf(r)!).includes('header:Idempotency-Key')).length,
-      ).toBe(11);
+        // Phase 7 PR 7-2 (PR #90 correction): the five creating pricing POSTs, where it is required.
+      ).toBe(16);
     });
   });
 

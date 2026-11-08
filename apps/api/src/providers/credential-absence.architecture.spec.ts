@@ -240,6 +240,11 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
     const DISPATCH_FENCING_0047 = new Set(['app_dispatch_claim_token', 'claim_token']);
     const phase50Fix = migrations.find((m) => m.n.startsWith('0047_'));
     expect(phase50Fix).toBeDefined();
+    // Phase 7 PR 7-2 (migration 0051): the platform namespace of idempotency_keys forbids an API
+    // key as the owner of a platform record — the actor identity column, no credential.
+    const IDEMPOTENCY_PLATFORM_0051 = new Set(['actor_api_key_id']);
+    const phase72Pricing = migrations.find((m) => m.n.startsWith('0051_'));
+    expect(phase72Pricing).toBeDefined();
     expect(
       phase2.flatMap((m) =>
         [...m.sql.matchAll(/\w*(?:credential|secret|passw|api_?key|token)\w*/gi)]
@@ -252,6 +257,7 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
           .filter((x) => !(m === phase43Recheck && DISPATCH_FENCING_0037.has(x[0])))
           .filter((x) => !(m === phase50Delivery && DISPATCH_FENCING_0044.has(x[0])))
           .filter((x) => !(m === phase50Fix && DISPATCH_FENCING_0047.has(x[0])))
+          .filter((x) => !(m === phase72Pricing && IDEMPOTENCY_PLATFORM_0051.has(x[0])))
           .map((x) => `${m.n}: ${x[0]}`),
       ),
     ).toEqual([]);

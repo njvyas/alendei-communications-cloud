@@ -24,6 +24,7 @@ import { AuditWriter } from '../audit/audit-writer.service';
 import { AuthorizationService } from '../auth/authorization.service';
 import { RequestContext } from '../common/context/request-context';
 import { AppException } from '../common/errors/app.exception';
+import { IdempotencyService, type IdempotentOutcome } from '../idempotency/idempotency.service';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
 import { TenantDatabase } from '../database/tenant-database.service';
 import type {
@@ -129,7 +130,36 @@ export class PricingService {
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly lists: ListQuery,
+    private readonly idempotency: IdempotencyService,
   ) {}
+
+  /**
+   * A creating `POST` of the catalogue, through the repository's idempotency
+   * mechanism in its platform namespace (`IdempotencyService.executePlatform`).
+   *
+   * The key is required. The same key and request replay the original response
+   * and create nothing; the same key with a different request is `422`;
+   * concurrent duplicates serialise on the key's unique index and the loser
+   * replays the winner. `pricing.manage` is asserted before the key is claimed
+   * and again before anything stored is replayed.
+   */
+  private keyed<T>(
+    principal: AuthPrincipal,
+    key: string | null,
+    successStatus: number,
+    route: string,
+    pathParams: Record<string, unknown>,
+    body: Record<string, unknown>,
+    work: (tx: Transaction) => Promise<T>,
+  ): Promise<IdempotentOutcome<{ data: T }>> {
+    return this.idempotency.executePlatform({
+      key,
+      successStatus,
+      request: { method: 'POST', route, orgId: null, principal, pathParams, query: {}, body },
+      authorize: (tx) => this.authorize(tx, principal, PERMISSIONS.PRICING_MANAGE),
+      work: async (tx) => ({ data: await work(tx) }),
+    });
+  }
 
   private readonly planListSpec: ListQuerySpec = {
     sortable: { createdAt: { column: schema.pricingPlans.id, encode: (row) => String(row.id) } },
@@ -263,62 +293,89 @@ export class PricingService {
   async createPlan(
     principal: AuthPrincipal,
     input: CreatePricingPlanDto,
-  ): Promise<PricingPlanDetailResponse> {
-    return this.db.withRequestTenant(async (tx) => {
-      await this.authorize(tx, principal, PERMISSIONS.PRICING_MANAGE);
-      const [row] = await tx
-        .insert(schema.pricingPlans)
-        .values({ name: input.name.trim(), description: input.description ?? null })
-        .onConflictDoNothing()
-        .returning();
-      if (!row) throw conflict('A pricing plan with this name already exists');
-      const view = planView(row);
-      await this.record(tx, principal, AUDIT_ACTIONS.PRICING_PLAN_CREATED, 'PricingPlan', row.id, {
-        ...view,
-      });
-      return { ...view, versions: [] };
-    });
+    key: string | null,
+  ): Promise<IdempotentOutcome<{ data: PricingPlanDetailResponse }>> {
+    return this.keyed(
+      principal,
+      key,
+      HttpStatus.CREATED,
+      '/platform/pricing/plans',
+      {},
+      { name: input.name, description: input.description ?? null },
+      async (tx) => {
+        const [row] = await tx
+          .insert(schema.pricingPlans)
+          .values({ name: input.name.trim(), description: input.description ?? null })
+          .onConflictDoNothing()
+          .returning();
+        if (!row) throw conflict('A pricing plan with this name already exists');
+        const view = planView(row);
+        await this.record(
+          tx,
+          principal,
+          AUDIT_ACTIONS.PRICING_PLAN_CREATED,
+          'PricingPlan',
+          row.id,
+          {
+            ...view,
+          },
+        );
+        return { ...view, versions: [] };
+      },
+    );
   }
 
   // --- versions and rules ------------------------------------------------------------
 
-  /** Creates the next draft version of a plan. A concurrent create loses with 409. */
+  /**
+   * Creates the next draft version of a plan. Keyed: a retry replays the original
+   * draft even after it was activated. One draft per plan: a second draft is 409.
+   */
   async createVersion(
     principal: AuthPrincipal,
     planId: string,
-  ): Promise<PricingPlanVersionResponse> {
-    return this.db.withRequestTenant(async (tx) => {
-      await this.authorize(tx, principal, PERMISSIONS.PRICING_MANAGE);
-      const [plan] = await tx
-        .select({ id: schema.pricingPlans.id })
-        .from(schema.pricingPlans)
-        .where(eq(schema.pricingPlans.id, planId));
-      if (!plan) throw notFound('Pricing plan', planId);
-      const [{ next }] = (await tx
-        .select({
-          next: sql<number>`coalesce(max(${schema.pricingPlanVersions.versionNumber}), 0)::int + 1`,
-        })
-        .from(schema.pricingPlanVersions)
-        .where(eq(schema.pricingPlanVersions.planId, planId))) as [{ next: number }];
-      const [row] = await tx
-        .insert(schema.pricingPlanVersions)
-        .values({ planId, versionNumber: next })
-        .onConflictDoNothing()
-        .returning();
-      if (!row) throw conflict('This plan already has a draft version; edit or activate it first');
-      const view = versionSummary(row);
-      await this.record(
-        tx,
-        principal,
-        AUDIT_ACTIONS.PRICING_VERSION_CREATED,
-        'PricingPlanVersion',
-        row.id,
-        {
-          ...view,
-        },
-      );
-      return { ...view, rules: [] };
-    });
+    key: string | null,
+  ): Promise<IdempotentOutcome<{ data: PricingPlanVersionResponse }>> {
+    return this.keyed(
+      principal,
+      key,
+      HttpStatus.CREATED,
+      '/platform/pricing/plans/:id/versions',
+      { id: planId },
+      {},
+      async (tx) => {
+        const [plan] = await tx
+          .select({ id: schema.pricingPlans.id })
+          .from(schema.pricingPlans)
+          .where(eq(schema.pricingPlans.id, planId));
+        if (!plan) throw notFound('Pricing plan', planId);
+        const [{ next }] = (await tx
+          .select({
+            next: sql<number>`coalesce(max(${schema.pricingPlanVersions.versionNumber}), 0)::int + 1`,
+          })
+          .from(schema.pricingPlanVersions)
+          .where(eq(schema.pricingPlanVersions.planId, planId))) as [{ next: number }];
+        const [row] = await tx
+          .insert(schema.pricingPlanVersions)
+          .values({ planId, versionNumber: next })
+          .onConflictDoNothing()
+          .returning();
+        if (!row)
+          throw conflict('This plan already has a draft version; edit or activate it first');
+        const view = versionSummary(row);
+        await this.record(
+          tx,
+          principal,
+          AUDIT_ACTIONS.PRICING_VERSION_CREATED,
+          'PricingPlanVersion',
+          row.id,
+          {
+            ...view,
+          },
+        );
+        return { ...view, rules: [] };
+      },
+    );
   }
 
   async getVersion(principal: AuthPrincipal, id: string): Promise<PricingPlanVersionResponse> {
@@ -414,42 +471,50 @@ export class PricingService {
     principal: AuthPrincipal,
     versionId: string,
     input: ActivatePricingVersionDto,
-  ): Promise<PricingPlanVersionResponse> {
-    return this.db.withRequestTenant(async (tx) => {
-      await this.authorize(tx, principal, PERMISSIONS.PRICING_MANAGE);
-      const before = await this.loadVersion(tx, versionId);
-      if (before.status !== 'draft') throw conflict('The version is already active');
-      if (before.rules.length === 0)
-        throw invalid('A version needs at least one rule to be activated');
-      const effectiveFrom = input.effectiveFrom ? new Date(input.effectiveFrom) : null;
-      await this.assertNotPast(tx, effectiveFrom);
-      try {
-        await tx
-          .update(schema.pricingPlanVersions)
-          .set({
-            status: 'active',
-            effectiveFrom: effectiveFrom ?? sql`now()`,
-          })
-          .where(eq(schema.pricingPlanVersions.id, versionId));
-      } catch (error) {
-        throw this.mapCatalogueError(error, 'version');
-      }
-      const after = await this.loadVersion(tx, versionId);
-      await this.record(
-        tx,
-        principal,
-        AUDIT_ACTIONS.PRICING_VERSION_ACTIVATED,
-        'PricingPlanVersion',
-        versionId,
-        {
-          status: after.status,
-          effectiveFrom: after.effectiveFrom,
-          activatedAt: after.activatedAt,
-        },
-        { status: before.status },
-      );
-      return after;
-    });
+    key: string | null,
+  ): Promise<IdempotentOutcome<{ data: PricingPlanVersionResponse }>> {
+    return this.keyed(
+      principal,
+      key,
+      HttpStatus.OK,
+      '/platform/pricing/versions/:id/activate',
+      { id: versionId },
+      { effectiveFrom: input.effectiveFrom ?? null },
+      async (tx) => {
+        const before = await this.loadVersion(tx, versionId);
+        if (before.status !== 'draft') throw conflict('The version is already active');
+        if (before.rules.length === 0)
+          throw invalid('A version needs at least one rule to be activated');
+        const effectiveFrom = input.effectiveFrom ? new Date(input.effectiveFrom) : null;
+        await this.assertNotPast(tx, effectiveFrom);
+        try {
+          await tx
+            .update(schema.pricingPlanVersions)
+            .set({
+              status: 'active',
+              effectiveFrom: effectiveFrom ?? sql`now()`,
+            })
+            .where(eq(schema.pricingPlanVersions.id, versionId));
+        } catch (error) {
+          throw this.mapCatalogueError(error, 'version');
+        }
+        const after = await this.loadVersion(tx, versionId);
+        await this.record(
+          tx,
+          principal,
+          AUDIT_ACTIONS.PRICING_VERSION_ACTIVATED,
+          'PricingPlanVersion',
+          versionId,
+          {
+            status: after.status,
+            effectiveFrom: after.effectiveFrom,
+            activatedAt: after.activatedAt,
+          },
+          { status: before.status },
+        );
+        return after;
+      },
+    );
   }
 
   // --- provider cost rates ---------------------------------------------------------------
@@ -484,46 +549,58 @@ export class PricingService {
   async createProviderCostRate(
     principal: AuthPrincipal,
     input: CreateProviderCostRateDto,
-  ): Promise<ProviderCostRateResponse> {
-    return this.db.withRequestTenant(async (tx) => {
-      await this.authorize(tx, principal, PERMISSIONS.PRICING_MANAGE);
-      const [provider] = await tx
-        .select({
-          id: schema.providers.id,
-          channelId: schema.providers.channelId,
-          code: schema.channels.code,
-        })
-        .from(schema.providers)
-        .innerJoin(schema.channels, eq(schema.channels.id, schema.providers.channelId))
-        .where(eq(schema.providers.id, input.providerId));
-      if (!provider) throw notFound('Provider', input.providerId);
-      const effectiveFrom = input.effectiveFrom ? new Date(input.effectiveFrom) : null;
-      await this.assertNotPast(tx, effectiveFrom);
-      let row: CostRateRow | undefined;
-      try {
-        [row] = await tx
-          .insert(schema.providerCostRates)
-          .values({
-            providerId: provider.id,
-            channelId: provider.channelId,
-            unitCostE4: input.unitCostE4,
-            effectiveFrom: effectiveFrom ?? sql`now()`,
+    key: string | null,
+  ): Promise<IdempotentOutcome<{ data: ProviderCostRateResponse }>> {
+    return this.keyed(
+      principal,
+      key,
+      HttpStatus.CREATED,
+      '/platform/pricing/provider-cost-rates',
+      {},
+      {
+        providerId: input.providerId,
+        unitCostE4: input.unitCostE4,
+        effectiveFrom: input.effectiveFrom ?? null,
+      },
+      async (tx) => {
+        const [provider] = await tx
+          .select({
+            id: schema.providers.id,
+            channelId: schema.providers.channelId,
+            code: schema.channels.code,
           })
-          .returning();
-      } catch (error) {
-        throw this.mapCatalogueError(error, 'provider cost rate');
-      }
-      const view = this.costRateView(row!, provider.code);
-      await this.record(
-        tx,
-        principal,
-        AUDIT_ACTIONS.PRICING_PROVIDER_COST_RATE_CREATED,
-        'ProviderCostRate',
-        view.id,
-        { ...view },
-      );
-      return view;
-    });
+          .from(schema.providers)
+          .innerJoin(schema.channels, eq(schema.channels.id, schema.providers.channelId))
+          .where(eq(schema.providers.id, input.providerId));
+        if (!provider) throw notFound('Provider', input.providerId);
+        const effectiveFrom = input.effectiveFrom ? new Date(input.effectiveFrom) : null;
+        await this.assertNotPast(tx, effectiveFrom);
+        let row: CostRateRow | undefined;
+        try {
+          [row] = await tx
+            .insert(schema.providerCostRates)
+            .values({
+              providerId: provider.id,
+              channelId: provider.channelId,
+              unitCostE4: input.unitCostE4,
+              effectiveFrom: effectiveFrom ?? sql`now()`,
+            })
+            .returning();
+        } catch (error) {
+          throw this.mapCatalogueError(error, 'provider cost rate');
+        }
+        const view = this.costRateView(row!, provider.code);
+        await this.record(
+          tx,
+          principal,
+          AUDIT_ACTIONS.PRICING_PROVIDER_COST_RATE_CREATED,
+          'ProviderCostRate',
+          view.id,
+          { ...view },
+        );
+        return view;
+      },
+    );
   }
 
   private costRateView(r: CostRateRow, channelCode: string): ProviderCostRateResponse {
@@ -569,46 +646,58 @@ export class PricingService {
   async createAssignment(
     principal: AuthPrincipal,
     input: CreatePricingAssignmentDto,
-  ): Promise<PricingAssignmentResponse> {
-    return this.db.withRequestTenant(async (tx) => {
-      await this.authorize(tx, principal, PERMISSIONS.PRICING_MANAGE);
-      const [plan] = await tx
-        .select({ id: schema.pricingPlans.id })
-        .from(schema.pricingPlans)
-        .where(eq(schema.pricingPlans.id, input.planId));
-      if (!plan) throw notFound('Pricing plan', input.planId);
-      const orgId = input.orgId ?? null;
-      if (orgId) {
-        const [org] = await tx
-          .select({ id: schema.organizations.id })
-          .from(schema.organizations)
-          .where(eq(schema.organizations.id, orgId));
-        if (!org) throw notFound('Organization', orgId);
-      }
-      const effectiveFrom = input.effectiveFrom ? new Date(input.effectiveFrom) : null;
-      await this.assertNotPast(tx, effectiveFrom);
-      let row: AssignmentRow | undefined;
-      try {
-        [row] = await tx
-          .insert(schema.customerPricingAssignments)
-          .values({ orgId, planId: plan.id, effectiveFrom: effectiveFrom ?? sql`now()` })
-          .returning();
-      } catch (error) {
-        throw this.mapCatalogueError(error, 'assignment');
-      }
-      const view = assignmentView(row!);
-      await this.record(
-        tx,
-        principal,
-        AUDIT_ACTIONS.PRICING_ASSIGNMENT_CREATED,
-        'PricingAssignment',
-        view.id,
-        {
-          ...view,
-        },
-      );
-      return view;
-    });
+    key: string | null,
+  ): Promise<IdempotentOutcome<{ data: PricingAssignmentResponse }>> {
+    return this.keyed(
+      principal,
+      key,
+      HttpStatus.CREATED,
+      '/platform/pricing/assignments',
+      {},
+      {
+        orgId: input.orgId ?? null,
+        planId: input.planId,
+        effectiveFrom: input.effectiveFrom ?? null,
+      },
+      async (tx) => {
+        const [plan] = await tx
+          .select({ id: schema.pricingPlans.id })
+          .from(schema.pricingPlans)
+          .where(eq(schema.pricingPlans.id, input.planId));
+        if (!plan) throw notFound('Pricing plan', input.planId);
+        const orgId = input.orgId ?? null;
+        if (orgId) {
+          const [org] = await tx
+            .select({ id: schema.organizations.id })
+            .from(schema.organizations)
+            .where(eq(schema.organizations.id, orgId));
+          if (!org) throw notFound('Organization', orgId);
+        }
+        const effectiveFrom = input.effectiveFrom ? new Date(input.effectiveFrom) : null;
+        await this.assertNotPast(tx, effectiveFrom);
+        let row: AssignmentRow | undefined;
+        try {
+          [row] = await tx
+            .insert(schema.customerPricingAssignments)
+            .values({ orgId, planId: plan.id, effectiveFrom: effectiveFrom ?? sql`now()` })
+            .returning();
+        } catch (error) {
+          throw this.mapCatalogueError(error, 'assignment');
+        }
+        const view = assignmentView(row!);
+        await this.record(
+          tx,
+          principal,
+          AUDIT_ACTIONS.PRICING_ASSIGNMENT_CREATED,
+          'PricingAssignment',
+          view.id,
+          {
+            ...view,
+          },
+        );
+        return view;
+      },
+    );
   }
 
   // --- shared ------------------------------------------------------------------------------

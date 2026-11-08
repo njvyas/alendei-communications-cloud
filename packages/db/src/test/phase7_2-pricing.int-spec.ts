@@ -863,6 +863,110 @@ describe('Phase 7 PR 7-2 — pricing and rating (migration 0051)', () => {
       });
     });
 
+    it('idempotency_keys platform namespace (PR #90 correction): one record per (endpoint, key); /platform/ endpoints only, never an API key; platform scope only', async () => {
+      const asApp = async (
+        settings: Record<string, string>,
+        work: (c: PoolClient) => Promise<void>,
+      ) => {
+        const c = await db.appPool.connect();
+        try {
+          await c.query('BEGIN');
+          for (const [k, v] of Object.entries(settings)) {
+            await c.query(`SELECT set_config($1, $2, true)`, [k, v]);
+          }
+          await work(c);
+        } finally {
+          await c.query('ROLLBACK');
+          c.release();
+        }
+      };
+      const insert = (
+        c: PoolClient,
+        org: string | null,
+        endpoint: string,
+        key: string,
+        apiKey?: string,
+      ) =>
+        code(
+          c,
+          `INSERT INTO idempotency_keys (org_id, endpoint, idempotency_key, request_hash, actor_api_key_id) VALUES ($1, $2, $3, 'h', $4)`,
+          [org, endpoint, key, apiKey ?? null],
+        );
+      const key = `p72-db-${uuidv7()}`;
+      await tx(async (c) => {
+        // Shape: a platform record is a /platform/ endpoint and never an API key's.
+        expect(await insert(c, null, 'POST /templates', key)).toBe('23514');
+        expect(await insert(c, null, 'POST /platform/pricing/plans', key, uuidv7())).toBe('23514');
+        // Unique per (endpoint, key) among platform records; organization records are untouched.
+        expect(await insert(c, null, 'POST /platform/pricing/plans', key)).toBe('OK');
+        expect(await insert(c, null, 'POST /platform/pricing/plans', key)).toBe('23505');
+        expect(await insert(c, null, 'POST /platform/pricing/assignments', key)).toBe('OK');
+        expect(await insert(c, A.orgId, 'POST /platform/pricing/plans', key)).toBe('OK');
+      });
+      // RLS: only a validated platform-scope claim reaches a platform record.
+      const platformKey = `p72-db-platform-${uuidv7()}`;
+      await asApp({ 'app.current_user_id': platformUser }, async (c) => {
+        expect(await insert(c, null, 'POST /platform/pricing/plans', platformKey)).toBe('OK');
+        expect(
+          (
+            await c.query(
+              `SELECT count(*)::int AS n FROM idempotency_keys WHERE idempotency_key = $1`,
+              [platformKey],
+            )
+          ).rows[0].n,
+        ).toBe(1);
+      });
+      // A committed platform record is visible to no tenant principal, nor without any claim,
+      // and neither can write one.
+      await admin(
+        `INSERT INTO idempotency_keys (org_id, endpoint, idempotency_key, request_hash) VALUES (NULL, 'POST /platform/pricing/plans', $1, 'h')`,
+        [platformKey],
+      );
+      try {
+        for (const settings of [
+          { 'app.current_user_id': A.userId, 'app.current_org_id': A.orgId },
+          {},
+        ]) {
+          await asApp(settings, async (c) => {
+            expect(
+              (
+                await c.query(
+                  `SELECT count(*)::int AS n FROM idempotency_keys WHERE org_id IS NULL`,
+                )
+              ).rows[0].n,
+            ).toBe(0);
+            expect(await insert(c, null, 'POST /platform/pricing/plans', `p72-t-${uuidv7()}`)).toBe(
+              '42501',
+            );
+          });
+        }
+        await asApp({ 'app.current_user_id': platformUser }, async (c) => {
+          expect(
+            (
+              await c.query(
+                `SELECT count(*)::int AS n FROM idempotency_keys WHERE idempotency_key = $1`,
+                [platformKey],
+              )
+            ).rows[0].n,
+          ).toBe(1);
+        });
+      } finally {
+        await admin(`DELETE FROM idempotency_keys WHERE idempotency_key = $1`, [platformKey]);
+      }
+      // The organization policy and index are unchanged.
+      const policies = (
+        await admin(`SELECT polname, pg_get_expr(polqual, polrelid) AS qual FROM pg_policy
+          WHERE polrelid = 'idempotency_keys'::regclass ORDER BY polname`)
+      ).rows;
+      expect(policies).toEqual([
+        {
+          polname: 'idempotency_keys_platform',
+          qual: '((org_id IS NULL) AND app_has_platform_scope())',
+        },
+        { polname: 'idempotency_keys_tenant', qual: 'app_org_in_scope(org_id)' },
+      ]);
+    });
+
     it('invariant D: the rating functions are SECURITY DEFINER and contain no dynamic SQL, ALTER or variable setting', async () => {
       const { rows } = await admin(
         `SELECT proname, prosecdef, provolatile, prosrc FROM pg_proc

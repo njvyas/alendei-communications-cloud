@@ -3,7 +3,11 @@
 -- owner-approved 08-Nov-2026 with OD-P-1, OD-P-2 and OD-P-3).
 --
 -- Expand-only. No Phase 7.1 object is altered; fn_billing_immutable (0050) is
--- reused as a trigger function only.
+-- reused as a trigger function only. The one change to an existing object is
+-- the platform namespace for idempotency_keys (section at the end; owner
+-- correction to PR #90, 08-Nov-2026): org_id becomes nullable for platform
+-- records only, with its own unique index, shape CHECK and RLS policy. Every
+-- organization row, policy, index and grant is unchanged.
 --
 -- Approved financial rules implemented here:
 --   1. Rates are integers in 1/10,000 of a paisa (`*_e4` bigint columns).
@@ -644,3 +648,35 @@ END;
 $$;
 --> statement-breakpoint
 REVOKE ALL ON FUNCTION app_rate_message(uuid, uuid, uuid, integer, boolean, boolean) FROM PUBLIC;
+--> statement-breakpoint
+
+-- =============================================================================
+-- Platform namespace for idempotency_keys (owner correction to PR #90).
+--
+-- The pricing catalogue's creating POSTs require an Idempotency-Key and use the
+-- existing mechanism (IdempotencyService: claim, work and finalize in one
+-- transaction; replay on the same key and request; 422 on a different request;
+-- 409 while in progress). Its records are namespaced by organization, and the
+-- catalogue has none, so a platform record carries org_id NULL:
+--   * unique (endpoint, idempotency_key) among platform records, the platform
+--     counterpart of idempotency_keys_scope_key;
+--   * only a /platform/ endpoint, and never an API key, may own one;
+--   * acc_app reaches platform records only under a validated platform-scope
+--     claim (app_has_platform_scope(), the 0018 pattern). The organization
+--     policy is untouched: app_org_in_scope(NULL) is false, so no tenant
+--     principal can see or write a platform record.
+-- Column grants (0025: no UPDATE of org_id, endpoint or the key; no DELETE) and
+-- the org_id immutability trigger apply unchanged.
+-- =============================================================================
+ALTER TABLE idempotency_keys ALTER COLUMN org_id DROP NOT NULL;
+--> statement-breakpoint
+ALTER TABLE idempotency_keys ADD CONSTRAINT idempotency_keys_platform_shape CHECK (
+  org_id IS NOT NULL OR (endpoint LIKE '% /platform/%' AND actor_api_key_id IS NULL)
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX idempotency_keys_platform_scope_key ON idempotency_keys (endpoint, idempotency_key)
+  WHERE org_id IS NULL;
+--> statement-breakpoint
+CREATE POLICY idempotency_keys_platform ON idempotency_keys FOR ALL TO acc_app
+  USING (org_id IS NULL AND app_has_platform_scope())
+  WITH CHECK (org_id IS NULL AND app_has_platform_scope());

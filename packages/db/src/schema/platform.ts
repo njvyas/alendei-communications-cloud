@@ -28,9 +28,11 @@ export const idempotencyKeys = pgTable(
   'idempotency_keys',
   {
     id: primaryId(),
-    orgId: uuid('org_id')
-      .notNull()
-      .references(() => organizations.id, { onDelete: 'cascade' }),
+    /**
+     * The organization namespace, or `NULL` for a platform-scope record (a
+     * `/platform/` endpoint with no organization; migration `0051`).
+     */
+    orgId: uuid('org_id').references(() => organizations.id, { onDelete: 'cascade' }),
     endpoint: text('endpoint').notNull(),
     idempotencyKey: text('idempotency_key').notNull(),
     /** Hash of the normalized request body; a mismatch is a caller error (422). */
@@ -71,10 +73,17 @@ export const idempotencyKeys = pgTable(
   },
   (table) => [
     uniqueIndex('idempotency_keys_scope_key').on(table.orgId, table.endpoint, table.idempotencyKey),
+    uniqueIndex('idempotency_keys_platform_scope_key')
+      .on(table.endpoint, table.idempotencyKey)
+      .where(sql`${table.orgId} IS NULL`),
     index('idempotency_keys_expires_at_idx').on(table.expiresAt),
     check(
       'idempotency_keys_actor_shape',
       sql`num_nonnulls(${table.actorUserId}, ${table.actorApiKeyId}) <= 1`,
+    ),
+    check(
+      'idempotency_keys_platform_shape',
+      sql`${table.orgId} IS NOT NULL OR (${table.endpoint} LIKE '% /platform/%' AND ${table.actorApiKeyId} IS NULL)`,
     ),
     check(
       'idempotency_keys_completed_shape',
