@@ -87,8 +87,10 @@ describe('table classes — tenancy records, tenant content, exemptions', () => 
       expect(result).toEqual({ unclassified: [], multiplyClassified: [], unknown: [] });
     });
 
-    it('CONTENT_TABLES contains the Phase 3.1 and Phase 3.3 content tables; the only exemptions are the Phase 7 financial tables', () => {
+    it('CONTENT_TABLES contains the content tables (Phase 3.1, 3.3, 8B.1); the only exemptions are the Phase 7 financial tables', () => {
       expect([...CONTENT_TABLES].sort()).toEqual([
+        'campaign_recipients',
+        'campaigns',
         'consent_events',
         'contact_identities',
         'contacts',

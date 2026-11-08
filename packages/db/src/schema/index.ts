@@ -11,3 +11,4 @@ export * from './assignments';
 export * from './messages';
 export * from './webhooks';
 export * from './pricing';
+export * from './campaigns';

@@ -18,6 +18,7 @@ import { organizations, workspaces } from './tenancy';
 import { channels, providers } from './providers';
 import { contacts } from './contacts';
 import { templates } from './templates';
+import { campaigns } from './campaigns';
 import { organizationProviderAssignments } from './assignments';
 
 /** Message lifecycle status (Phase 3.3, ADR-014 §7, P3-D10). */
@@ -83,6 +84,8 @@ export const messages = pgTable(
     failureReason: text('failure_reason'),
     correlationId: text('correlation_id').notNull(),
     completedAt: tstz('completed_at'),
+    /** Direct campaign attribution (Phase 8B.1, DATABASE.md §6). */
+    campaignId: uuid('campaign_id').references(() => campaigns.id, { onDelete: 'restrict' }),
     // Phase 5.0 (0044): delivery axis — aggregated from the attempts (spec Rev 2 §B.5).
     deliveryStatus: messageDeliveryStatus('delivery_status'),
     deliveredAt: tstz('delivered_at'),
@@ -112,6 +115,9 @@ export const messages = pgTable(
     index('messages_workspace_id_idx').on(table.workspaceId),
     index('messages_contact_id_idx').on(table.contactId),
     index('messages_status_idx').on(table.status),
+    index('messages_org_campaign_idx')
+      .on(table.orgId, table.campaignId)
+      .where(sql`${table.campaignId} IS NOT NULL`),
   ],
 );
 

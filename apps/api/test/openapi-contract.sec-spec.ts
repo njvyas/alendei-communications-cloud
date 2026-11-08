@@ -191,11 +191,12 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * (`POST /providers/{id}/simulator/delivery-events`): 146 → 147; the ingress header form is
      * the third exclusion (OD-10).
      * Phase 8A, 07-Nov-2026: 2 genuine contact activity timeline operations: 147 → 149.
-     * (Phase 8A-S then brought the total to 154.)
+     * Phase 8A-S, 08-Nov-2026: 5 contact audience resolution operations: 149 → 154.
      * Phase 7 PR 7-2, 08-Nov-2026: 11 platform pricing catalogue operations under
-     * `/platform/pricing`: 154 → 165.)
+     * `/platform/pricing`: 154 → 165.
+     * Phase 8B.1, 08-Nov-2026: 6 campaign foundation operations: 165 → 171.
      */
-    const APPLICATION_OPERATIONS = 165;
+    const APPLICATION_OPERATIONS = 171;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 
@@ -386,7 +387,8 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
           route.path.includes('/contacts') ||
           route.path.includes('/templates') ||
           route.path.includes('/identities') ||
-          route.path.includes('/audience');
+          route.path.includes('/audience') ||
+          route.path.includes('/campaigns');
         const success = codes.filter((c) => c.startsWith('2'));
         if (!isPhase3DataFoundation && success.length !== 1)
           problems.push(`${route.method} ${route.path}: success ${success}`);
@@ -442,8 +444,8 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
       expect(problems).toEqual([]);
       expect(
         documented().filter((r) => refs(operationOf(r)!).includes('header:Idempotency-Key')).length,
-        // Phase 7 PR 7-2 (PR #90 correction): the five creating pricing POSTs, where it is required.
-      ).toBe(16);
+        // Phase 7 PR 7-2: 5 pricing POSTs; Phase 8B.1: 1 campaign create POST: 11 -> 16 -> 17.
+      ).toBe(17);
     });
   });
 
