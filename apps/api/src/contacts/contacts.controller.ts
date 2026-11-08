@@ -27,6 +27,7 @@ import {
   GetEffectiveConsentDto,
   ListContactActivitiesDto,
   ListContactsDto,
+  ResolveAudienceDto,
   UpdateContactDto,
   UpdateContactIdentityDto,
 } from './contacts.dto';
@@ -325,5 +326,64 @@ export class ContactsController {
     return {
       data: await this.contacts.getEffectiveConsent(requestPrincipal(), contactId, query),
     };
+  }
+
+  // --- Campaign Audience Resolution (Phase 8A-S) --------------------------------
+
+  @Post('workspaces/:workspaceId/contacts/audience/resolve')
+  @RequiresPermission(PERMISSIONS.CONTACTS_READ, { target: 'deferred', because: AT_WORKSPACE })
+  @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Resolve campaign audience in a workspace' })
+  @ApiErrors(400, 401, 403, 404, 429)
+  async resolveAudienceByWorkspacePost(
+    @Param('workspaceId', new ParseUUIDPipe()) workspaceId: string,
+    @Body() dto: ResolveAudienceDto,
+  ) {
+    return this.contacts.resolveAudience(requestPrincipal(), dto, workspaceId);
+  }
+
+  @Get('workspaces/:workspaceId/contacts/audience/resolve')
+  @RequiresPermission(PERMISSIONS.CONTACTS_READ, { target: 'deferred', because: AT_WORKSPACE })
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Resolve campaign audience in a workspace' })
+  @ApiErrors(400, 401, 403, 404, 429)
+  async resolveAudienceByWorkspaceGet(
+    @Param('workspaceId', new ParseUUIDPipe()) workspaceId: string,
+    @Query() query: ResolveAudienceDto,
+  ) {
+    return this.contacts.resolveAudience(requestPrincipal(), query, workspaceId);
+  }
+
+  @Post('workspaces/:workspaceId/audience/preview')
+  @RequiresPermission(PERMISSIONS.CONTACTS_READ, { target: 'deferred', because: AT_WORKSPACE })
+  @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Preview campaign audience in a workspace' })
+  @ApiErrors(400, 401, 403, 404, 429)
+  async previewAudienceByWorkspace(
+    @Param('workspaceId', new ParseUUIDPipe()) workspaceId: string,
+    @Body() dto: ResolveAudienceDto,
+  ) {
+    return this.contacts.resolveAudience(requestPrincipal(), dto, workspaceId);
+  }
+
+  @Post('contacts/audience/resolve')
+  @RequiresPermission(PERMISSIONS.CONTACTS_READ, { target: 'deferred', because: AT_WORKSPACE })
+  @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Resolve campaign audience across organization or workspace' })
+  @ApiErrors(400, 401, 403, 404, 429)
+  async resolveAudiencePost(@Body() dto: ResolveAudienceDto) {
+    return this.contacts.resolveAudience(requestPrincipal(), dto);
+  }
+
+  @Get('contacts/audience/resolve')
+  @RequiresPermission(PERMISSIONS.CONTACTS_READ, { target: 'deferred', because: AT_WORKSPACE })
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Resolve campaign audience across organization or workspace' })
+  @ApiErrors(400, 401, 403, 404, 429)
+  async resolveAudienceGet(@Query() query: ResolveAudienceDto) {
+    return this.contacts.resolveAudience(requestPrincipal(), query);
   }
 }

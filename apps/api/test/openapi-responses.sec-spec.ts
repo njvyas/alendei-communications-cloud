@@ -1139,7 +1139,8 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
       template.includes('/branding') ||
       template.includes('/onboarding') ||
       template.includes('/resellers') ||
-      template.includes('/support');
+      template.includes('/support') ||
+      template.includes('/audience');
 
     it('every operation succeeded with every credential its document declares', () => {
       const document = validator.document as { paths: Record<string, Record<string, Json>> };

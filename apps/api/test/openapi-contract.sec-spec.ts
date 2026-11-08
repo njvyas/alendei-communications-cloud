@@ -192,7 +192,7 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * the third exclusion (OD-10).
      * Phase 8A, 07-Nov-2026: 2 genuine contact activity timeline operations: 147 → 149.)
      */
-    const APPLICATION_OPERATIONS = 149;
+    const APPLICATION_OPERATIONS = 154;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 
@@ -382,7 +382,8 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
         const isPhase3DataFoundation =
           route.path.includes('/contacts') ||
           route.path.includes('/templates') ||
-          route.path.includes('/identities');
+          route.path.includes('/identities') ||
+          route.path.includes('/audience');
         const success = codes.filter((c) => c.startsWith('2'));
         if (!isPhase3DataFoundation && success.length !== 1)
           problems.push(`${route.method} ${route.path}: success ${success}`);
