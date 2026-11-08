@@ -259,8 +259,9 @@ describe('migration 0026: permission classification and scope eligibility (ADR-0
         [DELEGATE, Object.values(PLATFORM_ROLE_KEYS)],
       );
       expect(rows).toEqual([
-        { key: 'alendei_super_admin', n: '39', delegate: true },
-        { key: 'alendei_support', n: '14', delegate: false },
+        // Phase 7 PR 7-1: + billing.manage, pricing.read, pricing.manage; support + pricing.read.
+        { key: 'alendei_super_admin', n: '42', delegate: true },
+        { key: 'alendei_support', n: '15', delegate: false },
         { key: 'reseller_admin', n: '18', delegate: false },
       ]);
     });
@@ -745,14 +746,18 @@ describe('migration 0026: permission classification and scope eligibility (ADR-0
 
     it('passes on the current database', async () => {
       await asOwnerRolledBack(async (c) => {
-        await c.query("DELETE FROM permissions WHERE key = 'platform.support.read'");
+        await c.query(
+          "DELETE FROM permissions WHERE key IN ('platform.support.read', 'billing.read', 'billing.manage', 'pricing.read', 'pricing.manage')",
+        );
         await c.query(verification());
       });
     });
 
     it('names a permission key it cannot classify', async () => {
       await asOwnerRolledBack(async (c) => {
-        await c.query("DELETE FROM permissions WHERE key = 'platform.support.read'");
+        await c.query(
+          "DELETE FROM permissions WHERE key IN ('platform.support.read', 'billing.read', 'billing.manage', 'pricing.read', 'pricing.manage')",
+        );
         await c.query(
           "INSERT INTO permissions (key, domain, action, classification, allowed_scope_types) VALUES ('zz.unknown', 'zz', 'unknown', 'tenancy_administration', '{organization}')",
         );
@@ -766,7 +771,9 @@ describe('migration 0026: permission classification and scope eligibility (ADR-0
 
     it('names a role already carrying a permission it is ineligible for', async () => {
       await asOwnerRolledBack(async (c) => {
-        await c.query("DELETE FROM permissions WHERE key = 'platform.support.read'");
+        await c.query(
+          "DELETE FROM permissions WHERE key IN ('platform.support.read', 'billing.read', 'billing.manage', 'pricing.read', 'pricing.manage')",
+        );
         await c.query('ALTER TABLE role_permissions DISABLE TRIGGER trg_role_permissions_validate');
         await c.query(attach, [platformRole.alendei_support, perm['contacts.read']]);
         const err = await failure(c);

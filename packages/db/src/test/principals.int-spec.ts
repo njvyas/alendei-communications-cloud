@@ -45,6 +45,11 @@ const TABLES = [
   'consent_events',
   'contact_identities',
   'contacts',
+  // Phase 7 PR 7-1 (migration 0050): billing accounts and the partitioned ledger parent. No
+  // application role holds any privilege on them (pinned in phase7_1-ledger); RLS is on with no
+  // policy. The monthly partitions are not listed (they are their parent's), but each must have
+  // RLS enabled too, which the RLS assertion below covers.
+  'credit_accounts',
   'idempotency_keys',
   // Phase 3.3 (migration 0033): message orchestrator and dispatch tables
   'message_attempts',
@@ -72,8 +77,10 @@ const TABLES = [
   'suppressions',
   'teams',
   'templates',
+  'usage_ledger',
   'user_roles',
   'users',
+  'wallets',
   // Phase 5.0 (migration 0044): inbound provider delivery events. Control-plane table: no
   // tenant-facing principal holds any privilege on it (pinned in phase5_0-delivery-schema).
   'webhook_events',
@@ -247,12 +254,15 @@ describe('database principals and RLS coverage', () => {
   // ===========================================================================
   describe('catalog', () => {
     it('every table in public is classified, and every one has RLS enabled', async () => {
-      const { rows } = await db.admin.execute<{ relname: string; rls: boolean }>(sql`
-        SELECT c.relname, c.relrowsecurity AS rls
+      const { rows } = await db.admin.execute<{ relname: string; rls: boolean; part: boolean }>(sql`
+        SELECT c.relname, c.relrowsecurity AS rls, c.relispartition AS part
         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
         ORDER BY c.relname`);
-      expect(rows.map((r) => r.relname)).toEqual(TABLES);
+      expect(rows.filter((r) => !r.part).map((r) => r.relname)).toEqual(TABLES);
+      // Every partition is a usage_ledger month (Phase 7 PR 7-1); partitions are checked for RLS too.
+      for (const row of rows.filter((r) => r.part))
+        expect(row.relname).toMatch(/^usage_ledger_p\d{6}$/);
       for (const row of rows) expect(`${row.relname}:${row.rls}`).toBe(`${row.relname}:true`);
     });
 

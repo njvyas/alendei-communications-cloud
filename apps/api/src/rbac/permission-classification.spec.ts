@@ -90,6 +90,17 @@ const PRE_ADR_015_KEYS = [
   'platform.audit.read',
 ] as const;
 
+/**
+ * The four Phase 7 keys (PR 7-1, DECISIONS.md §1zi): classification and scopes as approved
+ * (DP-1). Inert on the HTTP surface until a later Phase 7 PR adds their routes.
+ */
+const PHASE_7_KEYS: Readonly<Record<string, { cls: string; scopes: readonly ScopeType[] }>> = {
+  'billing.read': { cls: 'tenant_content', scopes: ['organization'] },
+  'billing.manage': { cls: 'tenancy_administration', scopes: ['platform'] },
+  'pricing.read': { cls: 'platform_catalogue', scopes: ['platform'] },
+  'pricing.manage': { cls: 'platform_catalogue', scopes: ['platform'] },
+};
+
 const DELEGATE = 'platform.roles.delegate_tenant';
 const SUPPORT_READ = 'platform.support.read';
 const sorted = (xs: readonly string[]) => [...xs].sort();
@@ -111,11 +122,34 @@ describe('permission classification (ADR-015 R-5)', () => {
     }
   });
 
-  it('has exactly the 37 pre-ADR-015 keys, delegate_tenant, platform.support.read and the eight ADR-014 §6 keys', () => {
-    expect(ALL_PERMISSION_KEYS).toHaveLength(47);
+  it('has exactly the 37 pre-ADR-015 keys, delegate_tenant, platform.support.read, the eight ADR-014 §6 keys and the four Phase 7 keys', () => {
+    expect(ALL_PERMISSION_KEYS).toHaveLength(51);
     expect(sorted(ALL_PERMISSION_KEYS)).toEqual(
-      sorted([...PRE_ADR_015_KEYS, DELEGATE, SUPPORT_READ, ...Object.keys(ADR_014_SECTION_6)]),
+      sorted([
+        ...PRE_ADR_015_KEYS,
+        DELEGATE,
+        SUPPORT_READ,
+        ...Object.keys(ADR_014_SECTION_6),
+        ...Object.keys(PHASE_7_KEYS),
+      ]),
     );
+  });
+
+  it('classifies and scopes the four Phase 7 keys as approved (DP-1)', () => {
+    for (const [key, { cls, scopes }] of Object.entries(PHASE_7_KEYS)) {
+      expect([key, PERMISSION_CLASS[key as PermissionKey]]).toEqual([key, cls]);
+      expect([key, [...PERMISSION_ALLOWED_SCOPES[key as PermissionKey]]]).toEqual([key, scopes]);
+    }
+    // billing.read is organization-only: never platform, reseller, workspace or team.
+    for (const forbidden of ['platform', 'reseller', 'workspace', 'team'] as const) {
+      expect(permissionAllowedAt('billing.read', forbidden)).toBe(false);
+    }
+    // The platform keys confer nothing below the platform.
+    for (const key of ['billing.manage', 'pricing.read', 'pricing.manage']) {
+      for (const scope of ['reseller', 'organization', 'workspace', 'team'] as const) {
+        expect([key, scope, permissionAllowedAt(key, scope)]).toEqual([key, scope, false]);
+      }
+    }
   });
 
   it('platform ⇔ the platform. domain; providers.* is the catalogue; the §6 keys are content; the rest is tenancy administration', () => {
@@ -126,10 +160,14 @@ describe('permission classification (ADR-015 R-5)', () => {
           ? 'platform_catalogue'
           : key in ADR_014_SECTION_6
             ? 'tenant_content'
-            : 'tenancy_administration';
+            : key in PHASE_7_KEYS
+              ? PHASE_7_KEYS[key]!.cls
+              : 'tenancy_administration';
       expect(`${key}=${PERMISSION_CLASS[key]}`).toBe(`${key}=${expected}`);
     }
-    expect(sorted(TENANT_CONTENT_PERMISSIONS)).toEqual(sorted(Object.keys(ADR_014_SECTION_6)));
+    expect(sorted(TENANT_CONTENT_PERMISSIONS)).toEqual(
+      sorted([...Object.keys(ADR_014_SECTION_6), 'billing.read']),
+    );
   });
 
   it('pins the eight content keys to the ADR-014 §6 scope sets — never platform, reseller or team', () => {
@@ -166,12 +204,16 @@ describe('permission classification (ADR-015 R-5)', () => {
 });
 
 describe('role definitions under R-5 and R-6', () => {
-  it('alendei_super_admin holds the whole catalogue minus tenant content — 39 keys, delegate_tenant included', () => {
+  it('alendei_super_admin holds the whole catalogue minus tenant content — 42 keys, delegate_tenant included', () => {
     const superAdmin = roleDefinition(PLATFORM_ROLE_KEYS.ALENDEI_SUPER_ADMIN);
     expect(sorted(superAdmin.permissions)).toEqual(
-      sorted(ALL_PERMISSION_KEYS.filter((k) => !(k in ADR_014_SECTION_6))),
+      sorted(ALL_PERMISSION_KEYS.filter((k) => !(k in ADR_014_SECTION_6) && k !== 'billing.read')),
     );
-    expect(superAdmin.permissions).toHaveLength(39);
+    expect(superAdmin.permissions).toHaveLength(42);
+    expect(superAdmin.permissions).toEqual(
+      expect.arrayContaining(['billing.manage', 'pricing.read', 'pricing.manage']),
+    );
+    expect(superAdmin.permissions).not.toContain('billing.read');
     expect(superAdmin.permissions).toContain(DELEGATE);
     expect(superAdmin.permissions).toContain(SUPPORT_READ);
     expect(sorted(SUPER_ADMIN_PERMISSIONS)).toEqual(sorted(superAdmin.permissions));
@@ -186,7 +228,7 @@ describe('role definitions under R-5 and R-6', () => {
     }
   });
 
-  it('org_admin carries exactly the eight tenant-content keys; no other tenant role carries any', () => {
+  it('org_admin carries exactly the eight tenant-content keys and billing.read; no other tenant role carries any', () => {
     const content = (key: string) =>
       sorted(roleDefinition(key).permissions.filter(isTenantContentPermission));
     expect(content(TENANT_ROLE_KEYS.ORG_ADMIN)).toEqual(
@@ -199,6 +241,7 @@ describe('role definitions under R-5 and R-6', () => {
         'suppressions.manage',
         'messages.read',
         'messages.send',
+        'billing.read',
       ]),
     );
     for (const role of TENANT_ROLE_DEFINITIONS.filter(
@@ -225,7 +268,7 @@ describe('role definitions under R-5 and R-6', () => {
     }
   });
 
-  it('support and reseller_admin are unchanged and do not hold delegate_tenant', () => {
+  it('support gains only pricing.read (DP-2); reseller_admin is unchanged; neither holds delegate_tenant', () => {
     expect(roleDefinition(PLATFORM_ROLE_KEYS.ALENDEI_SUPPORT).permissions).not.toContain(DELEGATE);
     expect(roleDefinition(PLATFORM_ROLE_KEYS.RESELLER_ADMIN).permissions).not.toContain(DELEGATE);
     expect(sorted(roleDefinition(PLATFORM_ROLE_KEYS.ALENDEI_SUPPORT).permissions)).toEqual(
@@ -238,6 +281,7 @@ describe('role definitions under R-5 and R-6', () => {
         'platform.tenants.read',
         'platform.audit.read',
         'platform.support.read',
+        'pricing.read',
       ]),
     );
     expect(roleDefinition(PLATFORM_ROLE_KEYS.RESELLER_ADMIN).permissions).toHaveLength(18);
@@ -251,10 +295,10 @@ describe('role definitions under R-5 and R-6', () => {
     expect(Object.isFrozen(DELEGABLE_TENANT_SYSTEM_ROLES)).toBe(true);
   });
 
-  it('the API surface is the catalogue (all 47 keys activated in Phase 4)', () => {
+  it('the API surface is the catalogue minus the four inert Phase 7 keys (47 keys)', () => {
     expect(
       sorted(ALL_PERMISSION_KEYS.filter((k) => !API_SURFACE_PERMISSION_KEYS.includes(k))),
-    ).toEqual([]);
+    ).toEqual(sorted(Object.keys(PHASE_7_KEYS)));
     expect(API_SURFACE_PERMISSION_KEYS).toContain(DELEGATE);
     expect(API_SURFACE_PERMISSION_KEYS).toHaveLength(47);
   });

@@ -195,6 +195,8 @@ describe('U14.1b: created_at range statements on (org_id, created_at) — behavi
     });
   }, 180_000);
 
+  // Phase 7 PR 7-1: each deleted message is now checked against the ledger's RESTRICT FKs
+  // across every monthly partition, so the bulk teardown needs more than the 5 s default.
   afterAll(async () => {
     jest.restoreAllMocks();
     if (!h) return;
@@ -206,7 +208,7 @@ describe('U14.1b: created_at range statements on (org_id, created_at) — behavi
     }
     for (const tenant of [dense, sparse]) if (tenant) await destroyTenant(h.admin, tenant);
     await h.close();
-  });
+  }, 120_000);
 
   const get = (orgId: string, path: string, query: Record<string, string | number>) =>
     request(h.app.getHttpServer())

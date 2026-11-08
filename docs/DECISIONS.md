@@ -2527,7 +2527,7 @@ Formal owner review of the U15.1 post-implementation design compliance audit res
 **Status:**
 - Phase 7 is **not started**.
 - These are design decisions only. **Implementation is not authorised**: each Phase 7 PR (7-1 onwards) needs its own explicit owner approval.
-- This section records **only** decisions the owner explicitly approved. The design they belong to is the Phase 7 consolidated baseline, Rev 2 (owner's evidence store), which the owner accepted in principle on 08-Nov-2026.
+- This section records **only** decisions the owner explicitly approved. The design they belong to is the Phase 7 consolidated baseline, Rev 3 (owner's evidence store; Rev 3 adds only OD-7-4U and the per-path lock order, both recorded below), which the owner accepted in principle on 08-Nov-2026.
 - Phase 8B remains on hold until the Phase 7 foundation is approved and implemented in the agreed sequence.
 
 ### 1zi.1 Approved
@@ -2586,7 +2586,53 @@ Formal owner review of the U15.1 post-implementation design compliance audit res
 ### 1zi.2 Not decided (recorded so they are not mistaken for decisions)
 - Tax, discount and wallet-principal treatment (RQ-1). Tax is subject to professional accounting review.
 - The poison-lease alert threshold K.
-- OD-7-5 to OD-7-14: permissions, provider cost source, fail-closed rules, error contract, currency, submission-core ownership, dual control, auto-recharge, reseller markup, entitlements.
+- OD-7-6 (provider cost source), OD-7-7 (fail-closed rules and billing-account provisioning), OD-7-8 (error contract and the HTTP mapping of `BL000`–`BL006`), OD-7-11 (dual-control threshold and scope), OD-7-12 (auto-recharge), OD-7-13 (reseller markup).
+- Whole-paise rounding of rated amounts (before PR 7-2); whether API keys may carry `billing.read` (before the PR that surfaces the billing keys); ledger foreign keys versus any future message-retention policy (`DECISIONS.md` §4).
+
+### 1zi.3 Approved for PR 7-1, 08-Nov-2026
+The owner approved these for the PR 7-1 design and then authorised PR 7-1 as one draft PR, strictly within that design.
+- **OD-7-9:** INR only, enforced by a database constraint; **all money in integer paise** (`bigint`), which supersedes `NUMERIC(14,4)` in `DATABASE.md` §10; no foreign exchange, multi-currency, floating point or implicit rounding.
+- **OD-7-5:** `billing.read`, `billing.manage`, `pricing.read`, `pricing.manage`, enforced fail-closed.
+  - **DP-1:** `billing.read` is `tenant_content` with scopes `{organization}`. `billing.manage` is `tenancy_administration` with scopes `{platform}`; it cannot be class `platform` without the `platform.` prefix (migration `0026`). `pricing.*` is `platform_catalogue` with scopes `{platform}`.
+  - **Role grants:** `org_admin` holds `billing.read`, backfilled for existing organizations by the `0008` pattern. `alendei_super_admin` holds the three platform keys by construction. **DP-2:** `alendei_support` holds `pricing.read` only.
+- **Entry-type allowlist:** the single writer accepts `reservation`, `reservation_release`, `customer_charge` and `provider_cost` only. `recharge`, `refund` and `adjustment` (operator money movement) and `tax`, `discount` and `reseller_markup` are refused until separately authorised. PR 7-1 adds no operator recharge, refund or adjustment operation.
+- **OD-7-14:** entitlements are outside Phase 7 scope.
+- **OD-7-10:** PR 7-3 owns the shared send-path refactor.
+- **DP-3:** `usage_ledger`, `wallets` and `credit_accounts` are exempt from the table-class census (`ORG_ID_EXEMPT_TABLES`, with the reason recorded there); each partition is classified as its parent and must carry equivalent protections.
+- **DP-4:** unused columns (`auto_recharge_config`, `pricing_evaluation_id`, `rate_card_ref`, `ai_usage_id`) and the `adjustments`, `payments` and `invoices` tables arrive with the stages that need them.
+- **DP-5:** separate foreign-keyed `wallet_id` and `credit_account_id` columns with database-enforced same-organization consistency.
+- **DP-6:** database error codes `BL000`–`BL006`; HTTP mappings remain with OD-7-8.
+- **Partition creation (owner decision during implementation, 08-Nov-2026).** Invariant D of the tenant-context trust suite is preserved without exception: no SECURITY DEFINER function runs dynamic SQL or ALTER.
+  - `app_ledger_ensure_partitions` is therefore SECURITY INVOKER and executable by the schema owner only.
+  - Partitions are created after every `db:migrate` and by the operator command `db:ledger:partitions --ensure`.
+  - API startup only verifies, read-only, and publishes the metrics and the 6-month / 2-month alerts.
+  - This supersedes the design's startup creation.
+- **Safeguards:**
+  1. no cascading deletion of billed messages or ledger records (every financial foreign key is `ON DELETE RESTRICT`; ledger rows and accounts cannot be deleted);
+  2. privileges, immutability and guards verified on the ledger parent and every partition;
+  3. no implicit monetary rounding or floating point;
+  4. all earlier Phase 7 decisions and the allowlist preserved;
+  5. no speculative tables, unused fields or unapproved functionality.
+
+### 1zi.4 PR 7-1 as built (migration `0050`)
+- **Inert by construction.**
+  - No application role holds any privilege on the financial tables or may execute `app_ledger_post` or `app_ledger_ensure_partitions`.
+  - The four keys are in `INERT_PERMISSION_KEYS`, so the HTTP API neither accepts nor lists them, and no custom role or API key can carry them.
+  - No route, enforcement, account creation or money movement exists.
+  - `acc_app` may execute only the read-only `app_ledger_partition_report` (SECURITY INVOKER; it reads the system catalogues), for the startup verification (RQ-4).
+- **One message, one lock (final review, 08-Nov-2026).** `app_ledger_post` locks the message row (`FOR NO KEY UPDATE`) before the billing account, so every posting for a message is serialised whatever its account. Without it, two concurrent first postings to different accounts took different account locks, both passed the account-consistency check (`BL005`) and could split a message's reservation (reproduced, then fixed). The order is message → account, as recorded in §1zi.1.
+- **Charge accounting.** `wallets.reserved` / `credit_accounts.reserved` are the sum of *open* reservations (§10). A `customer_charge` therefore also consumes its share of the message's reservation (`reserved −= amount`), and the release is reservation − charges (`BILLING.md` §8). A settled message leaves `reserved` as it was. This corrects a balance-effect table in the PR 7-1 design that changed only `balance` on a charge; the integration suite proves the derivation.
+- **Partition creation and locks.**
+  - `db:migrate` ends with an owner step that ensures 24 months ahead (lock timeout 10 s) and verifies the partitions. An ensure failure is reported, and fails the run only when the verdict is critical (headroom below two months, a gap, an orphan or an unprotected partition).
+  - `db:ledger:partitions --check | --ensure [--months N]` does the same on demand. An `--ensure` that fails (for example 42501 under a non-owner role) fails the command.
+  - `ATTACH PARTITION` does not wait on open ledger inserts. Because it clones the ledger's foreign keys, it waits for `SHARE ROW EXCLUSIVE` on the referenced tables (`messages`, `message_attempts`, `wallets`, `credit_accounts`, `organizations`, `resellers`).
+  - A new month is created at most once a month, at deploy time or by the operator. Writers to those tables can wait at most the lock timeout, and a timed-out ensure leaves nothing behind.
+  - The API never creates partitions.
+- **Index guard.** The 0045 guard admits `usage_ledger_message_attempt_fkey` as a dependant of `uq_message_attempts_id_message_id`, the documented `allowedConstraints` mechanism.
+- **C2.** `tax` and `discount` facts must carry a line suffix (`tax:<line>`); every other entry type's fact kind is the entry type.
+- **Metrics** (no labels, set by the startup verification): `acc_billing_ledger_partition_headroom_months`, `acc_billing_ledger_partition_unprotected`, `acc_billing_ledger_partition_check_failures_total`.
+- **Message deletion.** Deleting a message or attempt now also checks the ledger's RESTRICT foreign keys across every monthly partition. No production path deletes messages; two index-test teardowns were given a longer hook timeout. Any future retention work must account for this.
+- **History proof:** `51|b1f2a7a36c020f3833f86d942d689a56` (`0000`–`0050`), recorded in `RELEASE.md`.
 
 ## 3. Risks explicitly accepted by design (not oversights)
 

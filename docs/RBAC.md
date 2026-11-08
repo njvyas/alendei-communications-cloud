@@ -227,6 +227,20 @@ The recurring pattern: **an actor may administer downward, never its own level's
 
 No platform, reseller or team grant covers these keys; coverage is downward only, so a workspace grant never covers an organization-owned resource. A workspace sender may use an approved template of its organization through `messages.send`. Assignment administration (`organization_provider_assignments`) is open decision D05.
 
+### 4d. Phase 7 billing and pricing permissions (PR 7-1, `DECISIONS.md` §1zi.3; **inert** on the HTTP surface)
+
+| Permission | Class | Allowed grant scopes | Held by |
+|---|---|---|---|
+| `billing.read` | `tenant_content` | organization | `org_admin` (existing organizations backfilled by migration `0050`) |
+| `billing.manage` | `tenancy_administration` | platform | `alendei_super_admin` |
+| `pricing.read` | `platform_catalogue` | platform | `alendei_super_admin`, `alendei_support` |
+| `pricing.manage` | `platform_catalogue` | platform | `alendei_super_admin` |
+
+- **Class and scope reasons.**
+  - `billing.read` is organization-only. Tenant content is the only class that keeps such a key off the platform roles, because a role may carry a key only when its scopes are a subset of the key's.
+  - `billing.manage` cannot be class `platform` without the `platform.` prefix.
+- **Inert until later PRs.** The four keys are in `INERT_PERMISSION_KEYS` until the Phase 7 PR that adds their routes. The HTTP API neither accepts nor lists them, so no custom role or API key can carry them, and no route checks them yet.
+
 ## 5. Authentication architecture
 
 | Mechanism | Use case | Notes |

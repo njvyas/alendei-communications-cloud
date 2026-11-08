@@ -602,7 +602,7 @@ Evidence summary (17-Oct-2026, current working tree):
 
 ## 10. Phase 7 — Billing
 
-> **Status (08-Nov-2026):** not started. Owner-approved design decisions are recorded in `DECISIONS.md` §1zi. Implementation is not authorised: each Phase 7 PR needs explicit owner approval. Gate 7-A / 7-B split per OD-7-1; the acceptance criteria below are unchanged.
+> **Status (08-Nov-2026):** PR 7-1 (ledger and billing-account foundation, migration `0050`) is implemented as a draft PR, inert by construction; no later Phase 7 PR is authorised. Owner-approved design decisions are recorded in `DECISIONS.md` §1zi. Each Phase 7 PR needs explicit owner approval. Gate 7-A / 7-B split per OD-7-1; the acceptance criteria below are unchanged.
 
 - **Objectives**: implement the immutable usage ledger, wallets, credit accounts, invoicing, GST placeholder logic, and the Pricing & Rating Engine (`BILLING.md` §§10–17) that separates transaction/usage from what it's worth from what is actually billed.
 - **Dependencies**: Phase 3+ (needs real message/attempt cost data flowing) and Phase 5 (fallback billing interaction).

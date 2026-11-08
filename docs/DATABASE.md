@@ -428,6 +428,27 @@ Mitigations, in order of preference:
 
 ## 10. Domain: Billing (see `BILLING.md` for the full financial model)
 
+> **As built, Phase 7 PR 7-1 (migration `0050`, `DECISIONS.md` §1zi.3–§1zi.4).** This takes precedence over the conceptual columns below where they differ.
+>
+> **Money.** Integer paise (`bigint`) with `currency = 'INR'` enforced by CHECK. This supersedes `NUMERIC(14,4)`.
+>
+> **`wallets` and `credit_accounts`.**
+> - Columns: `balance_paise`/`reserved_paise`, `credit_limit_paise`/`used_paise`/`reserved_paise`, `status` (`active`, `frozen`) and `version`.
+> - One of each per organization at most. All amounts are ≥ 0.
+> - No delete or truncate.
+>
+> **`usage_ledger`.**
+> - Partitioned by month on `anchor_month`, the month of the fact's own UUIDv7 anchor (`app_uuidv7_month`).
+> - Keys: `PRIMARY KEY (anchor_month, id)` and the fact identity `UNIQUE (anchor_month, anchor_id, fact_kind)`.
+> - Separate foreign-keyed `wallet_id` / `credit_account_id` columns, kept in the same organization as `message_id` / `message_attempt_id`.
+> - Every foreign key is `ON DELETE RESTRICT`. Rows are immutable on the parent and on every partition.
+>
+> **Partitions** are created only by `app_ledger_ensure_partitions`, which is SECURITY INVOKER and owner-only. It runs after every `db:migrate` and from `db:ledger:partitions --ensure`. The API only verifies, read-only, through `app_ledger_partition_report`. There is no DEFAULT partition.
+>
+> **The single writer.** `app_ledger_post` accepts only `reservation`, `reservation_release`, `customer_charge` and `provider_cost`, and is executable by no application role in PR 7-1.
+>
+> **Deferred** to the stages that need them: `auto_recharge_config`, `pricing_evaluation_id`, `rate_card_ref`, `ai_usage_id`, and the `adjustments`, `payments` and `invoices` tables.
+
 **`wallets`** — `id, org_id FK, balance NUMERIC(14,4) (materialized, recomputed from ledger), reserved NUMERIC(14,4) (materialized, sum of open reservations — see §10a), currency, auto_recharge_config JSONB NULL`. **Available balance = `balance - reserved`**, and it is *available balance* the Eligibility Engine checks before authorizing a prepaid send, never `balance` alone (`BILLING.md` §8).
 
 **Reservation accounting — precise definition (Phase 0.2 clarification, consistent across `BILLING.md` §8, `API.md`, `PRD.md`)**: a reservation (`usage_ledger.entry_type='reservation'`) increases `wallets.reserved` only. It does **not** additionally decrease `wallets.balance` — `balance` is not touched by a reservation at all. `wallets.balance` changes only from ledger entries that represent an actual, realized financial fact: `recharge` (increases balance), `customer_charge` (decreases balance), `refund` (increases balance), `adjustment` (either direction, per its justification). `reservation_release` (`BILLING.md` §8) decreases `reserved` by the released amount once the real `customer_charge` is known — it never touches `balance` either. Both `reservation` and `reservation_release` remain permanent, independently auditable rows in the immutable ledger like every other entry type (§10 above) — a reservation is bookkeeping about *what might be charged*, not a financial event in itself; only `customer_charge`/`refund`/`adjustment`/`recharge` are.

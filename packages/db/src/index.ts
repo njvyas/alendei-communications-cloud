@@ -6,3 +6,4 @@ export * from './constants';
 export * from './table-classes';
 export * from './principal-guard';
 export * from './pool-guard';
+export * from './maintenance/ledger-partitions';
