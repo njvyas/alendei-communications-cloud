@@ -4,6 +4,8 @@
  * Workspace-owned resources under `/workspaces/:workspaceId/...`.
  */
 
+import type { PageInfo } from './api';
+
 export const CONTACT_IDENTITY_STATUSES = ['active', 'inactive'] as const;
 export type ContactIdentityStatus = (typeof CONTACT_IDENTITY_STATUSES)[number];
 
@@ -88,4 +90,38 @@ export interface ContactActivityResponse {
   readonly channelCode?: string | null;
   readonly statusTone: 'success' | 'warning' | 'error' | 'neutral' | 'accent';
   readonly metadata?: Record<string, unknown>;
+}
+
+// --- Audience Resolution Contracts (Phase 8A-S) ------------------------------
+
+export const AUDIENCE_TAG_MATCH_MODES = ['any', 'all'] as const;
+export type AudienceTagMatchMode = (typeof AUDIENCE_TAG_MATCH_MODES)[number];
+
+export interface AudienceMemberIdentity {
+  readonly id: string;
+  readonly channelId: string;
+  readonly channelCode?: string;
+  readonly rawAddress: string;
+  readonly normalizedAddress: string;
+  readonly isPrimary: boolean;
+  readonly status: ContactIdentityStatus;
+}
+
+export interface AudienceMemberResponse {
+  readonly contactId: string;
+  readonly workspaceId: string;
+  readonly firstName?: string | null;
+  readonly lastName?: string | null;
+  readonly tags: readonly string[];
+  readonly metadata: Record<string, unknown>;
+  readonly identities: readonly AudienceMemberIdentity[];
+  readonly consentState?: EffectiveConsentState | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface AudienceResolutionResponse {
+  readonly data: readonly AudienceMemberResponse[];
+  readonly totalCount: number;
+  readonly page: PageInfo;
 }

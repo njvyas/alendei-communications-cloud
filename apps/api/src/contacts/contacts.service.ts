@@ -6,6 +6,9 @@ import {
   isTerminalMessageStatus,
   maskRecipientAddress,
   sanitizeRecipientContent,
+  type AudienceMemberIdentity,
+  type AudienceMemberResponse,
+  type AudienceResolutionResponse,
   type AuthPrincipal,
   type ContactActivityResponse,
   type ContactResponse,
@@ -16,6 +19,7 @@ import {
   type MessageStatus,
   type PageInfo,
 } from '@acc/contracts';
+
 import { schema, type Transaction } from '@acc/db';
 import { and, desc, eq, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
@@ -38,6 +42,7 @@ import type {
   CreateConsentEventDto,
   GetEffectiveConsentDto,
   ListContactActivitiesDto,
+  ResolveAudienceDto,
   UpdateContactDto,
   UpdateContactIdentityDto,
 } from './contacts.dto';
@@ -46,6 +51,24 @@ import { normalizeAddress } from './contacts.normalization';
 type ContactRow = typeof schema.contacts.$inferSelect;
 type IdentityRow = typeof schema.contactIdentities.$inferSelect;
 type ConsentEventRow = typeof schema.consentEvents.$inferSelect;
+
+function extractContactTagsFromMetadata(metadata: unknown): string[] {
+  if (!metadata || typeof metadata !== 'object') return [];
+  const m = metadata as Record<string, unknown>;
+  const rawTags = m.tags ?? m.tag_list;
+  if (Array.isArray(rawTags)) {
+    return rawTags
+      .filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
+      .map((t) => t.trim());
+  }
+  if (typeof rawTags === 'string') {
+    return rawTags
+      .split(',')
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
+  }
+  return [];
+}
 
 function contactNotFound(id: string): AppException {
   return new AppException({
@@ -129,6 +152,7 @@ export class ContactsService {
   private readonly listSpec: ListQuerySpec = {
     sortable: {
       createdAt: { column: schema.contacts.id, encode: (row) => String(row.id) },
+      id: { column: schema.contacts.id, encode: (row) => String(row.id) },
     },
     defaultSort: 'createdAt',
     tieBreaker: schema.contacts.id,
@@ -1135,6 +1159,361 @@ export class ContactsService {
         consentType: dto.consentType,
         effectiveState,
         evaluatedAt: new Date().toISOString(),
+      };
+    });
+  }
+
+  /**
+   * Resolves campaign audiences from contacts within an organization or workspace (Phase 8A-S).
+   * Supports tag segmentation (any/all), channel eligibility, suppression preflight,
+   * deterministic consent evaluation, exact counting, and keyset pagination.
+   */
+  async resolveAudience(
+    principal: AuthPrincipal,
+    dto: ResolveAudienceDto = {},
+    targetWorkspaceId?: string,
+  ): Promise<AudienceResolutionResponse> {
+    const orgId = requireOrganization(principal);
+    const effectiveWorkspaceId = targetWorkspaceId ?? dto.workspaceId;
+
+    // Consent filters are evaluated per channel. Without a channel they would be silently
+    // ignored and the audience would include unconsented and revoked contacts, so refuse
+    // (fail closed) instead.
+    if (
+      (dto.requireOptIn === true || dto.consentType !== undefined) &&
+      !dto.channelId &&
+      !dto.channel
+    ) {
+      throw new AppException({
+        status: HttpStatus.BAD_REQUEST,
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: 'requireOptIn and consentType require channel or channelId',
+        logContext: { requireOptIn: dto.requireOptIn === true, consentType: dto.consentType },
+      });
+    }
+
+    return this.db.withRequestTenant(async (tx) => {
+      // 1. Tenancy & Workspace Access Assertion
+      if (effectiveWorkspaceId) {
+        await this.assertWorkspaceAccess(
+          tx,
+          principal,
+          effectiveWorkspaceId,
+          PERMISSIONS.CONTACTS_READ,
+        );
+      } else {
+        await this.authorization.assert(tx, {
+          principal,
+          permission: PERMISSIONS.CONTACTS_READ,
+          target: { scopeType: 'organization', scopeId: orgId },
+          resourceType: 'Organization',
+        });
+      }
+
+      // 2. Channel Resolution (if requested)
+      let resolvedChannel: { id: string; code: string } | undefined;
+      if (dto.channelId) {
+        const channelResult = await tx.execute<{ code: string }>(
+          sql`SELECT app_channel_code(${dto.channelId}) AS code`,
+        );
+        const code = channelResult.rows[0]?.code;
+        if (!code) throw channelNotFound(dto.channelId);
+        resolvedChannel = { id: dto.channelId, code };
+      } else if (dto.channel) {
+        const channelResult = await tx.execute<{ id: string; code: string; status: string }>(
+          sql`SELECT id, code, status FROM app_channel_resolve(${dto.channel}::text)`,
+        );
+        const ch = channelResult.rows[0];
+        if (!ch) {
+          throw new AppException({
+            status: HttpStatus.NOT_FOUND,
+            code: ERROR_CODES.RESOURCE_NOT_FOUND,
+            message: `Channel '${dto.channel}' not found`,
+            logContext: { requestedChannel: dto.channel },
+          });
+        }
+        resolvedChannel = { id: ch.id, code: ch.code };
+      }
+
+      // 3. Build Predicates
+      const predicates: SQL[] = [eq(schema.contacts.orgId, orgId)];
+      if (effectiveWorkspaceId) {
+        predicates.push(eq(schema.contacts.workspaceId, effectiveWorkspaceId));
+      }
+
+      // Tag Filtering
+      const rawTags = dto.tags ?? [];
+      const uniqueLowerTags = Array.from(
+        new Set(rawTags.map((t) => t.trim().toLowerCase()).filter(Boolean)),
+      );
+
+      if (uniqueLowerTags.length > 0) {
+        const tagMode = dto.tagMatchMode ?? 'any';
+        const tagsJsonbArrayExpr = sql`CASE
+          WHEN jsonb_typeof(${schema.contacts.metadata}->'tags') = 'array' THEN ${schema.contacts.metadata}->'tags'
+          WHEN jsonb_typeof(${schema.contacts.metadata}->'tag_list') = 'array' THEN ${schema.contacts.metadata}->'tag_list'
+          ELSE '[]'::jsonb
+        END`;
+
+        const tagListSql = sql.join(
+          uniqueLowerTags.map((t) => sql`${t}`),
+          sql`, `,
+        );
+
+        if (tagMode === 'all') {
+          predicates.push(
+            sql`(
+              SELECT count(DISTINCT lower(elem))
+              FROM jsonb_array_elements_text(${tagsJsonbArrayExpr}) AS elem
+              WHERE lower(elem) IN (${tagListSql})
+            ) = ${uniqueLowerTags.length}`,
+          );
+        } else {
+          predicates.push(
+            sql`EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements_text(${tagsJsonbArrayExpr}) AS elem
+              WHERE lower(elem) IN (${tagListSql})
+            )`,
+          );
+        }
+      }
+
+      // Channel Eligibility, Suppression & Consent
+      if (resolvedChannel) {
+        // Must have an active identity for this channel that is NOT actively suppressed
+        predicates.push(
+          sql`EXISTS (
+            SELECT 1
+            FROM ${schema.contactIdentities} ci
+            WHERE ci.contact_id = ${schema.contacts.id}
+              AND ci.channel_id = ${resolvedChannel.id}
+              AND ci.status = 'active'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM ${schema.suppressions} s
+                WHERE s.org_id = ${schema.contacts.orgId}
+                  AND (s.channel_id = ${resolvedChannel.id} OR s.channel_id IS NULL)
+                  AND s.normalized_address = ci.normalized_address
+                  AND s.status = 'active'
+              )
+          )`,
+        );
+
+        // Consent evaluation bounded by now + 5 min
+        const fiveMinutesFuture = new Date(Date.now() + 5 * 60 * 1000);
+        const consentTypeFilter = dto.consentType
+          ? sql`AND ce.consent_type = ${dto.consentType}`
+          : sql``;
+        const consentTypeInnerFilter = dto.consentType
+          ? sql`AND ce_inner.consent_type = ${dto.consentType}`
+          : sql``;
+
+        if (dto.requireOptIn) {
+          // Explicit opt-in required: must have grant at max occurred_at and no revoke at max occurred_at
+          predicates.push(
+            sql`EXISTS (
+              SELECT 1
+              FROM ${schema.consentEvents} ce
+              WHERE ce.contact_id = ${schema.contacts.id}
+                AND ce.channel_id = ${resolvedChannel.id}
+                ${consentTypeFilter}
+                AND ce.occurred_at <= ${fiveMinutesFuture}
+                AND ce.occurred_at = (
+                  SELECT MAX(ce_inner.occurred_at)
+                  FROM ${schema.consentEvents} ce_inner
+                  WHERE ce_inner.contact_id = ${schema.contacts.id}
+                    AND ce_inner.channel_id = ${resolvedChannel.id}
+                    ${consentTypeInnerFilter}
+                    AND ce_inner.occurred_at <= ${fiveMinutesFuture}
+                )
+                AND ce.event = 'grant'
+            )`,
+          );
+        }
+
+        // Under both default and opt-in modes: must NOT have a revoke at max occurred_at
+        predicates.push(
+          sql`NOT EXISTS (
+            SELECT 1
+            FROM ${schema.consentEvents} ce
+            WHERE ce.contact_id = ${schema.contacts.id}
+              AND ce.channel_id = ${resolvedChannel.id}
+              ${consentTypeFilter}
+              AND ce.occurred_at <= ${fiveMinutesFuture}
+              AND ce.occurred_at = (
+                SELECT MAX(ce_inner.occurred_at)
+                FROM ${schema.consentEvents} ce_inner
+                WHERE ce_inner.contact_id = ${schema.contacts.id}
+                  AND ce_inner.channel_id = ${resolvedChannel.id}
+                  ${consentTypeInnerFilter}
+                  AND ce_inner.occurred_at <= ${fiveMinutesFuture}
+              )
+              AND ce.event = 'revoke'
+          )`,
+        );
+      }
+
+      // 4. Exact Total Count (Never estimated or fabricated)
+      const [countResult] = await tx
+        .select({ count: sql<number>`count(DISTINCT ${schema.contacts.id})::int` })
+        .from(schema.contacts)
+        .where(and(...predicates));
+      const totalCount = Number(countResult?.count ?? 0);
+
+      // 5. Deterministic Keyset Pagination
+      const resolved = this.lists.resolve(dto, this.listSpec);
+      const pagePredicates = [...predicates];
+      if (resolved.after) pagePredicates.push(resolved.after);
+
+      const rows = await tx
+        .select()
+        .from(schema.contacts)
+        .where(and(...pagePredicates))
+        .orderBy(...resolved.orderBy)
+        .limit(this.lists.fetchSize(resolved));
+
+      const { items, page } = this.lists.paginate(
+        rows as unknown as Record<string, unknown>[],
+        resolved,
+        this.listSpec,
+        (row) => String(row.id),
+      );
+
+      if (items.length === 0) {
+        return { data: [], totalCount, page };
+      }
+
+      // 6. Hydrate Identities & Consent for returned page items
+      const contactIds = items.map((r) => String(r.id));
+
+      const identityPredicates = [
+        inArray(schema.contactIdentities.contactId, contactIds),
+        eq(schema.contactIdentities.status, 'active'),
+        // The same active-suppression exclusion as the eligibility predicate above, applied to
+        // each identity on its own channel: a suppressed address is never returned, even when its
+        // contact stays eligible through another, unsuppressed identity.
+        sql`NOT EXISTS (
+          SELECT 1
+          FROM ${schema.suppressions} s
+          WHERE s.org_id = ${schema.contactIdentities.orgId}
+            AND (s.channel_id = ${schema.contactIdentities.channelId} OR s.channel_id IS NULL)
+            AND s.normalized_address = ${schema.contactIdentities.normalizedAddress}
+            AND s.status = 'active'
+        )`,
+      ];
+      if (resolvedChannel) {
+        identityPredicates.push(eq(schema.contactIdentities.channelId, resolvedChannel.id));
+      }
+
+      const identityRows = await tx
+        .select({
+          id: schema.contactIdentities.id,
+          workspaceId: schema.contactIdentities.workspaceId,
+          contactId: schema.contactIdentities.contactId,
+          channelId: schema.contactIdentities.channelId,
+          channelCode: sql<string>`app_channel_code(${schema.contactIdentities.channelId})`,
+          rawAddress: schema.contactIdentities.rawAddress,
+          normalizedAddress: schema.contactIdentities.normalizedAddress,
+          isPrimary: schema.contactIdentities.isPrimary,
+          status: schema.contactIdentities.status,
+          createdAt: schema.contactIdentities.createdAt,
+          updatedAt: schema.contactIdentities.updatedAt,
+        })
+        .from(schema.contactIdentities)
+        .where(and(...identityPredicates))
+        .orderBy(
+          desc(schema.contactIdentities.isPrimary),
+          desc(schema.contactIdentities.createdAt),
+        );
+
+      const identitiesByContact = new Map<string, AudienceMemberIdentity[]>();
+      for (const idRow of identityRows) {
+        const list = identitiesByContact.get(idRow.contactId) ?? [];
+        list.push({
+          id: idRow.id,
+          channelId: idRow.channelId,
+          channelCode: idRow.channelCode,
+          rawAddress: idRow.rawAddress,
+          normalizedAddress: idRow.normalizedAddress,
+          isPrimary: idRow.isPrimary,
+          status: idRow.status,
+        });
+        identitiesByContact.set(idRow.contactId, list);
+      }
+
+      // If channel is specified, compute effective consent state for each contact
+      const consentByContact = new Map<string, EffectiveConsentState>();
+      if (resolvedChannel) {
+        const fiveMinutesFuture = new Date(Date.now() + 5 * 60 * 1000);
+        const consentPredicates = [
+          inArray(schema.consentEvents.contactId, contactIds),
+          eq(schema.consentEvents.channelId, resolvedChannel.id),
+          lte(schema.consentEvents.occurredAt, fiveMinutesFuture),
+        ];
+        if (dto.consentType) {
+          consentPredicates.push(eq(schema.consentEvents.consentType, dto.consentType));
+        }
+
+        const consentRows = await tx
+          .select()
+          .from(schema.consentEvents)
+          .where(and(...consentPredicates))
+          .orderBy(
+            desc(schema.consentEvents.occurredAt),
+            desc(schema.consentEvents.createdAt),
+            desc(schema.consentEvents.id),
+          );
+
+        // Group by contactId
+        const eventsByContact = new Map<string, typeof consentRows>();
+        for (const ce of consentRows) {
+          const list = eventsByContact.get(ce.contactId) ?? [];
+          list.push(ce);
+          eventsByContact.set(ce.contactId, list);
+        }
+
+        for (const cId of contactIds) {
+          const cEvents = eventsByContact.get(cId) ?? [];
+          if (cEvents.length === 0) {
+            consentByContact.set(cId, 'unconsented');
+          } else {
+            const maxOccurredAt = cEvents[0]!.occurredAt.getTime();
+            const latestBatch = cEvents.filter((r) => r.occurredAt.getTime() === maxOccurredAt);
+            const hasGrant = latestBatch.some((r) => r.event === 'grant');
+            const hasRevoke = latestBatch.some((r) => r.event === 'revoke');
+
+            if (hasGrant && hasRevoke) {
+              consentByContact.set(cId, 'unconsented');
+            } else if (hasGrant) {
+              consentByContact.set(cId, 'opted_in');
+            } else if (hasRevoke) {
+              consentByContact.set(cId, 'opted_out');
+            }
+          }
+        }
+      }
+
+      const members: AudienceMemberResponse[] = items.map((row) => {
+        const c = row as unknown as ContactRow;
+        return {
+          contactId: c.id,
+          workspaceId: c.workspaceId,
+          firstName: c.firstName,
+          lastName: c.lastName,
+          tags: extractContactTagsFromMetadata(c.metadata),
+          metadata: (c.metadata as Record<string, unknown>) ?? {},
+          identities: identitiesByContact.get(c.id) ?? [],
+          consentState: resolvedChannel ? (consentByContact.get(c.id) ?? 'unconsented') : null,
+          createdAt: c.createdAt.toISOString(),
+          updatedAt: c.updatedAt.toISOString(),
+        };
+      });
+
+      return {
+        data: members,
+        totalCount,
+        page,
       };
     });
   }
