@@ -726,6 +726,46 @@ export function useCanSendMessages(): boolean {
 }
 
 /**
+ * Evaluates whether the actor can view campaigns in the active organization.
+ *
+ * Frontend Visibility vs. Server-Side Authorization:
+ * Phase 8B native campaign permissions (e.g. `campaigns.read`) do not exist in the catalog
+ * and no backend endpoints yet exist to enforce them.
+ * For client-side navigation and view visibility, we reuse the established communications
+ * pattern: an actor holding `messages.read` or `messages.send` (identical to `/whatsapp`)
+ * is granted console visibility. Tenancy-only permissions such as `workspaces.read` are
+ * deliberately excluded because they confer workspace metadata access rather than
+ * messaging/content access.
+ */
+export function canReadCampaigns(): boolean {
+  return hasPermission('messages.read') || hasPermission('messages.send');
+}
+
+export function useCanReadCampaigns(): boolean {
+  const canReadMessages = useHasPermission('messages.read');
+  const canSendMessages = useHasPermission('messages.send');
+  return canReadMessages || canSendMessages;
+}
+
+/**
+ * Evaluates whether the actor can manage/create campaigns in the active organization.
+ *
+ * Frontend Visibility vs. Server-Side Authorization:
+ * In accordance with ACC Architecture (§11), campaigns are callers of core communication
+ * APIs and orchestrate message dispatch. Managing and initiating campaigns requires outbound
+ * sending authority (`messages.send`).
+ * Holding `templates.manage` alone is insufficient: template authoring does not confer message
+ * sending rights. Server-side authorization remains unenforced pending Phase 8B backend endpoints.
+ */
+export function canManageCampaigns(): boolean {
+  return hasPermission('messages.send');
+}
+
+export function useCanManageCampaigns(): boolean {
+  return useHasPermission('messages.send');
+}
+
+/**
  * Initializes the session on application startup via silent refresh.
  * Transitions to 'unauthenticated' if no active session exists.
  */

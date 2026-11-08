@@ -244,7 +244,7 @@ describe('U10 source sweep', () => {
     assert.deepEqual(problems, []);
   });
 
-  it('all 45 custom dialog panels are programmatically focusable (tabIndex={-1})', () => {
+  it('all 46 custom dialog panels are programmatically focusable (tabIndex={-1})', () => {
     const panels: string[] = [];
     const missing: string[] = [];
     for (const { file, text } of SOURCES) {
@@ -255,7 +255,7 @@ describe('U10 source sweep', () => {
         if (!/tabIndex=\{-1\}/.test(tag)) missing.push(`${file}:${line}`);
       }
     }
-    assert.equal(panels.length, 45); // 43 after U13.3 + 2 U13.4 support dialogs
+    assert.equal(panels.length, 46); // 45 after U13.4 + 1 Phase 8B campaign creation dialog
     assert.deepEqual(missing, []);
   });
 

@@ -462,3 +462,22 @@ export function IconClose(props: IconProps) {
     </svg>
   );
 }
+
+export function IconCampaigns(props: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      aria-hidden="true"
+      {...props}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M11.25 4.5l-6 3.5H3a1 1 0 00-1 1v2a1 1 0 001 1h2.25l6 3.5v-11zM11.25 8h3a3 3 0 010 4h-3M6.5 12.5v3.25a.75.75 0 00.75.75h1a.75.75 0 00.75-.75V13"
+      />
+    </svg>
+  );
+}

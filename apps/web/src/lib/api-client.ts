@@ -82,6 +82,13 @@ import {
   deliveryRank,
 } from '@acc/contracts';
 import { maskRecipientAddress } from './address-masking';
+import {
+  type CampaignRecord,
+  type CreateCampaignParams,
+  DEFAULT_PREVIEW_ORG_ID,
+  INITIAL_MOCK_CAMPAIGNS,
+  filterCampaigns,
+} from './campaigns';
 
 export type {
   AssignmentStatus,
@@ -3307,5 +3314,127 @@ export const platformSupportApi = {
       skipTenant: true,
       signal,
     });
+  },
+};
+
+/**
+ * Phase 8B: Campaigns API Client (Frontend Slice).
+ *
+ * NOTE: Backend /campaigns endpoints and tables do not yet exist.
+ * This client operates against an isolated in-memory preview store initialized
+ * with INITIAL_MOCK_CAMPAIGNS, clearly documenting that changes are local preview
+ * only and awaiting Phase 8B backend execution engine.
+ */
+let previewCampaigns: CampaignRecord[] = [...INITIAL_MOCK_CAMPAIGNS];
+
+export const campaignsApi = {
+  /** Reset preview state to initial fixtures (used in test suites) */
+  resetPreview(): void {
+    previewCampaigns = [...INITIAL_MOCK_CAMPAIGNS];
+  },
+
+  async list(
+    workspaceId?: string,
+    params: { orgId?: string; channel?: string; status?: string; query?: string } = {},
+    _signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<CampaignRecord>> {
+    const effectiveOrgId = params.orgId ?? getSelectedOrganization() ?? undefined;
+    if (!effectiveOrgId) {
+      return {
+        data: [],
+        page: {
+          hasMore: false,
+          nextCursor: null,
+          limit: 50,
+        },
+      };
+    }
+
+    const filtered = filterCampaigns(previewCampaigns, {
+      orgId: effectiveOrgId,
+      workspaceId,
+      channel: params.channel,
+      status: params.status,
+      query: params.query,
+    });
+
+    return {
+      data: filtered,
+      page: {
+        hasMore: false,
+        nextCursor: null,
+        limit: 50,
+      },
+    };
+  },
+
+  async get(
+    id: string,
+    contextOrSignal?: { orgId?: string; workspaceId?: string } | AbortSignal,
+    _signal?: AbortSignal,
+  ): Promise<ApiDataResponse<CampaignRecord>> {
+    const options =
+      contextOrSignal && !(contextOrSignal instanceof AbortSignal) ? contextOrSignal : undefined;
+    const effectiveOrgId = options?.orgId ?? getSelectedOrganization() ?? undefined;
+    const effectiveWorkspaceId = options?.workspaceId;
+
+    if (!effectiveOrgId) {
+      throw new ApiError(404, 'NOT_FOUND', 'Campaign not found', 'preview-corr-id', false);
+    }
+
+    const campaign = previewCampaigns.find((c) => {
+      if (c.id !== id) return false;
+      if (c.orgId !== effectiveOrgId) return false;
+      if (effectiveWorkspaceId && c.workspaceId !== effectiveWorkspaceId) return false;
+      return true;
+    });
+
+    if (!campaign) {
+      throw new ApiError(404, 'NOT_FOUND', 'Campaign not found', 'preview-corr-id', false);
+    }
+    return { data: campaign };
+  },
+
+  async create(
+    params: CreateCampaignParams,
+    _signal?: AbortSignal,
+  ): Promise<ApiDataResponse<CampaignRecord>> {
+    const effectiveOrgId = params.orgId || getSelectedOrganization() || DEFAULT_PREVIEW_ORG_ID;
+    const now = new Date().toISOString();
+    const newRecord: CampaignRecord = {
+      id: `cmp-prev-${Date.now().toString(36)}`,
+      orgId: effectiveOrgId,
+      workspaceId: params.workspaceId,
+      name: params.name,
+      description: params.description,
+      channel: params.channel,
+      templateId: params.templateId,
+      templateName: params.templateName,
+      templateBody: params.templateBody,
+      templateVariables: params.templateVariables,
+      status: params.scheduleMode === 'scheduled' ? 'scheduled' : 'draft',
+      recipientSource: params.recipientSource,
+      scheduleMode: params.scheduleMode,
+      scheduledAt: params.scheduledAt ?? null,
+      throttling: {
+        rateLimitPerSecond: params.throttling?.rateLimitPerSecond ?? 25,
+        maxAttemptsPerRecipient: params.throttling?.maxAttemptsPerRecipient ?? 1,
+      },
+      metrics: {
+        totalRecipients: params.recipientSource.contactCount,
+        sent: 0,
+        delivered: 0,
+        read: 0,
+        failed: 0,
+        deliveryRate: 0,
+      },
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+      isSimulatedPreview: true,
+    };
+
+    previewCampaigns.unshift(newRecord);
+    return { data: newRecord };
   },
 };

@@ -3,6 +3,7 @@ import type { AuthStatus } from '@/lib/session-store';
 import {
   IconApiKeys,
   IconAudit,
+  IconCampaigns,
   IconChannels,
   IconContacts,
   IconDomains,
@@ -71,6 +72,13 @@ export const NAV_ITEMS: readonly NavItemConfig[] = [
     group: 'operations',
     groupLabel: 'Operations',
     icon: IconTemplates,
+  },
+  {
+    href: '/campaigns',
+    label: 'Campaigns',
+    group: 'operations',
+    groupLabel: 'Operations',
+    icon: IconCampaigns,
   },
 
   // 2. Audience
@@ -185,6 +193,7 @@ export interface NavVisibilityContext {
   readonly canReadMessages: boolean;
   readonly canSendMessages: boolean;
   readonly canReadTemplates: boolean;
+  readonly canReadCampaigns: boolean;
   readonly canReadContacts: boolean;
   readonly canReadSuppressions: boolean;
   readonly canReadProviders: boolean;
@@ -229,6 +238,8 @@ export function isNavItemVisible(href: string, ctx: NavVisibilityContext): boole
       return ctx.canReadMessages || ctx.canSendMessages;
     case '/templates':
       return ctx.canReadTemplates;
+    case '/campaigns':
+      return ctx.canReadCampaigns;
     case '/contacts':
       return ctx.canReadContacts;
     case '/suppressions':
