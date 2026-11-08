@@ -2522,6 +2522,72 @@ Formal owner review of the U15.1 post-implementation design compliance audit res
 - OD-2 (`expired`), OD-15 (retention, not implemented), OD-17 and OD-20 (Phase 5 policy), receipts for closed organizations (default: informational), and each environment's enablement (S0–S8, `DELIVERY_OUTCOMES.md` §3).
 - Phase 5.0 is **not** approval for real provider connectivity, credentials or live traffic.
 
+## 1zi. Phase 7 billing: owner-approved design decisions, 08-Nov-2026
+
+**Status:**
+- Phase 7 is **not started**.
+- These are design decisions only. **Implementation is not authorised**: each Phase 7 PR (7-1 onwards) needs its own explicit owner approval.
+- This section records **only** decisions the owner explicitly approved. The design they belong to is the Phase 7 consolidated baseline, Rev 2 (owner's evidence store), which the owner accepted in principle on 08-Nov-2026.
+- Phase 8B remains on hold until the Phase 7 foundation is approved and implemented in the agreed sequence.
+
+### 1zi.1 Approved
+- **OD-7-1: acceptance is split; nothing is removed.**
+  - *Gate 7-A* accepts Phase 7 with one carried criterion. It consists of: the `BILLING.md` §5 worked example reproduced numerically on a same-channel five-attempt chain; every `TESTING.md` §7 billing test; and the safeguard suites.
+  - *Gate 7-B* closes the carried criterion at Phase 5 acceptance. It is the original cross-channel five-step critical scenario (`TESTING.md` §3 item 7) asserted against the real ledger.
+  - Phase 5 cannot be accepted without 7-B. `ROADMAP.md` §10 and `TESTING.md` §3 are unchanged.
+- **OD-7-2: settlement inside the dispatcher's existing transactions, without an event bus** (ADR-014 F11 stands).
+  - Ledger facts are written immediately before COMMIT of the state change that justifies them.
+  - One SECURITY DEFINER writer inserts each fact if absent and changes materialised balances only when a row was inserted.
+  - The settlement fence is read `FOR UPDATE`.
+  - The circuit-admission recording is taken once, outside any retry; metrics are published after COMMIT.
+  - Only the settlement transaction is retried: on SQLSTATE `40P01`/`40001`, at most 3 attempts, and only with at least 5 s of lease left. The provider call is never inside a retry.
+  - Lease recovery runs one expired lease per transaction.
+  - **Lock order, per path.** There is no single global order. The pre-existing dispatcher takes the provider row and the message row in different orders in T2 and T3. That is unchanged by Phase 7, and safe because a message row is locked only under its live claim and recovery never requeues a `submitting` message.
+    - *Settlement (T3):* org-lifecycle advisory lock (shared) → queue row (`FOR UPDATE`) → message → provider row (taken by the existing circuit recording, `recordSubmission`) → attempt → billing account → ledger.
+    - *Pre-submit (T2, reservation extension):* org-lifecycle advisory lock (shared) → provider row (taken by the existing circuit admission, `admit`) → message → billing account → ledger, then the new attempt row.
+    - *Lease recovery:* queue row → message → attempt → billing account → ledger.
+    - *Submission (T0):* billing account only, then new rows.
+    - *Operator resolution of an unknown outcome:* message → attempt → billing account → ledger.
+    - *Delivery ingestion:* message → attempt → `webhook_events`, with no billing account.
+  - **Rule:** the billing account row is the **last** row lock taken in every transaction. After it, only new rows and the transaction's own ledger fact keys are written. A transaction holding a billing account therefore never waits on a message, attempt or provider lock, so the billing additions cannot form a lock cycle.
+- **OD-7-3: `usage_ledger` partitioned by month from its first migration, on an anchor month derived from the fact's own UUIDv7 anchor.**
+  - Keys are `PRIMARY KEY (anchor_month, id)` and `UNIQUE (anchor_month, anchor_id, fact_kind)`, which is globally unique by construction.
+  - A custom `IMMUTABLE` function derives the month. PostgreSQL 17's `uuid_extract_timestamp` returns NULL for v7 UUIDs and must not be used; the CHECK rejects NULL.
+  - No DEFAULT partition.
+  - Partitions are created only by one routine (detached table → range CHECK → TRUNCATE trigger → ATTACH, in one transaction), run at migrate, at application startup and by operator command.
+  - A TRUNCATE guard sits on every partition.
+- **OD-7-4, except the outcome-unknown clause: charging.**
+  - The customer charge is settled at chain terminal state on **confirmed** provider acceptance.
+  - Provider cost is recorded for each attempt that reached the provider.
+  - Delivery receipts never change billing automatically.
+  - Credits are made only by an explicit, keyed, justified refund.
+  - The failed-delivery fee defaults to 0.
+  - The owner withdrew the clause treating `outcome_unknown` as accepted. It is replaced by OD-7-4U below.
+- **OD-7-4U: outcome-unknown billing** (approved by the owner, 08-Nov-2026). An attempt whose provider outcome is unknown is treated as neither accepted nor failed:
+  - No automatic customer charge, under either billing policy.
+  - No provider-cost ledger entry. Estimated exposure appears in reconciliation only.
+  - The reservation is released in the same transaction that marks the message finished.
+  - Later delivery receipts are evidence only and create no automatic ledger entries.
+  - Operator charge or write-off is explicit and audited. A charge reuses the automatic path's idempotency keys, requires available funds, and enforces dual control above the configured threshold.
+  - An unknown-outcome reconciliation register and metric are maintained.
+- **SMS billing units.**
+  - Calculated at submission after render.
+  - Persisted immutably on the message.
+  - Required to equal the dispatch-time re-derivation, else refused before the provider call.
+  - Snapshotted on each attempt and used as the rating quantity.
+- **RQ-2: additional per-attempt reservations.** When attempts exceed the submit-time reservation count, a reservation extension is posted before the provider call; if funds are insufficient, no provider call is made.
+- **RQ-3: mandatory `Idempotency-Key` on money-moving operations** (refund, adjustment, recharge record, invoice issue), persisted with per-organisation uniqueness.
+- **RQ-4: no background worker for partition creation or monitoring.**
+  - Startup checks, operator reconciliation and monitoring are retained.
+  - Accepted limitations: headroom is extended only by deploy, restart or operator command; the headroom gauge reflects the last check; detachment or loss of a guard is detected only at the next startup or reconciliation.
+- **RQ-5: no superuser event trigger** to block partition DETACH/DROP.
+- **RQ-6 (thresholds): partition headroom warning below 6 months, critical below 2 months.**
+
+### 1zi.2 Not decided (recorded so they are not mistaken for decisions)
+- Tax, discount and wallet-principal treatment (RQ-1). Tax is subject to professional accounting review.
+- The poison-lease alert threshold K.
+- OD-7-5 to OD-7-14: permissions, provider cost source, fail-closed rules, error contract, currency, submission-core ownership, dual control, auto-recharge, reseller markup, entitlements.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.
