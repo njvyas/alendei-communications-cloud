@@ -218,7 +218,8 @@ describe('Phase 8B.1: Campaigns Foundation Integration Suite', () => {
       expect(res.body.data.templateName).toBe('Promo WhatsApp Template');
       expect(res.body.data.throttling.rateLimitPerSecond).toBe(50);
       expect(res.body.data.throttling.maxAttemptsPerRecipient).toBe(2);
-      expect(res.body.data.metrics.totalRecipients).toBe(100);
+      expect(res.body.data.recipientSource.contactCount).toBe(100);
+      expect(res.body.data.metrics.totalRecipients).toBeNull();
       expect(res.body.data.isSimulatedPreview).toBe(false);
     });
 
@@ -444,6 +445,180 @@ describe('Phase 8B.1: Campaigns Foundation Integration Suite', () => {
       );
 
       expect(res.status).toBe(401);
+    });
+  });
+
+  describe('Idempotency & Fingerprint Integrity', () => {
+    const basePayload = () => ({
+      name: `Idem Campaign ${uuidv7().slice(0, 8)}`,
+      description: 'Idempotency test description',
+      channel: 'whatsapp' as const,
+      templateId: templateWaA,
+      templateVariables: { promo: 'SPRING20' },
+      recipientSource: {
+        type: 'tag_segment' as const,
+        tags: ['vip', 'newsletter'],
+        tagMatchMode: 'all' as const,
+        contactCount: 150,
+      },
+      scheduleMode: 'immediate' as const,
+      throttling: {
+        rateLimitPerSecond: 40,
+        maxAttemptsPerRecipient: 2,
+      },
+    });
+
+    it('same key + same request returns original result (replay)', async () => {
+      const key = `idem-same-${uuidv7()}`;
+      const payload = basePayload();
+
+      const first = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .set('idempotency-key', key)
+        .send(payload)
+        .expect(201);
+
+      const second = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .set('idempotency-key', key)
+        .send(payload)
+        .expect(201);
+
+      expect(second.body.data.id).toBe(first.body.data.id);
+      expect(second.body.data.name).toBe(payload.name);
+      expect(second.body.data.metrics.totalRecipients).toBeNull();
+    });
+
+    it('same key + changed name is refused with 422', async () => {
+      const key = `idem-diff-name-${uuidv7()}`;
+      const payload = basePayload();
+
+      await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .set('idempotency-key', key)
+        .send(payload)
+        .expect(201);
+
+      const changed = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .set('idempotency-key', key)
+        .send({ ...payload, name: 'Changed Name' });
+
+      expect(changed.status).toBe(422);
+      expect(changed.body.error.code).toBe(ERROR_CODES.IDEMPOTENCY_KEY_PAYLOAD_MISMATCH);
+    });
+
+    it('same key + changed recipientSource is refused with 422', async () => {
+      const key = `idem-diff-source-${uuidv7()}`;
+      const payload = basePayload();
+
+      await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .set('idempotency-key', key)
+        .send(payload)
+        .expect(201);
+
+      const changed = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .set('idempotency-key', key)
+        .send({
+          ...payload,
+          recipientSource: { type: 'all_contacts' },
+        });
+
+      expect(changed.status).toBe(422);
+      expect(changed.body.error.code).toBe(ERROR_CODES.IDEMPOTENCY_KEY_PAYLOAD_MISMATCH);
+    });
+
+    it('same key + changed throttling is refused with 422', async () => {
+      const key = `idem-diff-throttle-${uuidv7()}`;
+      const payload = basePayload();
+
+      await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .set('idempotency-key', key)
+        .send(payload)
+        .expect(201);
+
+      const changed = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .set('idempotency-key', key)
+        .send({
+          ...payload,
+          throttling: { rateLimitPerSecond: 99, maxAttemptsPerRecipient: 3 },
+        });
+
+      expect(changed.status).toBe(422);
+      expect(changed.body.error.code).toBe(ERROR_CODES.IDEMPOTENCY_KEY_PAYLOAD_MISMATCH);
+    });
+
+    it('same key + changed templateVariables is refused with 422', async () => {
+      const key = `idem-diff-vars-${uuidv7()}`;
+      const payload = basePayload();
+
+      await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .set('idempotency-key', key)
+        .send(payload)
+        .expect(201);
+
+      const changed = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .set('idempotency-key', key)
+        .send({
+          ...payload,
+          templateVariables: { promo: 'AUTUMN50' },
+        });
+
+      expect(changed.status).toBe(422);
+      expect(changed.body.error.code).toBe(ERROR_CODES.IDEMPOTENCY_KEY_PAYLOAD_MISMATCH);
+    });
+
+    it('concurrent requests with the same idempotency key and identical payload both succeed with the same campaign id', async () => {
+      const key = `idem-concurrent-${uuidv7()}`;
+      const payload = basePayload();
+
+      const [res1, res2] = await Promise.all([
+        request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+          .set('authorization', `Bearer ${tokenA}`)
+          .set('idempotency-key', key)
+          .send(payload),
+        request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+          .set('authorization', `Bearer ${tokenA}`)
+          .set('idempotency-key', key)
+          .send(payload),
+      ]);
+
+      expect([res1.status, res2.status]).toEqual([201, 201]);
+      expect(res1.body.data.id).toBe(res2.body.data.id);
+      expect(res1.body.data.name).toBe(payload.name);
+
+      // Verify in database that exactly one campaign and one idempotency record exist
+      const rows = await h.admin
+        .select()
+        .from(schema.campaigns)
+        .where(eq(schema.campaigns.id, res1.body.data.id));
+      expect(rows).toHaveLength(1);
+
+      const idemRows = await h.admin
+        .select()
+        .from(schema.idempotencyKeys)
+        .where(eq(schema.idempotencyKeys.idempotencyKey, key));
+      expect(idemRows).toHaveLength(1);
+      expect(idemRows[0]!.status).toBe('completed');
+      expect(idemRows[0]!.responseStatusCode).toBe(201);
     });
   });
 

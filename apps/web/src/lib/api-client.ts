@@ -3421,7 +3421,7 @@ export const campaignsApi = {
         maxAttemptsPerRecipient: params.throttling?.maxAttemptsPerRecipient ?? 1,
       },
       metrics: {
-        totalRecipients: params.recipientSource.contactCount,
+        totalRecipients: null,
         sent: 0,
         delivered: 0,
         read: 0,

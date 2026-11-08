@@ -293,7 +293,18 @@ export class CampaignsService {
         principal,
         pathParams: { workspaceId },
         query: {},
-        body: { name: dto.name, templateId: dto.templateId },
+        body: {
+          name: dto.name,
+          description: dto.description ?? null,
+          channel: dto.channel ?? null,
+          channelId: dto.channelId ?? null,
+          templateId: dto.templateId,
+          templateVariables: dto.templateVariables ?? {},
+          recipientSource: dto.recipientSource,
+          scheduleMode: dto.scheduleMode ?? 'immediate',
+          scheduledAt: dto.scheduledAt ?? null,
+          throttling: dto.throttling ?? null,
+        },
       },
       authorize,
       work: async (tx) => {
@@ -370,7 +381,7 @@ export class CampaignsService {
         };
 
         const metrics = {
-          totalRecipients: dto.recipientSource.contactCount ?? null,
+          totalRecipients: null,
           sent: 0,
           delivered: 0,
           read: 0,
@@ -484,13 +495,6 @@ export class CampaignsService {
       if (dto.templateVariables !== undefined) updates.templateVariables = dto.templateVariables;
       if (dto.recipientSource !== undefined) {
         updates.recipientSource = dto.recipientSource;
-        if (dto.recipientSource.contactCount !== undefined) {
-          const currentMetrics = campaign.metrics as CampaignMetrics;
-          updates.metrics = {
-            ...currentMetrics,
-            totalRecipients: dto.recipientSource.contactCount,
-          };
-        }
       }
 
       const effectiveScheduleMode = dto.scheduleMode ?? campaign.scheduleMode;
