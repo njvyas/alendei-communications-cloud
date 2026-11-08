@@ -244,6 +244,7 @@ export class ProviderAccess {
     before: Record<string, unknown> | null,
     after: Record<string, unknown>,
     outcome: 'success' | 'failure' = 'success',
+    metadata: Record<string, unknown> = {},
   ): Promise<void> {
     return this.audit.record(
       {
@@ -256,7 +257,7 @@ export class ProviderAccess {
         outcome,
         before,
         after,
-        metadata: {},
+        metadata,
       },
       tx,
     );

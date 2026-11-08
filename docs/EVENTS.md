@@ -25,6 +25,8 @@ A Kafka-wire-compatible event bus (Apache Kafka or Redpanda; abstracted so eithe
 
 Two structurally different kinds of event exist, and the catalogue is organized by that split because it directly mirrors the `message_attempts` vs. `messages` ownership boundary (`DATABASE.md` §6, `ARCHITECTURE.md` §5):
 
+> **Catalogue status (Phase 5.0, 07-Nov-2026):** no event bus or outbox exists yet (Phase 7.0); none of the topics below is published. Delivery receipts are recorded as `message_events` rows written in the ingestion transaction: `message.delivered`, `message.undelivered`, `message.read`, `message.delivery_conflict` and `message.delivery_duplicate`. `message.delivered_after_escalation` is defined in `@acc/contracts` but not emitted, because 5.0 has no escalation (`DELIVERY_OUTCOMES.md` §5). Customer-facing outbound webhooks (§5a) are not implemented.
+
 ### 4a. Attempt-level events — describe one physical provider/channel try
 
 | Event | Emitted when |

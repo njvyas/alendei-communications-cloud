@@ -7,6 +7,7 @@ import {
   IsOptional,
   IsString,
   IsInt,
+  IsObject,
   IsUUID,
   Matches,
   Max,
@@ -224,4 +225,26 @@ export class UpdateCircuitPolicyDto {
   @Min(1)
   @ApiProperty({ type: 'integer', minimum: 1 })
   expectedVersion!: number;
+}
+
+/**
+ * `POST /providers/:id/simulator/delivery-events` (Phase 5.0 PR-E, spec §F.2(b)). The target
+ * is an attempt id only (a message id is not supported in 5.0); the scenario is a
+ * `simulator_delivery` value, validated by the service, or the provider's configured one when
+ * omitted. The ingress key is a header, never a body field. Unknown properties are refused.
+ */
+export class ProviderSimulatorDeliveryEventsDto {
+  @IsUUID()
+  @ApiProperty({ format: 'uuid', description: 'The attempt the receipts name (client reference).' })
+  attemptId!: string;
+
+  @IsOptional()
+  @IsObject()
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: true,
+    description:
+      "A simulator_delivery scenario (outcome, read, delayMs, duplicates, order, signature, clientReferenceOnly, batch, withEventIds); defaults to the provider's configured simulator_delivery capability.",
+  })
+  scenario?: Record<string, unknown>;
 }

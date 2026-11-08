@@ -2504,6 +2504,24 @@ Formal owner review of the U15.1 post-implementation design compliance audit res
 - Phase 5 has not started.
 - Production is not deployed or authorised.
 
+## 1zh. Phase 5.0 delivery-outcome ingestion: decisions, 07-Nov-2026
+
+### 1zh.1 Design
+- **Option B (two axes, OD-1):** delivery is a separate axis (`delivery_status`, `read_at`) beside the unchanged submission status; a delivery outcome never rewrites the submission status (OD-4). No backfill: `NULL` = not tracked.
+- **Design frozen (OD-0), 07-Nov-2026:** design specification Rev 2 and implementation plan (owner's evidence store), with the plan defaults OD-3, OD-5, OD-6 (hash-only key with a server pepper, 24 h rotation grace), OD-7 (`acc_delivery` principal), OD-8 (attempt id as client reference) and OD-18.
+- **OD-19:** reverse-proxy log redaction must be applied and verified on a host before ingress is enabled there. Ingress (`DELIVERY_WEBHOOKS_ENABLED`) stays off by default.
+
+### 1zh.2 Owner decisions during implementation
+- **OD-9 (PR-D):** `providerMessageId` is platform-staff-only; it is not exposed on tenant responses.
+- **Platform-support delivery filter (PR-D):** approved with migration 0049, inside the existing definer content boundary (result shape, security and grants unchanged).
+- **Ingress header form (PR-E, contract correction):** the frozen route carried the key only in the URL; the owner approved an additive header form, `POST /api/v1/webhooks/providers` with `X-Acc-Webhook-Ingress-Key`, entering the same pipeline. Exactly one credential form per request; a missing, unknown or ambiguous credential gets the same uniform 401; the URL form is unchanged for real providers; both forms are excluded from the customer OpenAPI document.
+- **Operator simulator trigger (PR-E, OD-16):** the operator supplies the ingress key transiently in that header; the trigger forwards it only in the same header to the deployment's own fixed loopback address; it is never stored, audited, logged or returned. Audit reuses `provider.test_sent` with `metadata.tool = simulator_delivery_events`. Target: `attemptId` only (no `messageId`, no new resolver). PR-E is migration-free.
+- **Escalation fixture (PR-E):** a test fixture only; the terminal guard is not weakened and no timer or worker is introduced.
+
+### 1zh.3 Open
+- OD-2 (`expired`), OD-15 (retention, not implemented), OD-17 and OD-20 (Phase 5 policy), receipts for closed organizations (default: informational), and each environment's enablement (S0–S8, `DELIVERY_OUTCOMES.md` §3).
+- Phase 5.0 is **not** approval for real provider connectivity, credentials or live traffic.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

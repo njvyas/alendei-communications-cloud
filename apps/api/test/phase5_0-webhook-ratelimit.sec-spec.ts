@@ -7,6 +7,7 @@
 import { randomBytes } from 'node:crypto';
 import request from 'supertest';
 
+import { INGRESS_KEY_HEADER } from '../src/webhooks/ingress-path';
 import { WebhookIngressService } from '../src/webhooks/webhook-ingress.service';
 import { IngressKeyHasher } from '../src/webhooks/webhook-key-material.module';
 import type { Harness } from './auth-harness';
@@ -79,5 +80,31 @@ describe('Phase 5.0 PR-C — ingress rate limiting runs before key handling (AC-
     expect(metrics.text).toMatch(
       /acc_webhook_requests_total\{[^}]*outcome="rate_limited"[^}]*\} [1-9]/,
     );
+  });
+
+  it('Phase 5.0 PR-E: the header form is limited by the same buckets, before any hashing or lookup', async () => {
+    // The per-IP bucket of this source is exhausted by the test above.
+    const ingress = h.app.get(WebhookIngressService);
+    const hasher = h.app.get(IngressKeyHasher);
+    const resolve = jest.spyOn(
+      ingress as unknown as { resolve: () => Promise<unknown> },
+      'resolve',
+    );
+    const hash = jest.spyOn(hasher, 'hash');
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        const res = await request(h.app.getHttpServer())
+          .post('/api/v1/webhooks/providers')
+          .set(INGRESS_KEY_HEADER, `unknown-header-${i}`)
+          .set('content-type', 'application/json')
+          .send('{"events":[]}');
+        expect(res.status).toBe(429);
+      }
+      expect(resolve).not.toHaveBeenCalled();
+      expect(hash).not.toHaveBeenCalled();
+    } finally {
+      resolve.mockRestore();
+      hash.mockRestore();
+    }
   });
 });

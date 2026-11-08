@@ -25,7 +25,7 @@ import type { NextFunction, Request, Response } from 'express';
 
 import type { AppConfigService } from '../config/app-config.service';
 import { MetricsService } from '../observability/metrics.service';
-import { isIngressPath, isIngressRoute } from './ingress-path';
+import { isIngressHeaderRoute, isIngressPath, isIngressRoute } from './ingress-path';
 
 /** The exact request bytes on an ingress request (`req.body` is then a Buffer). */
 export function ingressRawBody(request: Request): Buffer | undefined {
@@ -78,8 +78,9 @@ export function configureWebhookBodyParsing(app: INestApplication, config: AppCo
 
   app.use((request: Request, response: Response, next: NextFunction) => {
     const url = request.originalUrl ?? request.url;
-    if (!isIngressPath(url)) return next();
-    if (request.method !== 'POST' || !isIngressRoute(url)) {
+    const headerForm = isIngressHeaderRoute(url);
+    if (!isIngressPath(url) && !headerForm) return next();
+    if (request.method !== 'POST' || !(isIngressRoute(url) || headerForm)) {
       // No handler exists here, and Nest's default 404 message would echo the path — the key.
       // Answer with the same uniform, path-free 404 the disabled ingress gives.
       request.resume();

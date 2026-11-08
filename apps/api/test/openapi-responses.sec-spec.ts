@@ -167,6 +167,7 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
 
   beforeAll(async () => {
     process.env.ACC_TEST_OPENAPI_WEBHOOK_PEPPER = 'test-only-openapi-webhook-pepper-0123456789';
+    process.env.ACC_TEST_OPENAPI_SIM_SIGNING_KEY = 'test-only-openapi-sim-signing-key-0123456789';
     booted = await bootAppInFileRegistry({
       APP_ENV: 'test',
       OPENAPI_UI_ENABLED: 'true',
@@ -174,6 +175,10 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
       // reference is configuration (read at boot); its value is resolved lazily through
       // SecretsPort on first use, so it is set for the suite's lifetime, not only for boot.
       WEBHOOK_INGRESS_KEY_PEPPER_REF: 'env:ACC_TEST_OPENAPI_WEBHOOK_PEPPER',
+      // Phase 5.0 PR-E: the ingress on (and a TEST-ONLY simulator signing key) so the operator
+      // simulator trigger, which posts through the ingress over loopback, can succeed.
+      DELIVERY_WEBHOOKS_ENABLED: 'true',
+      SIMULATOR_WEBHOOK_SIGNING_KEY_REF: 'env:ACC_TEST_OPENAPI_SIM_SIGNING_KEY',
     });
     const document = await booted
       .resolve<{ get(): Promise<Json> }>(
@@ -504,10 +509,18 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
         );
       }
       // Phase 5.0 PR-C: the ingress key (shown once), then the per-provider switch on and off.
+      const issued = await hit('POST', `providers/${providerId}/webhook-ingress-key`, credential);
+      expectStatus(issued, 200, 'provider webhook ingress key');
+      // Phase 5.0 PR-E: the operator simulator trigger with that key, for an unknown attempt
+      // (the ingress records it unmatched): a 200 that validates against the document.
       expectStatus(
-        await hit('POST', `providers/${providerId}/webhook-ingress-key`, credential),
+        await hit('POST', `providers/${providerId}/simulator/delivery-events`, {
+          ...credential,
+          headers: { 'x-acc-webhook-ingress-key': issued.body.data.key as string },
+          body: { attemptId: uuidv7(), scenario: { outcome: 'DELIVERED' } },
+        }),
         200,
-        'provider webhook ingress key',
+        'provider simulator delivery events',
       );
       for (const transition of ['enable', 'disable']) {
         expectStatus(
@@ -860,53 +873,55 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
             ? { capabilities: [] }
             : template.endsWith('/test-send')
               ? { behavior: 'SUCCESS' }
-              : template.endsWith('/health-check')
-                ? { behavior: 'HEALTHY' }
-                : template.endsWith('/health') && method === 'POST'
-                  ? { override: null }
-                  : template.endsWith('/domains') && method === 'POST'
-                    ? { domain: `d-${suffix()}.example.com` }
-                    : template.endsWith('/consent-events') && method === 'POST'
-                      ? {
-                          channelId: uuidv7(),
-                          consentType: 'marketing',
-                          event: 'grant',
-                          occurredAt: new Date().toISOString(),
-                          source: 'test',
-                        }
-                      : template.endsWith('/identities') && method === 'POST'
+              : template.endsWith('/simulator/delivery-events')
+                ? { attemptId: uuidv7(), scenario: { outcome: 'DELIVERED' } }
+                : template.endsWith('/health-check')
+                  ? { behavior: 'HEALTHY' }
+                  : template.endsWith('/health') && method === 'POST'
+                    ? { override: null }
+                    : template.endsWith('/domains') && method === 'POST'
+                      ? { domain: `d-${suffix()}.example.com` }
+                      : template.endsWith('/consent-events') && method === 'POST'
                         ? {
                             channelId: uuidv7(),
-                            rawAddress: '+15551234567',
+                            consentType: 'marketing',
+                            event: 'grant',
+                            occurredAt: new Date().toISOString(),
+                            source: 'test',
                           }
-                        : (template.endsWith('/lift') ||
-                              template.endsWith('/suspend') ||
-                              template.endsWith('/close')) &&
-                            method === 'POST'
-                          ? { reason: 'test' }
-                          : template.endsWith('/simulate-approval') && method === 'POST'
-                            ? { targetStatus: 'approved' }
-                            : template.includes('/provider-assignments') &&
-                                method === 'POST' &&
-                                !template.endsWith('/enable') &&
-                                !template.endsWith('/disable')
-                              ? {
-                                  providerId: uuidv7(),
-                                  priority: 1,
-                                }
-                              : method !== 'PATCH'
-                                ? {}
-                                : template.includes('/branding')
-                                  ? { brandName: `Brand ${suffix()}` }
-                                  : template.includes('/users/')
-                                    ? { phone: '+15551234567' }
-                                    : template.includes('/contacts/')
-                                      ? { firstName: `x ${suffix()}` }
-                                      : template.includes('/identities/')
-                                        ? { isPrimary: true }
-                                        : template.includes('/provider-assignments/')
-                                          ? { priority: 2 }
-                                          : { name: `x ${suffix()}` },
+                        : template.endsWith('/identities') && method === 'POST'
+                          ? {
+                              channelId: uuidv7(),
+                              rawAddress: '+15551234567',
+                            }
+                          : (template.endsWith('/lift') ||
+                                template.endsWith('/suspend') ||
+                                template.endsWith('/close')) &&
+                              method === 'POST'
+                            ? { reason: 'test' }
+                            : template.endsWith('/simulate-approval') && method === 'POST'
+                              ? { targetStatus: 'approved' }
+                              : template.includes('/provider-assignments') &&
+                                  method === 'POST' &&
+                                  !template.endsWith('/enable') &&
+                                  !template.endsWith('/disable')
+                                ? {
+                                    providerId: uuidv7(),
+                                    priority: 1,
+                                  }
+                                : method !== 'PATCH'
+                                  ? {}
+                                  : template.includes('/branding')
+                                    ? { brandName: `Brand ${suffix()}` }
+                                    : template.includes('/users/')
+                                      ? { phone: '+15551234567' }
+                                      : template.includes('/contacts/')
+                                        ? { firstName: `x ${suffix()}` }
+                                        : template.includes('/identities/')
+                                          ? { isPrimary: true }
+                                          : template.includes('/provider-assignments/')
+                                            ? { priority: 2 }
+                                            : { name: `x ${suffix()}` },
         });
         expect(`${method} ${template} → ${res.status}`).toMatch(/→ (404|403)$/);
       }

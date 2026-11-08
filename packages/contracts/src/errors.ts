@@ -269,6 +269,8 @@ export const ERROR_CODES = {
   // Ingress-key administration: no server pepper configured; ingress enabled without a key.
   WEBHOOK_INGRESS_NOT_CONFIGURED: 'WEBHOOK_INGRESS_NOT_CONFIGURED',
   WEBHOOK_INGRESS_KEY_REQUIRED: 'WEBHOOK_INGRESS_KEY_REQUIRED',
+  // Phase 5.0 PR-E: the operator simulator trigger refuses while DELIVERY_WEBHOOKS_ENABLED is off.
+  WEBHOOK_INGRESS_DISABLED: 'WEBHOOK_INGRESS_DISABLED',
 
   VALIDATION_FAILED: 'VALIDATION_FAILED',
   RESOURCE_NOT_FOUND: 'RESOURCE_NOT_FOUND',
