@@ -33,6 +33,7 @@ import { MessagesModule } from './messages/messages.module';
 import { PlatformSupportModule } from './platform-support/platform-support.module';
 import { WebhookKeyMaterialModule } from './webhooks/webhook-key-material.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
+import { BillingModule } from './billing/billing.module';
 import { OPENAPI_MODULES } from './openapi/openapi.module';
 
 /**
@@ -74,6 +75,8 @@ import { OPENAPI_MODULES } from './openapi/openapi.module';
     // Phase 5.0 PR-C: provider webhook ingress — disabled unless DELIVERY_WEBHOOKS_ENABLED.
     WebhookKeyMaterialModule,
     WebhooksModule,
+    // Phase 7 PR 7-1: the ledger partition startup check only (no routes).
+    BillingModule,
     // The OpenAPI document route, when `OPENAPI_UI_ENABLED` is on (Phase 1C.3).
     ...OPENAPI_MODULES,
   ],

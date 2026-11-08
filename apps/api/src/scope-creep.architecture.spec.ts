@@ -239,16 +239,43 @@ const CATEGORIES: Category[] = [
     key: 'billing',
     forbids: 'billing or rating (ADR-013 PD-6)',
     exceptions:
-      'Pre-existing: the organization billing mode and policy fields (Phase 1C; no rating or charging) and the `estimateCost` interface member, which the simulator refuses (PD-6). ADR-015 R-13: `estimateCost` is also an abstract member of `GuardedProviderAdapter`, and the circuit-admission *ledger* is admission bookkeeping (issued → recorded), not a billing ledger.',
+      'Pre-existing: the organization billing mode and policy fields (Phase 1C; no rating or charging) and the `estimateCost` interface member, which the simulator refuses (PD-6). ADR-015 R-13: `estimateCost` is also an abstract member of `GuardedProviderAdapter`, and the circuit-admission *ledger* is admission bookkeeping (issued → recorded), not a billing ledger. Phase 7 PR 7-1 (DECISIONS.md §1zi, owner-authorised 08-Nov-2026): the ledger and billing-account foundation — the four inert billing and pricing permission keys and their role grants, the ledger partition maintenance (owner-only creation after db:migrate and by the operator command, the shared verdict, the read-only API startup verification and its metrics, the lock class), the attempt FK the 0045 index guard admits, and the financial-table exemption. No billing route, enforcement, rating, account creation or money movement.',
     pattern:
       /[\w-]*(?:billing|rating|ledger|invoice|wallet|tariff|estimate_?cost|charge|pricing|price)[\w-]*/gi,
     providerCodeOnly: false,
     pinned: {
+      // Phase 7 PR 7-1: the BillingModule registration (startup check only, no routes).
+      'apps/api/src/app.module.ts': ['BillingModule', 'billing'],
+      'apps/api/src/billing/billing.module.ts': [
+        'BillingModule',
+        'LedgerPartitionStartupCheck',
+        'ledger-partition-startup',
+      ],
+      'apps/api/src/billing/ledger-partition-startup.check.ts': [
+        'LedgerPartitionStartupCheck',
+        'evaluateLedgerPartitions',
+        'ledger',
+        'ledgerPartitionCheckFailures',
+        'ledgerPartitionHeadroomMonths',
+        'ledgerPartitionUnprotected',
+        'readLedgerPartitionReport',
+        'usage_ledger',
+      ],
       'apps/api/src/metadata.ts': [
         'billingMode',
         'billingPolicy',
         'charge_per_attempt',
         'charge_per_logical_message',
+      ],
+      // Phase 7 PR 7-1: the partition gauges and failure counter (no labels).
+      'apps/api/src/observability/metrics.service.ts': [
+        'acc_billing_ledger_partition_check_failures_total',
+        'acc_billing_ledger_partition_headroom_months',
+        'acc_billing_ledger_partition_unprotected',
+        'ledgerPartitionCheckFailures',
+        'ledgerPartitionHeadroomMonths',
+        'ledgerPartitionUnprotected',
+        'usage_ledger',
       ],
       'apps/api/src/openapi/openapi-schemas.ts': [
         'BILLING_MODES',
@@ -271,7 +298,62 @@ const CATEGORIES: Category[] = [
       ],
       'apps/api/src/provider-adapters/circuit-admission.ts': ['estimateCost', 'ledger'],
       'apps/api/src/provider-adapters/simulator.adapter.ts': ['estimateCost'],
+      // Phase 7 PR 7-1: the four inert keys (DP-1) and the role grants (org_admin, DP-2 support).
+      'packages/contracts/src/permissions.ts': [
+        'BILLING_MANAGE',
+        'BILLING_READ',
+        'PRICING_MANAGE',
+        'PRICING_READ',
+        'billing',
+        'pricing',
+      ],
       'packages/contracts/src/provider-adapter.ts': ['estimateCost'],
+      'packages/contracts/src/roles.ts': ['BILLING_READ', 'PRICING_READ'],
+      // Phase 7 PR 7-1: partition maintenance (operator command, shared verdict, lock class),
+      // the attempt FK the 0045 index guard admits, and the financial-table exemption (DP-3).
+      'packages/db/src/cli/ledger-partitions.ts': [
+        'LEDGER_PARTITION_MONTHS_AHEAD',
+        'LedgerPartitionsMode',
+        'acc-ledger-partitions',
+        'ensureAndVerifyLedgerPartitions',
+        'evaluateLedgerPartitions',
+        'ledger',
+        'ledger-partitions',
+        'parseLedgerPartitionsArgs',
+        'readLedgerPartitionReport',
+        'runLedgerPartitions',
+      ],
+      // db:migrate's post-migration owner step: ensure 24 months, then verify (owner decision 08-Nov-2026).
+      'packages/db/src/cli/migrate.ts': [
+        'Ledger',
+        'app_ledger_ensure_partitions',
+        'ensureAndVerifyLedgerPartitions',
+        'ledger',
+        'ledger-partitions',
+        'maintainLedgerPartitions',
+      ],
+      'packages/db/src/constants.ts': ['LEDGER_PARTITION_LOCK_CLASS'],
+      'packages/db/src/index.ts': ['ledger-partitions'],
+      'packages/db/src/maintenance/ledger-partitions.ts': [
+        'LEDGER_PARTITION_CRITICAL_BELOW_MONTHS',
+        'LEDGER_PARTITION_ENSURE_LOCK_TIMEOUT_MS',
+        'LEDGER_PARTITION_MONTHS_AHEAD',
+        'LEDGER_PARTITION_WARNING_BELOW_MONTHS',
+        'LedgerPartitionLevel',
+        'LedgerPartitionMaintenanceResult',
+        'LedgerPartitionReportRow',
+        'LedgerPartitionVerdict',
+        'app_ledger_ensure_partitions',
+        'app_ledger_partition_report',
+        'ensureAndVerifyLedgerPartitions',
+        'ensureLedgerPartitions',
+        'evaluateLedgerPartitions',
+        'readLedgerPartitionReport',
+        'usage_ledger',
+      ],
+      'packages/db/src/maintenance/message-attempts-delivery.ts': [
+        'usage_ledger_message_attempt_fkey',
+      ],
       'packages/db/src/schema/tenancy.ts': [
         'billingMode',
         'billingPolicy',
@@ -280,6 +362,7 @@ const CATEGORIES: Category[] = [
         'charge_per_attempt',
         'charge_per_logical_message',
       ],
+      'packages/db/src/table-classes.ts': ['usage_ledger', 'wallets'],
     },
   },
   {
@@ -911,6 +994,7 @@ const CATEGORIES: Category[] = [
         'message_attempts_provider_message_uq',
         'messages_delivered_attempt_fk',
         'uq_message_attempts_id_message_id',
+        'usage_ledger_message_attempt_fkey',
         'verifyMessageAttemptsDeliveryIndexes',
       ],
       'packages/db/src/schema/index.ts': ['webhooks'],
@@ -1139,6 +1223,8 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       'audit',
       'audit-read',
       'auth',
+      // Phase 7 PR 7-1 (DECISIONS.md §1zi): the ledger partition startup check; no routes.
+      'billing',
       'cli',
       'common',
       'config',
@@ -1200,6 +1286,9 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       'consent_events',
       'contact_identities',
       'contacts',
+      // Phase 7 PR 7-1 (0050): the billing accounts and the partitioned ledger parent. Its monthly
+      // partitions are created by app_ledger_ensure_partitions, never by a literal CREATE TABLE.
+      'credit_accounts',
       'idempotency_keys',
       'message_attempts',
       'message_dispatch_queue',
@@ -1221,8 +1310,10 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       'suppressions',
       'teams',
       'templates',
+      'usage_ledger',
       'user_roles',
       'users',
+      'wallets',
       'webhook_events',
       'workspaces',
       'ws_tickets',

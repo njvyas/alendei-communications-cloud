@@ -89,6 +89,8 @@ export const PLATFORM_ROLE_DEFINITIONS: readonly RoleDefinition[] = Object.freez
       P.PLATFORM_TENANTS_READ,
       P.PLATFORM_AUDIT_READ,
       P.PLATFORM_SUPPORT_READ,
+      // Phase 7 PR 7-1 (DP-2): read-only pricing catalogue; no billing key.
+      P.PRICING_READ,
     ],
   },
   {
@@ -161,6 +163,9 @@ export const TENANT_ROLE_DEFINITIONS: readonly RoleDefinition[] = Object.freeze(
       P.SUPPRESSIONS_MANAGE,
       P.MESSAGES_READ,
       P.MESSAGES_SEND,
+      // Phase 7 PR 7-1 (DECISIONS.md §1zi): the organization's own billing read.
+      // Inert on the HTTP surface until a later Phase 7 PR adds billing routes.
+      P.BILLING_READ,
     ],
   },
   {

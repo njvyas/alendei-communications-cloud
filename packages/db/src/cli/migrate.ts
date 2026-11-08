@@ -15,6 +15,13 @@
  * concurrent-index runner waits a bounded time and then refuses. drizzle-orm
  * 0.45.x takes no lock of its own.
  *
+ * Ledger partitions (Phase 7 PR 7-1, `DECISIONS.md` §1zi): after the schema is
+ * current, every run extends the `usage_ledger` monthly partitions to 24 months
+ * ahead as the schema owner and verifies them. A failed ensure (for example an
+ * expired lock wait) is reported but fails the run only if the verdict is
+ * critical: less than two months of headroom, a gap, an orphan or an
+ * unprotected partition (RQ-6). Skipped while migration 0050 is not applied.
+ *
  * Barrier (U14.1a): before migration 0042 the index messages_org_id_id_desc_idx
  * is built CONCURRENTLY outside any transaction and verified; 0042 only checks it.
  * Once 0042 is recorded, every run re-verifies the index and exits non-zero if it
@@ -23,6 +30,7 @@
 import { resolve } from 'node:path';
 import { Pool } from 'pg';
 
+import { ensureAndVerifyLedgerPartitions } from '../maintenance/ledger-partitions';
 import { loadCliEnv, requireEnv } from './_env';
 import { lockWaitFromEnv } from './migration-lock';
 import { migrateSchema } from './schema-migrate';
@@ -60,8 +68,36 @@ async function main(): Promise<void> {
     console.log(
       'No role LOGIN or password was changed (a migration creates a missing application role NOLOGIN only, as 0032 and 0044 do). Role LOGIN/passwords are set only by `npm run db:roles:reconcile`.',
     );
+    if (!(await maintainLedgerPartitions(pool))) process.exitCode = 1;
   } finally {
     await pool.end();
+  }
+}
+
+/** The post-migration ledger partition step; false when the verdict is critical. */
+async function maintainLedgerPartitions(pool: Pool): Promise<boolean> {
+  const client = await pool.connect();
+  try {
+    const { rows } = await client.query<{ installed: boolean }>(
+      `SELECT to_regprocedure('app_ledger_ensure_partitions(integer)') IS NOT NULL AS installed`,
+    );
+    if (!rows[0]?.installed) return true;
+    const result = await ensureAndVerifyLedgerPartitions(client);
+    if (result.ensureError !== null) {
+      console.error(`Ledger partition ensure failed: ${result.ensureError}`);
+    } else {
+      console.log(`Ledger partitions: created ${result.created} partition(s).`);
+    }
+    if (result.verdict.level === 'critical') {
+      console.error(
+        `Refusing: ${result.verdict.summary}. Repair with \`npm run db:ledger:partitions --workspace @acc/db -- --ensure\`.`,
+      );
+      return false;
+    }
+    console.log(result.verdict.summary);
+    return true;
+  } finally {
+    client.release();
   }
 }
 

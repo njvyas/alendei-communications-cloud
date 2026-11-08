@@ -328,10 +328,11 @@ describe('three barriers (U14.1a 0042, U14.1b 0043, Phase 5.0 0045) — journal 
     }),
   });
 
-  // Pins the journal shape at the time of Phase 5.0 (PR-D): 0042, 0043, then 0044 (the prefix of
-  // the third barrier), the 0045 guard, 0046, the forward fix 0047, 0048 (resolver facts) and 0049
-  // (support delivery filter) as the newest. Update when a later migration is added.
-  it('0043 follows 0042; the 0045 guard follows 0044; 0046, 0047, 0048 then 0049 are the newest', () => {
+  // Pins the journal shape at the time of Phase 7 (PR 7-1): 0042, 0043, then 0044 (the prefix of
+  // the third barrier), the 0045 guard, 0046, the forward fix 0047, 0048 (resolver facts), 0049
+  // (support delivery filter) and 0050 (ledger foundation) as the newest. Update when a later
+  // migration is added.
+  it('0043 follows 0042; the 0045 guard follows 0044; 0046, 0047, 0048, 0049 then 0050 are the newest', () => {
     expect(at43).toBe(guardAt + 1);
     expect(at45).toBe(at43 + 2);
     expect(expected[at45 - 1]?.tag).toBe('0044_phase5_0_delivery_foundation');
@@ -339,29 +340,30 @@ describe('three barriers (U14.1a 0042, U14.1b 0043, Phase 5.0 0045) — journal 
     expect(expected[at45 + 2]?.tag).toBe('0047_phase5_0_dispatch_settled_event_visibility');
     expect(expected[at45 + 3]?.tag).toBe('0048_phase5_0_ingress_resolver_facts');
     expect(expected[at45 + 4]?.tag).toBe('0049_phase5_0_support_delivery_filter');
-    expect(expected).toHaveLength(at45 + 5);
+    expect(expected[at45 + 5]?.tag).toBe('0050_phase7_1_ledger_foundation');
+    expect(expected).toHaveLength(at45 + 6);
   });
 
   it.each<[string, Row[] | null, string[]]>([
     [
       'fresh database',
       null,
-      [`apply:${guardAt}`, 'barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:5'],
+      [`apply:${guardAt}`, 'barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:6'],
     ],
     [
       'database at 0041',
       rowsFor(guardAt),
-      ['barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:5'],
+      ['barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:6'],
     ],
     [
       'database at 0042 (U14.1a applied)',
       rowsFor(guardAt + 1),
-      ['verify:a', 'barrier:b', 'apply:2', 'barrier:c', 'apply:5'],
+      ['verify:a', 'barrier:b', 'apply:2', 'barrier:c', 'apply:6'],
     ],
     [
       'database at 0044 (Phase 5.0 M1 applied)',
       rowsFor(at45),
-      ['verify:a', 'verify:b', 'barrier:c', 'apply:5'],
+      ['verify:a', 'verify:b', 'barrier:c', 'apply:6'],
     ],
     ['up to date', rowsFor(expected.length), ['verify:a', 'verify:b', 'verify:c']],
   ])(

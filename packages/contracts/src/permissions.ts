@@ -119,6 +119,21 @@ export const PERMISSIONS = {
   SUPPRESSIONS_MANAGE: 'suppressions.manage',
   MESSAGES_READ: 'messages.read',
   MESSAGES_SEND: 'messages.send',
+
+  // --- Billing and pricing (Phase 7 PR 7-1, DECISIONS.md §1zi) ---------------
+  // INERT CATALOGUE ENTRIES in PR 7-1: the classification, the allowed scopes
+  // and the seeded role grants are in force, but no route checks them and the
+  // HTTP API neither accepts nor lists them (`INERT_PERMISSION_KEYS`), so no
+  // custom role or API key can carry them until a later Phase 7 PR surfaces
+  // them. Fail closed: no billing data is reachable through them yet.
+  /** Read the organization's own billing accounts, ledger and invoices (organization scope only). */
+  BILLING_READ: 'billing.read',
+  /** Platform money movement and billing-account administration (platform scope only). */
+  BILLING_MANAGE: 'billing.manage',
+  /** Read the platform pricing catalogue (platform scope only). */
+  PRICING_READ: 'pricing.read',
+  /** Administer the platform pricing catalogue (platform scope only). */
+  PRICING_MANAGE: 'pricing.manage',
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -216,6 +231,16 @@ export const PERMISSION_CLASS: Readonly<Record<PermissionKey, PermissionClass>> 
   [P.SUPPRESSIONS_MANAGE]: 'tenant_content',
   [P.MESSAGES_READ]: 'tenant_content',
   [P.MESSAGES_SEND]: 'tenant_content',
+  // Phase 7 PR 7-1 (DP-1): `billing.read` is organization-only, and the only class
+  // that keeps an organization-only key off the platform roles is tenant content
+  // (`SUPER_ADMIN_PERMISSIONS`; a role may carry a key only when its scopes are a
+  // subset of the key's). `billing.manage` cannot be class `platform` without the
+  // `platform.` prefix (migration 0026), so it is a platform-scoped tenancy
+  // administration key; `pricing.*` is platform catalogue, like `providers.*`.
+  [P.BILLING_READ]: 'tenant_content',
+  [P.BILLING_MANAGE]: 'tenancy_administration',
+  [P.PRICING_READ]: 'platform_catalogue',
+  [P.PRICING_MANAGE]: 'platform_catalogue',
 } satisfies Record<PermissionKey, PermissionClass>);
 
 /** Every scope level; the allowed-scope set of a permission no rule narrows. */
@@ -292,6 +317,10 @@ export const PERMISSION_ALLOWED_SCOPES: Readonly<Record<PermissionKey, readonly 
     [P.SUPPRESSIONS_MANAGE]: Object.freeze(['organization']),
     [P.MESSAGES_READ]: Object.freeze(['organization', 'workspace']),
     [P.MESSAGES_SEND]: Object.freeze(['organization', 'workspace']),
+    [P.BILLING_READ]: Object.freeze(['organization']),
+    [P.BILLING_MANAGE]: PLATFORM_ONLY_SCOPE,
+    [P.PRICING_READ]: PLATFORM_ONLY_SCOPE,
+    [P.PRICING_MANAGE]: PLATFORM_ONLY_SCOPE,
   } satisfies Record<PermissionKey, readonly ScopeType[]>);
 
 /** The tenant-content keys (ADR-014 §6), derived from the classification. */
@@ -329,12 +358,21 @@ export function grantConfers(
 }
 
 /**
- * The permission keys that remain inert (none in Phase 3.3; all content keys activated).
+ * The permission keys that remain inert: catalogued, classified and possibly
+ * carried by seeded roles, but neither accepted nor listed by the HTTP API.
+ * None in Phase 3.3 (all content keys activated). Phase 7 PR 7-1: the four
+ * billing and pricing keys, until the Phase 7 PR that adds their routes.
  */
-export const INERT_PERMISSION_KEYS: readonly PermissionKey[] = Object.freeze([]);
+export const INERT_PERMISSION_KEYS: readonly PermissionKey[] = Object.freeze([
+  PERMISSIONS.BILLING_READ,
+  PERMISSIONS.BILLING_MANAGE,
+  PERMISSIONS.PRICING_READ,
+  PERMISSIONS.PRICING_MANAGE,
+]);
 
 /**
- * The permission keys the HTTP API accepts and lists: all 46 permission keys.
+ * The permission keys the HTTP API accepts and lists: 47 of the 51 catalogue
+ * keys (all but the four inert billing and pricing keys).
  * Activated in Phase 3.1: contacts.*, templates.*, suppressions.*.
  * Activated in Phase 3.3: messages.read, messages.send.
  */

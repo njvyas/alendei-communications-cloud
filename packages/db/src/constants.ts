@@ -118,6 +118,17 @@ export const RESELLER_ADMIN_LOCK_CLASS = 482_019_309;
 export const ORG_LIFECYCLE_LOCK_CLASS = 482_019_310;
 
 /**
+ * The advisory-lock class serialising creation of `usage_ledger` partitions
+ * (Phase 7 PR 7-1, migration `0050`, `DECISIONS.md` §1zi OD-7-3).
+ *
+ * Taken by `app_ledger_ensure_partitions` in the two-int4 form
+ * `pg_advisory_xact_lock(LEDGER_PARTITION_LOCK_CLASS, 0)`: one lock for the whole
+ * ledger, so concurrent callers (migrate, API startup, the operator command)
+ * create each month exactly once. The migration hard-codes the same value.
+ */
+export const LEDGER_PARTITION_LOCK_CLASS = 482_019_311;
+
+/**
  * The session-level advisory-lock key serialising every schema migration and
  * every out-of-transaction schema maintenance step (U14.1a, ADR-015-adjacent
  * decision record "U14.1a").
