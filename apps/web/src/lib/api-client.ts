@@ -82,6 +82,12 @@ import {
   deliveryRank,
 } from '@acc/contracts';
 import { maskRecipientAddress } from './address-masking';
+import {
+  type CampaignRecord,
+  type CreateCampaignParams,
+  INITIAL_MOCK_CAMPAIGNS,
+  filterCampaigns,
+} from './campaigns';
 
 export type {
   AssignmentStatus,
@@ -3307,5 +3313,94 @@ export const platformSupportApi = {
       skipTenant: true,
       signal,
     });
+  },
+};
+
+/**
+ * Phase 8B: Campaigns API Client (Frontend Slice).
+ *
+ * NOTE: Backend /campaigns endpoints and tables do not yet exist.
+ * This client operates against an isolated in-memory preview store initialized
+ * with INITIAL_MOCK_CAMPAIGNS, clearly documenting that changes are local preview
+ * only and awaiting Phase 8B backend execution engine.
+ */
+let previewCampaigns: CampaignRecord[] = [...INITIAL_MOCK_CAMPAIGNS];
+
+export const campaignsApi = {
+  /** Reset preview state to initial fixtures (used in test suites) */
+  resetPreview(): void {
+    previewCampaigns = [...INITIAL_MOCK_CAMPAIGNS];
+  },
+
+  async list(
+    workspaceId?: string,
+    params: { channel?: string; status?: string; query?: string } = {},
+    _signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<CampaignRecord>> {
+    const filtered = filterCampaigns(previewCampaigns, {
+      workspaceId,
+      channel: params.channel,
+      status: params.status,
+      query: params.query,
+    });
+
+    return {
+      data: filtered,
+      page: {
+        hasMore: false,
+        nextCursor: null,
+        limit: 50,
+      },
+    };
+  },
+
+  async get(id: string, _signal?: AbortSignal): Promise<ApiDataResponse<CampaignRecord>> {
+    const campaign = previewCampaigns.find((c) => c.id === id);
+    if (!campaign) {
+      throw new ApiError(404, 'NOT_FOUND', 'Campaign not found', 'preview-corr-id', false);
+    }
+    return { data: campaign };
+  },
+
+  async create(
+    params: CreateCampaignParams,
+    _signal?: AbortSignal,
+  ): Promise<ApiDataResponse<CampaignRecord>> {
+    const now = new Date().toISOString();
+    const newRecord: CampaignRecord = {
+      id: `cmp-prev-${Date.now().toString(36)}`,
+      orgId: 'org-demo',
+      workspaceId: params.workspaceId,
+      name: params.name,
+      description: params.description,
+      channel: params.channel,
+      templateId: params.templateId,
+      templateName: params.templateName,
+      templateBody: params.templateBody,
+      templateVariables: params.templateVariables,
+      status: params.scheduleMode === 'scheduled' ? 'scheduled' : 'draft',
+      recipientSource: params.recipientSource,
+      scheduleMode: params.scheduleMode,
+      scheduledAt: params.scheduledAt ?? null,
+      throttling: {
+        rateLimitPerSecond: params.throttling?.rateLimitPerSecond ?? 25,
+        maxAttemptsPerRecipient: params.throttling?.maxAttemptsPerRecipient ?? 1,
+      },
+      metrics: {
+        totalRecipients: params.recipientSource.contactCount,
+        sent: 0,
+        delivered: 0,
+        read: 0,
+        failed: 0,
+        deliveryRate: 0,
+      },
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+      isSimulatedPreview: true,
+    };
+
+    previewCampaigns.unshift(newRecord);
+    return { data: newRecord };
   },
 };

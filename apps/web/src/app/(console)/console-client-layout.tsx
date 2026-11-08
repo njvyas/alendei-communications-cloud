@@ -8,6 +8,7 @@ import { useCanReadPlatformDomains } from '@/lib/platform-domains';
 import {
   bootstrapSession,
   useCanAccessPlatformSupport,
+  useCanReadCampaigns,
   useCanReadOrganizations,
   useCanReadProviders,
   useCanReadResellers,
@@ -47,6 +48,7 @@ const SECTIONS = [
   { href: '/usage', label: 'Usage' },
   { href: '/whatsapp', label: 'WhatsApp' },
   { href: '/templates', label: 'Templates' },
+  { href: '/campaigns', label: 'Campaigns' },
   { href: '/contacts', label: 'Contacts' },
   { href: '/suppressions', label: 'Suppressions' },
   { href: '/channels', label: 'Channels' },
@@ -90,6 +92,7 @@ export function ConsoleClientLayout({
   const canReadApiKeys = useHasPermission('api_keys.read');
   const canReadAudit = useHasPermission('audit.read');
   const canReadTemplates = useHasPermission('templates.read');
+  const canReadCampaigns = useCanReadCampaigns();
   const canReadContacts = useHasPermission('contacts.read');
   const canReadMessages = useHasPermission('messages.read');
   const canSendMessages = useHasPermission('messages.send');
@@ -122,6 +125,8 @@ export function ConsoleClientLayout({
         return canReadMessages || canSendMessages;
       case '/templates':
         return canReadTemplates;
+      case '/campaigns':
+        return canReadCampaigns;
       case '/contacts':
         return canReadContacts;
       case '/suppressions':
@@ -206,6 +211,7 @@ export function ConsoleClientLayout({
     canReadMessages,
     canSendMessages,
     canReadTemplates,
+    canReadCampaigns,
     canReadContacts,
     canReadSuppressions,
     canReadProviders,

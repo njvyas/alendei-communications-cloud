@@ -726,6 +726,34 @@ export function useCanSendMessages(): boolean {
 }
 
 /**
+ * Evaluates whether the actor can view campaigns in the active organization.
+ * In Phase 8B frontend preview, allows tenant users who hold messages.read or workspaces.read.
+ */
+export function canReadCampaigns(): boolean {
+  return hasPermission('messages.read') || hasPermission('workspaces.read');
+}
+
+export function useCanReadCampaigns(): boolean {
+  const canReadMessages = useHasPermission('messages.read');
+  const canReadWorkspaces = useHasPermission('workspaces.read');
+  return canReadMessages || canReadWorkspaces;
+}
+
+/**
+ * Evaluates whether the actor can manage/create campaigns in the active organization.
+ * Requires messages.send or templates.manage authority.
+ */
+export function canManageCampaigns(): boolean {
+  return hasPermission('messages.send') || hasPermission('templates.manage');
+}
+
+export function useCanManageCampaigns(): boolean {
+  const canSendMessages = useHasPermission('messages.send');
+  const canManageTemplates = useHasPermission('templates.manage');
+  return canSendMessages || canManageTemplates;
+}
+
+/**
  * Initializes the session on application startup via silent refresh.
  * Transitions to 'unauthenticated' if no active session exists.
  */
