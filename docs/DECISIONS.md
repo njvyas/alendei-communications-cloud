@@ -2542,7 +2542,14 @@ Formal owner review of the U15.1 post-implementation design compliance audit res
   - The circuit-admission recording is taken once, outside any retry; metrics are published after COMMIT.
   - Only the settlement transaction is retried: on SQLSTATE `40P01`/`40001`, at most 3 attempts, and only with at least 5 s of lease left. The provider call is never inside a retry.
   - Lease recovery runs one expired lease per transaction.
-  - Lock order: org-lifecycle advisory lock → queue row → message → provider row → attempt → billing account → ledger.
+  - **Lock order, per path.** There is no single global order. The pre-existing dispatcher takes the provider row and the message row in different orders in T2 and T3. That is unchanged by Phase 7, and safe because a message row is locked only under its live claim and recovery never requeues a `submitting` message.
+    - *Settlement (T3):* org-lifecycle advisory lock (shared) → queue row (`FOR UPDATE`) → message → provider row (taken by the existing circuit recording, `recordSubmission`) → attempt → billing account → ledger.
+    - *Pre-submit (T2, reservation extension):* org-lifecycle advisory lock (shared) → provider row (taken by the existing circuit admission, `admit`) → message → billing account → ledger, then the new attempt row.
+    - *Lease recovery:* queue row → message → attempt → billing account → ledger.
+    - *Submission (T0):* billing account only, then new rows.
+    - *Operator resolution of an unknown outcome:* message → attempt → billing account → ledger.
+    - *Delivery ingestion:* message → attempt → `webhook_events`, with no billing account.
+  - **Rule:** the billing account row is the **last** row lock taken in every transaction. After it, only new rows and the transaction's own ledger fact keys are written. A transaction holding a billing account therefore never waits on a message, attempt or provider lock, so the billing additions cannot form a lock cycle.
 - **OD-7-3: `usage_ledger` partitioned by month from its first migration, on an anchor month derived from the fact's own UUIDv7 anchor.**
   - Keys are `PRIMARY KEY (anchor_month, id)` and `UNIQUE (anchor_month, anchor_id, fact_kind)`, which is globally unique by construction.
   - A custom `IMMUTABLE` function derives the month. PostgreSQL 17's `uuid_extract_timestamp` returns NULL for v7 UUIDs and must not be used; the CHECK rejects NULL.
@@ -2555,7 +2562,14 @@ Formal owner review of the U15.1 post-implementation design compliance audit res
   - Delivery receipts never change billing automatically.
   - Credits are made only by an explicit, keyed, justified refund.
   - The failed-delivery fee defaults to 0.
-  - The owner withdrew the clause treating `outcome_unknown` as accepted; it is **not** decided (see 1zi.2).
+  - The owner withdrew the clause treating `outcome_unknown` as accepted. It is replaced by OD-7-4U below.
+- **OD-7-4U: outcome-unknown billing** (approved by the owner, 08-Nov-2026). An attempt whose provider outcome is unknown is treated as neither accepted nor failed:
+  - No automatic customer charge, under either billing policy.
+  - No provider-cost ledger entry. Estimated exposure appears in reconciliation only.
+  - The reservation is released in the same transaction that marks the message finished.
+  - Later delivery receipts are evidence only and create no automatic ledger entries.
+  - Operator charge or write-off is explicit and audited. A charge reuses the automatic path's idempotency keys, requires available funds, and enforces dual control above the configured threshold.
+  - An unknown-outcome reconciliation register and metric are maintained.
 - **SMS billing units.**
   - Calculated at submission after render.
   - Persisted immutably on the message.
@@ -2570,7 +2584,6 @@ Formal owner review of the U15.1 post-implementation design compliance audit res
 - **RQ-6 (thresholds): partition headroom warning below 6 months, critical below 2 months.**
 
 ### 1zi.2 Not decided (recorded so they are not mistaken for decisions)
-- Outcome-unknown billing (OD-7-4U).
 - Tax, discount and wallet-principal treatment (RQ-1). Tax is subject to professional accounting review.
 - The poison-lease alert threshold K.
 - OD-7-5 to OD-7-14: permissions, provider cost source, fail-closed rules, error contract, currency, submission-core ownership, dual control, auto-recharge, reseller markup, entitlements.
