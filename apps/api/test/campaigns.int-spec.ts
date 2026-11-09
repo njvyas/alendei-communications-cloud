@@ -1129,6 +1129,150 @@ describe('Phase 8B.1: Campaigns Foundation Integration Suite', () => {
         .where(eq(schema.campaignRecipients.campaignId, matCampaignId));
       expect(recipients).toHaveLength(3);
     });
+
+    it('prevents materialisation from adding recipients after a campaign has transitioned to scheduled', async () => {
+      const tag1 = `freeze_${uuidv7().slice(0, 8)}`;
+      for (let i = 1; i <= 2; i++) {
+        const c = await request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/contacts`))
+          .set('authorization', `Bearer ${tokenA}`)
+          .send({ firstName: `FreezeUser${i}`, metadata: { tags: [tag1] } });
+        await request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/contacts/${c.body.data.id}/identities`))
+          .set('authorization', `Bearer ${tokenA}`)
+          .send({ channelId: whatsappChannelId, rawAddress: `+1555777000${i}`, isPrimary: true });
+      }
+
+      // 1. Create a campaign with tag1
+      const createRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({
+          name: 'Freeze Snapshot Campaign',
+          channel: 'whatsapp',
+          templateId: templateNoVarsWaA,
+          recipientSource: { type: 'tag_segment', tag: tag1 },
+          scheduleMode: 'immediate',
+        });
+      const campaignId = createRes.body.data.id;
+
+      // 2. Materialize audience in draft
+      const matRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/materialize`))
+        .set('authorization', `Bearer ${tokenA}`);
+      expect(matRes.status).toBe(200);
+      expect(matRes.body.data.totalRecipients).toBe(2);
+      expect(matRes.body.data.materialized).toBe(2);
+
+      // 3. Schedule the campaign
+      const validFuture = new Date(Date.now() + 3600_000).toISOString();
+      const schedRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/schedule`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ scheduledAt: validFuture });
+      expect(schedRes.status).toBe(200);
+      expect(schedRes.body.data.status).toBe('scheduled');
+      expect(schedRes.body.data.metrics.totalRecipients).toBe(2);
+
+      // 4. Add a brand new contact with tag1 and active WhatsApp identity into Tenant A workspace
+      const newContactRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/contacts`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ firstName: 'Latecomer', metadata: { tags: [tag1] } });
+      const lateContactId = newContactRes.body.data.id;
+      await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/contacts/${lateContactId}/identities`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ channelId: whatsappChannelId, rawAddress: '+15559990099', isPrimary: true });
+
+      // 5. Attempt repeated materialisation on the scheduled campaign
+      const postSchedMatRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/materialize`))
+        .set('authorization', `Bearer ${tokenA}`);
+
+      expect(postSchedMatRes.status).toBe(200);
+      expect(postSchedMatRes.body.data.totalRecipients).toBe(2); // strictly frozen at 2
+      expect(postSchedMatRes.body.data.materialized).toBe(0); // 0 added
+
+      // 6. Direct database verification: campaign_recipients has exactly 2 rows, latecomer is absent
+      const recipients = await h.admin
+        .select()
+        .from(schema.campaignRecipients)
+        .where(eq(schema.campaignRecipients.campaignId, campaignId));
+      expect(recipients).toHaveLength(2);
+      expect(recipients.map((r) => r.contactId)).not.toContain(lateContactId);
+
+      // 7. GET /recipients verification
+      const listRec = await request(h.app.getHttpServer())
+        .get(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/recipients`))
+        .set('authorization', `Bearer ${tokenA}`);
+      expect(listRec.body.data).toHaveLength(2);
+      expect(listRec.body.data.map((r: { contactId: string }) => r.contactId)).not.toContain(
+        lateContactId,
+      );
+    });
+
+    it('scheduling uses the authoritative materialised snapshot and does not re-query dynamic audience', async () => {
+      const tag2 = `snapshot_${uuidv7().slice(0, 8)}`;
+      for (let i = 1; i <= 2; i++) {
+        const c = await request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/contacts`))
+          .set('authorization', `Bearer ${tokenA}`)
+          .send({ firstName: `SnapUser${i}`, metadata: { tags: [tag2] } });
+        await request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/contacts/${c.body.data.id}/identities`))
+          .set('authorization', `Bearer ${tokenA}`)
+          .send({ channelId: whatsappChannelId, rawAddress: `+1555888000${i}`, isPrimary: true });
+      }
+
+      // 1. Create a campaign with tag2
+      const createRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({
+          name: 'Authoritative Snapshot Schedule Campaign',
+          channel: 'whatsapp',
+          templateId: templateNoVarsWaA,
+          recipientSource: { type: 'tag_segment', tag: tag2 },
+          scheduleMode: 'immediate',
+        });
+      const campaignId = createRes.body.data.id;
+
+      // 2. Materialize audience in draft
+      const matRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/materialize`))
+        .set('authorization', `Bearer ${tokenA}`);
+      expect(matRes.status).toBe(200);
+      expect(matRes.body.data.totalRecipients).toBe(2);
+
+      // 3. Add another matching contact
+      const newContact = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/contacts`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ firstName: 'PostMatPreSched', metadata: { tags: [tag2] } });
+      const newContactId = newContact.body.data.id;
+      await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/contacts/${newContactId}/identities`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ channelId: whatsappChannelId, rawAddress: '+15559990088', isPrimary: true });
+
+      // 4. Schedule campaign
+      const validFuture = new Date(Date.now() + 3600_000).toISOString();
+      const schedRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/schedule`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ scheduledAt: validFuture });
+      expect(schedRes.status).toBe(200);
+      expect(schedRes.body.data.metrics.totalRecipients).toBe(2); // snapshot count preserved!
+
+      // 5. Database check: campaign_recipients count equals 2, not incremented
+      const recipients = await h.admin
+        .select()
+        .from(schema.campaignRecipients)
+        .where(eq(schema.campaignRecipients.campaignId, campaignId));
+      expect(recipients).toHaveLength(2);
+      expect(recipients.map((r) => r.contactId)).not.toContain(newContactId);
+    });
   });
 
   describe('Phase 8B.2: List Campaign Recipients', () => {
@@ -1514,6 +1658,172 @@ describe('Phase 8B.1: Campaigns Foundation Integration Suite', () => {
         .set('authorization', `Bearer ${tokenA}`);
       expect(cancelRunning.status).toBe(200);
       expect(cancelRunning.body.data.status).toBe('cancelled');
+    });
+
+    it('concurrent schedule and cancel requests execute atomically without overwriting cancellation', async () => {
+      const createRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({
+          name: 'Concurrent Schedule-Cancel Campaign',
+          channel: 'whatsapp',
+          templateId: templateNoVarsWaA,
+          recipientSource: { type: 'tag_segment', tag: 'vip' },
+          scheduleMode: 'immediate',
+        });
+      const campaignId = createRes.body.data.id;
+
+      // Materialize first so schedule has a snapshot
+      await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/materialize`))
+        .set('authorization', `Bearer ${tokenA}`);
+
+      const validFuture = new Date(Date.now() + 3600_000).toISOString();
+
+      // Fire schedule and cancel concurrently
+      const [schedRes, cancelRes] = await Promise.all([
+        request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/schedule`))
+          .set('authorization', `Bearer ${tokenA}`)
+          .send({ scheduledAt: validFuture }),
+        request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/cancel`))
+          .set('authorization', `Bearer ${tokenA}`),
+      ]);
+
+      // Cancel is valid from draft or scheduled, so cancelRes succeeds
+      expect([200, 409]).toContain(schedRes.status);
+      expect(cancelRes.status).toBe(200);
+      expect(cancelRes.body.data.status).toBe('cancelled');
+
+      // Regardless of which request completed first, the database status must be cancelled
+      const [dbRow] = await h.admin
+        .select()
+        .from(schema.campaigns)
+        .where(eq(schema.campaigns.id, campaignId));
+      expect(dbRow!.status).toBe('cancelled');
+
+      // And once cancelled, a subsequent schedule is guaranteed to be refused with 409
+      const subsequentSched = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/schedule`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ scheduledAt: validFuture });
+      expect(subsequentSched.status).toBe(409);
+      expect(subsequentSched.body.error.code).toBe(ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT);
+    });
+
+    it('concurrent cancel requests on the same campaign result in exactly one winner and one 409 conflict', async () => {
+      const createRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({
+          name: 'Concurrent Double Cancel Campaign',
+          channel: 'whatsapp',
+          templateId: templateNoVarsWaA,
+          recipientSource: { type: 'tag_segment', tag: 'vip' },
+          scheduleMode: 'immediate',
+        });
+      const campaignId = createRes.body.data.id;
+
+      const [res1, res2] = await Promise.all([
+        request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/cancel`))
+          .set('authorization', `Bearer ${tokenA}`),
+        request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/cancel`))
+          .set('authorization', `Bearer ${tokenA}`),
+      ]);
+
+      const statuses = [res1.status, res2.status].sort();
+      expect(statuses).toEqual([200, 409]);
+
+      const conflictRes = res1.status === 409 ? res1 : res2;
+      expect(conflictRes.body.error.code).toBe(ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT);
+
+      const [dbRow] = await h.admin
+        .select()
+        .from(schema.campaigns)
+        .where(eq(schema.campaigns.id, campaignId));
+      expect(dbRow!.status).toBe('cancelled');
+    });
+  });
+
+  describe('Phase 8B.2: Recipient Identity Channel Eligibility', () => {
+    it('excludes contacts who have identities on other channels but none on the campaign channel', async () => {
+      const uniqueTag = `chan_eligibility_${uuidv7().slice(0, 8)}`;
+
+      // 1. Contact with SMS identity ONLY (no WhatsApp identity)
+      const cSmsOnly = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/contacts`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ firstName: 'SmsOnlyUser', metadata: { tags: [uniqueTag] } });
+      const smsOnlyContactId = cSmsOnly.body.data.id;
+      const smsIdentityRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/contacts/${smsOnlyContactId}/identities`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ channelId: smsChannelId, rawAddress: '+15554440001', isPrimary: true });
+      const smsIdentityId = smsIdentityRes.body.data.id;
+
+      // 2. Contact with WhatsApp identity
+      const cWaOnly = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/contacts`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ firstName: 'WaUser', metadata: { tags: [uniqueTag] } });
+      const waContactId = cWaOnly.body.data.id;
+      const waIdentityRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/contacts/${waContactId}/identities`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ channelId: whatsappChannelId, rawAddress: '+15554440002', isPrimary: true });
+      const waIdentityId = waIdentityRes.body.data.id;
+
+      // 3. Create a WhatsApp campaign targeting the unique tag
+      const campRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({
+          name: 'WhatsApp Channel Eligibility Campaign',
+          channel: 'whatsapp',
+          templateId: templateNoVarsWaA,
+          recipientSource: { type: 'tag_segment', tag: uniqueTag },
+          scheduleMode: 'immediate',
+        });
+      const campaignId = campRes.body.data.id;
+
+      // 4. Test audience preview: must exclude the SMS-only contact
+      const previewRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/audience-preview`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({});
+      expect(previewRes.status).toBe(200);
+      expect(previewRes.body.totalCount).toBe(1);
+      expect(previewRes.body.data).toHaveLength(1);
+      expect(previewRes.body.data[0].contactId).toBe(waContactId);
+
+      // 5. Test materialization: must only materialize the WhatsApp contact
+      const matRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/materialize`))
+        .set('authorization', `Bearer ${tokenA}`);
+      expect(matRes.status).toBe(200);
+      expect(matRes.body.data.totalRecipients).toBe(1);
+      expect(matRes.body.data.materialized).toBe(1);
+
+      // 6. Inspect database: verify identity_id matches WhatsApp identity and NOT SMS identity
+      const dbRecipients = await h.admin
+        .select()
+        .from(schema.campaignRecipients)
+        .where(eq(schema.campaignRecipients.campaignId, campaignId));
+      expect(dbRecipients).toHaveLength(1);
+      expect(dbRecipients[0]!.contactId).toBe(waContactId);
+      expect(dbRecipients[0]!.identityId).toBe(waIdentityId);
+      expect(dbRecipients[0]!.identityId).not.toBe(smsIdentityId);
+
+      // 7. GET /recipients verification
+      const listRec = await request(h.app.getHttpServer())
+        .get(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/recipients`))
+        .set('authorization', `Bearer ${tokenA}`);
+      expect(listRec.body.data).toHaveLength(1);
+      expect(listRec.body.data[0].contactId).toBe(waContactId);
+      expect(listRec.body.data[0].identityId).toBe(waIdentityId);
     });
   });
 

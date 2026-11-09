@@ -52,6 +52,19 @@ describe('Campaigns boundary and structural guarantees', () => {
     expect(serviceCode).toContain('.onConflictDoNothing(');
   });
 
+  it('removes fallback to arbitrary channel identity (member.identities[0])', () => {
+    expect(serviceCode).not.toContain('member.identities[0]');
+  });
+
+  it('enforces atomic conditional lifecycle transitions with expected status predicates', () => {
+    expect(serviceCode).toContain("inArray(schema.campaigns.status, ['draft', 'scheduled'])");
+    expect(serviceCode).toContain(
+      "inArray(schema.campaigns.status, ['draft', 'scheduled', 'running', 'paused'])",
+    );
+    expect(serviceCode).toContain("eq(schema.campaigns.status, 'running')");
+    expect(serviceCode).toContain("eq(schema.campaigns.status, 'paused')");
+  });
+
   describe('DTO validation', () => {
     it('validates valid CreateCampaignDto', async () => {
       expect(

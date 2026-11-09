@@ -16,7 +16,7 @@ import {
   type PageInfo,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
-import { and, eq, ilike, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, eq, ilike, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 
 import { actorFromPrincipal } from '../audit/audit-actor';
@@ -598,8 +598,26 @@ export class CampaignsService {
       const [updatedRow] = await tx
         .update(schema.campaigns)
         .set(updates)
-        .where(eq(schema.campaigns.id, campaignId))
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+            inArray(schema.campaigns.status, ['draft', 'scheduled']),
+          ),
+        )
         .returning();
+
+      if (!updatedRow) {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message:
+            'Cannot update campaign: campaign is in terminal state or was modified concurrently',
+          details: { campaignId },
+        });
+      }
 
       await this.audit.record(
         {
@@ -664,10 +682,28 @@ export class CampaignsService {
         });
       }
 
-      await tx
+      const [deletedRow] = await tx
         .update(schema.campaigns)
         .set({ deletedAt: sql`now()` })
-        .where(eq(schema.campaigns.id, campaignId));
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+            inArray(schema.campaigns.status, ['draft', 'scheduled', 'cancelled', 'completed']),
+          ),
+        )
+        .returning({ id: schema.campaigns.id });
+
+      if (!deletedRow) {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message: 'Cannot delete campaign: campaign is running or was already deleted',
+          details: { campaignId },
+        });
+      }
 
       await this.audit.record(
         {
@@ -830,6 +866,21 @@ export class CampaignsService {
       return row;
     });
 
+    // Prevent materialisation from adding recipients after a campaign has transitioned to scheduled.
+    // Repeated materialisation remains idempotent: returns the authoritative materialized count.
+    if (campaign.status !== 'draft') {
+      const totalRecipients = await this.getMaterializedRecipientCount(
+        orgId,
+        workspaceId,
+        campaign.id,
+      );
+      return {
+        campaignId: campaign.id,
+        totalRecipients,
+        materialized: 0,
+      };
+    }
+
     const { totalRecipients, materialized } = await this.performMaterialization(
       principal,
       workspaceId,
@@ -878,40 +929,54 @@ export class CampaignsService {
       );
 
       if (pageRes.data.length > 0) {
-        const rowsToInsert = pageRes.data.map((member) => {
-          const matchingIdentity =
-            member.identities.find((id) => id.channelId === campaign.channelId && id.isPrimary) ??
-            member.identities.find((id) => id.channelId === campaign.channelId) ??
-            member.identities[0];
+        const eligibleRows = pageRes.data
+          .map((member) => {
+            const matchingIdentity =
+              member.identities.find(
+                (id) =>
+                  id.channelId === campaign.channelId && id.isPrimary && id.status === 'active',
+              ) ??
+              member.identities.find(
+                (id) => id.channelId === campaign.channelId && id.status === 'active',
+              ) ??
+              member.identities.find((id) => id.channelId === campaign.channelId && id.isPrimary) ??
+              member.identities.find((id) => id.channelId === campaign.channelId);
 
-          return {
-            id: uuidv7(),
-            campaignId: campaign.id,
-            orgId,
-            workspaceId,
-            contactId: member.contactId,
-            identityId: matchingIdentity?.id ?? null,
-            status: 'pending' as const,
-          };
-        });
+            if (!matchingIdentity) {
+              return null;
+            }
 
-        const inserted = await this.db.withRequestTenant(async (tx) => {
-          await this.assertWorkspaceAccess(
-            tx,
-            principal,
-            workspaceId,
-            PERMISSIONS.CAMPAIGNS_MANAGE,
-          );
-          return tx
-            .insert(schema.campaignRecipients)
-            .values(rowsToInsert)
-            .onConflictDoNothing({
-              target: [schema.campaignRecipients.campaignId, schema.campaignRecipients.contactId],
-            })
-            .returning({ id: schema.campaignRecipients.id });
-        });
+            return {
+              id: uuidv7(),
+              campaignId: campaign.id,
+              orgId,
+              workspaceId,
+              contactId: member.contactId,
+              identityId: matchingIdentity.id,
+              status: 'pending' as const,
+            };
+          })
+          .filter((row): row is NonNullable<typeof row> => row !== null);
 
-        newlyMaterialized += inserted.length;
+        if (eligibleRows.length > 0) {
+          const inserted = await this.db.withRequestTenant(async (tx) => {
+            await this.assertWorkspaceAccess(
+              tx,
+              principal,
+              workspaceId,
+              PERMISSIONS.CAMPAIGNS_MANAGE,
+            );
+            return tx
+              .insert(schema.campaignRecipients)
+              .values(eligibleRows)
+              .onConflictDoNothing({
+                target: [schema.campaignRecipients.campaignId, schema.campaignRecipients.contactId],
+              })
+              .returning({ id: schema.campaignRecipients.id });
+          });
+
+          newlyMaterialized += inserted.length;
+        }
       }
 
       cursor =
@@ -971,6 +1036,26 @@ export class CampaignsService {
     });
 
     return { totalRecipients, materialized: newlyMaterialized };
+  }
+
+  private async getMaterializedRecipientCount(
+    orgId: string,
+    workspaceId: string,
+    campaignId: string,
+  ): Promise<number> {
+    return this.db.withRequestTenant(async (tx) => {
+      const [countRow] = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(schema.campaignRecipients)
+        .where(
+          and(
+            eq(schema.campaignRecipients.campaignId, campaignId),
+            eq(schema.campaignRecipients.workspaceId, workspaceId),
+            eq(schema.campaignRecipients.orgId, orgId),
+          ),
+        );
+      return Number(countRow?.count ?? 0);
+    });
   }
 
   async schedule(
@@ -1084,12 +1169,17 @@ export class CampaignsService {
       });
     }
 
-    const { totalRecipients } = await this.performMaterialization(
-      principal,
-      workspaceId,
-      orgId,
-      campaign,
-    );
+    // Scheduling must use the authoritative materialised snapshot.
+    let totalRecipients = await this.getMaterializedRecipientCount(orgId, workspaceId, campaign.id);
+    if (totalRecipients === 0) {
+      const materialization = await this.performMaterialization(
+        principal,
+        workspaceId,
+        orgId,
+        campaign,
+      );
+      totalRecipients = materialization.totalRecipients;
+    }
 
     if (totalRecipients === 0) {
       throw new AppException({
@@ -1111,8 +1201,26 @@ export class CampaignsService {
           scheduledAt: scheduledAtDate,
           updatedAt: new Date(),
         })
-        .where(eq(schema.campaigns.id, campaignId))
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+            inArray(schema.campaigns.status, ['draft', 'scheduled']),
+          ),
+        )
         .returning();
+
+      if (!updatedRow) {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message:
+            'Campaign lifecycle transition conflict: campaign status was modified concurrently or is not in a valid state',
+          details: { campaignId },
+        });
+      }
 
       await this.audit.record(
         {
@@ -1192,8 +1300,25 @@ export class CampaignsService {
           completedAt: new Date(),
           updatedAt: new Date(),
         })
-        .where(eq(schema.campaigns.id, campaignId))
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+            inArray(schema.campaigns.status, ['draft', 'scheduled', 'running', 'paused']),
+          ),
+        )
         .returning();
+
+      if (!updatedRow) {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message: `Cannot cancel campaign: campaign is already in terminal state or was modified concurrently`,
+          details: { campaignId },
+        });
+      }
 
       await this.audit.record(
         {
@@ -1271,8 +1396,25 @@ export class CampaignsService {
           status: 'paused',
           updatedAt: new Date(),
         })
-        .where(eq(schema.campaigns.id, campaignId))
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+            eq(schema.campaigns.status, 'running'),
+          ),
+        )
         .returning();
+
+      if (!updatedRow) {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message: `Cannot pause campaign: campaign is not running or was modified concurrently`,
+          details: { campaignId },
+        });
+      }
 
       await this.audit.record(
         {
@@ -1348,8 +1490,25 @@ export class CampaignsService {
           status: 'running',
           updatedAt: new Date(),
         })
-        .where(eq(schema.campaigns.id, campaignId))
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+            eq(schema.campaigns.status, 'paused'),
+          ),
+        )
         .returning();
+
+      if (!updatedRow) {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message: `Cannot resume campaign: campaign is not paused or was modified concurrently`,
+          details: { campaignId },
+        });
+      }
 
       await this.audit.record(
         {
