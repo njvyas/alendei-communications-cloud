@@ -136,6 +136,18 @@ export const envSchema = z.object({
    */
   DELIVERY_WEBHOOKS_ENABLED: booleanFromEnv.default(false),
   /**
+   * Phase 7 PR 7-4: billing enforcement — funds reservation at message submission
+   * (`DECISIONS.md` §1zi.7). **Off by default**, and off, submission is unchanged
+   * apart from persisting billable units. On, every submission rates the message,
+   * reserves funds atomically with it, and requires an `Idempotency-Key`.
+   *
+   * Until settlement exists (PR 7-5) nothing releases a reservation, so startup
+   * refuses this flag outside tests (`billingEnforcementProblems`, owner decision
+   * D-74-4). Enabling it later also requires account provisioning and funding, a
+   * readiness report and explicit owner approval.
+   */
+  BILLING_ENFORCEMENT_ENABLED: booleanFromEnv.default(false),
+  /**
    * Phase 5.0 PR-C (OD-6): the server pepper for ingress-key hashes, resolved through
    * SecretsPort. A key is stored only as HMAC-SHA256(pepper, key). Required to issue keys
    * and, outside development and test, whenever ingress is enabled.
@@ -321,6 +333,23 @@ function deliveryCredentialProblems(env: Env): string[] {
   ];
 }
 
+/**
+ * Owner decision D-74-4 (09-Nov-2026): billing enforcement is refused at startup
+ * outside tests until PR 7-5 (settlement) is complete — in PR 7-4 a reservation is
+ * never released, so enabling it against real traffic would hold funds
+ * indefinitely. PR 7-5 replaces this guard.
+ */
+function billingEnforcementProblems(env: Env): string[] {
+  if (!env.BILLING_ENFORCEMENT_ENABLED) return [];
+  if (env.NODE_ENV === 'test' && env.APP_ENV === 'test') return [];
+  return [
+    `BILLING_ENFORCEMENT_ENABLED=true is refused (NODE_ENV=${env.NODE_ENV}, APP_ENV=${env.APP_ENV}): ` +
+      'until settlement (Phase 7 PR 7-5) is complete, billing enforcement is permitted only in tests ' +
+      '(NODE_ENV=test and APP_ENV=test). Enabling it requires account provisioning and funding, ' +
+      'a readiness report and explicit owner approval.',
+  ];
+}
+
 function productionHardening(env: Env): string[] {
   if (env.APP_ENV !== 'production') return [];
   const problems: string[] = [];
@@ -371,6 +400,7 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     ...productionHardening(parsed.data),
     ...dispatchCredentialProblems(parsed.data),
     ...deliveryCredentialProblems(parsed.data),
+    ...billingEnforcementProblems(parsed.data),
   ];
   // Checked against the raw input, because after parsing a default is
   // indistinguishable from a choice: production must *state* how many proxy

@@ -16,11 +16,21 @@ import { schema, type Transaction } from '@acc/db';
 import { and, desc, eq, isNull, or, sql } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 
+import { MessageReservationService } from '../../billing/message-reservation.service';
 import { AppException } from '../../common/errors/app.exception';
 import { AppConfigService } from '../../config/app-config.service';
 import { normalizeAddress } from '../../contacts/contacts.normalization';
 import { assertSubmissionAuthorized } from './submission-authorization';
 import type { SubmissionContext, SubmissionRequest, SubmissionResult } from './submission.types';
+
+type BillingMode = (typeof schema.organizations.$inferSelect)['billingMode'];
+type BillingPolicy = (typeof schema.organizations.$inferSelect)['billingPolicy'];
+
+interface BillableUnits {
+  readonly count: number;
+  readonly unit: 'sms_segment' | 'message';
+  readonly smsEncoding: 'GSM-7' | 'UCS-2' | null;
+}
 
 function channelNotFound(channelCode: string): AppException {
   return new AppException({
@@ -52,13 +62,23 @@ function channelNotFound(channelCode: string): AppException {
  *   refuses before reading anything.
  * - **Not idempotent by itself.** Each call creates one message; duplicate
  *   prevention belongs to the caller (on HTTP, the `Idempotency-Key`).
- * - **Behaviour-preserving extraction.** The checks run in the pre-7-3 order with
- *   the same errors; it calls no billing, pricing, ledger, provider or dispatcher
- *   code. The billing step of a later PR belongs after step 10, before returning.
+ * - **Behaviour-preserving extraction (7-3).** The checks run in the pre-7-3 order
+ *   with the same errors; it calls no pricing, ledger, provider or dispatcher code.
+ * - **Funds reservation (7-4, `DECISIONS.md` §1zi.7).** Every new message records
+ *   its billable units. When billing enforcement is enabled
+ *   (`BILLING_ENFORCEMENT_ENABLED`, read here so no caller can opt out), the
+ *   message also records the organization's billing settings and, as the **last**
+ *   step, reserves funds through `MessageReservationService` — the one reservation
+ *   path for every caller. Every existing refusal therefore precedes money, and
+ *   the billing account is the last lock the transaction takes. A refused
+ *   reservation throws, so the whole submission rolls back.
  */
 @Injectable()
 export class MessageSubmissionCore {
-  constructor(private readonly config: AppConfigService) {}
+  constructor(
+    private readonly config: AppConfigService,
+    private readonly reservation: MessageReservationService,
+  ) {}
 
   async submit(
     tx: Transaction,
@@ -67,6 +87,7 @@ export class MessageSubmissionCore {
   ): Promise<SubmissionResult> {
     assertSubmissionAuthorized(ctx.authorization, tx, ctx.orgId);
     const orgId = ctx.orgId;
+    const billingEnforced = this.config.billing.enforcementEnabled;
 
     // 1. Channel preflight
     const channelResult = await tx.execute<{ id: string; code: string; status: string }>(
@@ -300,6 +321,12 @@ export class MessageSubmissionCore {
 
     // 6b. Channel-specific regulatory & payload validation (Phase 4.1 Gate F.1)
     let finalPayload: Record<string, unknown> = request.payload;
+    // Billable units (Phase 7 PR 7-4): SMS segments after render; one per message
+    // on WhatsApp and RCS (`app_pricing_unit_for_channel`, migration 0051).
+    let units: BillableUnits | null =
+      channel.code === 'whatsapp' || channel.code === 'rcs'
+        ? { count: 1, unit: 'message', smsEncoding: null }
+        : null;
 
     if (channel.code === 'sms') {
       const smsPayloadInvalid = (message: string, errors?: readonly string[]) =>
@@ -469,6 +496,8 @@ export class MessageSubmissionCore {
         });
       }
 
+      units = { count: analysis.segmentCount, unit: 'sms_segment', smsEncoding: analysis.encoding };
+
       // Persist only server-derived content: rendered text and the template's own DLT.
       finalPayload = {
         text: renderedText,
@@ -522,6 +551,25 @@ export class MessageSubmissionCore {
       });
     }
 
+    // 7b. Billing snapshot (enforcement only): the settings the reservation is sized
+    // under; app_message_reserve refuses the message if they change before it runs.
+    let billing: { mode: BillingMode; policy: BillingPolicy } | null = null;
+    if (billingEnforced) {
+      if (!units) {
+        throw new Error(`message submission: no billable unit for channel '${channel.code}'`);
+      }
+      const [org] = await tx
+        .select({
+          mode: schema.organizations.billingMode,
+          policy: schema.organizations.billingPolicy,
+        })
+        .from(schema.organizations)
+        .where(eq(schema.organizations.id, orgId))
+        .limit(1);
+      if (!org) throw new Error('message submission: organization not visible');
+      billing = org;
+    }
+
     // 8. Insert into messages
     const messageId = uuidv7();
     const correlationId = ctx.correlationId;
@@ -538,6 +586,12 @@ export class MessageSubmissionCore {
         payload: finalPayload,
         status: 'queued',
         correlationId,
+        billableUnits: units?.count ?? null,
+        billableUnit: units?.unit ?? null,
+        smsEncoding: units?.smsEncoding ?? null,
+        billingEnforced: billing !== null,
+        billingModeSnapshot: billing?.mode ?? null,
+        billingPolicySnapshot: billing?.policy ?? null,
       })
       .returning();
 
@@ -560,6 +614,9 @@ export class MessageSubmissionCore {
         recipient: normalizedAddress,
       },
     });
+
+    // 11. Reserve funds (enforcement only): the last step and the last lock.
+    if (billing) await this.reservation.reserve(tx, messageId);
 
     return {
       messageId,

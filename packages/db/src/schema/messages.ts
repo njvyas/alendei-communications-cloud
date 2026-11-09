@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  boolean,
   check,
   foreignKey,
   index,
@@ -14,7 +15,8 @@ import {
 } from 'drizzle-orm/pg-core';
 
 import { createdAt, primaryId, timestamps, tstz } from './_shared';
-import { organizations, workspaces } from './tenancy';
+import { billingMode, billingPolicy, organizations, workspaces } from './tenancy';
+import { pricingUnit } from './pricing';
 import { channels, providers } from './providers';
 import { contacts } from './contacts';
 import { templates } from './templates';
@@ -92,6 +94,15 @@ export const messages = pgTable(
     readAt: tstz('read_at'),
     /** The first attempt that reached `delivered`; FK (delivered_attempt_id, id) → attempts (0046). */
     deliveredAttemptId: uuid('delivered_attempt_id'),
+    // Phase 7 PR 7-4 (0053): billable units, set by the submission core on every new
+    // message; the billing snapshot, set only when the submission ran under billing
+    // enforcement. All six are immutable after insert (trg_messages_billing_immutable).
+    billableUnits: integer('billable_units'),
+    billableUnit: pricingUnit('billable_unit'),
+    smsEncoding: text('sms_encoding'),
+    billingEnforced: boolean('billing_enforced').notNull().default(false),
+    billingModeSnapshot: billingMode('billing_mode_snapshot'),
+    billingPolicySnapshot: billingPolicy('billing_policy_snapshot'),
     ...timestamps(),
   },
   (table) => [

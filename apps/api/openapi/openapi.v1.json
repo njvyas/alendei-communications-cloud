@@ -1911,6 +1911,11 @@
               "IDEMPOTENCY_KEY_PAYLOAD_MISMATCH",
               "IDEMPOTENCY_KEY_INVALID",
               "IDEMPOTENCY_KEY_REQUIRED",
+              "BILLING_INSUFFICIENT_FUNDS",
+              "BILLING_PRICE_NOT_CONFIGURED",
+              "BILLING_ACCOUNT_NOT_CONFIGURED",
+              "BILLING_ACCOUNT_FROZEN",
+              "BILLING_BUSY",
               "PAGINATION_CURSOR_INVALID",
               "SUPPRESSION_ALREADY_ACTIVE",
               "SUPPRESSION_LIFECYCLE_CONFLICT",
@@ -12178,6 +12183,7 @@
         ]
       },
       "post": {
+        "description": "While billing enforcement is enabled (Phase 7 PR 7-4), funds are reserved atomically with the message, after every other check: `402 BILLING_INSUFFICIENT_FUNDS`, `422 BILLING_PRICE_NOT_CONFIGURED`, `422 BILLING_ACCOUNT_NOT_CONFIGURED`, `403 BILLING_ACCOUNT_FROZEN` and `503 BILLING_BUSY` (retryable) refuse the request and nothing is created.",
         "operationId": "Messages_send",
         "parameters": [
           {
@@ -12190,7 +12196,7 @@
             "$ref": "#/components/parameters/X-Correlation-Id"
           },
           {
-            "description": "16–255 characters of letters, digits, `-`, `_`, `.` or `:` (surrounding whitespace is trimmed; otherwise `400 IDEMPOTENCY_KEY_INVALID`). A repeat with the same key and payload replays the stored response; a different payload is `422 IDEMPOTENCY_KEY_PAYLOAD_MISMATCH`; a repeat while the first is still running is `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`.",
+            "description": "Required while billing enforcement is enabled on the deployment: without it the request is then refused with `400 IDEMPOTENCY_KEY_REQUIRED` and nothing runs; otherwise optional. 16–255 characters of letters, digits, `-`, `_`, `.` or `:` (surrounding whitespace is trimmed; otherwise `400 IDEMPOTENCY_KEY_INVALID`). A repeat with the same key and payload replays the stored response; a different payload is `422 IDEMPOTENCY_KEY_PAYLOAD_MISMATCH`; a repeat while the first is still running is `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -12286,6 +12292,33 @@
             "headers": {
               "X-Correlation-Id": {
                 "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Insufficient funds (`BILLING_INSUFFICIENT_FUNDS`); nothing was created.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
               },
               "X-Request-Id": {
                 "$ref": "#/components/headers/X-Request-Id"
@@ -12413,6 +12446,33 @@
               "Retry-After": {
                 "$ref": "#/components/headers/Retry-After"
               },
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A dependency is unavailable (`SERVICE_UNAVAILABLE`).",
+            "headers": {
               "X-Correlation-Id": {
                 "$ref": "#/components/headers/X-Correlation-Id"
               },

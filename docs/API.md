@@ -530,6 +530,8 @@ Idempotency is **execution/replay coordination**: it records that a request ran 
 
 **Required** (Phase 7 PR 7-2, owner correction to PR #90): the platform pricing catalogue's creating `POST`s (`/platform/pricing/plans`, `/platform/pricing/plans/:id/versions`, `/platform/pricing/versions/:id/activate`, `/platform/pricing/provider-cost-rates`, `/platform/pricing/assignments`) refuse a request without the header (`400 IDEMPOTENCY_KEY_REQUIRED`). Each creates append-only, effective-dated or one-shot financial configuration, where a retry must never be mistaken for a second request. Records are kept in the platform namespace (`org_id NULL`, `DATABASE.md` §7.1); the semantics are otherwise exactly those above (§2d).
 
+**Required while billing enforcement is enabled** (Phase 7 PR 7-4, owner decision D-4): `POST /messages` refuses a request without the header (`400 IDEMPOTENCY_KEY_REQUIRED`, before anything runs) whenever `BILLING_ENFORCEMENT_ENABLED` is on, because each accepted message reserves funds. With enforcement off the header stays optional. The fingerprint and replay are the same in both modes, so a key recorded before enforcement was enabled still replays its original response (and reserves nothing). Under enforcement the billing refusals are `402 BILLING_INSUFFICIENT_FUNDS`, `422 BILLING_PRICE_NOT_CONFIGURED`, `422 BILLING_ACCOUNT_NOT_CONFIGURED`, `403 BILLING_ACCOUNT_FROZEN` and `503 BILLING_BUSY` (retryable); none persists anything (`DECISIONS.md` §1zi.7).
+
 **Deliberately not supported, with reasons** — this is a classification, not an omission:
 
 | Endpoint | Why not |

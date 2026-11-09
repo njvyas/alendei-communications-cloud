@@ -191,6 +191,62 @@ describe('validateEnv', () => {
     });
   });
 
+  describe('billing enforcement (Phase 7 PR 7-4, owner decision D-74-4)', () => {
+    const problemsOf = (raw: Record<string, unknown>): string[] => {
+      try {
+        validateEnv(raw);
+        return [];
+      } catch (error) {
+        return (error as ConfigurationError).problems as string[];
+      }
+    };
+
+    it('is off by default', () => {
+      expect(validateEnv(MINIMAL_ENV).BILLING_ENFORCEMENT_ENABLED).toBe(false);
+    });
+
+    it('is permitted only when both NODE_ENV and APP_ENV are test', () => {
+      const env = validateEnv({
+        ...MINIMAL_ENV,
+        NODE_ENV: 'test',
+        APP_ENV: 'test',
+        BILLING_ENFORCEMENT_ENABLED: 'true',
+      });
+      expect(env.BILLING_ENFORCEMENT_ENABLED).toBe(true);
+    });
+
+    it.each([
+      ['development', 'development'],
+      ['test', 'development'],
+      ['development', 'test'],
+      ['production', 'test'],
+      ['production', 'staging'],
+      ['production', 'production'],
+    ])('refuses startup with NODE_ENV=%s APP_ENV=%s', (nodeEnv, appEnv) => {
+      const problems = problemsOf({
+        ...MINIMAL_ENV,
+        NODE_ENV: nodeEnv,
+        APP_ENV: appEnv,
+        BILLING_ENFORCEMENT_ENABLED: 'true',
+        DATABASE_DISPATCH_PASSWORD: 'a-non-development-dispatch-credential',
+      });
+      expect(
+        problems.some((p) => p.startsWith('BILLING_ENFORCEMENT_ENABLED=true is refused')),
+      ).toBe(true);
+    });
+
+    it('an explicit false is accepted anywhere', () => {
+      expect(
+        problemsOf({
+          ...MINIMAL_ENV,
+          APP_ENV: 'staging',
+          DATABASE_DISPATCH_PASSWORD: 'a-non-development-dispatch-credential',
+          BILLING_ENFORCEMENT_ENABLED: 'false',
+        }),
+      ).toEqual([]);
+    });
+  });
+
   describe('delivery credential (Phase 5.0, AC-GR-3)', () => {
     const SECRET = 'a-staging-delivery-credential';
     const STAGING = {

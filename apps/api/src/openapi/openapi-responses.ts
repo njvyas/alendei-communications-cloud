@@ -93,6 +93,7 @@ export const CLEARS_REFRESH_COOKIE: Record<string, HeaderObject> = {
 const ERROR_DESCRIPTIONS: Readonly<Record<number, string>> = {
   400: 'Validation failed (`VALIDATION_FAILED`, `details.issues`), or another request error named by `error.code`.',
   401: 'No valid credential (`AUTH_*`).',
+  402: 'Insufficient funds (`BILLING_INSUFFICIENT_FUNDS`); nothing was created.',
   403: 'Authenticated, but not permitted here (`AUTHZ_*`, `TENANCY_*`).',
   404: 'Not found, or not visible to the caller — indistinguishable by design (`RESOURCE_NOT_FOUND`).',
   415: 'The body must be `application/json` (`VALIDATION_FAILED`).',
@@ -120,14 +121,20 @@ export function ApiErrors(...statuses: number[]) {
  * `Idempotency-Key` (`API.md` §4) — on the creating `POST`s that accept it.
  * `required: true` documents an operation that refuses a request without one
  * (`400 IDEMPOTENCY_KEY_REQUIRED`; Phase 7 PR 7-2, the platform pricing catalogue).
+ * `requiredWhen` documents a conditional requirement while the header stays
+ * optional in the schema (Phase 7 PR 7-4: `POST /messages` under billing
+ * enforcement).
  */
-export function ApiIdempotencyKey(options: { required?: boolean } = {}) {
+export function ApiIdempotencyKey(options: { required?: boolean; requiredWhen?: string } = {}) {
   return ApiHeader({
     name: 'Idempotency-Key',
     required: options.required ?? false,
     description:
       (options.required
         ? 'Required: without it the request is refused with `400 IDEMPOTENCY_KEY_REQUIRED` and nothing runs. '
+        : '') +
+      (options.requiredWhen
+        ? `Required ${options.requiredWhen}: without it the request is then refused with \`400 IDEMPOTENCY_KEY_REQUIRED\` and nothing runs; otherwise optional. `
         : '') +
       '16–255 characters of letters, digits, `-`, `_`, `.` or `:` (surrounding whitespace is trimmed; otherwise `400 IDEMPOTENCY_KEY_INVALID`). A repeat with the same key and payload replays the stored response; a different payload is `422 IDEMPOTENCY_KEY_PAYLOAD_MISMATCH`; a repeat while the first is still running is `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`.',
     schema: { type: 'string', pattern: '^[A-Za-z0-9_.:-]{16,255}$' },

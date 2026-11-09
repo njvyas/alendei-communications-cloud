@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BillingModule } from '../billing/billing.module';
 import { ProviderAdaptersModule } from '../provider-adapters/provider-adapters.module';
 import { ProvidersModule } from '../providers/providers.module';
 import { DispatchWorker } from './dispatch/dispatch.worker';
@@ -10,7 +11,7 @@ import { MessageUsageController } from './usage/message-usage.controller';
 import { MessageUsageService } from './usage/message-usage.service';
 
 @Module({
-  imports: [ProvidersModule, ProviderAdaptersModule],
+  imports: [ProvidersModule, ProviderAdaptersModule, BillingModule],
   controllers: [MessagesController, MessageUsageController],
   providers: [
     MessagesService,

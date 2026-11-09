@@ -195,6 +195,24 @@ export const ERROR_CODES = {
    */
   IDEMPOTENCY_KEY_REQUIRED: 'IDEMPOTENCY_KEY_REQUIRED',
 
+  // --- Billing: funds reservation at submission (Phase 7 PR 7-4, D-74-1) ------
+  // Raised only when billing enforcement is enabled, after every other check of
+  // the submission; nothing is persisted. No balance, limit or price is disclosed.
+  /** `402`: the organization's available funds do not cover the reservation. */
+  BILLING_INSUFFICIENT_FUNDS: 'BILLING_INSUFFICIENT_FUNDS',
+  /** `422`: no rate card, active version or rule prices this message (fail closed). */
+  BILLING_PRICE_NOT_CONFIGURED: 'BILLING_PRICE_NOT_CONFIGURED',
+  /** `422`: the organization has no billing account of its billing mode (fail closed). */
+  BILLING_ACCOUNT_NOT_CONFIGURED: 'BILLING_ACCOUNT_NOT_CONFIGURED',
+  /** `403`: the organization's billing account is frozen. */
+  BILLING_ACCOUNT_FROZEN: 'BILLING_ACCOUNT_FROZEN',
+  /**
+   * `503`, retryable: the billing account was contended past its lock timeout, or
+   * the billing settings changed during the submission. Nothing was persisted; an
+   * identical retry (same `Idempotency-Key`) is safe.
+   */
+  BILLING_BUSY: 'BILLING_BUSY',
+
   // --- Pagination (`API.md` §8a) -------------------------------------------
   /**
    * The cursor was malformed, its signature did not verify, or it was minted
@@ -296,6 +314,7 @@ export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
 /** Error codes for which an identical retry is safe and may succeed. */
 export const RETRYABLE_ERROR_CODES: readonly ErrorCode[] = Object.freeze([
   ERROR_CODES.IDEMPOTENCY_REQUEST_IN_PROGRESS,
+  ERROR_CODES.BILLING_BUSY,
   ERROR_CODES.RATE_LIMIT_EXCEEDED,
   ERROR_CODES.SERVICE_UNAVAILABLE,
 ]);
