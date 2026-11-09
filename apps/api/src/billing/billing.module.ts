@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 
+import { AccountOperationsController } from './account-operations.controller';
+import { AccountOperationsService } from './account-operations.service';
 import { BillingControlsStartupLog } from './billing-controls-startup.log';
 import { BillingReadController } from './billing-read.controller';
 import { BillingReadService } from './billing-read.service';
@@ -27,7 +29,11 @@ import { UnknownResolutionService } from './unknown-resolution.service';
  *   control; charges and write-offs executed by the 0057 definers), and the startup log
  *   of the dual-control threshold.
  *
- * No account creation, recharge or other money movement here (7-6d).
+ * - PR 7-6d-1: billing-account administration — empty wallet and credit-account
+ *   provisioning, credit limits, freeze and unfreeze (platform, `billing.manage`, dual
+ *   control; executed by the 0059 definers). No ledger fact.
+ *
+ * No recharge or other money movement here (7-6d-2).
  */
 @Module({
   controllers: [
@@ -35,6 +41,7 @@ import { UnknownResolutionService } from './unknown-resolution.service';
     BillingReadController,
     UnknownOutcomeRegisterController,
     UnknownResolutionController,
+    AccountOperationsController,
   ],
   providers: [
     LedgerPartitionStartupCheck,
@@ -44,6 +51,7 @@ import { UnknownResolutionService } from './unknown-resolution.service';
     UnknownOutcomeRegisterService,
     UnknownResolutionService,
     BillingControlsStartupLog,
+    AccountOperationsService,
   ],
   exports: [MessageReservationService],
 })

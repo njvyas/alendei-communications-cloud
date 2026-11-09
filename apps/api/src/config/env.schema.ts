@@ -149,7 +149,8 @@ export const envSchema = z.object({
   BILLING_ENFORCEMENT_ENABLED: booleanFromEnv.default(false),
   /**
    * Phase 7 PR 7-6c (`DECISIONS.md` §1zi.9 D-76-3, §1zi.12 O-2): the dual-control
-   * threshold for operator resolution of unknown outcomes, in integer paise. **Unset
+   * threshold for operator resolution of unknown outcomes, in integer paise. Phase 7 PR
+   * 7-6d-1 (§1zi.13 D-76d-1): also for credit-limit increases, measured on the increase. **Unset
    * by default, and unset, every charge and every write-off needs a second
    * approver.** Set, a resolution whose customer amount is at or below it executes
    * on request; above it, and for any charge without provider evidence, a second

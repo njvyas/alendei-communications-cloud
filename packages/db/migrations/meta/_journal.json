@@ -407,6 +407,13 @@
       "when": 1794441600000,
       "tag": "0057_phase7_6c_operator_resolution",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1794614400000,
+      "tag": "0059_phase7_6d1_account_provisioning",
+      "breakpoints": true
     }
   ]
 }

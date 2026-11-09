@@ -13,5 +13,8 @@ describe('the dual-control threshold startup line', () => {
       /2500 paise; resolutions above it, and every charge without provider evidence, require a second approver/,
     );
     expect(describeDualControlThreshold(0)).toMatch(/: 0 paise;/);
+    // Phase 7 PR 7-6d-1 (D-76d-1): the same threshold governs credit-limit increases.
+    expect(describeDualControlThreshold(2500)).toMatch(/credit-limit increases larger than it/);
+    expect(describeDualControlThreshold(null)).toMatch(/as does every credit-limit increase/);
   });
 });
