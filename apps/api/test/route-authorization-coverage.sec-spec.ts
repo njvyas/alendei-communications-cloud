@@ -304,7 +304,9 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 7 PR 7-2 added 11 platform pricing catalogue routes (plans, versions, rules, activation,
     // provider cost rates, assignments; target deferred, platform scope): 141 → 152 scoped.
     // Phase 8B.1 added 6 scoped campaign routes (workspace-scoped CRUD and dispatch; target deferred): 152 → 158 scoped.
-    expect(scoped.length).toBe(158);
+    // Phase 7 PR 7-6a added 3 tenant billing read routes (account, ledger, usage; billing.read at the
+    // request organization, target deferred): 158 → 161 scoped.
+    expect(scoped.length).toBe(161);
     expect(exempt.length).toBe(7);
     expect(open.length).toBe(9);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
@@ -334,7 +336,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 8A-S added 5 contact audience resolution routes, each targeting deferred workspace context: 111 → 116.
     // Phase 7 PR 7-2 added 11 pricing catalogue routes, each targeting `platform`: 116 → 127.
     // Phase 8B.1 added 6 campaign routes, each targeting deferred workspace context: 127 → 133.
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(133);
+    // Phase 7 PR 7-6a added 3 tenant billing read routes, each targeting the deferred request organization: 133 → 136.
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(136);
   });
 });
 

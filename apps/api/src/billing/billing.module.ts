@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 
+import { BillingReadController } from './billing-read.controller';
+import { BillingReadService } from './billing-read.service';
 import { LedgerPartitionStartupCheck } from './ledger-partition-startup.check';
 import { MessageReservationService } from './message-reservation.service';
 import { PricingController } from './pricing.controller';
@@ -14,11 +16,18 @@ import { PricingService } from './pricing.service';
  * - PR 7-4: funds reservation at submission (`MessageReservationService`, used by
  *   the message submission core only, under `BILLING_ENFORCEMENT_ENABLED`).
  *
- * No settlement, release, charge, account creation or money movement.
+ * - PR 7-6a: tenant billing reads (`BillingReadController`, `billing.read`, read-only).
+ *
+ * No account creation or money movement here.
  */
 @Module({
-  controllers: [PricingController],
-  providers: [LedgerPartitionStartupCheck, PricingService, MessageReservationService],
+  controllers: [PricingController, BillingReadController],
+  providers: [
+    LedgerPartitionStartupCheck,
+    PricingService,
+    MessageReservationService,
+    BillingReadService,
+  ],
   exports: [MessageReservationService],
 })
 export class BillingModule {}

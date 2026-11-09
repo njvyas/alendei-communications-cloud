@@ -386,6 +386,13 @@
       "when": 1794182400000,
       "tag": "0054_phase7_5_settlement",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1794268800000,
+      "tag": "0055_phase7_6a_tenant_billing_reads",
+      "breakpoints": true
     }
   ]
 }

@@ -1007,12 +1007,19 @@ describe('Phase 7 PR 7-2 — pricing and rating (migration 0051)', () => {
       expect(touching).toBeNull();
     });
 
-    it('the ledger writer and the account tables are exactly as 0050 left them (no grant, no policy)', async () => {
+    // Phase 7 PR 7-6a (0055, D-76-2) later granted acc_app SELECT, and only SELECT, on these
+    // three tables; 7-2 itself added nothing to them.
+    it('the ledger writer and the account tables gained nothing from 7-2 (later: acc_app SELECT only, D-76-2)', async () => {
       const grants = await admin(
-        `SELECT count(*)::int AS n FROM information_schema.role_table_grants
-          WHERE table_name IN ('usage_ledger', 'wallets', 'credit_accounts') AND grantee IN ('acc_app', 'acc_dispatch', 'acc_delivery', 'acc_auth', 'acc_relay')`,
+        `SELECT grantee || ':' || table_name || ':' || privilege_type AS g FROM information_schema.role_table_grants
+          WHERE table_name IN ('usage_ledger', 'wallets', 'credit_accounts') AND grantee IN ('acc_app', 'acc_dispatch', 'acc_delivery', 'acc_auth', 'acc_relay')
+          ORDER BY 1`,
       );
-      expect(grants.rows[0].n).toBe(0);
+      expect(grants.rows.map((r) => r.g)).toEqual([
+        'acc_app:credit_accounts:SELECT',
+        'acc_app:usage_ledger:SELECT',
+        'acc_app:wallets:SELECT',
+      ]);
       const writer = await admin(
         `SELECT has_function_privilege('acc_app', 'app_ledger_post(uuid, usage_ledger_entry_type, uuid, bigint, text, uuid, uuid, text, text)', 'EXECUTE') AS ok`,
       );
