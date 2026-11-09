@@ -10,6 +10,9 @@
  * 4. Campaign dispatch remains disabled until Phase 7 billing acceptance.
  */
 
+import type { PageInfo } from './api';
+import type { AudienceMemberResponse } from './contacts';
+
 export const ALL_CAMPAIGN_STATUSES = [
   'draft',
   'scheduled',
@@ -127,4 +130,49 @@ export interface UpdateCampaignRequest {
   readonly scheduleMode?: CampaignScheduleMode;
   readonly scheduledAt?: string | null;
   readonly throttling?: Partial<CampaignThrottling>;
+}
+
+export interface CampaignRecipientRecord {
+  readonly id: string;
+  readonly campaignId: string;
+  readonly orgId: string;
+  readonly workspaceId: string;
+  readonly contactId: string;
+  readonly identityId?: string | null;
+  readonly status: CampaignRecipientStatus;
+  readonly messageId?: string | null;
+  readonly skipReason?: string | null;
+  readonly errorCode?: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface CampaignAudiencePreviewRequest {
+  readonly limit?: number;
+  readonly cursor?: string;
+  readonly tags?: readonly string[];
+  readonly tagMatchMode?: 'any' | 'all';
+  readonly requireOptIn?: boolean;
+}
+
+export interface CampaignAudiencePreviewResponse {
+  readonly data: readonly AudienceMemberResponse[];
+  readonly totalCount: number;
+  readonly page: PageInfo;
+}
+
+export interface ScheduleCampaignRequest {
+  readonly scheduledAt?: string;
+}
+
+export interface MaterializeAudienceResponse {
+  readonly campaignId: string;
+  readonly totalRecipients: number;
+  readonly materialized: number;
+}
+
+export interface ListCampaignRecipientsQuery {
+  readonly limit?: number;
+  readonly cursor?: string;
+  readonly status?: CampaignRecipientStatus;
 }

@@ -202,8 +202,9 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * Phase 7 PR 7-6d-1, 09-Nov-2026: billing-account administration (accounts read, 7 operation POSTs, approve, reject, list, get): 186 → 198.
      * Phase 7 PR 7-6d-2, 09-Nov-2026: the wallet recharge request (`POST /platform/billing/organizations/{orgId}/recharges`): 198 → 199.
      * Phase 8A.2, 10-Nov-2026: 3 contact import/export operations: 199 → 202.
+     * Phase 8B.2, 10-Nov-2026: 7 campaign lifecycle, audience & preview operations: 202 → 209.
      */
-    const APPLICATION_OPERATIONS = 202;
+    const APPLICATION_OPERATIONS = 209;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 

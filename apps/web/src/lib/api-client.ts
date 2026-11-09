@@ -84,6 +84,11 @@ import {
   SUPPRESSION_STATUSES,
   isDeliveryFinal,
   deliveryRank,
+  type CampaignAudiencePreviewRequest,
+  type CampaignAudiencePreviewResponse,
+  type CampaignRecipientRecord,
+  type MaterializeAudienceResponse,
+  type ScheduleCampaignRequest,
 } from '@acc/contracts';
 import { maskRecipientAddress } from './address-masking';
 import {
@@ -3656,5 +3661,96 @@ export const campaignsApi = {
       `/workspaces/${encodeURIComponent(workspaceId)}/campaigns/${encodeURIComponent(id)}/dispatch`,
       { method: 'POST', signal },
     );
+  },
+
+  async previewAudienceLive(
+    workspaceId: string,
+    id: string,
+    params?: CampaignAudiencePreviewRequest,
+    signal?: AbortSignal,
+  ): Promise<CampaignAudiencePreviewResponse> {
+    return apiFetch<CampaignAudiencePreviewResponse>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/campaigns/${encodeURIComponent(id)}/audience-preview`,
+      {
+        method: 'POST',
+        body: params ?? {},
+        signal,
+      },
+    );
+  },
+
+  async materializeLive(
+    workspaceId: string,
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<MaterializeAudienceResponse>> {
+    return apiFetch<ApiDataResponse<MaterializeAudienceResponse>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/campaigns/${encodeURIComponent(id)}/materialize`,
+      { method: 'POST', signal },
+    );
+  },
+
+  async scheduleLive(
+    workspaceId: string,
+    id: string,
+    params?: ScheduleCampaignRequest,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<CampaignRecord>> {
+    return apiFetch<ApiDataResponse<CampaignRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/campaigns/${encodeURIComponent(id)}/schedule`,
+      {
+        method: 'POST',
+        body: params ?? {},
+        signal,
+      },
+    );
+  },
+
+  async cancelLive(
+    workspaceId: string,
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<CampaignRecord>> {
+    return apiFetch<ApiDataResponse<CampaignRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/campaigns/${encodeURIComponent(id)}/cancel`,
+      { method: 'POST', signal },
+    );
+  },
+
+  async pauseLive(
+    workspaceId: string,
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<CampaignRecord>> {
+    return apiFetch<ApiDataResponse<CampaignRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/campaigns/${encodeURIComponent(id)}/pause`,
+      { method: 'POST', signal },
+    );
+  },
+
+  async resumeLive(
+    workspaceId: string,
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<CampaignRecord>> {
+    return apiFetch<ApiDataResponse<CampaignRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/campaigns/${encodeURIComponent(id)}/resume`,
+      { method: 'POST', signal },
+    );
+  },
+
+  async getRecipientsLive(
+    workspaceId: string,
+    id: string,
+    query?: { status?: string; cursor?: string; limit?: number },
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<CampaignRecipientRecord>> {
+    const search = new URLSearchParams();
+    if (query?.status) search.set('status', query.status);
+    if (query?.cursor) search.set('cursor', query.cursor);
+    if (query?.limit) search.set('limit', String(query.limit));
+    const qs = search.toString();
+    const path = `/workspaces/${encodeURIComponent(workspaceId)}/campaigns/${encodeURIComponent(id)}/recipients${qs ? `?${qs}` : ''}`;
+    return apiFetch<ApiPagedResponse<CampaignRecipientRecord>>(path, { method: 'GET', signal });
   },
 };

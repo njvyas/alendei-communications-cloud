@@ -665,4 +665,105 @@ describe('Phase 8B Campaigns Module — Unit & Component Tests', () => {
       assert.strictEqual(fetchCalls[0]?.options.method, 'POST');
     });
   });
+
+  describe('8. Phase 8B.2 Audience Materialisation, Previews & Scheduling Live Contracts', () => {
+    const originalFetch = globalThis.fetch;
+    let fetchCalls: { url: string; options: RequestInit }[] = [];
+
+    beforeEach(() => {
+      fetchCalls = [];
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        const options = init ?? {};
+        fetchCalls.push({ url, options });
+
+        return new Response(JSON.stringify({ data: { id: 'cmp-123', status: 'scheduled' } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      };
+    });
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    it('campaignsApi.previewAudienceLive dispatches POST to /audience-preview', async () => {
+      await campaignsApi.previewAudienceLive('ws-live-1', 'cmp-123', {
+        limit: 10,
+        tags: ['vip'],
+        tagMatchMode: 'all',
+        requireOptIn: true,
+      });
+
+      assert.strictEqual(fetchCalls.length, 1);
+      assert.ok(
+        fetchCalls[0]?.url.endsWith('/workspaces/ws-live-1/campaigns/cmp-123/audience-preview'),
+      );
+      assert.strictEqual(fetchCalls[0]?.options.method, 'POST');
+      const body = JSON.parse(fetchCalls[0]?.options.body as string);
+      assert.strictEqual(body.limit, 10);
+      assert.deepStrictEqual(body.tags, ['vip']);
+      assert.strictEqual(body.tagMatchMode, 'all');
+      assert.strictEqual(body.requireOptIn, true);
+    });
+
+    it('campaignsApi.materializeLive dispatches POST to /materialize', async () => {
+      await campaignsApi.materializeLive('ws-live-1', 'cmp-123');
+
+      assert.strictEqual(fetchCalls.length, 1);
+      assert.ok(fetchCalls[0]?.url.endsWith('/workspaces/ws-live-1/campaigns/cmp-123/materialize'));
+      assert.strictEqual(fetchCalls[0]?.options.method, 'POST');
+    });
+
+    it('campaignsApi.scheduleLive dispatches POST to /schedule with scheduledAt', async () => {
+      const scheduledAt = '2026-12-01T10:00:00.000Z';
+      await campaignsApi.scheduleLive('ws-live-1', 'cmp-123', { scheduledAt });
+
+      assert.strictEqual(fetchCalls.length, 1);
+      assert.ok(fetchCalls[0]?.url.endsWith('/workspaces/ws-live-1/campaigns/cmp-123/schedule'));
+      assert.strictEqual(fetchCalls[0]?.options.method, 'POST');
+      const body = JSON.parse(fetchCalls[0]?.options.body as string);
+      assert.strictEqual(body.scheduledAt, scheduledAt);
+    });
+
+    it('campaignsApi.cancelLive dispatches POST to /cancel', async () => {
+      await campaignsApi.cancelLive('ws-live-1', 'cmp-123');
+
+      assert.strictEqual(fetchCalls.length, 1);
+      assert.ok(fetchCalls[0]?.url.endsWith('/workspaces/ws-live-1/campaigns/cmp-123/cancel'));
+      assert.strictEqual(fetchCalls[0]?.options.method, 'POST');
+    });
+
+    it('campaignsApi.pauseLive dispatches POST to /pause', async () => {
+      await campaignsApi.pauseLive('ws-live-1', 'cmp-123');
+
+      assert.strictEqual(fetchCalls.length, 1);
+      assert.ok(fetchCalls[0]?.url.endsWith('/workspaces/ws-live-1/campaigns/cmp-123/pause'));
+      assert.strictEqual(fetchCalls[0]?.options.method, 'POST');
+    });
+
+    it('campaignsApi.resumeLive dispatches POST to /resume', async () => {
+      await campaignsApi.resumeLive('ws-live-1', 'cmp-123');
+
+      assert.strictEqual(fetchCalls.length, 1);
+      assert.ok(fetchCalls[0]?.url.endsWith('/workspaces/ws-live-1/campaigns/cmp-123/resume'));
+      assert.strictEqual(fetchCalls[0]?.options.method, 'POST');
+    });
+
+    it('campaignsApi.getRecipientsLive dispatches GET to /recipients with query parameters', async () => {
+      await campaignsApi.getRecipientsLive('ws-live-1', 'cmp-123', {
+        status: 'pending',
+        cursor: 'cursor-123',
+        limit: 25,
+      });
+
+      assert.strictEqual(fetchCalls.length, 1);
+      assert.ok(fetchCalls[0]?.url.includes('/workspaces/ws-live-1/campaigns/cmp-123/recipients'));
+      assert.ok(fetchCalls[0]?.url.includes('status=pending'));
+      assert.ok(fetchCalls[0]?.url.includes('cursor=cursor-123'));
+      assert.ok(fetchCalls[0]?.url.includes('limit=25'));
+      assert.strictEqual(fetchCalls[0]?.options.method, 'GET');
+    });
+  });
 });
