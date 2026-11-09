@@ -2756,6 +2756,14 @@ Owner approval 08-Nov-2026: OD-P-1, OD-P-2 and OD-P-3 approved, PR 7-2 authorise
     - `charge_per_logical_message`: E_m from `app_rate_message`, with the evaluation recorded.
     - `charge_per_attempt`: N × the highest price over the N distinct actively assigned providers for the channel, via read-only `app_price_lookup`, with no evaluation recorded.
   - A missing price is `BL007`. A zero amount posts nothing.
+  - **Settings serialised (owner review of PR #93, 09-Nov-2026).**
+    - **Finding:** `PATCH /organizations/:id` with `platform.tenants.manage` can change `billing_mode` and `billing_policy` concurrently with a submission.
+    - **Hazard:** the settings were read with a plain `SELECT`, so a change could commit between that read and the reservation's commit. The message would then be reserved under settings no longer in force.
+    - **Correction:** the settings are now read `FOR SHARE`, which conflicts with that path's `FOR UPDATE`/`UPDATE`. The two serialise:
+      - a change in progress is waited for (bounded by the 2 s lock timeout), then seen, and the stale snapshot is refused (`40001` → `503`);
+      - a change that starts later waits until the reservation has committed.
+    - **Lock order:** organisation (share), then the transaction's own message row, then the billing account (still last). `FOR SHARE` does not conflict with the `FOR KEY SHARE` that inserts referencing the organisation take.
+    - **Control:** with the clause removed, the five serialisation tests fail.
   - The reservation is posted through `app_ledger_post` on the snapshot's account. The writer takes the message lock and then the account lock (last), and refuses `BL001`, `BL002` or `BL003`. A repeated call is a no-op.
 - **The core.**
   - Units are computed from the existing SMS segment analysis (WhatsApp and RCS = 1). Under enforcement, the organisation's billing settings are read before the insert (step 7b).
@@ -2773,10 +2781,10 @@ Owner approval 08-Nov-2026: OD-P-1, OD-P-2 and OD-P-3 approved, PR 7-2 authorise
   - 7.1 and 7.2 objects and grants (`app_ledger_post`, `app_rate_message` and `app_price_lookup` stay executable by no application role);
   - the 7-3 characterisation suite, byte-identical and green with enforcement off;
   - campaign code.
-- **History proof:** `54|0da48027841ad60bfa378f2545b97264` (`0000`–`0053`), computed on a disposable clone and recorded in `RELEASE.md`.
+- **History proof:** `54|1944fe4dd79e7e3f5e4d1453609b5fb5` (`0000`–`0053`), computed on a disposable clone and recorded in `RELEASE.md`.
 
 **Tests.**
-- `packages/db/src/test/phase7_4-reservation.int-spec.ts` (27):
+- `packages/db/src/test/phase7_4-reservation.int-spec.ts` (32, including 5 serialisation tests for billing mode and policy changes):
   - privileges and the static check that `0053` touches no 7.1 or 7.2 object;
   - column shape and immutability;
   - every caller-check refusal;
@@ -2799,6 +2807,15 @@ Owner approval 08-Nov-2026: OD-P-1, OD-P-2 and OD-P-3 approved, PR 7-2 authorise
 2. **No reservation metric.** The proposed `acc_billing_reservations_total` counter is not added. A counter incremented inside the transaction would count reservations that later roll back. It is deferred to 7-5, which can publish after COMMIT.
 3. **`RELEASE.md` baseline list.** The `0052` proof (`53|8b3f4018a42c3c46607b956d3dc7fdae`), not recorded by PR #92, is added as a previous baseline so the chain is complete.
 4. **The snapshot-mismatch and no-candidate cases use `40001`**, mapped to `503 BILLING_BUSY`, which the handover listed under "busy". They are tested at the database level, and the mapping in the unit test.
+
+**Per-attempt initial reservation, confirmed (owner review of PR #93).**
+- N × the maximum candidate price is an upper bound on the per-attempt charges while assignments and prices are unchanged, because the dispatcher:
+  - picks each attempt's provider from the active assignments for the channel, excluding providers already attempted for the message;
+  - requeues for fallback only while such a provider remains;
+  - never re-sends on lease recovery (`outcome_unknown`).
+- A message therefore makes at most N attempts, each on a distinct candidate, each priced at or below the maximum.
+- Assignments added, or prices raised, after submission are covered by the 7-5 top-up (D-74-3).
+- Counting inactive-status or circuit-open providers in N, and the RCS eligibility filter, can only over-reserve.
 
 **Carried to 7-5 (not implemented).** Settlement, release and charges; the RQ-2 top-up (D-74-3); re-deriving units at dispatch; attempt units; removing the startup guard. Settlement follows the message's own `billing_enforced` and snapshot, never the current flag.
 

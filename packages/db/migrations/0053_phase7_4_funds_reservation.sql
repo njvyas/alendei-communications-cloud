@@ -97,10 +97,11 @@ CREATE TRIGGER trg_messages_billing_immutable
 -- refuses amounts ≤ 0); the message proceeds.
 --
 -- Account: the message's snapshot mode (prepaid → wallet, postpaid → credit
--- account), which must equal the organization's current settings; a change
--- between the core's read and this one is a serialization failure (40001), so
--- the request is retried rather than reserved under settings it was not sized
--- for. Funds, account presence and status are checked by the writer under the
+-- account), which must equal the organization's settings read FOR SHARE here, so
+-- no settings change can commit between this check and the reservation's commit;
+-- a change between the core's read and this one is a serialization failure
+-- (40001), so the request is retried rather than reserved under settings it was
+-- not sized for. Lock order: organization (share) → message → account (last). Funds, account presence and status are checked by the writer under the
 -- account lock (BL001, BL002, BL003). The account is the last row lock taken.
 --
 -- Idempotent: a repeated call returns the existing evaluation and fact
@@ -153,8 +154,18 @@ BEGIN
     RAISE EXCEPTION 'message units do not match its channel' USING ERRCODE = 'invalid_parameter_value';
   END IF;
 
-  -- 3. The snapshot must still be the organization's billing settings.
-  SELECT o.billing_mode, o.billing_policy INTO v_mode, v_policy FROM organizations o WHERE o.id = v_org;
+  -- 3. The snapshot must still be the organization's billing settings, and must stay
+  -- so until this transaction commits. FOR SHARE conflicts with the FOR UPDATE /
+  -- UPDATE of PATCH /organizations/:id (the only path that changes them), so the
+  -- two serialise: a change already in progress is waited for (bounded by the
+  -- caller's lock_timeout) and then seen here, refusing the stale snapshot (40001);
+  -- a change that starts later waits until this reservation has committed. It is
+  -- taken before the message and account locks, so the billing account stays the
+  -- last row lock (DECISIONS.md §1zi.1), and it does not conflict with the
+  -- FOR KEY SHARE locks that inserts referencing the organization take.
+  SELECT o.billing_mode, o.billing_policy INTO v_mode, v_policy
+    FROM organizations o WHERE o.id = v_org
+     FOR SHARE;
   IF (v_mode, v_policy) IS DISTINCT FROM (v_message.billing_mode_snapshot, v_message.billing_policy_snapshot) THEN
     RAISE EXCEPTION 'billing settings changed during submission' USING ERRCODE = 'serialization_failure';
   END IF;

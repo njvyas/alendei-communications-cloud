@@ -449,6 +449,121 @@ describe('Phase 7 PR 7-4 — funds reservation (migration 0053)', () => {
   });
 
   // ---------------------------------------------------------------------------
+  describe('3b. billing settings serialise with the reservation (owner review of PR #93)', () => {
+    const settings = [
+      ['billing_mode', 'postpaid', 'prepaid'],
+      ['billing_policy', 'charge_per_attempt', 'charge_per_logical_message'],
+    ] as const;
+
+    /** Resolves to a settled marker so a test can prove a statement is still waiting. */
+    const settledWithin = async (p: Promise<unknown>, ms: number): Promise<boolean> =>
+      Promise.race([
+        p.then(
+          () => true,
+          () => true,
+        ),
+        new Promise<boolean>((r) => setTimeout(() => r(false), ms)),
+      ]);
+
+    async function appSession(t: TenantFixture): Promise<PoolClient> {
+      const c = await db.appPool.connect();
+      await c.query('BEGIN');
+      await c.query(`SELECT set_config('app.current_org_id', $1, true)`, [t.orgId]);
+      await c.query(`SELECT set_config('app.current_api_key_id', $1, true)`, [t.apiKeyId]);
+      await c.query(`SET LOCAL lock_timeout = '10s'`);
+      return c;
+    }
+
+    it.each(settings)(
+      'a %s change in progress is waited for, then the stale snapshot is refused (40001); nothing is reserved',
+      async (column, changed, original) => {
+        const id = await plant(A);
+        const reservedBefore = (
+          await admin(`SELECT reserved_paise::int AS r FROM wallets WHERE org_id = $1`, [A.orgId])
+        ).rows[0].r;
+        const changer = await db.adminPool.connect();
+        const app = await appSession(A);
+        try {
+          await changer.query('BEGIN');
+          await changer.query(`UPDATE organizations SET ${column} = $1 WHERE id = $2`, [
+            changed,
+            A.orgId,
+          ]);
+          const reserving = app.query(`SELECT * FROM app_message_reserve($1)`, [id]).then(
+            () => 'OK',
+            (e: { code?: string }) => e.code ?? 'NO_CODE',
+          );
+          expect(await settledWithin(reserving, 500)).toBe(false); // blocked on the change
+          await changer.query('COMMIT');
+          expect(await reserving).toBe('40001');
+        } finally {
+          await app.query('ROLLBACK').catch(() => undefined);
+          app.release();
+          await changer.query('ROLLBACK').catch(() => undefined);
+          changer.release();
+          await admin(`UPDATE organizations SET ${column} = $1 WHERE id = $2`, [original, A.orgId]);
+        }
+        expect(
+          (await admin(`SELECT count(*)::int AS n FROM usage_ledger WHERE message_id = $1`, [id]))
+            .rows[0].n,
+        ).toBe(0);
+        expect(
+          (await admin(`SELECT reserved_paise::int AS r FROM wallets WHERE org_id = $1`, [A.orgId]))
+            .rows[0].r,
+        ).toBe(reservedBefore);
+      },
+    );
+
+    it.each(settings)(
+      'a %s change that starts after the reservation waits for it to commit; the reservation stands on the settings it was sized under',
+      async (column, changed, original) => {
+        const id = await plant(A);
+        const changer = await db.adminPool.connect();
+        const app = await appSession(A);
+        try {
+          const reserved = (await reserve(app, id)).rows[0];
+          expect(reserved).toMatchObject({ reserved_paise: '50', inserted: true });
+          await changer.query('BEGIN');
+          await changer.query(`SET LOCAL lock_timeout = '10s'`);
+          const changing = changer.query(`UPDATE organizations SET ${column} = $1 WHERE id = $2`, [
+            changed,
+            A.orgId,
+          ]);
+          expect(await settledWithin(changing, 500)).toBe(false); // blocked on the reservation
+          await app.query('COMMIT');
+          await changing;
+          await changer.query('COMMIT');
+        } finally {
+          await app.query('ROLLBACK').catch(() => undefined);
+          app.release();
+          await changer.query('ROLLBACK').catch(() => undefined);
+          changer.release();
+          await admin(`UPDATE organizations SET ${column} = $1 WHERE id = $2`, [original, A.orgId]);
+        }
+        // Committed before the change: on the wallet, under the snapshot it was sized for.
+        const { rows } = await admin(
+          `SELECT l.amount_paise::int AS amount, l.wallet_id IS NOT NULL AS wallet,
+                  m.billing_mode_snapshot AS mode, m.billing_policy_snapshot AS policy
+             FROM usage_ledger l JOIN messages m ON m.id = l.message_id
+            WHERE l.message_id = $1`,
+          [id],
+        );
+        expect(rows).toEqual([
+          { amount: 50, wallet: true, mode: 'prepaid', policy: 'charge_per_logical_message' },
+        ]);
+      },
+    );
+
+    it('the settings are read FOR SHARE, before the message and account locks', () => {
+      const body = MIGRATION.replace(/--[^\n]*/g, '');
+      const share = body.search(/FROM organizations o WHERE o\.id = v_org\s+FOR SHARE;/);
+      const post = body.indexOf('FROM app_ledger_post(');
+      expect(share).toBeGreaterThan(0);
+      expect(post).toBeGreaterThan(share);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   describe('4. reservation from database state', () => {
     it('reserves the rated price on the wallet, once; a repeat changes nothing', async () => {
       const id = await plant(A);
