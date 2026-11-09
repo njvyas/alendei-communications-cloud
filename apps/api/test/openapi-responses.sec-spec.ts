@@ -640,6 +640,14 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
       );
     });
 
+    it('the unknown-outcome register (Phase 7 PR 7-6b, platform billing.manage only)', async () => {
+      expectStatus(
+        await hit('GET', 'platform/billing/unknown-outcomes', as.session(platform)),
+        200,
+        'unknown-outcome register',
+      );
+    });
+
     it('the pricing catalogue (Phase 7 PR 7-2, platform scope only)', async () => {
       const credential = as.session(platform);
       const channels = await hit('GET', 'channels', credential);

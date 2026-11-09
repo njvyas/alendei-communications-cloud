@@ -2995,6 +2995,52 @@ The owner reviewed `docs/PHASE-7-6-BILLING-APIS-HANDOVER.md` and decided as foll
 
    The OpenAPI contract probe exercises the three reads with a real `org_admin` session.
 
+### 1zi.11 PR 7-6b as built: the unknown-outcome register (migration `0056`)
+**Owner instruction, 09-Nov-2026:** implement 7-6b after PR #96 merged (it merged as `f6e302c`).
+- Scope: the platform register read API, estimated exposure clearly marked as estimates, age, evidence, resolution status and the open-items gauge.
+- Access: `billing.manage` only.
+- Read path: SECURITY DEFINER read functions, with no platform-wide RLS policy on the financial tables.
+- Excluded: operator resolution (7-6c), provisioning and recharge (7-6d), and enforcement.
+
+**As built.**
+- **Migration `0056` (expand-only):** `app_billing_unknown_register(...)` and `app_billing_unknown_open_counts()`.
+  - Both are `STABLE SECURITY DEFINER`, `EXECUTE` for `acc_app` only.
+  - Both refuse (`42501`) unless the caller is a signed-in user holding `billing.manage` at platform scope (the `0049` pattern).
+  - No policy or privilege is added to any financial table; nothing is written; invariant D holds.
+- **An item** is an enforced message in `outcome_unknown`, with:
+  - its latest `outcome_unknown` attempt;
+  - age (now − `completed_at`);
+  - **estimated exposure**, from the evaluations and never a ledger entry: customer E_m (per message) or the attempt's E_a (per attempt); provider cost from the attempt's evaluation;
+  - **evidence:** `evidenced` when a provider receipt reached the attempt (`delivered`, `undelivered` or a read time);
+  - **status**, derived from the ledger: `charged` (a customer charge on the automatic anchor and a provider cost on the attempt), `charged_without_cost` (the charge alone) or `open`. `pending_approval` and `written_off` are part of the contract but cannot occur until 7-6c; filtering by them returns nothing.
+- **API:** `GET /platform/billing/unknown-outcomes`.
+  - `billing.manage` at platform scope, as the pricing catalogue authorizes; signed-in user sessions only, enforced in the service.
+  - Oldest first, with a signed cursor and filters `orgId`, `channelCode`, `evidence`, `status`, `minAgeHours`.
+- **Gauge:** `acc_billing_outcome_unknown_open{channel}`, the open items per channel, set on each register read.
+- **Unchanged:** every 7.1–7.6a object, settlement semantics and tenant policies. Nothing charges, writes off or resolves.
+- **History proof:** `57|d02afdb275c613ec5498d632c354684c` (`0000`–`0056`), computed on a disposable clone and recorded in `RELEASE.md`.
+
+**Tests.**
+- `packages/db/src/test/phase7_6b-unknown-register.int-spec.ts` (4): privileges and definer settings, the static check (no policy, table privilege or write), the tenant policies unchanged, and `42501` for a caller without a user or without platform `billing.manage`.
+- `apps/api/test/phase7_6b-unknown-register.int-spec.ts` (18), fixtures rated by `app_rate_message` and charged through `app_ledger_post`:
+  - exactly the enforced unknown outcomes, oldest first;
+  - exposure under both policies;
+  - every status and evidence state;
+  - filters, including the two 7-6c statuses returning nothing;
+  - minimum age;
+  - complete cursor pagination;
+  - invalid filters and a forged cursor (`400`);
+  - the gauge;
+  - reading writes nothing;
+  - platform support, a tenant administrator and an API key carrying `billing.manage` all refused (`403`); no credential `401`.
+
+**Deviations from the handover.**
+1. **Provider-cost exposure** comes from the attempt's evaluation only. Every attempt under enforcement is rated before its provider call (7-5), so the handover's fallback to `provider_cost_rates` would apply only to an unknown message with no attempt, which has no provider to cost; it is reported as `null`.
+2. **Evidence and status are two fields** (`evidence`, `status`) rather than one combined label, so an item can be both evidenced and charged.
+3. **The resolutions counter** (`acc_billing_outcome_unknown_resolutions_total`) counts resolutions and therefore comes with 7-6c.
+4. **Pinned counts updated:** application operations 174 → 175, scoped routes 161 → 162, deferred-target routes 136 → 137. The OpenAPI contract probe exercises the register with a platform session.
+5. **Query bounds documented.** The query DTO documents its `limit` and `minAgeHours` bounds explicitly in OpenAPI (`@ApiPropertyOptional`), as the shared list DTO does; the DTO contract check requires it.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

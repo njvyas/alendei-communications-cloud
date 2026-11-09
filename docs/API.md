@@ -126,6 +126,16 @@ Platform administration of rate cards, provider cost rates and rate-card assignm
 - **Authorization:** `billing.read` at the request organization, signed-in users only. The key is held through system roles only (`org_admin`); API keys and custom roles cannot carry it (`DECISIONS.md` §1zi.9 D-76-4).
 - **Isolation:** enforced by organization-scoped RLS `SELECT` policies on `wallets`, `credit_accounts` and `usage_ledger`; `acc_app` holds `SELECT` only.
 
+### 2f. `/platform/billing/unknown-outcomes` — the unknown-outcome register (Phase 7 PR 7-6b, 09-Nov-2026)
+- **Read-only:**
+  - one row per message billed under enforcement whose outcome is unknown, oldest first;
+  - the unknown attempt, age, `evidence` (`evidenced` / `unevidenced`) and `status` (`open`, `charged`, `charged_without_cost`; `pending_approval` and `written_off` arrive with operator resolution);
+  - **estimated** customer and provider-cost exposure in paise.
+
+  The estimates are never ledger entries, and nothing is charged automatically.
+- **Filters:** `orgId`, `channelCode`, `evidence`, `status`, `minAgeHours`; signed cursor.
+- **Authorization:** `billing.manage` at platform scope, signed-in users only. Platform support, tenants and API keys are refused (`DECISIONS.md` §1zi.9 D-76-5). The data is read through SECURITY DEFINER functions; there is no platform policy on the financial tables.
+
 ## 3. Authentication & request identity
 
 Every authenticated caller resolves to exactly one **identity type**, and `audit_logs.actor_type` (`DATABASE.md` §12) always records which:
