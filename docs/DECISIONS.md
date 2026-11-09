@@ -3049,6 +3049,58 @@ The owner reviewed `docs/PHASE-7-6-BILLING-APIS-HANDOVER.md` and decided as foll
 4. **Pinned counts updated:** application operations 174 → 175, scoped routes 161 → 162, deferred-target routes 136 → 137. The OpenAPI contract probe exercises the register with a platform session.
 5. **Query bounds documented.** The query DTO documents its `limit` and `minAgeHours` bounds explicitly in OpenAPI (`@ApiPropertyOptional`), as the shared list DTO does; the DTO contract check requires it.
 
+### 1zi.12 PR 7-6c as built: operator resolution of unknown outcomes (migration `0057`)
+**Owner approval, 09-Nov-2026:** the 7-6c implementation handover, with:
+- **D-76c-1 (approved as recommended):** under `charge_per_attempt`, an operator charge posts E_a on the unknown attempt **and** on every earlier attempt recorded as reaching the provider, as an accepted chain would; the register's exposure shows the same total.
+- **O-1 (approved):** "independent supporting evidence" is a provider receipt (`delivered`, `undelivered` or a read time) recorded on the unknown attempt, required at request and at execution. No provider cost is ever posted later for an item charged without evidence.
+- **O-2:** no database threshold table. The threshold stays the environment setting `BILLING_DUAL_CONTROL_THRESHOLD_PAISE` (unset by default), logged at startup and changed only by a controlled deployment (`RELEASE.md` §4).
+- **C-1 (approved):** the writer's mode is a defaulted tenth argument; `app_ledger_post` is dropped and recreated with its privileges reapplied, and the four suites that pin its signature are updated deliberately.
+- **C-2 (approved):** a pending request still counts as open; a written-off item does not.
+- One draft PR; full regression; no merge, QA, production or enforcement.
+
+**As built.**
+- **Migration `0057` (expand-only apart from the writer's recreation):**
+  - **Writer (C-1, D-76-1).** `app_ledger_post(…, p_mode text DEFAULT 'automatic')`. Privileges as `0050` left them: no `EXECUTE` for `PUBLIC` or any application role; same owner. Mode `automatic` is every existing caller (nine arguments) and is unchanged — `BL004` after a release and `BL006` above the outstanding reservation are pinned again. Mode `operator_resolution`:
+    - is accepted for a `customer_charge` only, on an enforced `outcome_unknown` message, while a pending **charge** resolution exists for it (checked under the message lock);
+    - checks the account is active (`BL002`) and that available funds (`balance − reserved`, or `limit − used − reserved`) cover the charge (`BL003`), under the account lock;
+    - skips `BL004` and `BL006`; moves `balance` (prepaid) or `used` (postpaid) only — `reserved` is unchanged and no reservation is posted;
+    - keeps the fact key (a repeat is a no-op), `BL005` and the message lock.
+
+    Only `app_billing_resolve_unknown` passes the mode (structural test over `pg_proc`).
+  - **`billing_unknown_resolutions`:** one row per request — message, unknown attempt, action, the policy and the snapshots taken at request (customer amount, the attempt's evaluated provider cost, evidence, whether the cost is posted, dual control and the threshold in force), reason, request key, requester, approval or rejection, execution results (`charged_paise`, `provider_cost_posted_paise`) and the last refusal.
+    - CHECKs: requester ≠ approver and ≠ rejector; dual control is mandatory without a threshold, above it, and for an unevidenced charge (so the rule holds in the database, given the recorded threshold); provider cost only for an evidenced charge; state consistency per status.
+    - Partial unique indexes: one `pending` and one `executed` resolution per message.
+    - Guard trigger: only `pending → executed` / `pending → rejected`; while pending only the approval (once) and the last refusal may be recorded; the request's own columns never change; no delete or truncate.
+    - RLS on, no policy, no privilege.
+  - **Definers** (`SECURITY DEFINER`, pinned `search_path`, invariant D). For `acc_app`: `app_billing_resolution_request`, `_approve`, `_reject`, `_note_refusal` and `app_billing_resolutions_list`, each refusing (`42501`) a caller that is not a signed-in user with platform `billing.manage`. Owner-only: `app_billing_resolve_unknown` (execution, which checks the caller too), `app_billing_unknown_assess` and `app_billing_unknown_charge_lines`.
+  - **Lock order:** resolution row (`FOR UPDATE`) → message → unknown attempt (`FOR SHARE`, holding its evidence steady) → billing account (last, by the writer) → new rows. A request has no row yet and starts at the message.
+  - **Register (`0056` functions replaced in place, same signatures and grants):** status `written_off` (executed write-off), `charged` / `charged_without_cost` (as before, or an executed zero-amount charge), `pending_approval`, else `open`; a rejected request leaves the item open. Under `charge_per_attempt` the exposure is the sum over the unknown attempt and every reached attempt (D-76c-1). The open count also excludes an item with an executed resolution; a pending one stays open (C-2). The partition-keyed charge lookup (PR #97 review) is unchanged.
+- **API** (`billing.manage` at platform scope; user sessions only, enforced in the service; `Idempotency-Key` required on every `POST` through `executePlatform`):
+  - `POST /platform/billing/unknown-outcomes/{messageId}/resolutions`, `POST /platform/billing/resolutions/{id}/approve` (bound to `expectedAmountPaise`), `POST /platform/billing/resolutions/{id}/reject`, `GET /platform/billing/resolutions`, `GET /platform/billing/resolutions/{id}`.
+  - Errors: `409 BILLING_RESOLUTION_CONFLICT`, `409 BILLING_RESOLUTION_STALE`, `403 BILLING_RESOLUTION_SELF_APPROVAL` (new); `402 BILLING_INSUFFICIENT_FUNDS`, `403 BILLING_ACCOUNT_FROZEN`, `422 BILLING_ACCOUNT_NOT_CONFIGURED`, `503 BILLING_BUSY`, `404`. No amount appears in an error. New SQLSTATEs: `BL010` not resolvable, `BL011` four eyes, `BL012` stale.
+  - The service reads the threshold once per request and passes it to the database, which records it on the request.
+- **Audit** (security-sensitive, platform scope, same transaction, before/after): `billing.outcome_unknown.resolution_requested`, `.resolution_approved`, `.resolution_rejected`, `.charged` (metadata reason `outcome_unknown_resolved`; the ledger facts carry the same reference note) and `.written_off`.
+- **Metric:** `acc_billing_outcome_unknown_resolutions_total{action,outcome}` (`executed`, `pending`, `rejected`, `refused`), after commit.
+- **Configuration:** `BILLING_DUAL_CONTROL_THRESHOLD_PAISE` — a non-negative integer, empty meaning unset; invalid values refuse startup. `BillingControlsStartupLog` logs the value (or "unset") once at startup.
+- **Unchanged:** settlement, reservation and rating; tenant policies; the enforcement startup guard (enforcement stays refused outside tests). Nothing resolves automatically.
+- **History proof:** `58|6fa278509fb2ffbad8e328f804dfec9a` (`0000`–`0057`), computed on a disposable clone and recorded in `RELEASE.md`.
+
+**Tests.**
+- `packages/db/src/test/phase7_6c-operator-resolution.int-spec.ts` (12): the writer's ten-argument identity, definer settings and owner; privileges of every new and replaced function; the table's RLS, policies and grants; the structural mode check; `0057`'s grants; automatic mode unchanged (`BL006`, `BL004`); the operator mode on a wallet (reserved untouched, no reservation, idempotent) and on a credit account; its refusals (`BL003`, `BL002`, not an unknown outcome, no pending resolution, wrong entry type or mode); the CHECKs; the unique indexes and guard; `42501` for every entry function without a user or without platform `billing.manage`, and acc_app's lack of access to the executor, helpers and writer.
+- `apps/api/test/phase7_6c-operator-resolution.int-spec.ts` (16): the dual-control matrix (unset, at, above, unevidenced); self-approval and self-rejection; stale amount and stale evidence; the evidenced charge (E_m plus provider cost, balance down, reserved unchanged, reference note, audit trail) and the unevidenced one (`charged_without_cost`); write-off (nothing posted, `written_off`, gauge drops, pending stays open); rejection and re-request; `charge_per_attempt` with a reached and with an unreached earlier attempt; a credit account; insufficient funds on request and on approval (refusal recorded, then success once funded); a frozen account; ineligible messages; idempotency (replay, `422`, `400`); two concurrent approvers (one executes, one charge); listing, filters, cursor and get; access refusals; the counter.
+- Unit: the threshold setting's parsing and the startup line.
+- Regression: all 7.1–7.6b suites; the four writer-signature pins updated; censuses (table classes, principals, scope creep) classify the new table and code.
+
+**Deviations and implementation decisions.**
+1. **Rejection is four-eyes too.** The requester cannot reject (withdraw) their own request; another `billing.manage` user rejects it (handover §3 [P]).
+2. **Refusal recording.** A refused approval rolls back entirely, so its idempotency key is not consumed and a retry with the same key can succeed once funds arrive. The refusal is then recorded on the still-pending request in a second transaction by `app_billing_resolution_note_refusal`, which re-derives it from the account (frozen, missing or short) and records nothing otherwise. Besides `insufficient_funds`, `account_frozen` and `account_not_configured` are recorded.
+3. **Stale** covers a change of the unknown attempt, the amount, the provider cost or the evidence (in either direction), and a message no longer an enforced unknown outcome.
+4. **Additional eligibility refusals** (`BL010`): any customer charge already on the message; missing evaluations; an evidenced charge whose attempt has no evaluated provider cost.
+5. **Zero amounts.** A charge whose lines are all zero executes and posts nothing; the register derives its status from the executed resolution.
+6. **Metric label.** `action` (two fixed values) added to the bounded Prometheus label set.
+7. **Threshold trust (O-2 consequence).** The database enforces dual control against the threshold the service passes and records; a caller able to execute the request function as `acc_app` could pass a different threshold. This is inherent in an environment-held threshold and is mitigated by the recorded value, the audit entry and the startup log.
+8. **Pinned counts updated:** application operations 175 → 180; scoped routes 162 → 167; deferred-target routes 137 → 142; `Idempotency-Key` handlers 17 → 20; migration counts 57 → 58. The OpenAPI response suite exercises all five routes, including `403` self-approval and `409` stale.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

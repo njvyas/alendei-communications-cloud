@@ -103,6 +103,13 @@ export const AUDIT_ACTIONS = {
   PRICING_PROVIDER_COST_RATE_CREATED: 'pricing.provider_cost_rate_created',
   PRICING_ASSIGNMENT_CREATED: 'pricing.assignment_created',
 
+  // Phase 7 PR 7-6c — operator resolution of unknown outcomes (platform scope, Policy U).
+  BILLING_OUTCOME_UNKNOWN_RESOLUTION_REQUESTED: 'billing.outcome_unknown.resolution_requested',
+  BILLING_OUTCOME_UNKNOWN_RESOLUTION_APPROVED: 'billing.outcome_unknown.resolution_approved',
+  BILLING_OUTCOME_UNKNOWN_RESOLUTION_REJECTED: 'billing.outcome_unknown.resolution_rejected',
+  BILLING_OUTCOME_UNKNOWN_CHARGED: 'billing.outcome_unknown.charged',
+  BILLING_OUTCOME_UNKNOWN_WRITTEN_OFF: 'billing.outcome_unknown.written_off',
+
   AUTHORIZATION_DENIED: 'authorization.denied',
 } as const;
 
@@ -259,6 +266,12 @@ export const SECURITY_SENSITIVE_AUDIT_ACTIONS: readonly AuditAction[] = Object.f
   AUDIT_ACTIONS.PRICING_VERSION_ACTIVATED,
   AUDIT_ACTIONS.PRICING_PROVIDER_COST_RATE_CREATED,
   AUDIT_ACTIONS.PRICING_ASSIGNMENT_CREATED,
+  // Phase 7 PR 7-6c: each moves, or decides not to move, a customer's money.
+  AUDIT_ACTIONS.BILLING_OUTCOME_UNKNOWN_RESOLUTION_REQUESTED,
+  AUDIT_ACTIONS.BILLING_OUTCOME_UNKNOWN_RESOLUTION_APPROVED,
+  AUDIT_ACTIONS.BILLING_OUTCOME_UNKNOWN_RESOLUTION_REJECTED,
+  AUDIT_ACTIONS.BILLING_OUTCOME_UNKNOWN_CHARGED,
+  AUDIT_ACTIONS.BILLING_OUTCOME_UNKNOWN_WRITTEN_OFF,
 ]);
 
 export function isSecuritySensitiveAction(action: string): boolean {

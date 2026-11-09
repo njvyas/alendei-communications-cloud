@@ -213,6 +213,15 @@ export const ERROR_CODES = {
    */
   BILLING_BUSY: 'BILLING_BUSY',
 
+  // --- Billing: operator resolution of unknown outcomes (Phase 7 PR 7-6c, D-76-3) ---
+  // Platform billing.manage only. No amount is disclosed in the error.
+  /** `409`: the outcome is not resolvable now: not an unknown outcome under enforcement, already resolved, or a request is pending. */
+  BILLING_RESOLUTION_CONFLICT: 'BILLING_RESOLUTION_CONFLICT',
+  /** `409`: the approved amount, or the outcome's amount or evidence, no longer matches the request; nothing executed. */
+  BILLING_RESOLUTION_STALE: 'BILLING_RESOLUTION_STALE',
+  /** `403`: the requester cannot approve or reject their own request (dual control). */
+  BILLING_RESOLUTION_SELF_APPROVAL: 'BILLING_RESOLUTION_SELF_APPROVAL',
+
   // --- Pagination (`API.md` §8a) -------------------------------------------
   /**
    * The cursor was malformed, its signature did not verify, or it was minted

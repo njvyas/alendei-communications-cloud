@@ -307,7 +307,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 7 PR 7-6a added 3 tenant billing read routes (account, ledger, usage; billing.read at the
     // request organization, target deferred): 158 → 161 scoped.
     // Phase 7 PR 7-6b added the unknown-outcome register (platform billing.manage, target deferred): 161 → 162 scoped.
-    expect(scoped.length).toBe(162);
+    // Phase 7 PR 7-6c added 5 operator-resolution routes (platform billing.manage, target deferred): 162 → 167 scoped.
+    expect(scoped.length).toBe(167);
     expect(exempt.length).toBe(7);
     expect(open.length).toBe(9);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
@@ -339,7 +340,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 8B.1 added 6 campaign routes, each targeting deferred workspace context: 127 → 133.
     // Phase 7 PR 7-6a added 3 tenant billing read routes, each targeting the deferred request organization: 133 → 136.
     // Phase 7 PR 7-6b added the unknown-outcome register, targeting the deferred platform scope: 136 → 137.
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(137);
+    // Phase 7 PR 7-6c added 5 operator-resolution routes, targeting the deferred platform scope: 137 → 142.
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(142);
   });
 });
 

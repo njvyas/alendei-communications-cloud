@@ -1021,7 +1021,8 @@ describe('Phase 7 PR 7-2 — pricing and rating (migration 0051)', () => {
         'acc_app:wallets:SELECT',
       ]);
       const writer = await admin(
-        `SELECT has_function_privilege('acc_app', 'app_ledger_post(uuid, usage_ledger_entry_type, uuid, bigint, text, uuid, uuid, text, text)', 'EXECUTE') AS ok`,
+        // Phase 7 PR 7-6c (0057, C-1): the writer gained a defaulted tenth argument, p_mode.
+        `SELECT has_function_privilege('acc_app', 'app_ledger_post(uuid, usage_ledger_entry_type, uuid, bigint, text, uuid, uuid, text, text, text)', 'EXECUTE') AS ok`,
       );
       expect(writer.rows[0].ok).toBe(false);
     });

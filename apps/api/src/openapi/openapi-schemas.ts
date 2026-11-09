@@ -1165,7 +1165,63 @@ export class UnknownOutcomeSchema {
   @ApiProperty({
     enum: ['open', 'pending_approval', 'charged', 'charged_without_cost', 'written_off'],
     description:
-      'Derived from the ledger. pending_approval and written_off arrive with operator resolution (7-6c).',
+      'written_off: an executed write-off; charged / charged_without_cost: charged, with or without the provider cost; pending_approval: a resolution awaits a second approver; open: none of these (a rejected request leaves the item open).',
   })
   status!: string;
+}
+
+/** Phase 7 PR 7-6c — an operator resolution of an unknown outcome. */
+@ApiSchema({ name: 'UnknownResolution' })
+export class UnknownResolutionSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty(uuid) orgId!: string;
+  @ApiProperty(uuid) messageId!: string;
+  @ApiProperty(nullableUuid) attemptId!: string | null;
+  @ApiProperty({ enum: ['charge', 'write_off'] }) action!: string;
+  @ApiProperty({ enum: ['pending', 'executed', 'rejected'] }) status!: string;
+  @ApiProperty({ enum: ['charge_per_logical_message', 'charge_per_attempt'] })
+  billingPolicy!: string;
+  @ApiProperty({
+    ...paiseAmount,
+    description:
+      'Snapshot at request, in paise: the total customer charge a charge posts (E_m, or under charge_per_attempt E_a of the unknown attempt and of every earlier attempt that reached the provider), or the amount written off.',
+  })
+  customerAmountPaise!: number;
+  @ApiProperty({
+    ...nullablePaise,
+    description: "Snapshot at request: the unknown attempt's evaluated provider cost.",
+  })
+  providerCostPaise!: number | null;
+  @ApiProperty({ enum: ['evidenced', 'unevidenced'] }) evidence!: string;
+  @ApiProperty({
+    description: 'Whether a charge posts the provider cost: only with a provider receipt.',
+  })
+  postsProviderCost!: boolean;
+  @ApiProperty({ description: 'Whether a second approver is required.' }) dualControl!: boolean;
+  @ApiProperty({
+    ...nullablePaise,
+    description: 'The dual-control threshold in force at request; null when unset.',
+  })
+  thresholdPaise!: number | null;
+  @ApiProperty() reason!: string;
+  @ApiProperty(uuid) requestedBy!: string;
+  @ApiProperty(timestamp) requestedAt!: string;
+  @ApiProperty(nullableUuid) approvedBy!: string | null;
+  @ApiProperty(nullableTimestamp) approvedAt!: string | null;
+  @ApiProperty(nullableUuid) rejectedBy!: string | null;
+  @ApiProperty(nullableTimestamp) rejectedAt!: string | null;
+  @ApiProperty({ type: 'string', nullable: true }) rejectionReason!: string | null;
+  @ApiProperty(nullableTimestamp) executedAt!: string | null;
+  @ApiProperty({ ...nullablePaise, description: 'Customer charges posted on execution.' })
+  chargedPaise!: number | null;
+  @ApiProperty({ ...nullablePaise, description: 'Provider cost posted on execution.' })
+  providerCostPostedPaise!: number | null;
+  @ApiProperty({
+    type: 'string',
+    nullable: true,
+    enum: ['insufficient_funds', 'account_frozen', 'account_not_configured', null],
+    description: 'Why the last approval was refused; the request stayed pending.',
+  })
+  lastRefusal!: string | null;
+  @ApiProperty(nullableTimestamp) lastRefusedAt!: string | null;
 }

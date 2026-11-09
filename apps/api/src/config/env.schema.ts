@@ -148,6 +148,19 @@ export const envSchema = z.object({
    */
   BILLING_ENFORCEMENT_ENABLED: booleanFromEnv.default(false),
   /**
+   * Phase 7 PR 7-6c (`DECISIONS.md` §1zi.9 D-76-3, §1zi.12 O-2): the dual-control
+   * threshold for operator resolution of unknown outcomes, in integer paise. **Unset
+   * by default, and unset, every charge and every write-off needs a second
+   * approver.** Set, a resolution whose customer amount is at or below it executes
+   * on request; above it, and for any charge without provider evidence, a second
+   * approver is still required. Logged at startup; changed only by a controlled
+   * deployment with owner approval (`RELEASE.md`). An empty value means unset.
+   */
+  BILLING_DUAL_CONTROL_THRESHOLD_PAISE: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+  ),
+  /**
    * Phase 5.0 PR-C (OD-6): the server pepper for ingress-key hashes, resolved through
    * SecretsPort. A key is stored only as HMAC-SHA256(pepper, key). Required to issue keys
    * and, outside development and test, whenever ingress is enabled.

@@ -129,12 +129,28 @@ Platform administration of rate cards, provider cost rates and rate-card assignm
 ### 2f. `/platform/billing/unknown-outcomes` — the unknown-outcome register (Phase 7 PR 7-6b, 09-Nov-2026)
 - **Read-only:**
   - one row per message billed under enforcement whose outcome is unknown, oldest first;
-  - the unknown attempt, age, `evidence` (`evidenced` / `unevidenced`) and `status` (`open`, `charged`, `charged_without_cost`; `pending_approval` and `written_off` arrive with operator resolution);
+  - the unknown attempt, age, `evidence` (`evidenced` / `unevidenced`) and `status` (`open`, `pending_approval`, `charged`, `charged_without_cost`, `written_off`; a rejected request leaves the item `open`);
   - **estimated** customer and provider-cost exposure in paise.
 
   The estimates are never ledger entries, and nothing is charged automatically.
 - **Filters:** `orgId`, `channelCode`, `evidence`, `status`, `minAgeHours`; signed cursor.
 - **Authorization:** `billing.manage` at platform scope, signed-in users only. Platform support, tenants and API keys are refused (`DECISIONS.md` §1zi.9 D-76-5). The data is read through SECURITY DEFINER functions; there is no platform policy on the financial tables.
+
+### 2g. `/platform/billing/…/resolutions` — operator resolution of unknown outcomes (Phase 7 PR 7-6c, 09-Nov-2026)
+| Route | Result |
+|---|---|
+| `POST /platform/billing/unknown-outcomes/{messageId}/resolutions` `{ action: 'charge' \| 'write_off', reason }` | `201`: the resolution, `executed` or `pending` a second approver |
+| `POST /platform/billing/resolutions/{id}/approve` `{ expectedAmountPaise }` | `200`: executed |
+| `POST /platform/billing/resolutions/{id}/reject` `{ reason }` | `200`: rejected; nothing posted; the item is open again |
+| `GET /platform/billing/resolutions` | Newest first; filters `status`, `orgId`, `messageId`; signed cursor |
+| `GET /platform/billing/resolutions/{id}` | One resolution |
+
+- **Authorization:** `billing.manage` at platform scope, signed-in users only (D-76-5). Every `POST` requires `Idempotency-Key` (`400` without; same key and request replays; a changed request is `422`).
+- **Dual control (D-76-3):** with `BILLING_DUAL_CONTROL_THRESHOLD_PAISE` unset (the default), every charge and write-off waits for a second approver; once set, a request at or below it executes at once and one above it waits; a charge without provider evidence always waits. The requester can neither approve nor reject (`403 BILLING_RESOLUTION_SELF_APPROVAL`).
+- **Binding:** an approval executes only if `expectedAmountPaise` equals the request and the outcome's amount and evidence are unchanged; otherwise `409 BILLING_RESOLUTION_STALE` and nothing executes.
+- **A charge** posts what the automatic path would have: E_m on the message; under `charge_per_attempt`, E_a on the unknown attempt and on every earlier attempt that reached the provider. The provider cost is posted only when a provider receipt is recorded on the unknown attempt, at request and at execution. Balance (prepaid) or used credit (postpaid) moves; no reservation is created. **A write-off** posts nothing.
+- **Refusals:** `402 BILLING_INSUFFICIENT_FUNDS`, `403 BILLING_ACCOUNT_FROZEN`, `422 BILLING_ACCOUNT_NOT_CONFIGURED` — on a request nothing is recorded; on an approval the request stays `pending` with `lastRefusal` recorded. `409 BILLING_RESOLUTION_CONFLICT` when the outcome is not resolvable (not an enforced unknown outcome, already resolved, or a request already pending). `503 BILLING_BUSY` is retryable with the same key. No error discloses an amount.
+- **Audit:** `billing.outcome_unknown.resolution_requested`, `.resolution_approved`, `.resolution_rejected`, `.charged` and `.written_off`, security-sensitive, in the same transaction. **Metric:** `acc_billing_outcome_unknown_resolutions_total{action,outcome}`.
 
 ## 3. Authentication & request identity
 

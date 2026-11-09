@@ -235,8 +235,8 @@ describe('U14.1b — one db:migrate for every starting point; U14.1a untouched',
   // Pinned at U14.1b; updated by Phase 5.0 (PR-A: 0044 M1, the 0045 guard (M2, a third barrier),
   // 0046 M3; PR-B: the forward fix 0047; PR-C: 0048; PR-D: 0049; Phase 7 PR 7-1: 0050; PR 7-2: 0051; Phase 8B.1: 0052). Update when a later migration
   // is added.
-  it('0043 directly follows 0042; Phase 5.0 adds 0044–0049, Phase 7 adds 0050–0051, Phase 8B.1 adds 0052 and Phase 7 PRs 7-4 to 7-6b add 0053–0056 after it', () => {
-    expect([AT42, AT43, expected.length]).toEqual([42, 43, 57]);
+  it('0043 directly follows 0042; Phase 5.0 adds 0044–0049, Phase 7 adds 0050–0051, Phase 8B.1 adds 0052 and Phase 7 PRs 7-4 to 7-6c add 0053–0057 after it', () => {
+    expect([AT42, AT43, expected.length]).toEqual([42, 43, 58]);
   });
 
   it.each<[string, () => string]>([

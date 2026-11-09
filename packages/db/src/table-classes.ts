@@ -93,4 +93,8 @@ export const ORG_ID_EXEMPT_TABLES: readonly string[] = [
   // attempts. No application-role privilege at all: written and read only by the
   // acc_dispatch settlement functions (SECURITY DEFINER); RLS on, no policy.
   'message_attempt_billing',
+  // Phase 7 PR 7-6c (migration 0057): operator resolutions of unknown outcomes. No
+  // application-role privilege at all: written and read only by the 0057 SECURITY DEFINER
+  // functions (platform billing.manage); RLS on, no policy.
+  'billing_unknown_resolutions',
 ];
