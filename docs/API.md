@@ -119,10 +119,10 @@ Platform administration of rate cards, provider cost rates and rate-card assignm
     - prepaid: `balancePaise`, `reservedPaise`, `availablePaise`;
     - postpaid: `creditLimitPaise`, `usedPaise`, `reservedPaise`, `availablePaise`;
     - `404 BILLING_ACCOUNT_NOT_CONFIGURED` when there is none.
-  - `GET /billing/ledger`: cursor-paginated, newest first. Filters: `from`, `to`, `entryType` (`reservation`, `reservation_release`, `customer_charge`), `messageId`.
+  - `GET /billing/ledger`: cursor-paginated, newest first. Filters: `from`, `to`, `entryType` (`reservation`, `reservation_release`, `customer_charge`, `recharge`), `messageId`. A `recharge` row (Phase 7 PR 7-6d-2, D-76d-3) shows amount and time only: no message, attempt or correlation, and never the payment reference, reason or approver.
   - `GET /billing/usage?from&to[&channelCode][&timeZone]`: customer charges in `[from, to)` (at most 92 days), by channel and by day, with message and unit counts, derived from the ledger.
 - **Money:** integer paise, INR only.
-- **Never returned to a tenant:** provider cost, reseller markup or rate-card details. The database itself admits only the three tenant-visible entry types to a tenant (`0055`).
+- **Never returned to a tenant:** provider cost, reseller markup or rate-card details. The database itself admits only the tenant-visible entry types to a tenant (`0055`; `0060` adds `recharge`).
 - **Authorization:** `billing.read` at the request organization, signed-in users only. The key is held through system roles only (`org_admin`); API keys and custom roles cannot carry it (`DECISIONS.md` §1zi.9 D-76-4).
 - **Isolation:** enforced by organization-scoped RLS `SELECT` policies on `wallets`, `credit_accounts` and `usage_ledger`; `acc_app` holds `SELECT` only.
 
@@ -169,6 +169,28 @@ Platform administration of rate cards, provider cost rates and rate-card assignm
 - **Binding:** a limit change names the limit it expects (`409 BILLING_ACCOUNT_OPERATION_STALE` otherwise), and an approval names the new limit. One operation of a kind may be pending at a time (`409 BILLING_ACCOUNT_OPERATION_CONFLICT`).
 - **Freeze (D-76d-4):** new reservations and spending are refused; balances, limits and existing reservations are unchanged; in-flight messages settle. Credit-limit changes are permitted while frozen and never unfreeze.
 - **Nothing here writes the ledger.** Recharge is PR 7-6d-2.
+
+### 2i. `POST /platform/billing/organizations/{orgId}/recharges` — wallet recharge (Phase 7 PR 7-6d-2, 09-Nov-2026)
+- **Body:** `{ amountPaise, paymentReference, receivedOn, reason }`.
+  - `amountPaise` is the net spendable amount credited to the wallet, in integer paise (D-76d-2); tax treatment stays with Phase 7.7.
+  - `paymentReference` is the external receipt (1–120 characters: letters, digits, space, `.`, `/`, `_`, `-`; starting with a letter or digit).
+  - `receivedOn` is `YYYY-MM-DD`, not in the future.
+- **Result:** `201`, `executed` or `pending`.
+  - An executed recharge posts one immutable ledger entry anchored on the operation: the balance rises and reservations are unchanged.
+  - Pending, rejected and refused recharges post nothing.
+- **Dual control (D-76d-1):** a recharge waits for a second approver while `BILLING_DUAL_CONTROL_THRESHOLD_PAISE` is unset or the amount exceeds it.
+  - Approval goes through `POST /platform/billing/account-operations/{id}/approve` with `expectedAmountPaise`, `expectedPaymentReference` and `expectedReceivedOn`, all required.
+  - Any mismatch is `409 BILLING_ACCOUNT_OPERATION_STALE`. The reference is compared after normalisation.
+  - The requester can neither approve nor reject.
+- **Payment references:** unique per organization among pending and executed recharges, after normalisation (whitespace removed, upper case). Reuse is `409 BILLING_ACCOUNT_OPERATION_CONFLICT`; a rejected recharge frees its reference. One recharge may be pending per organization.
+- **Frozen wallet (D-76d-4):**
+  - a request is refused (`403 BILLING_ACCOUNT_FROZEN`) and records nothing;
+  - an approval is refused the same way, and the recharge stays pending with `lastRefusal` recorded and audited (`billing.account_operation.refused`);
+  - the same `Idempotency-Key` can be retried after unfreezing.
+
+  An organization without a wallet is `409`. Credit accounts are never recharged.
+- **Audit:** `billing.account_operation.requested`, `.approved`, `.rejected`, `.refused`, and `billing.wallet.recharged`.
+- **No reversal (D-76d-5):** an executed recharge can be neither edited nor deleted; corrections are Phase 7.7.
 
 ## 3. Authentication & request identity
 

@@ -335,7 +335,7 @@ export class MetricsService implements OnModuleInit {
     });
     this.billingAccountOperations = this.counter({
       name: 'acc_billing_account_operations_total',
-      help: 'Billing-account operations by action (provision, credit_limit_change, freeze, unfreeze) and outcome: executed, pending (awaiting a second approver), rejected. Counted after commit.',
+      help: 'Billing-account operations by action (provision, credit_limit_change, freeze, unfreeze, recharge) and outcome: executed, pending (awaiting a second approver), rejected, refused (recharge refused for the wallet state). Counted after commit.',
       labelNames: ['action', 'outcome'],
     });
   }

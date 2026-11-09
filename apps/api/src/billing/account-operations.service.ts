@@ -78,6 +78,15 @@ export interface AccountOperationView {
   readonly rejectedAt: string | null;
   readonly rejectionReason: string | null;
   readonly executedAt: string | null;
+  /** Recharge: the external payment reference (platform only, never shown to tenants). */
+  readonly paymentReference: string | null;
+  /** Recharge: when the money was received (`YYYY-MM-DD`). */
+  readonly receivedOn: string | null;
+  /** Recharge: the ledger entry it posted. */
+  readonly resultLedgerId: string | null;
+  /** Why the last approval was refused (the request stayed pending). */
+  readonly lastRefusal: string | null;
+  readonly lastRefusedAt: string | null;
 }
 
 export interface AccountOperationResult {
@@ -105,6 +114,11 @@ interface OperationRow extends Record<string, unknown> {
   rejected_at: string | Date | null;
   rejection_reason: string | null;
   executed_at: string | Date | null;
+  payment_reference: string | null;
+  received_on: string | Date | null;
+  result_ledger_id: string | null;
+  last_refusal: string | null;
+  last_refused_at: string | Date | null;
 }
 
 interface AccountRow extends Record<string, unknown> {
@@ -123,6 +137,13 @@ interface AccountRow extends Record<string, unknown> {
 const num = (v: string | null): number | null => (v === null ? null : Number(v));
 const iso = (v: string | Date | null): string | null =>
   v === null ? null : (v instanceof Date ? v : new Date(v)).toISOString();
+/** A `date` column as `YYYY-MM-DD` (the driver may return a string or a local-midnight Date). */
+const day = (v: string | Date | null): string | null => {
+  if (v === null) return null;
+  if (typeof v === 'string') return v.slice(0, 10);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${v.getFullYear()}-${pad(v.getMonth() + 1)}-${pad(v.getDate())}`;
+};
 
 function operationView(r: OperationRow): AccountOperationView {
   return {
@@ -144,6 +165,11 @@ function operationView(r: OperationRow): AccountOperationView {
     rejectedAt: iso(r.rejected_at),
     rejectionReason: r.rejection_reason,
     executedAt: iso(r.executed_at),
+    paymentReference: r.payment_reference,
+    receivedOn: day(r.received_on),
+    resultLedgerId: r.result_ledger_id,
+    lastRefusal: r.last_refusal,
+    lastRefusedAt: iso(r.last_refused_at),
   };
 }
 
@@ -206,6 +232,18 @@ function translate(error: unknown): unknown {
       );
     case 'BL011':
       return SELF_APPROVAL();
+    case 'BL002':
+      return refusal(
+        HttpStatus.FORBIDDEN,
+        ERROR_CODES.BILLING_ACCOUNT_FROZEN,
+        "The organization's wallet is frozen; nothing was credited",
+      );
+    case 'BL001':
+      return refusal(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        ERROR_CODES.BILLING_ACCOUNT_NOT_CONFIGURED,
+        'The organization has no wallet; nothing was credited',
+      );
     case 'P0002':
       return refusal(HttpStatus.NOT_FOUND, ERROR_CODES.RESOURCE_NOT_FOUND, 'Not found');
     case '22023':
@@ -242,8 +280,13 @@ function executedAction(op: AccountOperationView): AuditAction {
       return AUDIT_ACTIONS.BILLING_ACCOUNT_FROZEN;
     case 'unfreeze':
       return AUDIT_ACTIONS.BILLING_ACCOUNT_UNFROZEN;
+    case 'recharge':
+      return AUDIT_ACTIONS.BILLING_WALLET_RECHARGED;
   }
 }
+
+/** Approval refusals that leave a pending recharge pending, with the reason recorded on it. */
+const ACCOUNT_STATE_REFUSALS = new Set(['BL001', 'BL002']);
 
 export interface AccountOperationInput {
   readonly account: BillingAccountName;
@@ -261,8 +304,8 @@ export interface AccountOperationInput {
  * (checked here). Every mutation requires an `Idempotency-Key`, is audited as
  * security-sensitive in its own transaction and runs entirely in the migration `0059`
  * SECURITY DEFINER functions, which check the caller again, decide dual control, bind
- * an approval and execute. No ledger fact is written: an account is created empty, a
- * limit is configuration and a freeze is a status. No recharge here (7-6d-2).
+ * an approval and execute. Provisioning, limits and freezes write no ledger fact; a
+ * recharge (PR 7-6d-2) posts exactly one, through the ledger writer's recharge branch.
  *
  * The dual-control threshold is `BILLING_DUAL_CONTROL_THRESHOLD_PAISE`, read from the
  * server configuration on each request and never from the request itself.
@@ -339,13 +382,75 @@ export class AccountOperationsService {
     }
   }
 
-  async approve(
+  /**
+   * Phase 7 PR 7-6d-2 — a wallet recharge request (D-76d-1, D-76d-2, D-76d-4): the net
+   * spendable amount, a payment reference unique per organization, the received date.
+   * Refused for a frozen wallet; executes at once only within the configured threshold.
+   */
+  async recharge(
     principal: AuthPrincipal,
-    id: string,
-    expectedAmountPaise: number | undefined,
+    orgId: string,
+    input: { amountPaise: number; paymentReference: string; receivedOn: string; reason: string },
     key: string | null,
   ): Promise<IdempotentOutcome<{ data: AccountOperationResult }>> {
     this.requireUserSession(principal);
+    const threshold = this.config.billing.dualControlThresholdPaise;
+    try {
+      const outcome = await this.idempotency.executePlatform({
+        key,
+        successStatus: HttpStatus.CREATED,
+        request: {
+          method: 'POST',
+          route: '/platform/billing/organizations/:orgId/recharges',
+          orgId: null,
+          principal,
+          pathParams: { orgId },
+          query: {},
+          body: { ...input },
+        },
+        authorize: (tx) => this.authorize(tx, principal),
+        work: async (tx) => {
+          const { rows } = await tx.execute<{ operation_id: string; executed: boolean }>(sql`
+            SELECT * FROM app_billing_account_request_recharge(
+              ${orgId}::uuid, ${input.amountPaise}::bigint, ${input.paymentReference}::text,
+              ${input.receivedOn}::date, ${input.reason}::text, ${threshold}::bigint, ${key}::text)`);
+          const operation = await this.load(tx, rows[0]!.operation_id);
+          await this.record(
+            tx,
+            principal,
+            AUDIT_ACTIONS.BILLING_ACCOUNT_OPERATION_REQUESTED,
+            operation,
+          );
+          if (operation.status === 'executed') {
+            await this.record(tx, principal, executedAction(operation), operation);
+          }
+          return { data: { operation, account: await this.accountOf(tx, operation) } };
+        },
+      });
+      if (!outcome.replayed) {
+        const op = outcome.body.data.operation;
+        this.count(op.kind, op.status === 'executed' ? 'executed' : 'pending');
+      }
+      return outcome;
+    } catch (error) {
+      if (ACCOUNT_STATE_REFUSALS.has(sqlState(error) ?? '')) this.count('recharge', 'refused');
+      throw translate(error);
+    }
+  }
+
+  async approve(
+    principal: AuthPrincipal,
+    id: string,
+    expected: {
+      amountPaise?: number;
+      paymentReference?: string;
+      receivedOn?: string;
+    },
+    key: string | null,
+  ): Promise<IdempotentOutcome<{ data: AccountOperationResult }>> {
+    this.requireUserSession(principal);
+    const expectedAmountPaise = expected.amountPaise;
+    let kind: string | null = null;
     try {
       const outcome = await this.idempotency.executePlatform({
         key,
@@ -357,15 +462,46 @@ export class AccountOperationsService {
           principal,
           pathParams: { id },
           query: {},
-          body: { expectedAmountPaise: expectedAmountPaise ?? null },
+          body: {
+            expectedAmountPaise: expectedAmountPaise ?? null,
+            expectedPaymentReference: expected.paymentReference ?? null,
+            expectedReceivedOn: expected.receivedOn ?? null,
+          },
         },
         authorize: (tx) => this.authorize(tx, principal),
         work: async (tx) => {
           const before = await this.load(tx, id);
+          kind = before.kind;
           this.refuseOwnRequest(before, principal);
-          await tx.execute(
-            sql`SELECT app_billing_account_approve(${id}::uuid, ${expectedAmountPaise ?? null}::bigint)`,
-          );
+          if (before.kind === 'recharge') {
+            // Bound to the exact amount and evidence snapshot (D-76d-1).
+            if (
+              expectedAmountPaise === undefined ||
+              expected.paymentReference === undefined ||
+              expected.receivedOn === undefined
+            ) {
+              throw refusal(
+                HttpStatus.BAD_REQUEST,
+                ERROR_CODES.VALIDATION_FAILED,
+                'A recharge approval names the amount, payment reference and received date it approves',
+              );
+            }
+            await tx.execute(sql`
+              SELECT app_billing_account_approve_recharge(
+                ${id}::uuid, ${expectedAmountPaise}::bigint, ${expected.paymentReference}::text,
+                ${expected.receivedOn}::date)`);
+          } else {
+            if (expected.paymentReference !== undefined || expected.receivedOn !== undefined) {
+              throw refusal(
+                HttpStatus.BAD_REQUEST,
+                ERROR_CODES.VALIDATION_FAILED,
+                'Only a recharge approval names a payment reference and received date',
+              );
+            }
+            await tx.execute(
+              sql`SELECT app_billing_account_approve(${id}::uuid, ${expectedAmountPaise ?? null}::bigint)`,
+            );
+          }
           const after = await this.load(tx, id);
           await this.record(
             tx,
@@ -381,6 +517,12 @@ export class AccountOperationsService {
       if (!outcome.replayed) this.count(outcome.body.data.operation.kind, 'executed');
       return outcome;
     } catch (error) {
+      if (kind === 'recharge' && ACCOUNT_STATE_REFUSALS.has(sqlState(error) ?? '')) {
+        // The approval rolled back (its key is not consumed); the recharge stays pending with
+        // the refusal recorded — re-derived by the database — and audited.
+        await this.noteRefusal(principal, id);
+        this.count('recharge', 'refused');
+      }
       throw translate(error);
     }
   }
@@ -485,6 +627,41 @@ export class AccountOperationsService {
 
   // --- helpers --------------------------------------------------------------------------
 
+  /** Records an approval refusal on the pending recharge, in its own transaction; best effort. */
+  private async noteRefusal(principal: AuthPrincipal, id: string): Promise<void> {
+    try {
+      await this.db.withRequestTenant(async (tx) => {
+        const { rows } = await tx.execute<{ refusal: string | null }>(
+          sql`SELECT app_billing_account_note_refusal(${id}::uuid) AS refusal`,
+        );
+        if (!rows[0]?.refusal) return;
+        const op = await this.load(tx, id);
+        await this.audit.record(
+          {
+            scopeType: 'platform',
+            scopeId: null,
+            ...actorFromPrincipal(principal),
+            action: AUDIT_ACTIONS.BILLING_ACCOUNT_OPERATION_REFUSED,
+            resourceType: 'BillingAccountOperation',
+            resourceId: op.id,
+            outcome: 'failure',
+            before: null,
+            after: { ...op },
+            metadata: {
+              orgId: op.orgId,
+              account: op.account,
+              kind: op.kind,
+              refusal: rows[0].refusal,
+            },
+          },
+          tx,
+        );
+      });
+    } catch {
+      // The refusal itself is still returned to the caller.
+    }
+  }
+
   private async load(tx: Transaction, id: string): Promise<AccountOperationView> {
     const { rows } = await tx.execute<OperationRow>(
       sql`SELECT * FROM app_billing_account_operations_list(${id}::uuid, NULL, NULL, NULL, NULL, NULL, 1)`,
@@ -544,7 +721,7 @@ export class AccountOperationsService {
     );
   }
 
-  private count(action: string, outcome: 'executed' | 'pending' | 'rejected'): void {
+  private count(action: string, outcome: 'executed' | 'pending' | 'rejected' | 'refused'): void {
     this.metrics?.billingAccountOperations.inc({ action, outcome });
   }
 

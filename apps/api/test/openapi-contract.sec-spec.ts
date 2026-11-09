@@ -200,8 +200,9 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * Phase 7 PR 7-6c, 09-Nov-2026: operator resolution (request, approve, reject, list, get under `/platform/billing`): 175 → 180.
      * Phase 8A.1, 09-Nov-2026: 6 saved segment operations under `/workspaces/{workspaceId}/segments`: 180 → 186.
      * Phase 7 PR 7-6d-1, 09-Nov-2026: billing-account administration (accounts read, 7 operation POSTs, approve, reject, list, get): 186 → 198.
+     * Phase 7 PR 7-6d-2, 09-Nov-2026: the wallet recharge request (`POST /platform/billing/organizations/{orgId}/recharges`): 198 → 199.
      */
-    const APPLICATION_OPERATIONS = 198;
+    const APPLICATION_OPERATIONS = 199;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 
@@ -454,7 +455,8 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
         // Phase 7 PR 7-6c: 3 operator-resolution POSTs (request, approve, reject): 17 -> 20.
         // Phase 8A.1: 1 segment create POST: 20 -> 21.
         // Phase 7 PR 7-6d-1: 9 account-operation POSTs (7 requests, approve, reject): 21 -> 30.
-      ).toBe(30);
+        // Phase 7 PR 7-6d-2: the recharge POST: 30 -> 31.
+      ).toBe(31);
     });
   });
 

@@ -5,14 +5,17 @@ import { CHANNEL_CODES, type ChannelCode } from '@acc/contracts';
 import { ListQueryDto } from '../common/http/list-query.dto';
 
 /**
- * The ledger entry types a tenant can see (Phase 7 PR 7-6a; baseline §7.1). The
- * database admits only these to a tenant (`usage_ledger_tenant_select`, 0055);
- * this list only validates the filter.
+ * The ledger entry types a tenant can see (Phase 7 PR 7-6a; baseline §7.1; Phase 7 PR
+ * 7-6d-2 adds `recharge`, D-76d-3). The database admits only these to a tenant
+ * (`usage_ledger_tenant_select`, 0055 as replaced by 0060); this list only validates
+ * the filter. A recharge row carries no message, attempt or correlation: amount and
+ * time only.
  */
 export const TENANT_LEDGER_ENTRY_TYPES = [
   'reservation',
   'reservation_release',
   'customer_charge',
+  'recharge',
 ] as const;
 export type TenantLedgerEntryType = (typeof TENANT_LEDGER_ENTRY_TYPES)[number];
 

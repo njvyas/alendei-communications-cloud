@@ -119,6 +119,9 @@ export const AUDIT_ACTIONS = {
   BILLING_CREDIT_LIMIT_CHANGED: 'billing.credit_limit.changed',
   BILLING_ACCOUNT_FROZEN: 'billing.account.frozen',
   BILLING_ACCOUNT_UNFROZEN: 'billing.account.unfrozen',
+  // Phase 7 PR 7-6d-2 — wallet recharge (D-76d-2) and approval refusals.
+  BILLING_WALLET_RECHARGED: 'billing.wallet.recharged',
+  BILLING_ACCOUNT_OPERATION_REFUSED: 'billing.account_operation.refused',
 
   AUTHORIZATION_DENIED: 'authorization.denied',
 } as const;
@@ -291,6 +294,9 @@ export const SECURITY_SENSITIVE_AUDIT_ACTIONS: readonly AuditAction[] = Object.f
   AUDIT_ACTIONS.BILLING_CREDIT_LIMIT_CHANGED,
   AUDIT_ACTIONS.BILLING_ACCOUNT_FROZEN,
   AUDIT_ACTIONS.BILLING_ACCOUNT_UNFROZEN,
+  // Phase 7 PR 7-6d-2: money credited to a customer, and refused approvals of it.
+  AUDIT_ACTIONS.BILLING_WALLET_RECHARGED,
+  AUDIT_ACTIONS.BILLING_ACCOUNT_OPERATION_REFUSED,
 ]);
 
 export function isSecuritySensitiveAction(action: string): boolean {

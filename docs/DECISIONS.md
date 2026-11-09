@@ -3102,7 +3102,7 @@ The owner reviewed `docs/PHASE-7-6-BILLING-APIS-HANDOVER.md` and decided as foll
 8. **Pinned counts updated:** application operations 175 → 180; scoped routes 162 → 167; deferred-target routes 137 → 142; `Idempotency-Key` handlers 17 → 20; migration counts 57 → 58. The OpenAPI response suite exercises all five routes, including `403` self-approval and `409` stale.
 
 ### 1zi.13 Phase 7.6d decisions: provisioning, credit limits, freeze and recharge
-**Owner decisions, 09-Nov-2026**, on the 7-6d implementation handover (`docs/PHASE-7-6D-PROVISIONING-RECHARGE-HANDOVER.md`, Rev 2). **Owner authorisation, 09-Nov-2026:** PR 7-6d-1 only (§1zi.14); PR 7-6d-2 (recharge) is not authorised.
+**Owner decisions, 09-Nov-2026**, on the 7-6d implementation handover (`docs/PHASE-7-6D-PROVISIONING-RECHARGE-HANDOVER.md`, Rev 2). **Owner authorisation, 09-Nov-2026:** PR 7-6d-1 (§1zi.14); after it merged, PR 7-6d-2 (recharge, §1zi.15).
 - **D-76d-1: dual control.**
   - Recharge and credit-limit increases need a second approver when `BILLING_DUAL_CONTROL_THRESHOLD_PAISE` is unset or the applicable amount exceeds it.
   - For a limit increase the applicable amount is the increase (new − current).
@@ -3247,6 +3247,104 @@ Each is a draft, stopped for owner review. Billing enforcement stays disabled; n
    | Migrations | 59 | 60 |
 
    Baselines are `develop` after Phase 8A.1 (#99).
+
+### 1zi.15 PR 7-6d-2 as built: wallet recharge and ledger integration (migration `0060`)
+**Owner authorisation, 09-Nov-2026,** after PR #100 merged (`171b18b`): PR 7-6d-2 only, within the approved 7.6d scope.
+- **Out of scope:** GST and tax treatment, payment gateways, auto-recharge, credit-account recharge, refunds, reversals and adjustments, QA or production.
+- **Enforcement** stays disabled.
+
+**Synchronisation.**
+- `develop` at `171b18b` contained #100, with `0059` at journal idx 59.
+- No open PR claimed a later migration number.
+- **`0060` was therefore confirmed and used.**
+
+**Before/after fingerprint** (every `app_*`/`fn_*` function's source hash, ACL, owner and definer settings; every policy; every application-role table grant), on clones of `develop` and of this branch. The only changes:
+- **Changed bodies, ACL and owner unchanged:** the ledger writer, the account executor, the generic account approval, the operations guard, and the `usage_ledger_tenant_select` policy.
+- **New functions:** three.
+- **Unchanged:** every other function, policy and table grant.
+
+**As built.**
+- **Migration `0060` (expand-only).**
+  - **`billing_account_operations` columns:** gains `payment_reference`, a generated `payment_reference_normalized` (`upper(regexp_replace(ref, '[[:space:]]', '', 'g'))`), `received_on`, `result_ledger_id`, `last_refusal` and `last_refused_at`.
+  - **CHECKs:** the kind, amount and dual-control CHECKs are widened for `recharge`, and are identical for the 7-6d-1 kinds. The recharge rules:
+    - wallet only, amount > 0;
+    - dual control unless a threshold is recorded and the amount is within it;
+    - evidence present and well formed, and only on a recharge;
+    - an executed recharge names its ledger row;
+    - refusals only on a recharge.
+  - **Uniqueness:** `UNIQUE (org_id, payment_reference_normalized) WHERE kind = 'recharge' AND status IN ('pending', 'executed')`.
+  - **Guard:** the guard function is replaced so that the evidence columns are immutable request columns.
+  - **Ledger writer** (`CREATE OR REPLACE`, same signature, owner and privileges):
+    - `recharge` joins the allowlist, and a single marked block handles it before any other branch;
+    - wallet only, with no message, attempt, correlation or note;
+    - the anchor must be a pending recharge operation of the same organisation, for exactly that amount, approved when dual-controlled;
+    - a frozen wallet is refused (`BL002`); the wallet is the last row lock;
+    - the fact key makes a repeat a no-op;
+    - `balance += amount`; `reserved` is untouched.
+
+    Every other branch is byte-identical to `0057`, as proved by a structural test that removes the marked block and compares the result.
+  - **Executor and generic approval:** the executor gains a marked recharge branch (it posts through the writer and records `result_ledger_id`). The generic approval refuses a recharge (`BL014`), which has its own evidence-bound approval. Both are byte-identical to `0059` outside the marked blocks (structural test).
+  - **New definers for `acc_app`,** each refusing (`42501`) a caller without platform `billing.manage`:
+    - `app_billing_account_request_recharge`: wallet exists (`BL013`) and is active (`BL002`), reference unused, one pending recharge, dual control per D-76d-1;
+    - `app_billing_account_approve_recharge`: four eyes; binding to the amount, the normalised reference and the received date (`BL014`);
+    - `app_billing_account_note_refusal`: re-derives `account_frozen` or `account_not_configured`, records nothing otherwise.
+  - **Tenant policy:** `usage_ledger_tenant_select` is replaced with `recharge` added to its entry types (D-76d-3); otherwise it is identical to `0055`.
+- **API:**
+  - `POST /platform/billing/organizations/{orgId}/recharges` (`billing.manage` at platform scope, user sessions only, `Idempotency-Key` required, threshold from server configuration only);
+  - the approval body gains `expectedPaymentReference` and `expectedReceivedOn`, required for a recharge and refused otherwise (`400`);
+  - the operation view gains `paymentReference`, `receivedOn`, `resultLedgerId`, `lastRefusal` and `lastRefusedAt` (platform only);
+  - the tenant ledger `entryType` filter and schema gain `recharge`.
+- **Approval refusal:**
+  - a recharge approval refused for the wallet's state rolls back entirely, so its key is not consumed;
+  - a second transaction records the re-derived refusal on the still-pending request and writes the security-sensitive audit record `billing.account_operation.refused` (outcome `failure`);
+  - the counter records `refused`.
+- **Audit:** additionally `billing.wallet.recharged` and `billing.account_operation.refused`.
+- **Metric:** `acc_billing_account_operations_total{action="recharge", outcome}`.
+- **History proof:** `61|da9371bb1f6a3e2cdc765f88823e8f02` (`0000`–`0060`).
+
+**Tests.**
+- **`packages/db/src/test/phase7_6d2-wallet-recharge.int-spec.ts` (10):**
+  - privileges of the new functions, plus regression of every earlier billing function's grants, owner and definer settings;
+  - `0060`'s grants;
+  - the structural "only the marked blocks changed" proof for the writer, executor and approval;
+  - only the executor posts a recharge;
+  - the tenant policy;
+  - the writer's recharge branch: posting, idempotency, nothing internal on the row, immutability, and every refusal;
+  - the CHECKs;
+  - normalised uniqueness, immutable evidence, rejection freeing a reference, and other organisations unaffected;
+  - `42501` for every new entry function.
+- **`apps/api/test/phase7_6d2-wallet-recharge.int-spec.ts` (14):**
+  - immediate execution with an existing reservation untouched;
+  - dual control and binding of each snapshot element (amount, reference, date), with normalised comparison;
+  - rejection posting nothing and freeing the reference;
+  - normalised uniqueness, including three concurrent requests;
+  - idempotency;
+  - concurrent approvers;
+  - frozen wallet (request refused and unrecorded; approval refused, recorded and audited; same key succeeds after unfreeze);
+  - no wallet;
+  - ledger truth after mixed recharges, reservations, charges and releases (`balance = Σ recharge − Σ charge`, `reserved = Σ reservation − Σ release − Σ charge`, one executed operation per fact);
+  - tenant visibility (exact row shape; no reference, reason, operation, approver, provider cost or other tenant; `provider_cost` filter `400`);
+  - access;
+  - validation, including a threshold in the body refused;
+  - the counter.
+- **Regression:** every suite. The 7.1 allowlist test is deliberately updated (`recharge` left the disabled list, and a message-shaped recharge is still refused `22023`). Migration, operation and route counts are updated, and the OpenAPI response suite exercises the recharge route and its evidence-bound approval.
+
+**Deviations and implementation decisions.**
+1. **A dedicated request function** (`app_billing_account_request_recharge`) rather than an overload or a recreated 7-6d-1 request function: the 7-6d-1 function is untouched (handover §12 item 2).
+2. **A dedicated recharge approval** binds the evidence snapshot. The generic approval now refuses a recharge — the only behavioural change to a 7-6d-1 function, and one that affects no existing kind.
+3. **A frozen wallet is refused at request time** (`403`), as well as at execution.
+4. **One pending recharge per organisation** (the 7-6d-1 one-pending-per-kind rule).
+5. **Normalisation** removes all whitespace and upper-cases. Hyphens and other permitted punctuation are significant, and leading whitespace is refused by the format rule rather than normalised away.
+6. **An audit action for refusals** (`billing.account_operation.refused`), which the handover did not name; it records the required refusal trail.
+7. **Pinned counts updated:**
+
+   | Count | Before | After |
+   |---|---|---|
+   | Application operations | 198 | 199 |
+   | Scoped routes | 185 | 186 |
+   | Deferred-target routes | 160 | 161 |
+   | `Idempotency-Key` handlers | 30 | 31 |
+   | Migrations | 60 | 61 |
 
 ## 3. Risks explicitly accepted by design (not oversights)
 
