@@ -1,6 +1,6 @@
 import { ERROR_CODES, PERMISSIONS } from '@acc/contracts';
 import { schema } from '@acc/db';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import request from 'supertest';
 import { uuidv7 } from 'uuidv7';
 
@@ -636,6 +636,135 @@ describe('Phase 8A.1: Saved Segments & Audience Resolution Integration Suite', (
         .set('idempotency-key', idempotencyKey)
         .send({ name: 'Changed Name' });
       expect(res2.status).toBe(422);
+    });
+  });
+
+  describe('Case-Insensitive Uniqueness & Concurrency', () => {
+    it('concurrent case-variant creates cannot produce duplicates (one succeeds, one 409 SEGMENT_NAME_EXISTS)', async () => {
+      const baseName = `Concurrent Segment ${uuidv7()}`;
+      const nameUpper = baseName.toUpperCase();
+      const nameLower = baseName.toLowerCase();
+
+      const [res1, res2] = await Promise.all([
+        request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/segments`))
+          .set('authorization', `Bearer ${tokenA}`)
+          .send({ name: nameUpper, criteria: {} }),
+        request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/segments`))
+          .set('authorization', `Bearer ${tokenA}`)
+          .send({ name: nameLower, criteria: {} }),
+      ]);
+
+      const statuses = [res1.status, res2.status].sort();
+      expect(statuses).toEqual([201, 409]);
+
+      const conflictRes = res1.status === 409 ? res1 : res2;
+      expect(conflictRes.body.error.code).toBe(ERROR_CODES.SEGMENT_NAME_EXISTS);
+
+      // Verify at the database level that exactly one row exists in this workspace
+      const rows = await h.admin
+        .select()
+        .from(schema.segments)
+        .where(
+          and(
+            eq(schema.segments.workspaceId, tenantA.workspaceId),
+            sql`lower(${schema.segments.name}) = lower(${baseName})`,
+            isNull(schema.segments.deletedAt),
+          ),
+        );
+      expect(rows).toHaveLength(1);
+    });
+
+    it('concurrent case-variant renames cannot produce duplicates (one succeeds, one 409 SEGMENT_NAME_EXISTS)', async () => {
+      // Create two distinct segments first
+      const seg1Res = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/segments`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ name: `Rename Initial 1 ${uuidv7()}`, criteria: {} });
+      expect(seg1Res.status).toBe(201);
+      const seg1Id = seg1Res.body.data.id;
+
+      const seg2Res = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/segments`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ name: `Rename Initial 2 ${uuidv7()}`, criteria: {} });
+      expect(seg2Res.status).toBe(201);
+      const seg2Id = seg2Res.body.data.id;
+
+      const targetBase = `Target Rename ${uuidv7()}`;
+      const targetUpper = targetBase.toUpperCase();
+      const targetLower = targetBase.toLowerCase();
+
+      // Attempt concurrent renames to case variants of the same name
+      const [patch1, patch2] = await Promise.all([
+        request(h.app.getHttpServer())
+          .patch(url(`/workspaces/${tenantA.workspaceId}/segments/${seg1Id}`))
+          .set('authorization', `Bearer ${tokenA}`)
+          .send({ name: targetUpper }),
+        request(h.app.getHttpServer())
+          .patch(url(`/workspaces/${tenantA.workspaceId}/segments/${seg2Id}`))
+          .set('authorization', `Bearer ${tokenA}`)
+          .send({ name: targetLower }),
+      ]);
+
+      const patchStatuses = [patch1.status, patch2.status].sort();
+      expect(patchStatuses).toEqual([200, 409]);
+
+      const patchConflict = patch1.status === 409 ? patch1 : patch2;
+      expect(patchConflict.body.error.code).toBe(ERROR_CODES.SEGMENT_NAME_EXISTS);
+
+      // Verify at the database level that exactly one active row has the target name
+      const rows = await h.admin
+        .select()
+        .from(schema.segments)
+        .where(
+          and(
+            eq(schema.segments.workspaceId, tenantA.workspaceId),
+            sql`lower(${schema.segments.name}) = lower(${targetBase})`,
+            isNull(schema.segments.deletedAt),
+          ),
+        );
+      expect(rows).toHaveLength(1);
+    });
+
+    it('allows soft-deleted name reuse with case-variant name', async () => {
+      const reuseBase = `Reuse Base ${uuidv7()}`;
+      // Create segment
+      const createRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/segments`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ name: reuseBase.toUpperCase(), criteria: {} });
+      expect(createRes.status).toBe(201);
+      const segId = createRes.body.data.id;
+
+      // Soft-delete it
+      const delRes = await request(h.app.getHttpServer())
+        .delete(url(`/workspaces/${tenantA.workspaceId}/segments/${segId}`))
+        .set('authorization', `Bearer ${tokenA}`);
+      expect(delRes.status).toBe(204);
+
+      // Recreate with lowercase name
+      const recreateRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/segments`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({ name: reuseBase.toLowerCase(), criteria: {} });
+      expect(recreateRes.status).toBe(201);
+      expect(recreateRes.body.data.name).toBe(reuseBase.toLowerCase());
+
+      // Verify both rows exist in DB (1 soft-deleted, 1 active)
+      const allRows = await h.admin
+        .select()
+        .from(schema.segments)
+        .where(
+          and(
+            eq(schema.segments.workspaceId, tenantA.workspaceId),
+            sql`lower(${schema.segments.name}) = lower(${reuseBase})`,
+          ),
+        );
+      expect(allRows).toHaveLength(2);
+      expect(allRows.filter((r) => r.deletedAt !== null)).toHaveLength(1);
+      expect(allRows.filter((r) => r.deletedAt === null)).toHaveLength(1);
     });
   });
 });

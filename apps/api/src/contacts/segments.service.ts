@@ -94,6 +94,23 @@ export class SegmentsService {
     private readonly contactsService: ContactsService,
   ) {}
 
+  private isSegmentNameUniqueViolation(error: unknown): boolean {
+    const err = error as {
+      code?: string;
+      constraint?: string;
+      message?: string;
+      cause?: { code?: string; constraint?: string; message?: string };
+    };
+    const code = err?.code ?? err?.cause?.code;
+    const constraint = err?.constraint ?? err?.cause?.constraint;
+    const message = err?.message ?? err?.cause?.message ?? '';
+    return (
+      code === '23505' &&
+      (constraint === 'uq_segments_workspace_name' ||
+        message.includes('uq_segments_workspace_name'))
+    );
+  }
+
   private async assertWorkspaceAccess(
     tx: Transaction,
     principal: AuthPrincipal,
@@ -226,17 +243,31 @@ export class SegmentsService {
         }
 
         const segmentId = uuidv7();
-        const [row] = await tx
-          .insert(schema.segments)
-          .values({
-            id: segmentId,
-            orgId,
-            workspaceId,
-            name: trimmedName,
-            description: dto.description?.trim() || null,
-            criteria: (dto.criteria as unknown as Record<string, unknown>) ?? {},
-          })
-          .returning();
+        let row: SegmentRow | undefined;
+        try {
+          const [inserted] = await tx
+            .insert(schema.segments)
+            .values({
+              id: segmentId,
+              orgId,
+              workspaceId,
+              name: trimmedName,
+              description: dto.description?.trim() || null,
+              criteria: (dto.criteria as unknown as Record<string, unknown>) ?? {},
+            })
+            .returning();
+          row = inserted;
+        } catch (error) {
+          if (this.isSegmentNameUniqueViolation(error)) {
+            throw new AppException({
+              status: HttpStatus.CONFLICT,
+              code: ERROR_CODES.SEGMENT_NAME_EXISTS,
+              message: `A segment named '${trimmedName}' already exists in this workspace`,
+              logContext: { workspaceId, name: trimmedName },
+            });
+          }
+          throw error;
+        }
 
         if (!row) throw new Error('Failed to insert segment');
 
@@ -400,38 +431,51 @@ export class SegmentsService {
         updates.criteria = (dto.criteria as unknown as Record<string, unknown>) ?? {};
       }
 
-      const [updated] = await tx
-        .update(schema.segments)
-        .set(updates)
-        .where(
-          and(
-            eq(schema.segments.id, segmentId),
-            eq(schema.segments.orgId, orgId),
-            eq(schema.segments.workspaceId, workspaceId),
-            isNull(schema.segments.deletedAt),
-          ),
-        )
-        .returning();
+      try {
+        const [updated] = await tx
+          .update(schema.segments)
+          .set(updates)
+          .where(
+            and(
+              eq(schema.segments.id, segmentId),
+              eq(schema.segments.orgId, orgId),
+              eq(schema.segments.workspaceId, workspaceId),
+              isNull(schema.segments.deletedAt),
+            ),
+          )
+          .returning();
 
-      if (!updated) throw segmentNotFound(segmentId);
+        if (!updated) throw segmentNotFound(segmentId);
 
-      await this.audit.record(
-        {
-          scopeType: 'workspace',
-          scopeId: workspaceId,
-          ...actorFromPrincipal(principal),
-          action: 'segment.updated',
-          resourceType: 'Segment',
-          resourceId: updated.id,
-          outcome: 'success',
-          before: null,
-          after: null,
-          metadata: { name: updated.name },
-        },
-        tx,
-      );
+        await this.audit.record(
+          {
+            scopeType: 'workspace',
+            scopeId: workspaceId,
+            ...actorFromPrincipal(principal),
+            action: 'segment.updated',
+            resourceType: 'Segment',
+            resourceId: updated.id,
+            outcome: 'success',
+            before: null,
+            after: null,
+            metadata: { name: updated.name },
+          },
+          tx,
+        );
 
-      return segmentView(updated);
+        return segmentView(updated);
+      } catch (error) {
+        if (this.isSegmentNameUniqueViolation(error)) {
+          const conflictName = dto.name !== undefined ? dto.name.trim() : existing.name;
+          throw new AppException({
+            status: HttpStatus.CONFLICT,
+            code: ERROR_CODES.SEGMENT_NAME_EXISTS,
+            message: `A segment named '${conflictName}' already exists in this workspace`,
+            logContext: { workspaceId, name: conflictName },
+          });
+        }
+        throw error;
+      }
     });
   }
 

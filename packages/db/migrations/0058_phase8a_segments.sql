@@ -11,7 +11,7 @@ CREATE TABLE "segments" (
 );--> statement-breakpoint
 ALTER TABLE "segments" ADD CONSTRAINT "segments_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "segments" ADD CONSTRAINT "segments_workspace_org_fk" FOREIGN KEY ("workspace_id","org_id") REFERENCES "public"."workspaces"("id","org_id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-CREATE UNIQUE INDEX "uq_segments_workspace_name" ON "segments" USING btree ("workspace_id","name") WHERE deleted_at IS NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "uq_segments_workspace_name" ON "segments" USING btree ("workspace_id",lower("name")) WHERE deleted_at IS NULL;--> statement-breakpoint
 CREATE INDEX "segments_org_id_idx" ON "segments" USING btree ("org_id");--> statement-breakpoint
 CREATE INDEX "segments_workspace_id_idx" ON "segments" USING btree ("workspace_id");--> statement-breakpoint
 CREATE INDEX "segments_workspace_created_at_id_idx" ON "segments" USING btree ("workspace_id","created_at","id");--> statement-breakpoint

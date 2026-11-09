@@ -35,7 +35,7 @@ export const segments = pgTable(
       foreignColumns: [workspaces.id, workspaces.orgId],
     }).onDelete('restrict'),
     uniqueIndex('uq_segments_workspace_name')
-      .on(table.workspaceId, table.name)
+      .on(table.workspaceId, sql`lower(${table.name})`)
       .where(sql`${table.deletedAt} IS NULL`),
     index('segments_org_id_idx').on(table.orgId),
     index('segments_workspace_id_idx').on(table.workspaceId),
