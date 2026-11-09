@@ -101,6 +101,8 @@ describe('table classes — tenancy records, tenant content, exemptions', () => 
         'templates',
       ]);
       expect([...ORG_ID_EXEMPT_TABLES].sort()).toEqual([
+        // Phase 7 PR 7-6c (0057): the definer-only operator resolutions of unknown outcomes.
+        'billing_unknown_resolutions',
         'credit_accounts',
         // Phase 7 PR 7-2 (0051): platform pricing administration and the definer-only evaluations.
         'customer_pricing_assignments',

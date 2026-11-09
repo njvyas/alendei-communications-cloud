@@ -247,6 +247,32 @@ describe('validateEnv', () => {
     });
   });
 
+  describe('BILLING_DUAL_CONTROL_THRESHOLD_PAISE (Phase 7 PR 7-6c, O-2)', () => {
+    it('is unset by default, and an empty value means unset', () => {
+      expect(validateEnv(MINIMAL_ENV).BILLING_DUAL_CONTROL_THRESHOLD_PAISE).toBeUndefined();
+      expect(
+        validateEnv({ ...MINIMAL_ENV, BILLING_DUAL_CONTROL_THRESHOLD_PAISE: ' ' })
+          .BILLING_DUAL_CONTROL_THRESHOLD_PAISE,
+      ).toBeUndefined();
+    });
+
+    it.each([
+      ['0', 0],
+      ['500', 500],
+    ])('accepts %s paise', (raw, value) => {
+      expect(
+        validateEnv({ ...MINIMAL_ENV, BILLING_DUAL_CONTROL_THRESHOLD_PAISE: raw })
+          .BILLING_DUAL_CONTROL_THRESHOLD_PAISE,
+      ).toBe(value);
+    });
+
+    it.each(['-1', '1.5', 'ten', '9007199254740992'])('refuses startup with %s', (raw) => {
+      expect(() =>
+        validateEnv({ ...MINIMAL_ENV, BILLING_DUAL_CONTROL_THRESHOLD_PAISE: raw }),
+      ).toThrow(/BILLING_DUAL_CONTROL_THRESHOLD_PAISE/);
+    });
+  });
+
   describe('delivery credential (Phase 5.0, AC-GR-3)', () => {
     const SECRET = 'a-staging-delivery-credential';
     const STAGING = {

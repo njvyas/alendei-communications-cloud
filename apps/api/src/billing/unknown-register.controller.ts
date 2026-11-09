@@ -27,7 +27,7 @@ export class UnknownOutcomeRegisterController {
   @ApiOperation({
     summary: 'The unknown-outcome register',
     description:
-      'One row per message billed under enforcement whose outcome is unknown, oldest first: the unknown attempt, age, evidence (a provider receipt on the attempt) and resolution status. Exposure figures are ESTIMATES for reconciliation, never ledger entries; an unknown outcome is never charged automatically. billing.manage at platform scope, signed-in users only. pending_approval and written_off appear once operator resolution exists (7-6c).',
+      'One row per message billed under enforcement whose outcome is unknown, oldest first: the unknown attempt, age, evidence (a provider receipt on the attempt) and resolution status. Exposure figures are ESTIMATES for reconciliation, never ledger entries; an unknown outcome is never charged automatically. billing.manage at platform scope, signed-in users only. Resolve an item with POST /platform/billing/unknown-outcomes/{messageId}/resolutions (7-6c).',
   })
   @ApiPaged(UnknownOutcomeSchema)
   @ApiErrors(400, 401, 403, 429)

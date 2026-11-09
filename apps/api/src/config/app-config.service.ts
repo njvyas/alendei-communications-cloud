@@ -164,10 +164,15 @@ export class AppConfigService {
     } as const;
   }
 
-  /** Phase 7 PR 7-4: funds reservation at submission (`BILLING_ENFORCEMENT_ENABLED`). */
+  /**
+   * Phase 7 PR 7-4: funds reservation at submission (`BILLING_ENFORCEMENT_ENABLED`).
+   * Phase 7 PR 7-6c: the dual-control threshold, `null` when unset (every resolution
+   * then needs a second approver).
+   */
   get billing() {
     return {
       enforcementEnabled: this.get('BILLING_ENFORCEMENT_ENABLED'),
+      dualControlThresholdPaise: this.get('BILLING_DUAL_CONTROL_THRESHOLD_PAISE') ?? null,
     } as const;
   }
 

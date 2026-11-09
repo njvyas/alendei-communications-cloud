@@ -400,6 +400,13 @@
       "when": 1794355200000,
       "tag": "0056_phase7_6b_unknown_outcome_register",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1794441600000,
+      "tag": "0057_phase7_6c_operator_resolution",
+      "breakpoints": true
     }
   ]
 }

@@ -35,7 +35,9 @@ const SETTLEMENT = [
   'app_dispatch_message_settle()',
 ];
 const EARLIER = {
-  'app_ledger_post(uuid, usage_ledger_entry_type, uuid, bigint, text, uuid, uuid, text, text)': [],
+  // Phase 7 PR 7-6c (0057, C-1): the writer gained a defaulted tenth argument, p_mode.
+  'app_ledger_post(uuid, usage_ledger_entry_type, uuid, bigint, text, uuid, uuid, text, text, text)':
+    [],
   'app_rate_message(uuid, uuid, uuid, integer, boolean, boolean)': [],
   'app_price_lookup(uuid, uuid, uuid, integer, timestamp with time zone, boolean, boolean)': [],
   'app_message_reserve(uuid)': ['acc_app'],

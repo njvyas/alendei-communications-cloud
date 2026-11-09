@@ -38,6 +38,8 @@ import {
 const TABLES = [
   'api_keys',
   'audit_logs',
+  // Phase 7 PR 7-6c (migration 0057): definer-only operator resolutions; no grant, RLS on.
+  'billing_unknown_resolutions',
   // Phase 8B.1 (migration 0052): campaigns and campaign recipients
   'campaign_recipients',
   'campaigns',

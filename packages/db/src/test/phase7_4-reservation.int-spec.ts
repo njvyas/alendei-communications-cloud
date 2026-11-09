@@ -35,8 +35,10 @@ const MIGRATION = readFileSync(
 );
 const APP_ROLES = ['acc_app', 'acc_auth', 'acc_relay', 'acc_dispatch', 'acc_delivery'] as const;
 const RESERVE = 'app_message_reserve(uuid)';
+// Phase 7 PR 7-6c (0057, owner decision C-1): the writer gained a defaulted tenth argument,
+// p_mode, and was recreated with the same privileges (none for any application role).
 const WRITER =
-  'app_ledger_post(uuid, usage_ledger_entry_type, uuid, bigint, text, uuid, uuid, text, text)';
+  'app_ledger_post(uuid, usage_ledger_entry_type, uuid, bigint, text, uuid, uuid, text, text, text)';
 const RATE = 'app_rate_message(uuid, uuid, uuid, integer, boolean, boolean)';
 const LOOKUP =
   'app_price_lookup(uuid, uuid, uuid, integer, timestamp with time zone, boolean, boolean)';

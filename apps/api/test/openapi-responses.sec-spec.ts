@@ -73,6 +73,8 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
     pricingPlans: [] as string[],
   };
   const suffix = () => uuidv7().replace(/-/g, '').slice(-10);
+  /** Phase 7 PR 7-6c: the suite's planted unknown outcomes, removed by the owner in teardown. */
+  const resolutionMessages: string[] = [];
 
   // --- the request helper: every response is validated ----------------------------
 
@@ -319,6 +321,24 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
     // triggers suspended, before its organization.
     await db.transaction(async (tx) => {
       await tx.execute(sql`SET LOCAL session_replication_role = replica`);
+      // Phase 7 PR 7-6c: the planted unknown outcomes, their resolutions and ledger facts.
+      for (const table of ['billing_unknown_resolutions', 'usage_ledger', 'pricing_evaluations']) {
+        await tx.execute(sql`DELETE FROM ${sql.identifier(table)} WHERE org_id = ${orgId}`);
+      }
+      if (resolutionMessages.length > 0) {
+        const ids = sql.join(
+          resolutionMessages.map((id) => sql`${id}`),
+          sql`, `,
+        );
+        await tx.execute(sql`DELETE FROM message_attempts WHERE message_id IN (${ids})`);
+        await tx.execute(
+          sql`DELETE FROM contacts WHERE id IN (SELECT contact_id FROM messages WHERE id IN (${ids}))`,
+        );
+        await tx.execute(sql`DELETE FROM messages WHERE id IN (${ids})`);
+      }
+      await tx.execute(
+        sql`DELETE FROM idempotency_keys WHERE org_id IS NULL AND endpoint LIKE 'POST /platform/billing/%' AND idempotency_key LIKE 'oa-%'`,
+      );
       await tx.execute(sql`DELETE FROM wallets WHERE org_id = ${orgId}`);
     });
     const orgs = created.orgs;
@@ -645,6 +665,117 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
         await hit('GET', 'platform/billing/unknown-outcomes', as.session(platform)),
         200,
         'unknown-outcome register',
+      );
+    });
+
+    it('operator resolution of unknown outcomes (Phase 7 PR 7-6c, platform billing.manage only)', async () => {
+      // An enforced unknown outcome as settlement leaves it, planted by the owner with
+      // triggers suspended (its evaluation names no live rate card).
+      await db.execute(
+        sql`INSERT INTO wallets (org_id, balance_paise) VALUES (${orgId}, 1000) ON CONFLICT (org_id) DO NOTHING`,
+      );
+      const plant = async () => {
+        const contact = uuidv7();
+        const message = uuidv7();
+        const attempt = uuidv7();
+        await db.transaction(async (tx) => {
+          await tx.execute(sql`SET LOCAL session_replication_role = replica`);
+          await tx.execute(
+            sql`INSERT INTO contacts (id, org_id, workspace_id) VALUES (${contact}, ${orgId}, ${workspaceId})`,
+          );
+          await tx.execute(sql`
+            INSERT INTO messages (id, org_id, workspace_id, contact_id, channel_id, status, recipient_address,
+                                  correlation_id, completed_at, billable_units, billable_unit, billing_enforced,
+                                  billing_mode_snapshot, billing_policy_snapshot)
+            VALUES (${message}, ${orgId}, ${workspaceId}, ${contact}, (SELECT id FROM channels WHERE code = 'whatsapp'),
+                    'outcome_unknown', '+12025550144', 'oa-76c', now(), 1, 'message', true, 'prepaid',
+                    'charge_per_logical_message')`);
+          await tx.execute(sql`
+            INSERT INTO message_attempts (id, message_id, org_id, provider_id, channel_id, attempt_number,
+                                          fencing_epoch, claim_token, status)
+            VALUES (${attempt}, ${message}, ${orgId}, ${uuidv7()}, (SELECT id FROM channels WHERE code = 'whatsapp'),
+                    1, 1, ${uuidv7()}, 'outcome_unknown')`);
+          await tx.execute(sql`
+            INSERT INTO pricing_evaluations (org_id, message_id, subject, plan_version_id, rating_timestamp,
+                                             units, unit, total_customer_price_paise)
+            VALUES (${orgId}, ${message}, 'message', ${uuidv7()}, now(), 1, 'message', 25)`);
+        });
+        resolutionMessages.push(message);
+        return message;
+      };
+      const p2 = await person('platform-approver');
+      const [superAdmin] = await db
+        .select({ id: schema.roles.id })
+        .from(schema.roles)
+        .where(sql`${schema.roles.key} = 'alendei_super_admin' AND ${schema.roles.orgId} IS NULL`);
+      await grant(p2.id, superAdmin!.id, 'platform', null);
+      const approver = await signIn(p2);
+      const keyed = () => ({ 'idempotency-key': `oa-76c-${suffix()}-${suffix()}` });
+
+      const charged = await plant();
+      const request1 = await hit(
+        'POST',
+        `platform/billing/unknown-outcomes/${charged}/resolutions`,
+        {
+          ...as.session(platform),
+          headers: keyed(),
+          body: { action: 'charge', reason: 'OpenAPI suite' },
+        },
+      );
+      expectStatus(request1, 201, 'resolution request');
+      const pendingId = request1.body.data.id as string;
+      expectStatus(
+        await hit('POST', `platform/billing/resolutions/${pendingId}/approve`, {
+          ...as.session(platform),
+          headers: keyed(),
+          body: { expectedAmountPaise: 25 },
+        }),
+        403,
+        'resolution self-approval',
+      );
+      expectStatus(
+        await hit('POST', `platform/billing/resolutions/${pendingId}/approve`, {
+          ...as.session(approver),
+          headers: keyed(),
+          body: { expectedAmountPaise: 24 },
+        }),
+        409,
+        'resolution stale approval',
+      );
+      expectStatus(
+        await hit('POST', `platform/billing/resolutions/${pendingId}/approve`, {
+          ...as.session(approver),
+          headers: keyed(),
+          body: { expectedAmountPaise: 25 },
+        }),
+        200,
+        'resolution approve',
+      );
+      const writtenOff = await plant();
+      const request2 = await hit(
+        'POST',
+        `platform/billing/unknown-outcomes/${writtenOff}/resolutions`,
+        { ...as.session(platform), headers: keyed(), body: { action: 'write_off', reason: 'OA' } },
+      );
+      expectStatus(request2, 201, 'resolution request (write-off)');
+      expectStatus(
+        await hit('POST', `platform/billing/resolutions/${request2.body.data.id}/reject`, {
+          ...as.session(approver),
+          headers: keyed(),
+          body: { reason: 'OpenAPI suite' },
+        }),
+        200,
+        'resolution reject',
+      );
+      expectStatus(
+        await hit('GET', 'platform/billing/resolutions', as.session(platform)),
+        200,
+        'resolutions',
+      );
+      expectStatus(
+        await hit('GET', `platform/billing/resolutions/${pendingId}`, as.session(platform)),
+        200,
+        'resolution',
       );
     });
 
@@ -1027,66 +1158,73 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
             : undefined,
           body: template.endsWith('/capabilities')
             ? { capabilities: [] }
-            : template.endsWith('/test-send')
-              ? { behavior: 'SUCCESS' }
-              : template.endsWith('/simulator/delivery-events')
-                ? { attemptId: uuidv7(), scenario: { outcome: 'DELIVERED' } }
-                : template.endsWith('/health-check')
-                  ? { behavior: 'HEALTHY' }
-                  : template.endsWith('/health') && method === 'POST'
-                    ? { override: null }
-                    : template.endsWith('/domains') && method === 'POST'
-                      ? { domain: `d-${suffix()}.example.com` }
-                      : template.endsWith('/consent-events') && method === 'POST'
-                        ? {
-                            channelId: uuidv7(),
-                            consentType: 'marketing',
-                            event: 'grant',
-                            occurredAt: new Date().toISOString(),
-                            source: 'test',
-                          }
-                        : template.endsWith('/identities') && method === 'POST'
-                          ? {
-                              channelId: uuidv7(),
-                              rawAddress: '+15551234567',
-                            }
-                          : (template.endsWith('/lift') ||
-                                template.endsWith('/suspend') ||
-                                template.endsWith('/close')) &&
-                              method === 'POST'
-                            ? { reason: 'test' }
-                            : template.endsWith('/simulate-approval') && method === 'POST'
-                              ? { targetStatus: 'approved' }
-                              : template.includes('/provider-assignments') &&
-                                  method === 'POST' &&
-                                  !template.endsWith('/enable') &&
-                                  !template.endsWith('/disable')
+            : // Phase 7 PR 7-6c: operator resolution of unknown outcomes.
+              template.endsWith('/approve')
+              ? { expectedAmountPaise: 1 }
+              : template.endsWith('/reject')
+                ? { reason: 'test' }
+                : template.endsWith('/resolutions') && method === 'POST'
+                  ? { action: 'write_off', reason: 'test' }
+                  : template.endsWith('/test-send')
+                    ? { behavior: 'SUCCESS' }
+                    : template.endsWith('/simulator/delivery-events')
+                      ? { attemptId: uuidv7(), scenario: { outcome: 'DELIVERED' } }
+                      : template.endsWith('/health-check')
+                        ? { behavior: 'HEALTHY' }
+                        : template.endsWith('/health') && method === 'POST'
+                          ? { override: null }
+                          : template.endsWith('/domains') && method === 'POST'
+                            ? { domain: `d-${suffix()}.example.com` }
+                            : template.endsWith('/consent-events') && method === 'POST'
+                              ? {
+                                  channelId: uuidv7(),
+                                  consentType: 'marketing',
+                                  event: 'grant',
+                                  occurredAt: new Date().toISOString(),
+                                  source: 'test',
+                                }
+                              : template.endsWith('/identities') && method === 'POST'
                                 ? {
-                                    providerId: uuidv7(),
-                                    priority: 1,
+                                    channelId: uuidv7(),
+                                    rawAddress: '+15551234567',
                                   }
-                                : template.endsWith('/rules') && method === 'PUT'
-                                  ? { rules: [] }
-                                  : template.endsWith('/campaigns') && method === 'POST'
-                                    ? {
-                                        name: `c-${suffix()}`,
-                                        channel: 'sms',
-                                        templateId: uuidv7(),
-                                        recipientSource: { type: 'all_contacts' },
-                                      }
-                                    : method !== 'PATCH'
-                                      ? {}
-                                      : template.includes('/branding')
-                                        ? { brandName: `Brand ${suffix()}` }
-                                        : template.includes('/users/')
-                                          ? { phone: '+15551234567' }
-                                          : template.includes('/contacts/')
-                                            ? { firstName: `x ${suffix()}` }
-                                            : template.includes('/identities/')
-                                              ? { isPrimary: true }
-                                              : template.includes('/provider-assignments/')
-                                                ? { priority: 2 }
-                                                : { name: `x ${suffix()}` },
+                                : (template.endsWith('/lift') ||
+                                      template.endsWith('/suspend') ||
+                                      template.endsWith('/close')) &&
+                                    method === 'POST'
+                                  ? { reason: 'test' }
+                                  : template.endsWith('/simulate-approval') && method === 'POST'
+                                    ? { targetStatus: 'approved' }
+                                    : template.includes('/provider-assignments') &&
+                                        method === 'POST' &&
+                                        !template.endsWith('/enable') &&
+                                        !template.endsWith('/disable')
+                                      ? {
+                                          providerId: uuidv7(),
+                                          priority: 1,
+                                        }
+                                      : template.endsWith('/rules') && method === 'PUT'
+                                        ? { rules: [] }
+                                        : template.endsWith('/campaigns') && method === 'POST'
+                                          ? {
+                                              name: `c-${suffix()}`,
+                                              channel: 'sms',
+                                              templateId: uuidv7(),
+                                              recipientSource: { type: 'all_contacts' },
+                                            }
+                                          : method !== 'PATCH'
+                                            ? {}
+                                            : template.includes('/branding')
+                                              ? { brandName: `Brand ${suffix()}` }
+                                              : template.includes('/users/')
+                                                ? { phone: '+15551234567' }
+                                                : template.includes('/contacts/')
+                                                  ? { firstName: `x ${suffix()}` }
+                                                  : template.includes('/identities/')
+                                                    ? { isPrimary: true }
+                                                    : template.includes('/provider-assignments/')
+                                                      ? { priority: 2 }
+                                                      : { name: `x ${suffix()}` },
         });
         expect(`${method} ${template} → ${res.status}`).toMatch(/→ (404|403)$/);
       }

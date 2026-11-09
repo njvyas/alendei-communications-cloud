@@ -6,8 +6,9 @@ import { CHANNEL_CODES, PAGE_LIMITS, type ChannelCode } from '@acc/contracts';
 /** Evidence of a provider receipt on the unknown attempt (Policy U). */
 export const UNKNOWN_EVIDENCE_STATES = ['evidenced', 'unevidenced'] as const;
 /**
- * Resolution status, derived from the ledger. `pending_approval` and `written_off`
- * arrive with operator resolution (7-6c); until then no item can be in either.
+ * Resolution status, derived from the ledger and the operator resolutions (7-6c):
+ * `pending_approval` while a request awaits a second approver, `written_off` after an
+ * executed write-off.
  */
 export const UNKNOWN_RESOLUTION_STATUSES = [
   'open',

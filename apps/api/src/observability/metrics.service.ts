@@ -39,6 +39,9 @@ const ALLOWED_LABELS = new Set([
   'adapter',
   'reason',
   'to',
+  // Phase 7 PR 7-6c (handover Rev 2 §5): the operator resolution action — `charge` or
+  // `write_off`, two fixed values.
+  'action',
 ]);
 
 /** Labels that would create one time series per tenant/message/campaign. */
@@ -123,6 +126,8 @@ export class MetricsService implements OnModuleInit {
   readonly dispatchSettlementRetries: Counter<'outcome'>;
   // Phase 7 PR 7-6b — the unknown-outcome register (baseline §6.5, Policy U).
   readonly billingOutcomeUnknownOpen: Gauge<'channel'>;
+  // Phase 7 PR 7-6c — operator resolution of unknown outcomes.
+  readonly billingOutcomeUnknownResolutions: Counter<'action' | 'outcome'>;
 
   constructor(private readonly config: AppConfigService) {
     this.registry.setDefaultLabels({
@@ -320,6 +325,11 @@ export class MetricsService implements OnModuleInit {
       name: 'acc_billing_outcome_unknown_open',
       help: 'Open unknown-outcome register items (billed under enforcement, outcome_unknown, not charged), by channel, as of the last register read.',
       labelNames: ['channel'],
+    });
+    this.billingOutcomeUnknownResolutions = this.counter({
+      name: 'acc_billing_outcome_unknown_resolutions_total',
+      help: 'Operator resolutions of unknown outcomes, by action (charge, write_off) and outcome: executed, pending (awaiting a second approver), rejected, refused (insufficient funds or account state). Counted after commit.',
+      labelNames: ['action', 'outcome'],
     });
   }
 

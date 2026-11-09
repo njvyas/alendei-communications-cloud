@@ -37,8 +37,10 @@ const PACKAGE_ROOT = resolve(__dirname, '../..');
 const APP_ROLES = ['acc_app', 'acc_auth', 'acc_relay', 'acc_dispatch', 'acc_delivery'] as const;
 const DISABLED_TYPES = ['recharge', 'refund', 'adjustment', 'tax', 'discount', 'reseller_markup'];
 const PRIVILEGES = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
+// Phase 7 PR 7-6c (0057, owner decision C-1): the writer gained a defaulted tenth argument,
+// p_mode, and was recreated with the same privileges (none for any application role).
 const WRITER =
-  'app_ledger_post(uuid, usage_ledger_entry_type, uuid, bigint, text, uuid, uuid, text, text)';
+  'app_ledger_post(uuid, usage_ledger_entry_type, uuid, bigint, text, uuid, uuid, text, text, text)';
 
 /** A UUIDv7 whose timestamp is `ms` (RFC 9562 layout: 48-bit ms, version 7, variant 10). */
 function v7At(ms: number): string {
@@ -637,7 +639,7 @@ describe('Phase 7 PR 7-1 — ledger and billing-account foundation (migration 00
           env: process.env,
           timeout: 300_000,
         });
-        expect(stdout).toContain('Schema up to date (57 migrations verified).');
+        expect(stdout).toContain('Schema up to date (58 migrations verified).');
         expect(stdout).toContain('Ledger partitions: created 0 partition(s).');
         expect(stdout).toMatch(
           /usage_ledger partitions ok: headroom 24 month\(s\); 25 partition\(s\); no gaps; all protected; no orphans/,
