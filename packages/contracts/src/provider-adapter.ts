@@ -146,12 +146,27 @@ export interface ProviderSubmissionAccepted {
   readonly latencyMs: number;
 }
 
+/**
+ * Where a failure was decided (Phase 7 PR 7-5, owner decision 09-Nov-2026).
+ * `provider`: an actual provider response was received — the submission reached
+ * the provider. `local`: decided on our side without a provider response — the
+ * adapter's own validation, configuration or credential checks before any network
+ * submission, the executor's timeout, an adapter that threw, or a result outside
+ * the contract. Billing records provider cost (and, under `charge_per_attempt`,
+ * charges) only for attempts that reached the provider, so the category name
+ * alone (an `AUTH_ERROR` can be either) never decides it.
+ */
+export const PROVIDER_FAILURE_ORIGINS = ['provider', 'local'] as const;
+export type ProviderFailureOrigin = (typeof PROVIDER_FAILURE_ORIGINS)[number];
+
 export interface ProviderFailure {
   readonly category: ProviderFailureCategory;
   readonly retryable: boolean;
   /** The provider's own code, for operators only (never branched on). */
   readonly providerCode: string | null;
   readonly message: string;
+  /** Whether an actual provider response decided this failure (see `ProviderFailureOrigin`). */
+  readonly origin: ProviderFailureOrigin;
 }
 
 /** The provider (or the executor, on timeout) refused the submission. */

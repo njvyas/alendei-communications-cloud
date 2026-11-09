@@ -379,6 +379,13 @@
       "when": 1794096000000,
       "tag": "0053_phase7_4_funds_reservation",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1794182400000,
+      "tag": "0054_phase7_5_settlement",
+      "breakpoints": true
     }
   ]
 }

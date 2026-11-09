@@ -57,6 +57,8 @@ const TABLES = [
   // platform-scope claim) and the definer-only pricing evaluations.
   'customer_pricing_assignments',
   'idempotency_keys',
+  // Phase 7 PR 7-5 (migration 0054): the definer-only attempt classification; no grant, RLS on.
+  'message_attempt_billing',
   // Phase 3.3 (migration 0033): message orchestrator and dispatch tables
   'message_attempts',
   'message_dispatch_queue',

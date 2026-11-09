@@ -245,6 +245,11 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
     const IDEMPOTENCY_PLATFORM_0051 = new Set(['actor_api_key_id']);
     const phase72Pricing = migrations.find((m) => m.n.startsWith('0051_'));
     expect(phase72Pricing).toBeDefined();
+    // Phase 7 PR 7-5 (migration 0054): the settlement functions verify the caller's live
+    // dispatch claim — claim_token fencing through app_dispatch_claim_token(), no credential.
+    const DISPATCH_FENCING_0054 = new Set(['app_dispatch_claim_token', 'claim_token']);
+    const phase75Settlement = migrations.find((m) => m.n.startsWith('0054_'));
+    expect(phase75Settlement).toBeDefined();
     expect(
       phase2.flatMap((m) =>
         [...m.sql.matchAll(/\w*(?:credential|secret|passw|api_?key|token)\w*/gi)]
@@ -258,6 +263,7 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
           .filter((x) => !(m === phase50Delivery && DISPATCH_FENCING_0044.has(x[0])))
           .filter((x) => !(m === phase50Fix && DISPATCH_FENCING_0047.has(x[0])))
           .filter((x) => !(m === phase72Pricing && IDEMPOTENCY_PLATFORM_0051.has(x[0])))
+          .filter((x) => !(m === phase75Settlement && DISPATCH_FENCING_0054.has(x[0])))
           .map((x) => `${m.n}: ${x[0]}`),
       ),
     ).toEqual([]);

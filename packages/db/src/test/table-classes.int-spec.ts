@@ -104,6 +104,8 @@ describe('table classes — tenancy records, tenant content, exemptions', () => 
         'credit_accounts',
         // Phase 7 PR 7-2 (0051): platform pricing administration and the definer-only evaluations.
         'customer_pricing_assignments',
+        // Phase 7 PR 7-5 (0054): the definer-only attempt classification.
+        'message_attempt_billing',
         'pricing_evaluations',
         'usage_ledger',
         'wallets',

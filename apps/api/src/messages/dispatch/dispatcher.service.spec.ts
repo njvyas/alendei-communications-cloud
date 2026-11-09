@@ -179,6 +179,13 @@ describe('DispatcherService provider lifecycle exclusion before admission (Issue
     const stateStore = {
       admit: admitMock,
       recordSubmission: jest.fn(),
+      // Phase 7 PR 7-5: the settlement transaction takes the record once and writes it.
+      takeSubmissionRecord: jest.fn(() => ({})),
+      writeSubmissionRecord: jest.fn(async () => ({
+        healthState: 'healthy',
+        circuitState: 'closed',
+        afterCommit: () => undefined,
+      })),
     } as unknown as ProviderStateStore;
 
     const executor = {

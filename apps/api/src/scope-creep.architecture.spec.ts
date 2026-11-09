@@ -274,7 +274,7 @@ const CATEGORIES: Category[] = [
     key: 'billing',
     forbids: 'billing or rating (ADR-013 PD-6)',
     exceptions:
-      "Pre-existing: the organization billing mode and policy fields (Phase 1C; no rating or charging) and the `estimateCost` interface member, which the simulator refuses (PD-6). ADR-015 R-13: `estimateCost` is also an abstract member of `GuardedProviderAdapter`, and the circuit-admission *ledger* is admission bookkeeping (issued → recorded), not a billing ledger. Phase 7 PR 7-1 (DECISIONS.md §1zi, owner-authorised 08-Nov-2026): the ledger and billing-account foundation — the four inert billing and pricing permission keys and their role grants, the ledger partition maintenance (owner-only creation after db:migrate and by the operator command, the shared verdict, the read-only API startup verification and its metrics, the lock class), the attempt FK the 0045 index guard admits, and the financial-table exemption. No billing route, enforcement, rating, account creation or money movement. Phase 7 PR 7-2 (owner-authorised 08-Nov-2026; OD-P-1 to OD-P-3): the pricing catalogue (rate cards, versions, rules, provider cost rates, assignments) with its platform-scope administration API, audit actions and query models, and the evaluation attempt FK the 0045 guard admits. Rating is database-only and executable by no application role; no reservation, settlement or ledger posting. Phase 7 PR 7-4 (owner-authorised 09-Nov-2026; D-4, D-74-1 to D-74-4): funds reservation at submission behind BILLING_ENFORCEMENT_ENABLED — the reservation service (sole caller of app_message_reserve, the only billing function the application role may execute), the core's last step, the conditional mandatory key, the five billing error codes and the message units and billing snapshot. No settlement, release, charge, account creation or money movement.",
+      "Pre-existing: the organization billing mode and policy fields (Phase 1C; no rating or charging) and the `estimateCost` interface member, which the simulator refuses (PD-6). ADR-015 R-13: `estimateCost` is also an abstract member of `GuardedProviderAdapter`, and the circuit-admission *ledger* is admission bookkeeping (issued → recorded), not a billing ledger. Phase 7 PR 7-1 (DECISIONS.md §1zi, owner-authorised 08-Nov-2026): the ledger and billing-account foundation — the four inert billing and pricing permission keys and their role grants, the ledger partition maintenance (owner-only creation after db:migrate and by the operator command, the shared verdict, the read-only API startup verification and its metrics, the lock class), the attempt FK the 0045 index guard admits, and the financial-table exemption. No billing route, enforcement, rating, account creation or money movement. Phase 7 PR 7-2 (owner-authorised 08-Nov-2026; OD-P-1 to OD-P-3): the pricing catalogue (rate cards, versions, rules, provider cost rates, assignments) with its platform-scope administration API, audit actions and query models, and the evaluation attempt FK the 0045 guard admits. Rating is database-only and executable by no application role; no reservation, settlement or ledger posting. Phase 7 PR 7-4 (owner-authorised 09-Nov-2026; D-4, D-74-1 to D-74-4): funds reservation at submission behind BILLING_ENFORCEMENT_ENABLED — the reservation service (sole caller of app_message_reserve, the only billing function the application role may execute), the core's last step, the conditional mandatory key, the five billing error codes and the message units and billing snapshot. No settlement, release, charge, account creation or money movement. Phase 7 PR 7-5 (owner-authorised 09-Nov-2026): dispatcher settlement — charges on confirmed accepted chains, provider cost for attempts that reached the provider, releases at every terminal site, per-attempt top-ups before the provider call — through three acc_dispatch-only functions, gated on the message's billing_enforced. No account creation, recharge, refund, invoice or operator money movement.",
     pattern:
       /[\w-]*(?:billing|rating|ledger|invoice|wallet|tariff|estimate_?cost|charge|pricing|price)[\w-]*/gi,
     providerCodeOnly: false,
@@ -431,6 +431,8 @@ const CATEGORIES: Category[] = [
       ],
       'packages/db/src/table-classes.ts': [
         'customer_pricing_assignments',
+        // Phase 7 PR 7-5 (0054): the definer-only attempt classification.
+        'message_attempt_billing',
         'pricing_evaluations',
         'usage_ledger',
         'wallets',
@@ -572,6 +574,23 @@ const CATEGORIES: Category[] = [
         'BILLING_INSUFFICIENT_FUNDS',
         'BILLING_PRICE_NOT_CONFIGURED',
         'billing',
+      ],
+      // Phase 7 PR 7-5 (DECISIONS.md §1zi.8, owner-authorised 09-Nov-2026): dispatcher
+      // settlement through the three acc_dispatch settlement functions, gated on the
+      // message's billing_enforced; the pre-submit top-up refusal codes.
+      'apps/api/src/messages/dispatch/dispatcher.service.ts': [
+        'ATTEMPT_BILLING_REFUSALS',
+        'BILLING_ACCOUNT_FROZEN',
+        'BILLING_ACCOUNT_NOT_CONFIGURED',
+        'BILLING_INSUFFICIENT_FUNDS',
+        'BILLING_PRICE_NOT_CONFIGURED',
+        'BILLING_PROVIDER_COST_NOT_CONFIGURED',
+        'BILLING_UNITS_CHANGED',
+        'billing',
+        'billing_attempt',
+        'billing_enforced',
+        'settleAttemptBilling',
+        'settleMessageBilling',
       ],
       'apps/api/src/messages/messages.module.ts': ['BillingModule', 'billing'],
       'apps/api/src/messages/messages.service.ts': ['billing'],
@@ -1301,7 +1320,8 @@ const CATEGORIES: Category[] = [
         'webhook_events_received_at_idx',
         'webhook_events_request_event_uq',
       ],
-      'packages/db/src/table-classes.ts': ['message_attempts'],
+      // Phase 7 PR 7-5 (0054): the definer-only attempt classification is census-listed.
+      'packages/db/src/table-classes.ts': ['message_attempt_billing', 'message_attempts'],
     },
   },
   {
@@ -1542,6 +1562,8 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       // Phase 7 PR 7-2 (0051): the pricing catalogue and the pricing evaluations.
       'customer_pricing_assignments',
       'idempotency_keys',
+      // Phase 7 PR 7-5: the immutable reached-provider classification of settled attempts.
+      'message_attempt_billing',
       'message_attempts',
       'message_dispatch_queue',
       'message_events',

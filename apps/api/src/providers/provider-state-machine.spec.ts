@@ -127,7 +127,13 @@ describe('Phase 2.3 failure classification (§5b)', () => {
         outcome: 'rejected',
         submissionId: 'a',
         correlationId: 'b',
-        failure: { category: 'RATE_LIMITED', retryable: true, providerCode: null, message: 'x' },
+        failure: {
+          category: 'RATE_LIMITED',
+          retryable: true,
+          providerCode: null,
+          message: 'x',
+          origin: 'provider',
+        },
         latencyMs: 1,
       }),
     ).toBe('rate_limited');

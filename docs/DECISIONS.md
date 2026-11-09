@@ -2819,6 +2819,94 @@ Owner approval 08-Nov-2026: OD-P-1, OD-P-2 and OD-P-3 approved, PR 7-2 authorise
 
 **Carried to 7-5 (not implemented).** Settlement, release and charges; the RQ-2 top-up (D-74-3); re-deriving units at dispatch; attempt units; removing the startup guard. Settlement follows the message's own `billing_enforced` and snapshot, never the current flag.
 
+### 1zi.8 PR 7-5 as built: settlement and the reservation lifecycle (migration `0054`)
+**Owner authorisation, 09-Nov-2026.** Implementation of Phase 7.5, as one draft PR, was authorised on the approved baseline and the recorded decisions:
+- OD-7-2: settlement inside the dispatcher's transactions, with the per-path lock order.
+- OD-7-4: charge on confirmed acceptance at chain terminal state; provider cost for each attempt that reached the provider.
+- OD-7-4U: outcome unknown is neither charged nor costed, and the reservation is released.
+- RQ-2 and D-74-3: top up whenever the remaining reservation is below the next attempt's price.
+
+The authorisation excludes merge, deployment, enforcement enablement, provisioning, recharge, refund, invoicing and campaign execution.
+
+**As built.**
+- **Migration `0054` (expand-only).** No 7.1, 7.2 or 7.4 object is altered or granted.
+  - `message_attempt_billing`: the immutable record of whether a settled attempt reached the provider. Attempts are frozen once terminal, so it cannot live on them. RLS is on, there is no policy, and no application role holds a privilege.
+  - Three SECURITY DEFINER functions, `EXECUTE` for `acc_dispatch` only. Each first verifies the live dispatch claim (`app.dispatch_message_id` and `app_dispatch_claim_token()` against an unexpired queue row, read `FOR UPDATE`) and requires `billing_enforced`.
+    - **`app_dispatch_attempt_reserve(attempt, units)`**, in T2 before the provider call:
+      - checks the dispatch-time units against the persisted units (`BL009`);
+      - rates the attempt once (E_a: provider cost always; customer price under `charge_per_attempt`; `BL007`/`BL008` fail closed);
+      - under `charge_per_attempt`, posts a `reservation` anchored on the attempt for `price − (Σ reservations − Σ releases − Σ prices of earlier rated attempts)` when positive.
+    - **`app_dispatch_attempt_settle(attempt, reached)`**, in T3/TR after the attempt's terminal status:
+      - records the classification once;
+      - for a reached attempt, posts its `provider_cost`;
+      - refuses "reached" for `outcome_unknown` and "not reached" for `accepted`.
+    - **`app_dispatch_message_settle()`**, at every terminal site, before the queue row is deleted:
+      - on `accepted`, posts the customer charge(s): E_m under `charge_per_logical_message`, or each reached attempt's E_a under `charge_per_attempt`;
+      - then posts the writer-computed `reservation_release`;
+      - `failed` (failed-delivery fee 0) and `outcome_unknown` are never charged.
+  - All amounts come from evaluations and the ledger. Every fact is keyed, so repeated or concurrent settlement changes nothing.
+- **Dispatcher.**
+  - Settlement is called only for messages whose `billing_enforced` is true, read from the message and never from configuration. Messages submitted with enforcement off are dispatched exactly as before.
+  - Both fences (T2 and T3) are read `FOR UPDATE`, so the queue row is the first lock in every dispatch transaction.
+  - A refused T2 top-up or rating rolls back to a savepoint taken before the attempt. The message is then failed with `BILLING_*` before any provider call, and released.
+  - **Reached classification (owner decision, 09-Nov-2026; `reachedProvider`).** Decided at the provider boundary, not from the category name:
+    - every `ProviderFailure` carries `origin`: `provider` when an actual provider response decided it, `local` otherwise;
+    - the simulator marks its failure behaviours and its content rejections `provider`, and its own checks before submission (no or unknown behaviour, channel mismatch) `local`;
+    - the executor marks its own failures (timeout, an adapter that threw, a result outside the contract) `local`, and holds any adapter-supplied origin other than exactly `provider` to `local`.
+    - A result is reached when it is accepted, or when it is a failure other than `TIMEOUT`/`UNKNOWN` with origin `provider`.
+    - `TIMEOUT` and `UNKNOWN` are never reached (OD-7-4U).
+    - A locally detected `AUTH_ERROR` or `CONFIGURATION_ERROR` is not reached.
+    - The platform test-send API keeps its failure shape: `origin` is not exposed.
+  - **Settlement retry (OD-7-2), implemented after the owner's review of PR #95.**
+    - The settlement transaction (T3) is one method, `settleSubmission`, run whole each time: BEGIN, dispatch context, org-lifecycle lock, the fence `FOR UPDATE`, the message lock, recording, updates, settlement facts, the queue row, COMMIT.
+    - `settleWithRetry` re-runs it only after `40P01` or `40001`, at most 3 runs, with 25–100 ms jitter, and only while the claim has at least 5 s of lease left (read from the queue row).
+    - A database error aborts the PostgreSQL transaction. The run is rolled back whole (no fact, sample, status or event survives), and the next run starts from BEGIN, re-reading the fence.
+    - **Recording split:** the circuit record is taken from the admission ledger once, before the first run (`ProviderStateStore.takeSubmissionRecord`). Each run writes it in its own transaction (`writeSubmissionRecord`), and its metrics and logs are emitted once, after the committing run (`afterCommit`).
+    - The provider result is the immutable `settled` value in memory. Nothing reachable from the retry calls the executor or issues an admission (structural test, baseline D-6), so the provider is never called again.
+    - **Exhaustion, or any other error:** rethrown, leaving the message `submitting` with its claim held and no ledger fact. Lease recovery then settles it `outcome_unknown`, released and never charged (baseline §9.2, D-2).
+    - Counter `acc_dispatch_settlement_retries_total{outcome}`: `succeeded`, `exhausted`, `non_retryable`.
+  - Lease recovery takes one expired lease per transaction. A failing lease is rolled back, logged and skipped for the rest of the run, and the first error is rethrown at the end.
+- **Lock order.** Queue row (`FOR UPDATE`), then message, then (T3) provider and attempt, then the billing account last (taken by the writer), then new rows only. This is consistent with §1zi.1; the T2 extension inserts the attempt before the account, as §1zi.7 C-2 records.
+- **Receipts** remain evidence only. Delivery and webhook code reach no billing function (structural test), and a late `delivered` receipt after `outcome_unknown` changes no ledger fact (integration test).
+- **Unchanged:** the 7.4 submission path; the startup guard (enforcement is still refused outside tests); campaign code; `apps/web`; contracts and OpenAPI.
+- **History proof:** `55|b34a6d943bbb01bbfa705d9267771665` (`0000`–`0054`), computed on a disposable clone and recorded in `RELEASE.md`.
+
+**Tests.**
+- `apps/api/test/phase7_5-settlement.int-spec.ts` (26), through the real dispatcher with enforcement on:
+  - accepted, failed, fallback, claim-time failure and `TIMEOUT` outcomes, each with exact facts and wallet balances;
+  - a late receipt;
+  - lease recovery, the BE-DISPATCH-02 re-claim, and per-lease recovery across two organisations;
+  - per-attempt top-up success and refusal (no provider call), and a missing provider cost rate;
+  - stale token and expired lease (`42501`);
+  - repeated and concurrent settlement (each fact once);
+  - the `outcome_unknown` guard;
+  - concurrent sends and dispatches for one organisation (no deadlock, balances equal to the ledger);
+  - enforcement-off messages never settled;
+  - the ledger invariant for every organisation;
+  - provider-originated `AUTH_ERROR` and `RATE_LIMITED` (reached) against a locally detected failure (not reached);
+  - **T3 fault injection.** A test trigger raises a real SQLSTATE inside T3, after the provider cost is posted:
+    - a deadlock retried to success, and two serialization failures then success (one provider call, every fact, sample and event once);
+    - exhaustion, then lease recovery (released, not charged, not re-sent, once);
+    - a non-retryable error, not retried;
+    - less than 5 s of lease left, not retried;
+    - a claim superseded during the provider call, fenced (nothing recorded);
+    - with retries disabled, the retry tests fail.
+- `reached-provider.spec.ts`: every category against both origins; `provider-adapters.spec.ts`: origin per simulator behaviour and executor normalisation (provider and local `AUTH_ERROR`).
+- `packages/db/src/test/phase7_5-settlement.int-spec.ts` (6): privileges, untouched earlier grants, definer properties, table immutability. The table censuses (`table-classes.ts`, `principals`) classify `message_attempt_billing` with the definer-only financial tables (DP-3).
+- `settlement.architecture.spec.ts` (9), including that the retry cannot reach the executor, an admission or a second record take (D-6): every queue-row delete is preceded by settlement (a removed call fails the suite), gating on `billing_enforced`, receipts evidence-only, fences `FOR UPDATE`, per-lease recovery.
+
+**Deviations from the approved design (for owner review).**
+1. **Settlement retry: implemented** (see above). The exhaustion outcome remains the approved D-2 recovery. A provider result that cannot be settled within the bounded retry is still lost to `outcome_unknown`: released, never charged.
+2. **`charge_per_attempt` charges only when the chain ends accepted.** OD-7-4 ("settled at chain terminal state on confirmed provider acceptance") and the owner's 7.5 instruction take precedence over the baseline §6.2 rows that charged per attempt on failure. A failed per-attempt chain posts provider cost and release only.
+3. **Reached classification:** settled by the owner (09-Nov-2026) and implemented at the provider boundary (`origin`, above). The contract change is additive to `ProviderFailure`; the test-send API response is unchanged.
+4. **Top-up remaining reservation is conservative.** It subtracts the price of every earlier rated attempt, including ones that will not be charged. It can over-reserve; the excess is released at the terminal state.
+5. **Attempt units snapshot.** The attempt's evaluation (`pricing_evaluations.units`) is the immutable snapshot; no column is added to `message_attempts`.
+6. **A missing provider cost rate fails closed at T2** (`BILLING_PROVIDER_COST_NOT_CONFIGURED`): the message fails before the provider call.
+7. **New SQLSTATE `BL009`** for units that changed between submission and dispatch.
+8. **The T2 fence is also read `FOR UPDATE`** (the baseline named T3). This keeps the queue row first in T2 and prevents a T2/lease-recovery lock inversion.
+9. **The startup guard is kept.** D-74-4 tied its removal to 7.5's completion, but enabling enforcement still requires provisioning, funding, a readiness report and owner approval, none of which this PR provides.
+10. **Not in 7.5** (later PRs per the baseline): operator resolution of unknown outcomes and the reconciliation register (7-6/7-7), metrics for settlement, and the failed-delivery fee configuration (default 0, so nothing is posted).
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

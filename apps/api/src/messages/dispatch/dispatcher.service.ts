@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ORG_LIFECYCLE_LOCK_CLASS, schema } from '@acc/db';
 import {
   DELIVERY_RECEIPTS_CAPABILITY,
@@ -9,6 +9,7 @@ import {
   type AuthPrincipal,
   type DeliveryReceiptType,
   type ProviderStatus,
+  type ProviderSubmissionResult,
   type RcsMessageType,
   type SimulatorBehavior,
 } from '@acc/contracts';
@@ -20,7 +21,8 @@ import { uuidv7 } from 'uuidv7';
 import { AppException } from '../../common/errors/app.exception';
 import { DISPATCH_POOL } from '../../database/database.tokens';
 import { ProviderSubmissionExecutor } from '../../provider-adapters/submission-executor';
-import { ProviderStateStore } from '../../providers/provider-state.store';
+import { MetricsService } from '../../observability/metrics.service';
+import { ProviderStateStore, type SubmissionRecord } from '../../providers/provider-state.store';
 import { initialDeliveryStatus } from '../delivery/delivery-rules';
 import {
   applyHeldReceipts,
@@ -98,14 +100,77 @@ const DISPATCH_PRINCIPAL: AuthPrincipal = Object.freeze({
 
 export const LEASE_DURATION_MS = 30_000;
 
+/** What the settlement transaction (T3) needs; fixed before its first run (OD-7-2). */
+/** The executor's settled result (no import of the admission ledger: ADR-015 R-13). */
+type SettledSubmission = Awaited<ReturnType<ProviderSubmissionExecutor['execute']>>;
+
+interface SettlementInput {
+  readonly claim: DispatchClaim;
+  readonly attemptId: string;
+  readonly attemptNumber: number;
+  readonly selectedProviderId: string;
+  readonly message: { readonly channel_id: string };
+  readonly mapping: { readonly rcs?: { readonly messageType: RcsMessageType } };
+  readonly settled: SettledSubmission;
+  readonly record: SubmissionRecord;
+  readonly enforced: boolean;
+}
+
+/**
+ * Phase 7 PR 7-5: whether a settled provider result means the attempt reached the
+ * provider (OD-7-4: provider cost is recorded for each such attempt; under
+ * `charge_per_attempt` it is charged when the chain ends accepted). Owner decision,
+ * 09-Nov-2026:
+ *   - accepted: reached;
+ *   - TIMEOUT and UNKNOWN: never reached (outcome_unknown, OD-7-4U), whatever the origin;
+ *   - any other failure: reached only when an actual provider response decided it
+ *     (`failure.origin === 'provider'`, set at the adapter boundary). A failure
+ *     detected locally — configuration, credentials checked before any network
+ *     submission — is not reached, whatever its category (an `AUTH_ERROR` can be
+ *     either).
+ */
+export function reachedProvider(result: ProviderSubmissionResult): boolean {
+  if (result.outcome === 'accepted') return true;
+  const { category, origin } = result.failure;
+  if (category === 'TIMEOUT' || category === 'UNKNOWN') return false;
+  return origin === 'provider';
+}
+
+/**
+ * Phase 7 PR 7-5: refusals of the pre-submit reservation top-up and attempt rating
+ * (`app_dispatch_attempt_reserve`), by SQLSTATE. Each terminates the message
+ * `failed` before any provider call, and its reservation is released.
+ */
+const ATTEMPT_BILLING_REFUSALS: Readonly<Record<string, string>> = Object.freeze({
+  BL001: 'BILLING_ACCOUNT_NOT_CONFIGURED',
+  BL002: 'BILLING_ACCOUNT_FROZEN',
+  BL003: 'BILLING_INSUFFICIENT_FUNDS',
+  BL007: 'BILLING_PRICE_NOT_CONFIGURED',
+  BL008: 'BILLING_PROVIDER_COST_NOT_CONFIGURED',
+  BL009: 'BILLING_UNITS_CHANGED',
+});
+
+function sqlState(error: unknown): string | undefined {
+  const e = error as { code?: unknown; cause?: { code?: unknown } } | null | undefined;
+  if (typeof e?.code === 'string') return e.code;
+  if (typeof e?.cause?.code === 'string') return e.cause.code;
+  return undefined;
+}
+
 @Injectable()
 export class DispatcherService {
+  /** OD-7-2: at most this many runs of the settlement transaction. */
+  static readonly SETTLEMENT_MAX_ATTEMPTS = 3;
+  /** OD-7-2: a settlement retry starts only with at least this much claim lease left. */
+  static readonly SETTLEMENT_MIN_LEASE_MS = 5_000;
+
   private readonly logger = new Logger(DispatcherService.name);
 
   constructor(
     @Inject(DISPATCH_POOL) private readonly pool: Pool,
     private readonly providerStateStore: ProviderStateStore,
     private readonly executor: ProviderSubmissionExecutor,
+    @Optional() private readonly metrics?: MetricsService,
   ) {}
 
   /**
@@ -196,9 +261,13 @@ export class DispatcherService {
       const queueResult = await client.query<{
         claim_token: string | null;
         dispatch_epoch: number;
-      }>(`SELECT claim_token, dispatch_epoch FROM message_dispatch_queue WHERE message_id = $1`, [
-        claim.messageId,
-      ]);
+      }>(
+        // Phase 7 PR 7-5: the fence is read under the queue-row lock (§1zi.1: queue row
+        // first in every dispatch transaction), so lease recovery (SKIP LOCKED) cannot
+        // take the row while this transaction may settle money for it.
+        `SELECT claim_token, dispatch_epoch FROM message_dispatch_queue WHERE message_id = $1 FOR UPDATE`,
+        [claim.messageId],
+      );
       const queueRows = queueResult.rows;
 
       if (
@@ -228,7 +297,13 @@ export class DispatcherService {
       const stateResult = await client.query<{
         status: string;
         current_attempt_id: string | null;
-      }>(`SELECT status, current_attempt_id FROM messages WHERE id = $1`, [claim.messageId]);
+        billing_enforced: boolean;
+      }>(`SELECT status, current_attempt_id, billing_enforced FROM messages WHERE id = $1`, [
+        claim.messageId,
+      ]);
+      // Phase 7 PR 7-5: settlement applies only to messages submitted under billing
+      // enforcement (immutable on the message; never the current flag).
+      const enforced = stateResult.rows[0]?.billing_enforced === true;
       if (stateResult.rows[0]?.status === 'submitting') {
         const reason = await this.settleAbandonedSubmission(
           client,
@@ -293,6 +368,7 @@ export class DispatcherService {
            VALUES ($1, $2, $3, 'message.failed', '{"reason":"Organization is closed"}')`,
           [uuidv7(), claim.orgId, claim.messageId],
         );
+        await this.settleMessageBilling(client, enforced);
         await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
           claim.messageId,
         ]);
@@ -353,6 +429,7 @@ export class DispatcherService {
            VALUES ($1, $2, $3, 'message.failed', $4)`,
           [uuidv7(), claim.orgId, claim.messageId, JSON.stringify({ reason, attempts: 0 })],
         );
+        await this.settleMessageBilling(client, enforced);
         await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
           claim.messageId,
         ]);
@@ -395,6 +472,7 @@ export class DispatcherService {
             JSON.stringify({ reason: block, attempts: priorAttemptCount }),
           ],
         );
+        await this.settleMessageBilling(client, enforced);
         await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
           claim.messageId,
         ]);
@@ -453,6 +531,7 @@ export class DispatcherService {
             JSON.stringify({ reason, attempts: priorAttemptCount }),
           ],
         );
+        await this.settleMessageBilling(client, enforced);
         await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
           claim.messageId,
         ]);
@@ -504,6 +583,7 @@ export class DispatcherService {
               }),
             ],
           );
+          await this.settleMessageBilling(client, enforced);
           await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
             claim.messageId,
           ]);
@@ -598,6 +678,7 @@ export class DispatcherService {
             }),
           ],
         );
+        await this.settleMessageBilling(client, enforced);
         await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
           claim.messageId,
         ]);
@@ -608,6 +689,10 @@ export class DispatcherService {
           error: 'NO_ELIGIBLE_PROVIDER',
         };
       }
+
+      // Phase 7 PR 7-5: a refused pre-submit top-up undoes the attempt (and the
+      // queued -> submitting transition) to this savepoint, then fails the message.
+      if (enforced) await client.query('SAVEPOINT billing_attempt');
 
       // Create message attempt
       attemptId = uuidv7();
@@ -660,6 +745,41 @@ export class DispatcherService {
           JSON.stringify({ attemptNumber, providerId: selectedProviderId }),
         ],
       );
+
+      // Phase 7 PR 7-5 (RQ-2, D-74-3): rate this attempt and top up the reservation when
+      // the remaining reservation is below its price — before any provider call. The
+      // units re-derived for submission must equal those persisted at submission.
+      if (enforced) {
+        const refusal = await this.reserveAttempt(
+          client,
+          attemptId,
+          mapping.sms ? mapping.sms.segments : 1,
+        );
+        if (refusal) {
+          await client.query('ROLLBACK TO SAVEPOINT billing_attempt');
+          const reason = `${refusal}: refused before provider submission`;
+          await client.query(
+            `UPDATE messages
+             SET status = 'failed',
+                 failure_reason = $1,
+                 completed_at = now(),
+                 updated_at = now()
+             WHERE id = $2`,
+            [reason, claim.messageId],
+          );
+          await client.query(
+            `INSERT INTO message_events (id, org_id, message_id, event_type, payload)
+             VALUES ($1, $2, $3, 'message.failed', $4)`,
+            [uuidv7(), claim.orgId, claim.messageId, JSON.stringify({ reason: refusal })],
+          );
+          await this.settleMessageBilling(client, enforced);
+          await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
+            claim.messageId,
+          ]);
+          await client.query('COMMIT');
+          return { messageId: claim.messageId, outcome: 'failed', error: refusal };
+        }
+      }
 
       // Read simulator_behavior capability from PostgreSQL (ADR-014 §10, D19)
       let simulatorBehavior: SimulatorBehavior = 'SUCCESS';
@@ -766,6 +886,7 @@ export class DispatcherService {
            VALUES ($1, $2, $3, $4, 'message.failed', '{"reason":"Organization is closed"}')`,
           [uuidv7(), claim.orgId, claim.messageId, attemptId],
         );
+        await this.settleMessageBilling(client, enforced);
         await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
           claim.messageId,
         ]);
@@ -795,357 +916,21 @@ export class DispatcherService {
       );
 
       // -----------------------------------------------------------------------
-      // Step 3: Settlement Transaction
+      // Step 3: Settlement Transaction — retried alone, never the provider call (OD-7-2)
       // -----------------------------------------------------------------------
-      await client.query('BEGIN');
-
-      // Re-set dispatch session context
-      await client.query(
-        `SELECT set_config('app.current_org_id', $1, true),
-                set_config('app.dispatch_message_id', $2, true),
-                set_config('app.dispatch_claim_token', $3, true)`,
-        [claim.orgId, claim.messageId, claim.claimToken],
-      );
-
-      await client.query(`SELECT pg_advisory_xact_lock_shared($1, hashtext($2))`, [
-        ORG_LIFECYCLE_LOCK_CLASS,
-        claim.orgId,
-      ]);
-
-      // Fencing check: verify dispatch_epoch and claim_token match
-      const fenceResult = await client.query<{
-        dispatch_epoch: number;
-        claim_token: string | null;
-      }>(
-        `SELECT dispatch_epoch, claim_token
-         FROM message_dispatch_queue
-         WHERE message_id = $1`,
-        [claim.messageId],
-      );
-      const fenceRows = fenceResult.rows;
-
-      if (
-        !fenceRows[0] ||
-        fenceRows[0].dispatch_epoch !== claim.dispatchEpoch ||
-        fenceRows[0].claim_token !== claim.claimToken
-      ) {
-        // Fencing breach: leased token or epoch was lost/recovered!
-        this.logger.warn({
-          msg: 'Dispatcher fencing epoch breach detected; aborting settlement',
-          messageId: claim.messageId,
-          expectedEpoch: claim.dispatchEpoch,
-          actualEpoch: fenceRows[0]?.dispatch_epoch,
-        });
-        await client.query('ROLLBACK');
-        return {
-          messageId: claim.messageId,
-          attemptId,
-          outcome: 'fenced',
-          error: 'Fencing check failed',
-        };
-      }
-
-      // Phase 5.0 lock order (§B.8): the message row first, before anything touches the
-      // attempt — including the observation below, whose attempt reference takes a key-share
-      // lock on it. Delivery ingestion locks message then attempt, so this order cannot
-      // deadlock with a receipt for the same attempt (AC-LK-1/2).
-      await lockMessage(client, claim.messageId);
-
-      // Phase 5.0: the receipt types the selected provider declares decide the attempt's
-      // initial delivery status (`pending`, or `not_supported` without receipts, OD-3).
-      const receipts = await this.deliveryReceiptsOf(client, selectedProviderId);
-      const initialDelivery = initialDeliveryStatus(receipts);
-
-      // Record observation and sample in providerStateStore
-      const settlementTx = drizzle(client, { schema });
-      await this.providerStateStore.recordSubmission(
-        settlementTx as never,
-        DISPATCH_PRINCIPAL,
-        settled,
-        { attemptId },
-      );
-
-      // Evaluate outcome taxonomy
-      const isAccepted = settled.result.outcome === 'accepted';
-      const failureCategory =
-        'failure' in settled.result && settled.result.failure
-          ? settled.result.failure.category
-          : null;
-      const failureMessage =
-        'failure' in settled.result && settled.result.failure
-          ? settled.result.failure.message
-          : 'Provider submission rejected';
-      const fullFailureReason = failureCategory
-        ? `${failureCategory}: ${failureMessage}`
-        : failureMessage;
-
-      if (isAccepted) {
-        // Success path
-        await client.query(
-          // Phase 5.0: the provider message id (write-once) and the initial delivery status are
-          // written in the same statement that settles the attempt — the terminal guard admits
-          // no later provider reference on an accepted attempt (migration 0044).
-          `UPDATE message_attempts
-           SET status = 'accepted',
-               failure_reason = NULL,
-               latency_ms = $1,
-               completed_at = now(),
-               provider_message_id = $3,
-               delivery_status = $4,
-               delivery_updated_at = now()
-           WHERE id = $2`,
-          [
-            settled.result.latencyMs,
-            attemptId,
-            settled.result.outcome === 'accepted' ? settled.result.providerMessageId : null,
-            initialDelivery,
-          ],
-        );
-
-        await client.query(
-          `UPDATE messages
-           SET status = 'accepted',
-               failure_reason = NULL,
-               completed_at = now(),
-               updated_at = now()
-           WHERE id = $1`,
-          [claim.messageId],
-        );
-
-        await client.query(
-          `INSERT INTO message_events (id, org_id, message_id, attempt_id, event_type, payload)
-           VALUES ($1, $2, $3, $4, 'message.accepted', $5)`,
-          [
-            uuidv7(),
-            claim.orgId,
-            claim.messageId,
-            attemptId,
-            JSON.stringify({ latencyMs: settled.result.latencyMs }),
-          ],
-        );
-
-        // Phase 5.0: the message's delivery state and the held receipts — while the claim row
-        // still exists (every acc_dispatch policy is claim-bound).
-        await this.settleDelivery(client, claim, attemptId, selectedProviderId, {
-          providerMessageId:
-            settled.result.outcome === 'accepted' ? settled.result.providerMessageId : null,
-          receipts,
-        });
-
-        await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
-          claim.messageId,
-        ]);
-
-        await client.query('COMMIT');
-        return {
-          messageId: claim.messageId,
-          attemptId,
-          outcome: 'accepted',
-        };
-      }
-
-      // Ambiguous outcome: TIMEOUT or UNKNOWN (ADR-014 §7, D16) -> OUTCOME_UNKNOWN
-      if (failureCategory === 'TIMEOUT' || failureCategory === 'UNKNOWN') {
-        const unknownReason =
-          failureCategory === 'TIMEOUT'
-            ? 'TIMEOUT: Submission timed out'
-            : `UNKNOWN: ${failureMessage}`;
-
-        await client.query(
-          `UPDATE message_attempts
-           SET status = 'outcome_unknown',
-               failure_reason = $1,
-               latency_ms = $2,
-               completed_at = now(),
-               delivery_status = $4,
-               delivery_updated_at = now()
-           WHERE id = $3`,
-          [unknownReason, settled.result.latencyMs, attemptId, initialDelivery],
-        );
-
-        await client.query(
-          `UPDATE messages
-           SET status = 'outcome_unknown',
-               failure_reason = $1,
-               completed_at = now(),
-               updated_at = now()
-           WHERE id = $2`,
-          [unknownReason, claim.messageId],
-        );
-
-        await client.query(
-          `INSERT INTO message_events (id, org_id, message_id, attempt_id, event_type, payload)
-           VALUES ($1, $2, $3, $4, 'message.outcome_unknown', $5)`,
-          [
-            uuidv7(),
-            claim.orgId,
-            claim.messageId,
-            attemptId,
-            JSON.stringify({
-              category: failureCategory,
-              reason: unknownReason,
-              latencyMs: settled.result.latencyMs,
-            }),
-          ],
-        );
-
-        // Phase 5.0: delivery is tracked for an unknown outcome too — a receipt may resolve it
-        // on the delivery axis while the submission status stays outcome_unknown (§B.5 rule 5).
-        await this.settleDelivery(client, claim, attemptId, selectedProviderId, {
-          providerMessageId: null,
-          receipts,
-        });
-
-        // Delete from queue (terminal, non-retryable, zero fallback per ADR-014 D16)
-        await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
-          claim.messageId,
-        ]);
-
-        await client.query('COMMIT');
-        return {
-          messageId: claim.messageId,
-          attemptId,
-          outcome: 'unknown',
-          error: unknownReason,
-        };
-      }
-
-      // Definite non-acceptance: settle attempt as failed with structured reason
-      await client.query(
-        `UPDATE message_attempts
-         SET status = 'failed',
-             failure_reason = $1,
-             latency_ms = $2,
-             completed_at = now()
-         WHERE id = $3`,
-        [fullFailureReason, settled.result.latencyMs, attemptId],
-      );
-
-      const isFallbackEligible =
-        failureCategory === 'PROVIDER_ERROR' || failureCategory === 'RATE_LIMITED';
-
-      if (isFallbackEligible) {
-        // Check if there are remaining active candidates for this message
-        const remainingResult = await client.query<{ provider_id: string }>(
-          `SELECT opa.provider_id
-           FROM organization_provider_assignments opa
-           WHERE opa.org_id = $1 AND opa.channel_id = $2 AND opa.status = 'active'
-             AND opa.provider_id NOT IN (
-               SELECT ma.provider_id FROM message_attempts ma WHERE ma.message_id = $3
-             )`,
-          [claim.orgId, message.channel_id, claim.messageId],
-        );
-        const remainingIds = remainingResult.rows.map((r) => r.provider_id);
-        // RCS: only providers the next claim would actually try count (Phase 4.2),
-        // so a message is not requeued just to be refused by its own next claim.
-        const remainingCount = mapping.rcs
-          ? (await this.rcsEligibleProviders(client, remainingIds, mapping.rcs.messageType)).size
-          : remainingIds.length;
-
-        if (remainingCount > 0) {
-          // Re-queue message for fallback: submitting -> queued
-          await client.query(
-            `UPDATE messages
-             SET status = 'queued',
-                 current_attempt_id = NULL,
-                 failure_reason = $1,
-                 updated_at = now()
-             WHERE id = $2`,
-            [fullFailureReason, claim.messageId],
-          );
-
-          // Append fallback requeue event while active claim still exists for RLS
-          await client.query(
-            `INSERT INTO message_events (id, org_id, message_id, attempt_id, event_type, payload)
-             VALUES ($1, $2, $3, $4, 'message.queued', $5)`,
-            [
-              uuidv7(),
-              claim.orgId,
-              claim.messageId,
-              attemptId,
-              JSON.stringify({
-                reason: 'fallback',
-                attemptNumber,
-                failureCategory,
-                remainingCandidates: remainingCount,
-              }),
-            ],
-          );
-
-          // Phase 5.0: receipts held for this failed attempt (anomaly path, §B.3), before the
-          // claim is released. Never cancels or alters the requeue (§B.6a rules 3–5).
-          await this.settleDelivery(client, claim, attemptId, selectedProviderId, {
-            providerMessageId: null,
-            receipts,
-          });
-
-          // Release claim on queue so next worker/poll claims with fresh token and epoch
-          await client.query(
-            `UPDATE message_dispatch_queue
-             SET claim_token = NULL,
-                 claimed_until = NULL,
-                 claimed_by = NULL,
-                 available_at = now()
-             WHERE message_id = $1`,
-            [claim.messageId],
-          );
-
-          await client.query('COMMIT');
-          return {
-            messageId: claim.messageId,
-            attemptId,
-            outcome: 'failed',
-            error: fullFailureReason,
-          };
-        }
-      }
-
-      // Candidate exhaustion or non-fallback failure: terminal failed
-      const terminalReason = isFallbackEligible ? 'NO_ELIGIBLE_PROVIDER' : fullFailureReason;
-
-      await client.query(
-        `UPDATE messages
-         SET status = 'failed',
-             failure_reason = $1,
-             completed_at = now(),
-             updated_at = now()
-         WHERE id = $2`,
-        [terminalReason, claim.messageId],
-      );
-
-      await client.query(
-        `INSERT INTO message_events (id, org_id, message_id, attempt_id, event_type, payload)
-         VALUES ($1, $2, $3, $4, 'message.failed', $5)`,
-        [
-          uuidv7(),
-          claim.orgId,
-          claim.messageId,
-          attemptId,
-          JSON.stringify({
-            reason: terminalReason,
-            failureCategory,
-            latencyMs: settled.result.latencyMs,
-          }),
-        ],
-      );
-
-      await this.settleDelivery(client, claim, attemptId, selectedProviderId, {
-        providerMessageId: null,
-        receipts,
-      });
-
-      await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
-        claim.messageId,
-      ]);
-
-      await client.query('COMMIT');
-
-      return {
-        messageId: claim.messageId,
+      // The circuit record is taken from the admission ledger exactly once, here.
+      const record = this.providerStateStore.takeSubmissionRecord(settled);
+      return await this.settleWithRetry(client, {
+        claim,
         attemptId,
-        outcome: 'failed',
-        error: terminalReason,
-      };
+        attemptNumber,
+        selectedProviderId,
+        message,
+        mapping,
+        settled,
+        record,
+        enforced,
+      });
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       this.logger.error(failureLogEntry('Failed to process dispatch claim', error));
@@ -1157,6 +942,525 @@ export class DispatcherService {
       };
     } finally {
       client.release();
+    }
+  }
+
+  /**
+   * Phase 7 PR 7-5 (OD-7-2): the settlement transaction (T3), whole — BEGIN, dispatch
+   * context, org-lifecycle lock, the fence read FOR UPDATE, the message lock, the
+   * circuit/health recording, the attempt and message updates, settlement facts, the
+   * queue row, COMMIT. It holds nothing between runs, so `settleWithRetry` can run it
+   * again from the top after a rollback. It never calls the provider: it works on the
+   * provider result (`settled`) and the circuit record already taken.
+   */
+  private async settleSubmission(
+    client: PoolClient,
+    t: SettlementInput,
+    sink: { afterCommit?: () => void },
+  ): Promise<DispatchProcessResult> {
+    const {
+      claim,
+      attemptId,
+      attemptNumber,
+      selectedProviderId,
+      message,
+      mapping,
+      settled,
+      record,
+      enforced,
+    } = t;
+    await client.query('BEGIN');
+
+    // Re-set dispatch session context
+    await client.query(
+      `SELECT set_config('app.current_org_id', $1, true),
+              set_config('app.dispatch_message_id', $2, true),
+              set_config('app.dispatch_claim_token', $3, true)`,
+      [claim.orgId, claim.messageId, claim.claimToken],
+    );
+
+    await client.query(`SELECT pg_advisory_xact_lock_shared($1, hashtext($2))`, [
+      ORG_LIFECYCLE_LOCK_CLASS,
+      claim.orgId,
+    ]);
+
+    // Fencing check: verify dispatch_epoch and claim_token match
+    const fenceResult = await client.query<{
+      dispatch_epoch: number;
+      claim_token: string | null;
+    }>(
+      // Phase 7 PR 7-5 (OD-7-2): the settlement fence is read FOR UPDATE.
+      `SELECT dispatch_epoch, claim_token
+       FROM message_dispatch_queue
+       WHERE message_id = $1
+       FOR UPDATE`,
+      [claim.messageId],
+    );
+    const fenceRows = fenceResult.rows;
+
+    if (
+      !fenceRows[0] ||
+      fenceRows[0].dispatch_epoch !== claim.dispatchEpoch ||
+      fenceRows[0].claim_token !== claim.claimToken
+    ) {
+      // Fencing breach: leased token or epoch was lost/recovered!
+      this.logger.warn({
+        msg: 'Dispatcher fencing epoch breach detected; aborting settlement',
+        messageId: claim.messageId,
+        expectedEpoch: claim.dispatchEpoch,
+        actualEpoch: fenceRows[0]?.dispatch_epoch,
+      });
+      await client.query('ROLLBACK');
+      return {
+        messageId: claim.messageId,
+        attemptId,
+        outcome: 'fenced',
+        error: 'Fencing check failed',
+      };
+    }
+
+    // Phase 5.0 lock order (§B.8): the message row first, before anything touches the
+    // attempt — including the observation below, whose attempt reference takes a key-share
+    // lock on it. Delivery ingestion locks message then attempt, so this order cannot
+    // deadlock with a receipt for the same attempt (AC-LK-1/2).
+    await lockMessage(client, claim.messageId);
+
+    // Phase 5.0: the receipt types the selected provider declares decide the attempt's
+    // initial delivery status (`pending`, or `not_supported` without receipts, OD-3).
+    const receipts = await this.deliveryReceiptsOf(client, selectedProviderId);
+    const initialDelivery = initialDeliveryStatus(receipts);
+
+    // Record observation and sample in providerStateStore
+    const settlementTx = drizzle(client, { schema });
+    // OD-7-2 recording split: the record was taken once, before the retry loop; this
+    // writes it in this transaction only, and its metrics wait for COMMIT (sink).
+    const written = await this.providerStateStore.writeSubmissionRecord(
+      settlementTx as never,
+      DISPATCH_PRINCIPAL,
+      record,
+      { attemptId },
+    );
+    sink.afterCommit = written.afterCommit;
+
+    // Evaluate outcome taxonomy
+    const isAccepted = settled.result.outcome === 'accepted';
+    const failureCategory =
+      'failure' in settled.result && settled.result.failure
+        ? settled.result.failure.category
+        : null;
+    const failureMessage =
+      'failure' in settled.result && settled.result.failure
+        ? settled.result.failure.message
+        : 'Provider submission rejected';
+    const fullFailureReason = failureCategory
+      ? `${failureCategory}: ${failureMessage}`
+      : failureMessage;
+
+    if (isAccepted) {
+      // Success path
+      await client.query(
+        // Phase 5.0: the provider message id (write-once) and the initial delivery status are
+        // written in the same statement that settles the attempt — the terminal guard admits
+        // no later provider reference on an accepted attempt (migration 0044).
+        `UPDATE message_attempts
+         SET status = 'accepted',
+             failure_reason = NULL,
+             latency_ms = $1,
+             completed_at = now(),
+             provider_message_id = $3,
+             delivery_status = $4,
+             delivery_updated_at = now()
+         WHERE id = $2`,
+        [
+          settled.result.latencyMs,
+          attemptId,
+          settled.result.outcome === 'accepted' ? settled.result.providerMessageId : null,
+          initialDelivery,
+        ],
+      );
+      await this.settleAttemptBilling(client, enforced, attemptId, reachedProvider(settled.result));
+
+      await client.query(
+        `UPDATE messages
+         SET status = 'accepted',
+             failure_reason = NULL,
+             completed_at = now(),
+             updated_at = now()
+         WHERE id = $1`,
+        [claim.messageId],
+      );
+
+      await client.query(
+        `INSERT INTO message_events (id, org_id, message_id, attempt_id, event_type, payload)
+         VALUES ($1, $2, $3, $4, 'message.accepted', $5)`,
+        [
+          uuidv7(),
+          claim.orgId,
+          claim.messageId,
+          attemptId,
+          JSON.stringify({ latencyMs: settled.result.latencyMs }),
+        ],
+      );
+
+      // Phase 5.0: the message's delivery state and the held receipts — while the claim row
+      // still exists (every acc_dispatch policy is claim-bound).
+      await this.settleDelivery(client, claim, attemptId, selectedProviderId, {
+        providerMessageId:
+          settled.result.outcome === 'accepted' ? settled.result.providerMessageId : null,
+        receipts,
+      });
+
+      await this.settleMessageBilling(client, enforced);
+      await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
+        claim.messageId,
+      ]);
+
+      await client.query('COMMIT');
+      return {
+        messageId: claim.messageId,
+        attemptId,
+        outcome: 'accepted',
+      };
+    }
+
+    // Ambiguous outcome: TIMEOUT or UNKNOWN (ADR-014 §7, D16) -> OUTCOME_UNKNOWN
+    if (failureCategory === 'TIMEOUT' || failureCategory === 'UNKNOWN') {
+      const unknownReason =
+        failureCategory === 'TIMEOUT'
+          ? 'TIMEOUT: Submission timed out'
+          : `UNKNOWN: ${failureMessage}`;
+
+      await client.query(
+        `UPDATE message_attempts
+         SET status = 'outcome_unknown',
+             failure_reason = $1,
+             latency_ms = $2,
+             completed_at = now(),
+             delivery_status = $4,
+             delivery_updated_at = now()
+         WHERE id = $3`,
+        [unknownReason, settled.result.latencyMs, attemptId, initialDelivery],
+      );
+      // OD-7-4U: an unknown outcome never reached-billed: no provider cost, no charge.
+      await this.settleAttemptBilling(client, enforced, attemptId, false);
+
+      await client.query(
+        `UPDATE messages
+         SET status = 'outcome_unknown',
+             failure_reason = $1,
+             completed_at = now(),
+             updated_at = now()
+         WHERE id = $2`,
+        [unknownReason, claim.messageId],
+      );
+
+      await client.query(
+        `INSERT INTO message_events (id, org_id, message_id, attempt_id, event_type, payload)
+         VALUES ($1, $2, $3, $4, 'message.outcome_unknown', $5)`,
+        [
+          uuidv7(),
+          claim.orgId,
+          claim.messageId,
+          attemptId,
+          JSON.stringify({
+            category: failureCategory,
+            reason: unknownReason,
+            latencyMs: settled.result.latencyMs,
+          }),
+        ],
+      );
+
+      // Phase 5.0: delivery is tracked for an unknown outcome too — a receipt may resolve it
+      // on the delivery axis while the submission status stays outcome_unknown (§B.5 rule 5).
+      await this.settleDelivery(client, claim, attemptId, selectedProviderId, {
+        providerMessageId: null,
+        receipts,
+      });
+
+      // Delete from queue (terminal, non-retryable, zero fallback per ADR-014 D16)
+      await this.settleMessageBilling(client, enforced);
+      await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
+        claim.messageId,
+      ]);
+
+      await client.query('COMMIT');
+      return {
+        messageId: claim.messageId,
+        attemptId,
+        outcome: 'unknown',
+        error: unknownReason,
+      };
+    }
+
+    // Definite non-acceptance: settle attempt as failed with structured reason
+    await client.query(
+      `UPDATE message_attempts
+       SET status = 'failed',
+           failure_reason = $1,
+           latency_ms = $2,
+           completed_at = now()
+       WHERE id = $3`,
+      [fullFailureReason, settled.result.latencyMs, attemptId],
+    );
+    await this.settleAttemptBilling(client, enforced, attemptId, reachedProvider(settled.result));
+
+    const isFallbackEligible =
+      failureCategory === 'PROVIDER_ERROR' || failureCategory === 'RATE_LIMITED';
+
+    if (isFallbackEligible) {
+      // Check if there are remaining active candidates for this message
+      const remainingResult = await client.query<{ provider_id: string }>(
+        `SELECT opa.provider_id
+         FROM organization_provider_assignments opa
+         WHERE opa.org_id = $1 AND opa.channel_id = $2 AND opa.status = 'active'
+           AND opa.provider_id NOT IN (
+             SELECT ma.provider_id FROM message_attempts ma WHERE ma.message_id = $3
+           )`,
+        [claim.orgId, message.channel_id, claim.messageId],
+      );
+      const remainingIds = remainingResult.rows.map((r) => r.provider_id);
+      // RCS: only providers the next claim would actually try count (Phase 4.2),
+      // so a message is not requeued just to be refused by its own next claim.
+      const remainingCount = mapping.rcs
+        ? (await this.rcsEligibleProviders(client, remainingIds, mapping.rcs.messageType)).size
+        : remainingIds.length;
+
+      if (remainingCount > 0) {
+        // Re-queue message for fallback: submitting -> queued
+        await client.query(
+          `UPDATE messages
+           SET status = 'queued',
+               current_attempt_id = NULL,
+               failure_reason = $1,
+               updated_at = now()
+           WHERE id = $2`,
+          [fullFailureReason, claim.messageId],
+        );
+
+        // Append fallback requeue event while active claim still exists for RLS
+        await client.query(
+          `INSERT INTO message_events (id, org_id, message_id, attempt_id, event_type, payload)
+           VALUES ($1, $2, $3, $4, 'message.queued', $5)`,
+          [
+            uuidv7(),
+            claim.orgId,
+            claim.messageId,
+            attemptId,
+            JSON.stringify({
+              reason: 'fallback',
+              attemptNumber,
+              failureCategory,
+              remainingCandidates: remainingCount,
+            }),
+          ],
+        );
+
+        // Phase 5.0: receipts held for this failed attempt (anomaly path, §B.3), before the
+        // claim is released. Never cancels or alters the requeue (§B.6a rules 3–5).
+        await this.settleDelivery(client, claim, attemptId, selectedProviderId, {
+          providerMessageId: null,
+          receipts,
+        });
+
+        // Release claim on queue so next worker/poll claims with fresh token and epoch
+        await client.query(
+          `UPDATE message_dispatch_queue
+           SET claim_token = NULL,
+               claimed_until = NULL,
+               claimed_by = NULL,
+               available_at = now()
+           WHERE message_id = $1`,
+          [claim.messageId],
+        );
+
+        await client.query('COMMIT');
+        return {
+          messageId: claim.messageId,
+          attemptId,
+          outcome: 'failed',
+          error: fullFailureReason,
+        };
+      }
+    }
+
+    // Candidate exhaustion or non-fallback failure: terminal failed
+    const terminalReason = isFallbackEligible ? 'NO_ELIGIBLE_PROVIDER' : fullFailureReason;
+
+    await client.query(
+      `UPDATE messages
+       SET status = 'failed',
+           failure_reason = $1,
+           completed_at = now(),
+           updated_at = now()
+       WHERE id = $2`,
+      [terminalReason, claim.messageId],
+    );
+
+    await client.query(
+      `INSERT INTO message_events (id, org_id, message_id, attempt_id, event_type, payload)
+       VALUES ($1, $2, $3, $4, 'message.failed', $5)`,
+      [
+        uuidv7(),
+        claim.orgId,
+        claim.messageId,
+        attemptId,
+        JSON.stringify({
+          reason: terminalReason,
+          failureCategory,
+          latencyMs: settled.result.latencyMs,
+        }),
+      ],
+    );
+
+    await this.settleDelivery(client, claim, attemptId, selectedProviderId, {
+      providerMessageId: null,
+      receipts,
+    });
+
+    await this.settleMessageBilling(client, enforced);
+    await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
+      claim.messageId,
+    ]);
+
+    await client.query('COMMIT');
+
+    return {
+      messageId: claim.messageId,
+      attemptId,
+      outcome: 'failed',
+      error: terminalReason,
+    };
+  }
+
+  /**
+   * Phase 7 PR 7-5 (OD-7-2): runs the settlement transaction, retrying **only it**
+   * after a deadlock (40P01) or serialization failure (40001): at most
+   * SETTLEMENT_MAX_ATTEMPTS runs, with 25–100 ms jitter, and a retry only while the
+   * claim lease has at least SETTLEMENT_MIN_LEASE_MS left. Each run re-reads the fence
+   * under the queue-row lock, so a superseded worker never settles.
+   *
+   * A database error aborts the PostgreSQL transaction, so the run is rolled back as a
+   * whole — no partial fact, sample or status survives — and the next run starts from
+   * BEGIN. The provider result is the immutable `settled` value in memory and the
+   * circuit record was taken once, before the first run: no path here can reach the
+   * executor or issue an admission, so the provider is never called again. Metrics are
+   * published once, after the run that commits.
+   *
+   * Exhaustion or any other error is rethrown, leaving the message `submitting` with its
+   * claim held and no ledger fact. Lease recovery then settles it `outcome_unknown`
+   * (baseline §9.2, D-2): released, never charged, never re-sent.
+   */
+  private async settleWithRetry(
+    client: PoolClient,
+    t: SettlementInput,
+  ): Promise<DispatchProcessResult> {
+    for (let run = 1; ; run += 1) {
+      const sink: { afterCommit?: () => void } = {};
+      try {
+        const result = await this.settleSubmission(client, t, sink);
+        sink.afterCommit?.();
+        if (run > 1) this.metrics?.dispatchSettlementRetries.inc({ outcome: 'succeeded' });
+        return result;
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        const code = sqlState(error);
+        const context = { messageId: t.claim.messageId, attemptId: t.attemptId, run };
+        if (code !== '40P01' && code !== '40001') {
+          this.metrics?.dispatchSettlementRetries.inc({ outcome: 'non_retryable' });
+          this.logger.error({
+            ...failureLogEntry('Settlement transaction failed; left for lease recovery', error),
+            ...context,
+          });
+          throw error;
+        }
+        const leaseMs =
+          run < DispatcherService.SETTLEMENT_MAX_ATTEMPTS
+            ? await this.remainingLeaseMs(client, t.claim)
+            : null;
+        if (leaseMs === null || leaseMs < DispatcherService.SETTLEMENT_MIN_LEASE_MS) {
+          this.metrics?.dispatchSettlementRetries.inc({ outcome: 'exhausted' });
+          this.logger.error({
+            ...failureLogEntry('Settlement retries exhausted; left for lease recovery', error),
+            ...context,
+            leaseMs,
+          });
+          throw error;
+        }
+        this.logger.warn({
+          ...failureLogEntry('Settlement transaction failed; retrying', error),
+          ...context,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 25 + Math.floor(Math.random() * 76)));
+      }
+    }
+  }
+
+  /** The claim's remaining lease in ms, or null when the claim is no longer this worker's. */
+  private async remainingLeaseMs(client: PoolClient, claim: DispatchClaim): Promise<number | null> {
+    await client.query('BEGIN');
+    try {
+      await client.query(
+        `SELECT set_config('app.current_org_id', $1, true),
+                set_config('app.dispatch_message_id', $2, true),
+                set_config('app.dispatch_claim_token', $3, true)`,
+        [claim.orgId, claim.messageId, claim.claimToken],
+      );
+      const { rows } = await client.query<{ ms: string | null }>(
+        `SELECT (EXTRACT(EPOCH FROM (claimed_until - clock_timestamp())) * 1000)::bigint::text AS ms
+           FROM message_dispatch_queue
+          WHERE message_id = $1 AND claim_token = $2 AND dispatch_epoch = $3`,
+        [claim.messageId, claim.claimToken, claim.dispatchEpoch],
+      );
+      return rows[0]?.ms == null ? null : Number(rows[0].ms);
+    } finally {
+      await client.query('COMMIT').catch(() => undefined);
+    }
+  }
+
+  /**
+   * Phase 7 PR 7-5: charges (on a confirmed accepted chain) and releases the reservation,
+   * in the transaction that finishes the message, while the claim row still exists
+   * (`app_dispatch_message_settle` verifies the live claim). Nothing for a message not
+   * submitted under billing enforcement.
+   */
+  private async settleMessageBilling(client: PoolClient, enforced: boolean): Promise<void> {
+    if (!enforced) return;
+    await client.query(`SELECT * FROM app_dispatch_message_settle()`);
+  }
+
+  /**
+   * Phase 7 PR 7-5: records whether a settled attempt reached the provider and, if it did,
+   * its provider cost — after the attempt's terminal status is written, in the same
+   * transaction (`app_dispatch_attempt_settle`).
+   */
+  private async settleAttemptBilling(
+    client: PoolClient,
+    enforced: boolean,
+    attemptId: string,
+    reached: boolean,
+  ): Promise<void> {
+    if (!enforced) return;
+    await client.query(`SELECT * FROM app_dispatch_attempt_settle($1, $2)`, [attemptId, reached]);
+  }
+
+  /**
+   * Phase 7 PR 7-5: rates the new attempt and tops up the reservation if needed
+   * (`app_dispatch_attempt_reserve`). Returns the refusal code for a billing refusal
+   * (the caller rolls back to its savepoint and fails the message); rethrows anything
+   * else.
+   */
+  private async reserveAttempt(
+    client: PoolClient,
+    attemptId: string,
+    units: number,
+  ): Promise<string | null> {
+    try {
+      await client.query(`SELECT * FROM app_dispatch_attempt_reserve($1, $2)`, [attemptId, units]);
+      return null;
+    } catch (error) {
+      const refusal = ATTEMPT_BILLING_REFUSALS[sqlState(error) ?? ''];
+      if (!refusal) throw error;
+      return refusal;
     }
   }
 
@@ -1304,6 +1608,17 @@ export class DispatcherService {
       });
     }
 
+    // Phase 7 PR 7-5 (OD-7-4U): an abandoned submission is never charged and carries no
+    // provider cost; its reservation is released in this transaction, which finishes the
+    // message, while the (recovery or new) claim is still live.
+    const billing = await client.query<{ billing_enforced: boolean }>(
+      `SELECT billing_enforced FROM messages WHERE id = $1`,
+      [messageId],
+    );
+    const enforced = billing.rows[0]?.billing_enforced === true;
+    if (attemptId) await this.settleAttemptBilling(client, enforced, attemptId, false);
+    await this.settleMessageBilling(client, enforced);
+
     // Delete from queue (non-retryable)
     await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [messageId]);
     return reason;
@@ -1313,85 +1628,107 @@ export class DispatcherService {
    * Recovers expired leases (P3-D11 / ADR-014 D18).
    * Attempts that expired during 'submitting' status cannot be safely retried
    * and must be terminalized as OUTCOME_UNKNOWN (terminal, non-retryable).
+   *
+   * Phase 7 PR 7-5 (OD-7-2): **one expired lease per transaction**. Settlement takes
+   * the organization's billing account, so a batch spanning organizations could
+   * deadlock with another recovery run; and a lease that fails (a poison lease) must
+   * not hold back the others. A failing lease is rolled back, logged and skipped for
+   * the rest of this run; it is retried on the next cycle, never re-sent. The first
+   * error is rethrown once every other lease has been recovered.
    */
   async recoverExpiredLeases(): Promise<number> {
     const client = await this.pool.connect();
+    const skipped: string[] = [];
+    let firstError: unknown = null;
+    let recovered = 0;
     try {
-      await client.query('BEGIN');
-
-      const expiredResult = await client.query<{
-        message_id: string;
-        org_id: string;
-        claim_token: string | null;
-        dispatch_epoch: number;
-      }>(
-        `SELECT message_id, org_id, claim_token, dispatch_epoch
-         FROM message_dispatch_queue
-         WHERE claimed_until < now()
-         FOR UPDATE SKIP LOCKED`,
-      );
-      const expired = expiredResult.rows;
-
-      let recovered = 0;
-
-      for (const row of expired) {
-        // Claim the expired queue row for recovery
-        const recoveryToken = randomUUID();
-        await client.query(
-          `UPDATE message_dispatch_queue
-           SET claim_token = $1,
-               claimed_until = now() + interval '30 seconds',
-               dispatch_epoch = dispatch_epoch + 1
-           WHERE message_id = $2`,
-          [recoveryToken, row.message_id],
-        );
-
-        // Set dispatch context under the active recovery claim
-        await client.query(
-          `SELECT set_config('app.current_org_id', $1, true),
-                  set_config('app.dispatch_message_id', $2, true),
-                  set_config('app.dispatch_claim_token', $3, true)`,
-          [row.org_id, row.message_id, recoveryToken],
-        );
-
-        // Check if message is in 'submitting' status
-        const msgResult = await client.query<{
-          status: string;
-          current_attempt_id: string | null;
-        }>(`SELECT status, current_attempt_id FROM messages WHERE id = $1`, [row.message_id]);
-        const msgRows = msgResult.rows;
-
-        if (msgRows[0]?.status === 'submitting') {
-          await this.settleAbandonedSubmission(
-            client,
-            row.org_id,
-            row.message_id,
-            msgRows[0].current_attempt_id,
+      for (;;) {
+        let messageId: string | null = null;
+        try {
+          await client.query('BEGIN');
+          const expiredResult = await client.query<{
+            message_id: string;
+            org_id: string;
+            claim_token: string | null;
+            dispatch_epoch: number;
+          }>(
+            `SELECT message_id, org_id, claim_token, dispatch_epoch
+             FROM message_dispatch_queue
+             WHERE claimed_until < now()
+               AND NOT (message_id = ANY($1::uuid[]))
+             ORDER BY claimed_until, message_id
+             LIMIT 1
+             FOR UPDATE SKIP LOCKED`,
+            [skipped],
           );
-        } else {
-          // Message was not submitting (e.g. queued/routing): release claim for redelivery
+          const row = expiredResult.rows[0];
+          if (!row) {
+            await client.query('COMMIT');
+            break;
+          }
+          messageId = row.message_id;
+
+          // Claim the expired queue row for recovery
+          const recoveryToken = randomUUID();
           await client.query(
             `UPDATE message_dispatch_queue
-             SET claim_token = NULL,
-                 claimed_until = NULL,
-                 claimed_by = NULL
-             WHERE message_id = $1`,
-            [row.message_id],
+             SET claim_token = $1,
+                 claimed_until = now() + interval '30 seconds',
+                 dispatch_epoch = dispatch_epoch + 1
+             WHERE message_id = $2`,
+            [recoveryToken, row.message_id],
           );
+
+          // Set dispatch context under the active recovery claim
+          await client.query(
+            `SELECT set_config('app.current_org_id', $1, true),
+                    set_config('app.dispatch_message_id', $2, true),
+                    set_config('app.dispatch_claim_token', $3, true)`,
+            [row.org_id, row.message_id, recoveryToken],
+          );
+
+          // Check if message is in 'submitting' status
+          const msgResult = await client.query<{
+            status: string;
+            current_attempt_id: string | null;
+          }>(`SELECT status, current_attempt_id FROM messages WHERE id = $1`, [row.message_id]);
+          const msgRows = msgResult.rows;
+
+          if (msgRows[0]?.status === 'submitting') {
+            await this.settleAbandonedSubmission(
+              client,
+              row.org_id,
+              row.message_id,
+              msgRows[0].current_attempt_id,
+            );
+          } else {
+            // Message was not submitting (e.g. queued/routing): release claim for redelivery
+            await client.query(
+              `UPDATE message_dispatch_queue
+               SET claim_token = NULL,
+                   claimed_until = NULL,
+                   claimed_by = NULL
+               WHERE message_id = $1`,
+              [row.message_id],
+            );
+          }
+
+          await client.query('COMMIT');
+          recovered++;
+        } catch (error) {
+          await client.query('ROLLBACK').catch(() => undefined);
+          this.logger.error(failureLogEntry('Failed to recover expired leases', error));
+          firstError ??= error;
+          // Without a row there is nothing to skip: the failure is not lease-specific.
+          if (messageId === null) break;
+          skipped.push(messageId);
         }
-
-        recovered++;
       }
-
-      await client.query('COMMIT');
-      return recovered;
-    } catch (error) {
-      await client.query('ROLLBACK').catch(() => undefined);
-      this.logger.error(failureLogEntry('Failed to recover expired leases', error));
-      throw error;
     } finally {
       client.release();
     }
+    if (firstError !== null) throw firstError;
+    return recovered;
   }
 
   /**
