@@ -96,7 +96,16 @@ describe('Phase 7-3: the shared message submission core', () => {
     });
 
     it('no application code posts a settlement fact', () => {
-      expect(filesMatching(/'(customer_charge|reservation_release|provider_cost)'/)).toEqual([]);
+      // Phase 7 PR 7-6a: only the read-only tenant billing files name these entry types — as
+      // a ledger filter and its validation and documentation — and none of them writes.
+      expect(filesMatching(/'(customer_charge|reservation_release|provider_cost)'/)).toEqual([
+        'apps/api/src/billing/billing-read.dto.ts',
+        'apps/api/src/billing/billing-read.service.ts',
+        'apps/api/src/openapi/openapi-schemas.ts',
+      ]);
+      expect(
+        filesMatching(/app_ledger_post|INSERT INTO usage_ledger|insert\(\s*schema\.usageLedger/i),
+      ).toEqual([]);
     });
   });
 

@@ -71,8 +71,9 @@ export const CONTENT_TABLES = [
  * functions (`app_ledger_post`, executable by no application role in PR 7-1).
  * They fit neither class: tenant content requires `acc_app` SELECT, INSERT and
  * UPDATE, and a tenancy record is reachable through `app_org_in_scope`. RLS is
- * enabled with no policy, so a role that is ever granted access still sees
- * nothing until a policy is approved. The monthly `usage_ledger` partitions are
+ * enabled. Phase 7 PR 7-6a (0055, D-76-2): `acc_app` has SELECT only, under
+ * organization-scoped tenant SELECT policies (the ledger's admits only the
+ * tenant-visible entry types); there is still no write privilege or policy. The monthly `usage_ledger` partitions are
  * not listed: the census treats each partition as its parent, and every
  * partition carries the parent's protections (`app_ledger_partition_report`).
  */

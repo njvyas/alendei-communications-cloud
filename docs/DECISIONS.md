@@ -2907,6 +2907,94 @@ The authorisation excludes merge, deployment, enforcement enablement, provisioni
 9. **The startup guard is kept.** D-74-4 tied its removal to 7.5's completion, but enabling enforcement still requires provisioning, funding, a readiness report and owner approval, none of which this PR provides.
 10. **Not in 7.5** (later PRs per the baseline): operator resolution of unknown outcomes and the reconciliation register (7-6/7-7), metrics for settlement, and the failed-delivery fee configuration (default 0, so nothing is posted).
 
+### 1zi.9 Phase 7.6 owner decisions: billing APIs and operational controls (09-Nov-2026)
+The owner reviewed `docs/PHASE-7-6-BILLING-APIS-HANDOVER.md` and decided as follows. Implementation is not yet authorised, and billing enforcement stays disabled.
+- **D-76-1: operator charge.** A narrow operator-charge mode in the existing ledger writer.
+  - It is callable only through the dedicated resolution function, and only for `outcome_unknown` messages.
+  - It preserves available-funds checks, the automatic path's fact identities, idempotency and single resolution.
+  - It recreates no reservation.
+  - It posts no provider cost without independent supporting evidence.
+- **D-76-2: tenant reads.** Tenant-scoped RLS `SELECT` policies on the financial tables, with no tenant write permissions. This supersedes the "no policy" clause of DP-3 for `SELECT` only.
+- **D-76-3: dual control.**
+  - The threshold is configurable. Until it is configured, every charge and every write-off requires a second approver.
+  - An unevidenced outcome may be charged only with dual control, whatever the amount.
+  - Requester and approver must be different users.
+  - Approval is bound to the exact request and amount.
+- **D-76-4: `billing.read`.** API keys and custom roles cannot receive `billing.read` in this increment; system roles only.
+- **D-76-5: register access.** The unknown-outcome register is restricted to `billing.manage`, with no platform-support access in this increment.
+- **D-76-6: provisioning and recharge.** These are a separate PR (7-6d) and require a separate implementation handover.
+- **PR sequence retained:** 7-6a tenant billing reads; 7-6b unknown-outcome register and metrics; 7-6c operator resolution; 7-6d the separate provisioning and recharge handover.
+
+**Conflicts with the baseline, resolved by these decisions** (handover §12):
+1. Policy U's operator charge posted `provider_cost` unconditionally. It is now posted only with independent supporting evidence; baseline test D-11 (evidenced) is unchanged.
+2. DP-3's "no policy" is superseded for tenant `SELECT`.
+3. Dual control is extended to write-offs, and to every action until the threshold is configured.
+4. The writer's `BL004`/`BL006` refusals are bypassed only by the resolution mode.
+5. Recharge and money-movement request keys move from 7-6 to 7-6d; RQ-3 still applies to resolution mutations.
+6. The register API and metrics move to 7-6b; the `billing:reconcile` CLI stays in 7-7.
+
+**Open for owner confirmation before 7-6c** (they do not block 7-6a or 7-6b):
+- **O-1:** the meaning of "independent supporting evidence". Proposed: a provider delivery receipt recorded on the unknown attempt. Also whether cost may be posted later for an item charged without evidence; proposed: no, not in 7.6.
+- **O-2:** where the dual-control threshold is configured. Proposed: an environment setting.
+
+### 1zi.10 PR 7-6a as built: tenant billing reads (migration `0055`)
+**Owner authorisation, 09-Nov-2026:** implementation of 7-6a only, on the approved Phase 7.6 handover (Rev 2) and §1zi.9. 7-6b, 7-6c, provisioning and recharge are not authorised; enforcement stays disabled.
+
+**As built.**
+- **Migration `0055` (expand-only):**
+  - `GRANT SELECT` (only) on `wallets`, `credit_accounts` and the `usage_ledger` parent to `acc_app`;
+  - one `SELECT` policy per table for `acc_app`: `org_id = app_current_org_id() AND app_content_context_valid()`. The ledger's also requires `entry_type IN ('reservation', 'reservation_release', 'customer_charge')`, so a provider cost (or reseller markup) is invisible to tenants at the database layer;
+  - no write privilege or write policy;
+  - ledger partitions carry no grant: a direct partition read is `42501`, and `app_ledger_partition_report` still finds every partition privilege-restricted;
+  - no function, trigger, constraint or writer branch changes.
+- **API** (`BillingReadController`, `billing.read` at the request organization, user sessions only):
+  - **`GET /billing/account`:** by the organization's billing mode — prepaid `balance`/`reserved`/`available`, postpaid `creditLimit`/`used`/`reserved`/`available`, plus `billingMode`, `billingPolicy`, `status` and `currency`. Integer paise. `404 BILLING_ACCOUNT_NOT_CONFIGURED` when there is none.
+  - **`GET /billing/ledger`:** cursor-paginated, newest first (UUIDv7 id). Filters `from`, `to`, `entryType` (the three tenant types only) and `messageId`.
+  - **`GET /billing/usage`:** `customer_charge` entries in `[from, to)` (at most 92 days), joined to messages under RLS. Totals, per channel and per day (in an IANA time zone), with charged paise, messages and billable units (each message counted once per day and channel).
+- **Read-only query models** (`packages/db/src/schema/billing.ts`) for `wallets`, `credit_accounts` and `usage_ledger`. Writes still go only through the SECURITY DEFINER writer.
+- **Unchanged:** settlement, the writer, 7.4/7.5 behaviour, `INERT_PERMISSION_KEYS` (`billing.read` stays unavailable to API keys and custom roles), and the enforcement startup guard.
+- **History proof:** `56|95f97adb857d43b157d7e1fe405df8bb` (`0000`–`0055`), computed on a disposable clone and recorded in `RELEASE.md`.
+
+**Tests.**
+- `packages/db/src/test/phase7_6a-billing-reads.int-spec.ts` (7), as `acc_app` under a tenant context:
+  - own rows only, and another organization's invisible even by id;
+  - provider cost invisible even for the tenant's own message;
+  - nothing without a valid content context;
+  - every `INSERT`/`UPDATE`/`DELETE`/`TRUNCATE` and direct partition read refused (`42501`);
+  - exactly the three policies;
+  - partitions still restricted.
+- `apps/api/test/phase7_6a-billing-reads.int-spec.ts` (23):
+  - prepaid, postpaid and no-account shapes;
+  - complete cursor pagination with no duplicates;
+  - filters, including refusal of a `provider_cost` filter;
+  - cross-organization access by message id or header empty or refused;
+  - usage aggregation and units, the channel filter, period and time-zone validation (92 days exactly admitted, 93 refused);
+  - no provider cost, markup or rate-card detail in any response;
+  - `403` without `billing.read`, API keys refused;
+  - no write route.
+
+**Deviations from the handover.**
+1. **Pinned regression assertions changed, deliberately, because D-76-2 changes what they pin:**
+   - `phase7_1-ledger` P-7 (application privileges; `acc_app` without a tenant context now sees zero rows instead of `42501`, and a partition is still `42501`) and its "no policy" check (now one tenant `SELECT` policy on the parent and each account, none on partitions);
+   - `phase7_2-pricing` (grants on the three tables);
+   - the `principals` privilege census;
+   - the `table-classes` reason text.
+
+   Every other assertion of those suites is unchanged.
+2. **The 7.4 structural test "no application code posts a settlement fact"** now pins the read-only files that name entry types (the DTO, the read service and the OpenAPI schemas), and additionally asserts that no application file names `app_ledger_post` or inserts into the ledger.
+3. **Read-only Drizzle query models** were added for the three tables (needed by the shared cursor pagination). The migrations still own all DDL.
+4. **The account response** also carries `billingPolicy`, and uses `404` for a missing account (the reservation path's `BILLING_ACCOUNT_NOT_CONFIGURED` code is `422` because there it refuses a send).
+5. **Test fixture:** the harness's stand-in `org_admin` is narrowed to organization scope, as the production `org_admin` is, before `billing.read` is added, because `billing.read` may only be conferred at organization scope.
+6. **Defect found and fixed during verification.** `@AcceptedCredentials('userSession')` is documentation only. An API key whose scopes carried `billing.read` (planted outside the API by the OpenAPI contract probe) reached `GET /billing/ledger`. `app_content_context_valid()` admits API keys, so the database did not refuse it either.
+   - **Fix:** each read now refuses any principal that is not a signed-in user session (`403 AUTHZ_SCOPE_DENIED`) in the owning service, as `revokeAllOwnSessions` does.
+   - **Tests:** the API suite now plants such a key and asserts the refusal on all three routes, and the contract probe asserts it for every user-session-only operation.
+7. **Pinned counts updated:**
+   - application operations 171 → 174;
+   - scoped routes 158 → 161, deferred-target routes 133 → 136;
+   - content-context policies 28 → 31.
+
+   The OpenAPI contract probe exercises the three reads with a real `org_admin` session.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

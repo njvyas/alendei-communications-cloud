@@ -113,6 +113,19 @@ Platform administration of rate cards, provider cost rates and rate-card assignm
 - **Idempotency:** every creating `POST` (plan, draft version, activation, provider cost rate, assignment) **requires** `Idempotency-Key` (`400 IDEMPOTENCY_KEY_REQUIRED` without one), with the semantics of §4. The same key and request replay the original response and status, even after the state has moved on (for example a draft retried after its activation), and create nothing. The same key with a different body, path or principal is `422 IDEMPOTENCY_KEY_PAYLOAD_MISMATCH`; a duplicate still in flight is `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`. Records live in the platform namespace of `idempotency_keys` (`org_id NULL`; `DATABASE.md` §7.1). A different request that collides with an existing record (plan name, a second draft, the same effective time) is `409`. `PUT …/rules` is unkeyed: it replaces the whole set.
 - **Append-only:** cost rates and assignments are never updated or deleted; a change is a new row with a later `effectiveFrom`.
 
+### 2e. `/billing` — tenant billing reads (Phase 7 PR 7-6a, 09-Nov-2026)
+- **Routes** (read-only; there is no write route):
+  - `GET /billing/account`: the account of the organization's billing mode.
+    - prepaid: `balancePaise`, `reservedPaise`, `availablePaise`;
+    - postpaid: `creditLimitPaise`, `usedPaise`, `reservedPaise`, `availablePaise`;
+    - `404 BILLING_ACCOUNT_NOT_CONFIGURED` when there is none.
+  - `GET /billing/ledger`: cursor-paginated, newest first. Filters: `from`, `to`, `entryType` (`reservation`, `reservation_release`, `customer_charge`), `messageId`.
+  - `GET /billing/usage?from&to[&channelCode][&timeZone]`: customer charges in `[from, to)` (at most 92 days), by channel and by day, with message and unit counts, derived from the ledger.
+- **Money:** integer paise, INR only.
+- **Never returned to a tenant:** provider cost, reseller markup or rate-card details. The database itself admits only the three tenant-visible entry types to a tenant (`0055`).
+- **Authorization:** `billing.read` at the request organization, signed-in users only. The key is held through system roles only (`org_admin`); API keys and custom roles cannot carry it (`DECISIONS.md` §1zi.9 D-76-4).
+- **Isolation:** enforced by organization-scoped RLS `SELECT` policies on `wallets`, `credit_accounts` and `usage_ledger`; `acc_app` holds `SELECT` only.
+
 ## 3. Authentication & request identity
 
 Every authenticated caller resolves to exactly one **identity type**, and `audit_logs.actor_type` (`DATABASE.md` §12) always records which:

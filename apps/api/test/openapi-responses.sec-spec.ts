@@ -315,6 +315,12 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
         sql`DELETE FROM idempotency_keys WHERE org_id IS NULL AND endpoint LIKE 'POST /platform/pricing/%' AND idempotency_key LIKE 'oa-%'`,
       );
     }
+    // Phase 7 PR 7-6a: the suite's wallet is undeletable by design; removed by the owner with
+    // triggers suspended, before its organization.
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL session_replication_role = replica`);
+      await tx.execute(sql`DELETE FROM wallets WHERE org_id = ${orgId}`);
+    });
     const orgs = created.orgs;
     const users = created.users;
     const list = (ids: string[]) =>
@@ -615,6 +621,22 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
         }),
         200,
         'circuit policy replace (unchanged)',
+      );
+    });
+
+    it('tenant billing reads (Phase 7 PR 7-6a, user sessions only)', async () => {
+      // A wallet for the suite organization, planted by the owner (no provisioning API yet).
+      await db.execute(sql`INSERT INTO wallets (org_id, balance_paise) VALUES (${orgId}, 1000)`);
+      const credential = as.session(admin);
+      expectStatus(await hit('GET', 'billing/account', credential), 200, 'billing account');
+      expectStatus(await hit('GET', 'billing/ledger', credential), 200, 'billing ledger');
+      expectStatus(
+        await hit('GET', 'billing/usage', {
+          ...credential,
+          query: { from: '2026-01-01T00:00:00.000Z', to: '2026-01-31T00:00:00.000Z' },
+        }),
+        200,
+        'billing usage',
       );
     });
 

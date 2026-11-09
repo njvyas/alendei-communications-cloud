@@ -396,6 +396,302 @@
         ],
         "type": "object"
       },
+      "BillingAccount": {
+        "additionalProperties": false,
+        "properties": {
+          "availablePaise": {
+            "description": "What new sends can reserve: balance − reserved (prepaid) or limit − used − reserved (postpaid).",
+            "type": "integer"
+          },
+          "balancePaise": {
+            "description": "Prepaid only: the wallet balance.",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "billingMode": {
+            "enum": [
+              "prepaid",
+              "postpaid"
+            ],
+            "type": "string"
+          },
+          "billingPolicy": {
+            "enum": [
+              "charge_per_logical_message",
+              "charge_per_attempt"
+            ],
+            "type": "string"
+          },
+          "creditLimitPaise": {
+            "description": "Postpaid only: the credit limit.",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "currency": {
+            "enum": [
+              "INR"
+            ],
+            "type": "string"
+          },
+          "reservedPaise": {
+            "description": "Funds held for messages not yet settled.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "frozen"
+            ],
+            "type": "string"
+          },
+          "usedPaise": {
+            "description": "Postpaid only: charges posted against the limit.",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "availablePaise",
+          "balancePaise",
+          "billingMode",
+          "billingPolicy",
+          "creditLimitPaise",
+          "currency",
+          "reservedPaise",
+          "status",
+          "usedPaise"
+        ],
+        "type": "object"
+      },
+      "BillingLedgerEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "amountPaise": {
+            "description": "Integer paise (INR).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "attemptId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "correlationId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "currency": {
+            "enum": [
+              "INR"
+            ],
+            "type": "string"
+          },
+          "entryType": {
+            "description": "reservation: funds held at submission; reservation_release: a hold returned; customer_charge: a settled charge.",
+            "enum": [
+              "reservation",
+              "reservation_release",
+              "customer_charge"
+            ],
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "messageId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amountPaise",
+          "attemptId",
+          "correlationId",
+          "currency",
+          "entryType",
+          "id",
+          "messageId",
+          "occurredAt"
+        ],
+        "type": "object"
+      },
+      "BillingUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "byChannel": {
+            "items": {
+              "$ref": "#/components/schemas/BillingUsageChannelRow"
+            },
+            "type": "array"
+          },
+          "channelCode": {
+            "enum": [
+              "whatsapp",
+              "rcs",
+              "sms",
+              "email",
+              "voice",
+              null
+            ],
+            "nullable": true,
+            "type": "string"
+          },
+          "currency": {
+            "enum": [
+              "INR"
+            ],
+            "type": "string"
+          },
+          "daily": {
+            "items": {
+              "$ref": "#/components/schemas/BillingUsageDayRow"
+            },
+            "type": "array"
+          },
+          "from": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "timeZone": {
+            "example": "Asia/Kolkata",
+            "type": "string"
+          },
+          "to": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/BillingUsageTotals"
+          }
+        },
+        "required": [
+          "byChannel",
+          "channelCode",
+          "currency",
+          "daily",
+          "from",
+          "timeZone",
+          "to",
+          "totals"
+        ],
+        "type": "object"
+      },
+      "BillingUsageChannelRow": {
+        "additionalProperties": false,
+        "properties": {
+          "channelCode": {
+            "enum": [
+              "whatsapp",
+              "rcs",
+              "sms",
+              "email",
+              "voice"
+            ],
+            "type": "string"
+          },
+          "chargedPaise": {
+            "description": "Integer paise (INR).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "messages": {
+            "description": "Messages charged.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "units": {
+            "description": "Billable units of the charged messages (SMS segments; one per WhatsApp/RCS message).",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "channelCode",
+          "chargedPaise",
+          "messages",
+          "units"
+        ],
+        "type": "object"
+      },
+      "BillingUsageDayRow": {
+        "additionalProperties": false,
+        "properties": {
+          "channelCode": {
+            "enum": [
+              "whatsapp",
+              "rcs",
+              "sms",
+              "email",
+              "voice"
+            ],
+            "type": "string"
+          },
+          "chargedPaise": {
+            "description": "Integer paise (INR).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "day": {
+            "description": "Calendar day in the report time zone. Days with no charges are omitted.",
+            "format": "date",
+            "type": "string"
+          },
+          "messages": {
+            "description": "Messages charged.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "units": {
+            "description": "Billable units of the charged messages (SMS segments; one per WhatsApp/RCS message).",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "channelCode",
+          "chargedPaise",
+          "day",
+          "messages",
+          "units"
+        ],
+        "type": "object"
+      },
+      "BillingUsageTotals": {
+        "additionalProperties": false,
+        "properties": {
+          "chargedPaise": {
+            "description": "Integer paise (INR).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "messages": {
+            "description": "Messages charged.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "units": {
+            "description": "Billable units of the charged messages (SMS segments; one per WhatsApp/RCS message).",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "chargedPaise",
+          "messages",
+          "units"
+        ],
+        "type": "object"
+      },
       "BrandConfig": {
         "additionalProperties": false,
         "properties": {
@@ -9313,6 +9609,622 @@
         "summary": "Revoke one of the caller’s sessions",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/v1/billing/account": {
+      "get": {
+        "description": "The wallet (prepaid) or credit account (postpaid) of the organization billing mode: balance or credit limit and used, reserved and available funds, in integer paise (INR). 404 BILLING_ACCOUNT_NOT_CONFIGURED when the organization has none.",
+        "operationId": "BillingRead_account",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
+            "$ref": "#/components/parameters/X-Causation-Id"
+          },
+          {
+            "$ref": "#/components/parameters/X-Correlation-Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BillingAccount"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid credential (`AUTH_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authenticated, but not permitted here (`AUTHZ_*`, `TENANCY_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not found, or not visible to the caller — indistinguishable by design (`RESOURCE_NOT_FOUND`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Rate limit exceeded (`RATE_LIMIT_EXCEEDED`); see `Retry-After`.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "summary": "The organization's billing account",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/api/v1/billing/ledger": {
+      "get": {
+        "description": "Newest first: reservations, reservation releases and customer charges. Ledger entries are append-only; corrections are new entries.",
+        "operationId": "BillingRead_ledger",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
+            "$ref": "#/components/parameters/X-Causation-Id"
+          },
+          {
+            "$ref": "#/components/parameters/X-Correlation-Id"
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 512,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "entryType",
+            "required": false,
+            "schema": {
+              "enum": [
+                "reservation",
+                "reservation_release",
+                "customer_charge"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "messageId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "pattern": "^-?[a-zA-Z][a-zA-Z0-9]{0,40}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "$ref": "#/components/schemas/BillingLedgerEntry"
+                      },
+                      "type": "array"
+                    },
+                    "page": {
+                      "$ref": "#/components/schemas/PageInfo"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "page"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "One page of results.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation failed (`VALIDATION_FAILED`, `details.issues`), or another request error named by `error.code`.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid credential (`AUTH_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authenticated, but not permitted here (`AUTHZ_*`, `TENANCY_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Rate limit exceeded (`RATE_LIMIT_EXCEEDED`); see `Retry-After`.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "summary": "The organization's billing ledger",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/api/v1/billing/usage": {
+      "get": {
+        "description": "Customer charges in [from, to), at most 92 days: totals, per channel and per day in the requested time zone, derived from the ledger.",
+        "operationId": "BillingRead_usage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
+            "$ref": "#/components/parameters/X-Causation-Id"
+          },
+          {
+            "$ref": "#/components/parameters/X-Correlation-Id"
+          },
+          {
+            "in": "query",
+            "name": "channelCode",
+            "required": false,
+            "schema": {
+              "enum": [
+                "email",
+                "whatsapp",
+                "rcs",
+                "sms",
+                "voice"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "timeZone",
+            "required": false,
+            "schema": {
+              "maxLength": 64,
+              "pattern": "^[A-Za-z]+(?:[/_+-][A-Za-z0-9_+-]+)*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BillingUsage"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation failed (`VALIDATION_FAILED`, `details.issues`), or another request error named by `error.code`.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid credential (`AUTH_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authenticated, but not permitted here (`AUTHZ_*`, `TENANCY_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Rate limit exceeded (`RATE_LIMIT_EXCEEDED`); see `Retry-After`.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "summary": "The organization's charges for a period",
+        "tags": [
+          "billing"
         ]
       }
     },

@@ -1033,3 +1033,95 @@ export class PricingAssignmentSchema {
   @ApiProperty(timestamp) effectiveFrom!: string;
   @ApiProperty(timestamp) createdAt!: string;
 }
+
+// --- Phase 7 PR 7-6a: tenant billing reads (DECISIONS.md §1zi.9) -----------------
+// Amounts are integer paise (INR, OD-7-9). Provider cost, reseller markup and rate-card
+// internals are never part of a tenant response.
+
+const paiseAmount = { type: 'integer', minimum: 0, description: 'Integer paise (INR).' } as const;
+const nullablePaise = { ...paiseAmount, nullable: true } as const;
+
+@ApiSchema({ name: 'BillingAccount' })
+export class BillingAccountSchema {
+  @ApiProperty({ enum: ['prepaid', 'postpaid'] }) billingMode!: string;
+  @ApiProperty({ enum: ['charge_per_logical_message', 'charge_per_attempt'] })
+  billingPolicy!: string;
+  @ApiProperty({ enum: ['active', 'frozen'] }) status!: string;
+  @ApiProperty({ type: 'string', enum: ['INR'] }) currency!: string;
+  @ApiProperty({ ...nullablePaise, description: 'Prepaid only: the wallet balance.' })
+  balancePaise!: number | null;
+  @ApiProperty({ ...nullablePaise, description: 'Postpaid only: the credit limit.' })
+  creditLimitPaise!: number | null;
+  @ApiProperty({
+    ...nullablePaise,
+    description: 'Postpaid only: charges posted against the limit.',
+  })
+  usedPaise!: number | null;
+  @ApiProperty({ ...paiseAmount, description: 'Funds held for messages not yet settled.' })
+  reservedPaise!: number;
+  @ApiProperty({
+    type: 'integer',
+    description:
+      'What new sends can reserve: balance − reserved (prepaid) or limit − used − reserved (postpaid).',
+  })
+  availablePaise!: number;
+}
+
+@ApiSchema({ name: 'BillingLedgerEntry' })
+export class BillingLedgerEntrySchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty({
+    enum: ['reservation', 'reservation_release', 'customer_charge'],
+    description:
+      'reservation: funds held at submission; reservation_release: a hold returned; customer_charge: a settled charge.',
+  })
+  entryType!: string;
+  @ApiProperty({ ...paiseAmount, minimum: 1 }) amountPaise!: number;
+  @ApiProperty({ type: 'string', enum: ['INR'] }) currency!: string;
+  @ApiProperty(nullableUuid) messageId!: string | null;
+  @ApiProperty(nullableUuid) attemptId!: string | null;
+  @ApiProperty(nullableString) correlationId!: string | null;
+  @ApiProperty(timestamp) occurredAt!: string;
+}
+
+@ApiSchema({ name: 'BillingUsageTotals' })
+export class BillingUsageTotalsSchema {
+  @ApiProperty(paiseAmount) chargedPaise!: number;
+  @ApiProperty({ type: 'integer', minimum: 0, description: 'Messages charged.' }) messages!: number;
+  @ApiProperty({
+    type: 'integer',
+    minimum: 0,
+    description:
+      'Billable units of the charged messages (SMS segments; one per WhatsApp/RCS message).',
+  })
+  units!: number;
+}
+
+@ApiSchema({ name: 'BillingUsageChannelRow' })
+export class BillingUsageChannelRowSchema extends BillingUsageTotalsSchema {
+  @ApiProperty({ enum: [...CHANNEL_CODES] }) channelCode!: string;
+}
+
+@ApiSchema({ name: 'BillingUsageDayRow' })
+export class BillingUsageDayRowSchema extends BillingUsageChannelRowSchema {
+  @ApiProperty({
+    type: 'string',
+    format: 'date',
+    description: 'Calendar day in the report time zone. Days with no charges are omitted.',
+  })
+  day!: string;
+}
+
+@ApiSchema({ name: 'BillingUsage' })
+export class BillingUsageSchema {
+  @ApiProperty(timestamp) from!: string;
+  @ApiProperty(timestamp) to!: string;
+  @ApiProperty({ type: 'string', example: 'Asia/Kolkata' }) timeZone!: string;
+  @ApiProperty({ enum: [...CHANNEL_CODES, null], nullable: true }) channelCode!: string | null;
+  @ApiProperty({ type: 'string', enum: ['INR'] }) currency!: string;
+  @ApiProperty({ type: BillingUsageTotalsSchema }) totals!: BillingUsageTotalsSchema;
+  @ApiProperty({ type: BillingUsageChannelRowSchema, isArray: true })
+  byChannel!: BillingUsageChannelRowSchema[];
+  @ApiProperty({ type: BillingUsageDayRowSchema, isArray: true })
+  daily!: BillingUsageDayRowSchema[];
+}

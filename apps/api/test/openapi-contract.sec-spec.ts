@@ -195,8 +195,9 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * Phase 7 PR 7-2, 08-Nov-2026: 11 platform pricing catalogue operations under
      * `/platform/pricing`: 154 → 165.
      * Phase 8B.1, 08-Nov-2026: 6 campaign foundation operations: 165 → 171.
+     * Phase 7 PR 7-6a, 09-Nov-2026: 3 tenant billing read operations under `/billing`: 171 → 174.
      */
-    const APPLICATION_OPERATIONS = 171;
+    const APPLICATION_OPERATIONS = 174;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 

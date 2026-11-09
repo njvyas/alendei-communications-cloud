@@ -121,6 +121,10 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
     consent_events: 'INSERT,SELECT',
     contact_identities: 'INSERT,SELECT,UPDATE',
     contacts: 'INSERT,SELECT,UPDATE',
+    // Phase 7 PR 7-6a (0055, D-76-2): tenant reads of the billing accounts and the ledger
+    // parent, under organization-scoped RLS SELECT policies. No write privilege; the
+    // ledger partitions carry no grant.
+    credit_accounts: 'SELECT',
     // Phase 7 PR 7-2: append-only; platform scope only (RLS).
     customer_pricing_assignments: 'INSERT,SELECT',
     idempotency_keys: 'INSERT,SELECT',
@@ -155,8 +159,10 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
     suppressions: 'INSERT,SELECT,UPDATE',
     teams: 'INSERT,SELECT',
     templates: 'INSERT,SELECT,UPDATE',
+    usage_ledger: 'SELECT',
     user_roles: 'DELETE,INSERT,SELECT',
     users: 'INSERT,SELECT',
+    wallets: 'SELECT',
     workspaces: 'INSERT,SELECT',
     ws_tickets: 'INSERT,SELECT',
   },

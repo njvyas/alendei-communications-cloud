@@ -455,7 +455,10 @@ describe('Phase 7 PR 7-1 — ledger and billing-account foundation (migration 00
       });
     });
 
-    it('P-7: no application role has any privilege on the parent or on any partition, nor on the accounts', async () => {
+    // Phase 7 PR 7-6a (0055, owner decision D-76-2): acc_app gained SELECT — only — on the
+    // ledger parent and the two account tables, behind tenant RLS SELECT policies. Every
+    // other privilege, and every privilege on every partition, is still absent.
+    it('P-7: no application role has any privilege on any partition; acc_app has SELECT only on the parent and the accounts (D-76-2)', async () => {
       const tables = (
         await admin(
           `SELECT 'usage_ledger' AS t UNION ALL SELECT 'wallets' UNION ALL SELECT 'credit_accounts'
@@ -476,7 +479,11 @@ describe('Phase 7 PR 7-1 — ledger and billing-account foundation (migration 00
           }
         }
       }
-      expect(granted).toEqual([]);
+      expect(granted).toEqual([
+        'acc_app:usage_ledger:SELECT',
+        'acc_app:wallets:SELECT',
+        'acc_app:credit_accounts:SELECT',
+      ]);
     });
 
     it('P-7: only the owner may execute the partition routine or the writer; acc_app may execute only the read-only report', async () => {
@@ -506,7 +513,10 @@ describe('Phase 7 PR 7-1 — ledger and billing-account foundation (migration 00
       });
     });
 
-    it('P-7: as acc_app, the report works, partition creation is refused and the ledger is unreachable', async () => {
+    // Phase 7 PR 7-6a (0055, D-76-2): acc_app may now SELECT the parent and the accounts —
+    // through tenant RLS, so without a tenant context it sees no row — but a partition stays
+    // unreachable directly, and nothing else changed.
+    it('P-7: as acc_app, the report works, partition creation is refused; without a tenant context no row is visible and partitions are unreachable', async () => {
       const c = await db.appPool.connect();
       try {
         await c.query('BEGIN');
@@ -526,8 +536,11 @@ describe('Phase 7 PR 7-1 — ledger and billing-account foundation (migration 00
         expect(await code(c, `SELECT * FROM app_ledger_ensure_partitions(24)`)).toBe('42501');
         expect(await code(c, `SELECT * FROM app_ledger_ensure_partitions(0)`)).toBe('42501');
         for (const t of ['usage_ledger', 'wallets', 'credit_accounts']) {
-          expect([t, await code(c, `SELECT 1 FROM ${t} LIMIT 1`)]).toEqual([t, '42501']);
+          const { rows } = await c.query(`SELECT count(*)::int AS n FROM ${t}`);
+          expect([t, rows[0].n]).toEqual([t, 0]);
         }
+        const month = report[0].partition_name as string;
+        expect(await code(c, `SELECT 1 FROM ${month} LIMIT 1`)).toBe('42501');
         expect(
           await code(
             c,
@@ -571,7 +584,9 @@ describe('Phase 7 PR 7-1 — ledger and billing-account foundation (migration 00
       });
     });
 
-    it('RLS is enabled with no policy on the parent, the accounts and every partition', async () => {
+    // Phase 7 PR 7-6a (0055, D-76-2): the parent and the two accounts carry exactly one tenant
+    // SELECT policy each; the partitions still carry none (they are reached only through the parent).
+    it('RLS is enabled everywhere; one tenant SELECT policy on the parent and each account, none on any partition', async () => {
       const { rows } = await admin(
         `SELECT c.relname, c.relrowsecurity,
                 (SELECT count(*)::int FROM pg_policy p WHERE p.polrelid = c.oid) AS policies
@@ -580,8 +595,13 @@ describe('Phase 7 PR 7-1 — ledger and billing-account foundation (migration 00
              OR c.oid IN (SELECT inhrelid FROM pg_inherits WHERE inhparent = 'usage_ledger'::regclass)`,
       );
       expect(rows.length).toBe(28);
+      const withPolicy = new Set(['usage_ledger', 'wallets', 'credit_accounts']);
       for (const r of rows)
-        expect([r.relname, r.relrowsecurity, r.policies]).toEqual([r.relname, true, 0]);
+        expect([r.relname, r.relrowsecurity, r.policies]).toEqual([
+          r.relname,
+          true,
+          withPolicy.has(r.relname) ? 1 : 0,
+        ]);
     });
   });
 
@@ -617,7 +637,7 @@ describe('Phase 7 PR 7-1 — ledger and billing-account foundation (migration 00
           env: process.env,
           timeout: 300_000,
         });
-        expect(stdout).toContain('Schema up to date (55 migrations verified).');
+        expect(stdout).toContain('Schema up to date (56 migrations verified).');
         expect(stdout).toContain('Ledger partitions: created 0 partition(s).');
         expect(stdout).toMatch(
           /usage_ledger partitions ok: headroom 24 month\(s\); 25 partition\(s\); no gaps; all protected; no orphans/,
