@@ -152,6 +152,24 @@ Platform administration of rate cards, provider cost rates and rate-card assignm
 - **Refusals:** `402 BILLING_INSUFFICIENT_FUNDS`, `403 BILLING_ACCOUNT_FROZEN`, `422 BILLING_ACCOUNT_NOT_CONFIGURED` — on a request nothing is recorded; on an approval the request stays `pending` with `lastRefusal` recorded. `409 BILLING_RESOLUTION_CONFLICT` when the outcome is not resolvable (not an enforced unknown outcome, already resolved, or a request already pending). `503 BILLING_BUSY` is retryable with the same key. No error discloses an amount.
 - **Audit:** `billing.outcome_unknown.resolution_requested`, `.resolution_approved`, `.resolution_rejected`, `.charged` and `.written_off`, security-sensitive, in the same transaction. **Metric:** `acc_billing_outcome_unknown_resolutions_total{action,outcome}`.
 
+### 2h. `/platform/billing/organizations/{orgId}/…` and `/platform/billing/account-operations` — billing-account administration (Phase 7 PR 7-6d-1, 09-Nov-2026)
+| Route | Result |
+|---|---|
+| `GET /platform/billing/organizations/{orgId}/accounts` | `{ orgId, wallet, creditAccount }`, each `null` when not provisioned |
+| `POST …/{orgId}/wallet`, `POST …/{orgId}/credit-account` `{ reason }` | `201`: an empty account (executes at once) |
+| `POST …/{orgId}/credit-limit` `{ newLimitPaise, previousLimitPaise, reason }` | `201`: executed (a decrease, or an increase within the threshold) or `pending` |
+| `POST …/{orgId}/wallet/freeze`, `…/credit-account/freeze` `{ reason }` | `201`: executed |
+| `POST …/{orgId}/wallet/unfreeze`, `…/credit-account/unfreeze` `{ reason }` | `201`: always `pending` |
+| `POST /platform/billing/account-operations/{id}/approve` `{ expectedAmountPaise? }` | `200`: executed |
+| `POST /platform/billing/account-operations/{id}/reject` `{ reason }` | `200`: rejected |
+| `GET /platform/billing/account-operations`, `GET …/{id}` | Newest first; filters `orgId`, `account`, `kind`, `status`; signed cursor |
+
+- **Authorization:** `billing.manage` at platform scope, signed-in users only. Platform support, tenants and API keys are refused. Every `POST` requires `Idempotency-Key`, and a key is unique per organisation.
+- **Dual control (D-76d-1):** a credit-limit increase waits for a second approver while `BILLING_DUAL_CONTROL_THRESHOLD_PAISE` is unset or the increase exceeds it; decreases, freezes and provisioning execute at once; an unfreeze always waits. The threshold is server configuration; a request carrying one is refused (`400`). The requester can neither approve nor reject.
+- **Binding:** a limit change names the limit it expects (`409 BILLING_ACCOUNT_OPERATION_STALE` otherwise), and an approval names the new limit. One operation of a kind may be pending at a time (`409 BILLING_ACCOUNT_OPERATION_CONFLICT`).
+- **Freeze (D-76d-4):** new reservations and spending are refused; balances, limits and existing reservations are unchanged; in-flight messages settle. Credit-limit changes are permitted while frozen and never unfreeze.
+- **Nothing here writes the ledger.** Recharge is PR 7-6d-2.
+
 ## 3. Authentication & request identity
 
 Every authenticated caller resolves to exactly one **identity type**, and `audit_logs.actor_type` (`DATABASE.md` §12) always records which:

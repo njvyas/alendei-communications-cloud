@@ -3101,6 +3101,153 @@ The owner reviewed `docs/PHASE-7-6-BILLING-APIS-HANDOVER.md` and decided as foll
 7. **Threshold trust (O-2 consequence).** The database enforces dual control against the threshold the service passes and records; a caller able to execute the request function as `acc_app` could pass a different threshold. This is inherent in an environment-held threshold and is mitigated by the recorded value, the audit entry and the startup log.
 8. **Pinned counts updated:** application operations 175 → 180; scoped routes 162 → 167; deferred-target routes 137 → 142; `Idempotency-Key` handlers 17 → 20; migration counts 57 → 58. The OpenAPI response suite exercises all five routes, including `403` self-approval and `409` stale.
 
+### 1zi.13 Phase 7.6d decisions: provisioning, credit limits, freeze and recharge
+**Owner decisions, 09-Nov-2026**, on the 7-6d implementation handover (`docs/PHASE-7-6D-PROVISIONING-RECHARGE-HANDOVER.md`, Rev 2). **Owner authorisation, 09-Nov-2026:** PR 7-6d-1 only (§1zi.14); PR 7-6d-2 (recharge) is not authorised.
+- **D-76d-1: dual control.**
+  - Recharge and credit-limit increases need a second approver when `BILLING_DUAL_CONTROL_THRESHOLD_PAISE` is unset or the applicable amount exceeds it.
+  - For a limit increase the applicable amount is the increase (new − current).
+  - Credit-limit decreases and freezes are single-operator.
+  - Unfreezing always needs a second approver.
+  - Requester ≠ approver; approval is bound to the exact amount (D-76-3 mechanics).
+- **D-76d-2: recharge amount.** The recorded amount is the net spendable amount credited to the wallet, in INR paise. Tax and accounting treatment stays with Phase 7.7 and professional review.
+- **D-76d-3: tenant visibility.**
+  - Recharge entries appear in the tenant ledger, showing amount and timestamp only.
+  - Payment references, approver identities and internal audit details are never exposed to tenants.
+  - This additively extends the `0055` tenant policy and the 7-6a entry-type list; it is the only change to settled 7.6a–7.6c behaviour.
+- **D-76d-4: freeze/unfreeze, in 7-6d-1.**
+  - A freeze blocks new spending and reservations without changing existing balances or reservations.
+  - Unfreeze requires dual control.
+  - A recharge is refused while the wallet is frozen.
+- **D-76d-5: no reversal in 7-6d.**
+  - Completed recharges can be neither edited nor deleted.
+  - Corrections and reversals are Phase 7.7 scope.
+
+**Sequence retained:**
+- PR 7-6d-1: provisioning, credit limits, freeze/unfreeze and reads, with no ledger writer change.
+- PR 7-6d-2: wallet recharge and ledger integration.
+
+Each is a draft, stopped for owner review. Billing enforcement stays disabled; no QA or production changes; no payment integration or credentials.
+
+**Design consequences recorded with the decisions:**
+- **Freeze is a status update only.** The existing writer already refuses new reservations, per-attempt top-ups and operator charges on a frozen account (`BL002`). Settlement of existing reservations does not check status, so in-flight messages settle normally.
+- **The recharge fact carries no correlation id or reference note.** The payment reference lives only on the platform-only operation row, so the tenant view shows nothing internal.
+- **The migration number was fixed at authorisation** from the latest `develop`: `0059`, because Phase 8A.1 (draft PR #99) claims `0058` (§1zi.14).
+
+### 1zi.14 PR 7-6d-1 as built: provisioning, credit limits, freeze and unfreeze (migration `0059`)
+**Owner authorisation, 09-Nov-2026:** PR 7-6d-1 only, on the approved Rev 2 handover and §1zi.13.
+- No ledger-writer change and no recharge.
+- Enforcement unchanged; no QA or production activity.
+- The threshold comes from trusted server configuration only.
+- Function ownership and grants preserved, with privilege-regression tests.
+- Credit-limit changes are permitted while frozen and never unfreeze.
+
+**Migration number.**
+- At authorisation `develop` ended at `0057`, and the open draft PR #99 (Phase 8A.1) claimed `0058_phase8a_segments`.
+- This PR therefore uses **`0059_phase7_6d1_account_provisioning`**, with journal `when` 1794614400000, later than #99's `0058` (1794528000000). Coordination was recorded on PR #99.
+- #99 then merged (`6f0a6c9`, 09-Nov-2026), and this PR was rebased onto it: `0059` is journal idx 59, directly after `0058`.
+- **No migration number claimed by another PR is used.**
+
+**As built.**
+- **Migration `0059` (expand-only):**
+  - **`billing_account_operations`:**
+    - kinds `provision`, `credit_limit_change`, `freeze`, `unfreeze`, for `wallet` or `credit_account`;
+    - amounts on a limit change only (the new limit, plus the previous limit the requester saw; the two must differ);
+    - `dual_control` and the recorded threshold;
+    - reason and `request_key` (`UNIQUE (org_id, request_key)`, RQ-3);
+    - request, approval, rejection and execution fields.
+  - **CHECKs:**
+    - D-76d-1 against the recorded threshold: unfreeze always dual; an increase dual unless the threshold is set and the **increase** is within it; decrease, freeze and provision never dual;
+    - four eyes for approval and rejection;
+    - per-kind amounts;
+    - state consistency.
+  - **One pending operation per (organisation, account, kind).**
+  - **Guard trigger:** only pending → executed/rejected; the approval is recorded once; the request is immutable; append-only. RLS on, no policy, no grant.
+  - **Definers** (`SECURITY DEFINER`, pinned `search_path`, invariant D, same owner as the ledger writer), each refusing (`42501`) a caller without a signed-in user holding platform `billing.manage`:
+    - for `acc_app`: `app_billing_account_request`, `_approve`, `_reject`, `app_billing_accounts_get` and `app_billing_account_operations_list`;
+    - owner-only: `app_billing_account_execute`.
+  - **Execution:**
+    - **provision:** inserts an empty account (`ON CONFLICT` → `BL013`);
+    - **limit change:** locks the credit account, requires the live limit to equal the previous limit (`BL014`), and updates the limit only;
+    - **freeze / unfreeze:** locks the account, requires `active` / `frozen` (`BL014`), and updates `status` only.
+
+    A closed organisation is refused (`BL013`). Lock order: operation → organisation (`FOR KEY SHARE`) → account.
+  - **The migration does not mention `app_ledger_post`, `usage_ledger` or any policy** (asserted).
+- **Freeze semantics (D-76d-4)** come from the existing writer, unchanged:
+  - new reservations, per-attempt top-ups and operator charges on a frozen account are refused (`BL002`);
+  - an in-flight message still settles against its existing reservation;
+  - balances and reservations are untouched by the freeze.
+- **API** (`billing.manage` at platform scope; user sessions only, enforced in the service; `Idempotency-Key` required on every `POST`):
+  - `GET /platform/billing/organizations/{orgId}/accounts`;
+  - `POST …/{orgId}/wallet`, `…/credit-account`, `…/credit-limit`, `…/wallet/freeze`, `…/wallet/unfreeze`, `…/credit-account/freeze`, `…/credit-account/unfreeze`;
+  - `POST /platform/billing/account-operations/{id}/approve` (`expectedAmountPaise`: the new limit, or absent) and `/reject`;
+  - `GET /platform/billing/account-operations` (filters `orgId`, `account`, `kind`, `status`; cursor) and `GET …/{id}`.
+
+  POST responses are `{ operation, account }`.
+- **Errors:**
+  - new: `409 BILLING_ACCOUNT_OPERATION_CONFLICT` (`BL013`, or a unique violation) and `409 BILLING_ACCOUNT_OPERATION_STALE` (`BL014`);
+  - reused: `403 BILLING_RESOLUTION_SELF_APPROVAL` (`BL011`), `404`, `400`, `503 BILLING_BUSY`;
+  - no amount or limit appears in an error.
+- **Threshold:**
+  - `BILLING_DUAL_CONTROL_THRESHOLD_PAISE` is read from server configuration on each request and recorded on the row;
+  - a request body carrying any extra property (for example `thresholdPaise`) is refused (`400`, whitelist validation);
+  - the startup log line now also names credit-limit increases.
+- **Audit:** security-sensitive, platform scope, same transaction:
+  - `billing.account_operation.requested`, `.approved`, `.rejected`;
+  - `billing.wallet.provisioned`, `billing.credit_account.provisioned`;
+  - `billing.credit_limit.changed`;
+  - `billing.account.frozen`, `billing.account.unfrozen`.
+- **Metric:** `acc_billing_account_operations_total{action,outcome}`, where `action` is the kind; counted after commit.
+- **History proof:** `60|52f403f970a0ef1bc9b591f6d70d7e25` (`0000`–`0059`), computed on a disposable clone and recorded in `RELEASE.md`.
+
+**Tests.**
+- **`packages/db/src/test/phase7_6d1-account-operations.int-spec.ts` (10):**
+  - new-function privileges and ownership;
+  - **privilege regression for every earlier billing function** (writer, rating, reservation, settlement, register, resolution);
+  - `0059` touching no ledger object or policy;
+  - table RLS and grants;
+  - the D-76d-1 CHECK matrix;
+  - four eyes, immutability, finality and append-only;
+  - provisioning once;
+  - limit binding and approval;
+  - limit change while frozen keeping `frozen`;
+  - freeze leaving balances unchanged, then `BL002` on new reservations while the in-flight message charges and releases;
+  - unfreeze four eyes and binding;
+  - `42501` for every entry function, and no access to the executor.
+- **`apps/api/test/phase7_6d1-account-operations.int-spec.ts` (15), handover §10.1–10.5:**
+  - provisioning and reads, with no ledger fact;
+  - the dual-control matrix with the threshold unset and set (measured on the increase);
+  - a request carrying a threshold refused;
+  - rejection;
+  - freeze semantics and limit changes while frozen;
+  - concurrency: provisioning, approvals, duplicate pending requests, serialised limit changes, and freeze against an in-flight reservation held open in another transaction;
+  - idempotency: replay, `422`, `400`, and a key reused across operations of one organisation;
+  - listing and cursor;
+  - access: support, tenant administrator, API key, no credential;
+  - tenant isolation (own account only, empty ledger);
+  - the counter.
+- **Regression:** all suites; censuses (table classes, principals, scope creep) classify the new table and code; the OpenAPI response suite exercises all 12 routes.
+
+**Deviations and implementation decisions.**
+1. **Migration `0059`, not `0058`** (above).
+2. **No refusal recording in 7-6d-1.** None of these operations can be refused at approval for an account state while remaining pending: limit changes are permitted while frozen, a freeze or unfreeze whose status moved is stale, and provisioning executes at once. So `app_billing_account_note_refusal` and the `last_refusal` columns move to 7-6d-2 with recharge.
+3. **Limit changes are serialised.** With one pending operation per kind, a decrease requested while an increase awaits approval is `409 BILLING_ACCOUNT_OPERATION_CONFLICT`, so the handover's §10.1 increase-against-decrease race cannot occur through the API. Stale binding is verified at request time (API test) and at approval (DB test).
+4. **A no-change limit** (new = previous) is refused (`400`).
+5. **A request key is unique per organisation in the database** (RQ-3). The same key on a different operation of the same organisation is `409 BILLING_ACCOUNT_OPERATION_CONFLICT`; a replay of the same operation still returns the original response.
+6. **`availablePaise` may be negative** after a limit decrease below `used + reserved`; new reservations are then refused by the existing funds check.
+7. **The request function takes no recharge parameters.** 7-6d-2 will extend it (handover §12 item 2).
+8. **Unfreeze approval** takes no amount; an approval naming one is stale.
+9. **Pinned counts updated:**
+
+   | Count | Before | After |
+   |---|---|---|
+   | Application operations | 186 | 198 |
+   | Scoped routes | 173 | 185 |
+   | Deferred-target routes | 148 | 160 |
+   | `Idempotency-Key` handlers | 21 | 30 |
+   | Migrations | 59 | 60 |
+
+   Baselines are `develop` after Phase 8A.1 (#99).
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

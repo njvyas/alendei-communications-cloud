@@ -110,6 +110,16 @@ export const AUDIT_ACTIONS = {
   BILLING_OUTCOME_UNKNOWN_CHARGED: 'billing.outcome_unknown.charged',
   BILLING_OUTCOME_UNKNOWN_WRITTEN_OFF: 'billing.outcome_unknown.written_off',
 
+  // Phase 7 PR 7-6d-1 — billing-account administration (platform scope).
+  BILLING_ACCOUNT_OPERATION_REQUESTED: 'billing.account_operation.requested',
+  BILLING_ACCOUNT_OPERATION_APPROVED: 'billing.account_operation.approved',
+  BILLING_ACCOUNT_OPERATION_REJECTED: 'billing.account_operation.rejected',
+  BILLING_WALLET_PROVISIONED: 'billing.wallet.provisioned',
+  BILLING_CREDIT_ACCOUNT_PROVISIONED: 'billing.credit_account.provisioned',
+  BILLING_CREDIT_LIMIT_CHANGED: 'billing.credit_limit.changed',
+  BILLING_ACCOUNT_FROZEN: 'billing.account.frozen',
+  BILLING_ACCOUNT_UNFROZEN: 'billing.account.unfrozen',
+
   AUTHORIZATION_DENIED: 'authorization.denied',
 } as const;
 
@@ -272,6 +282,15 @@ export const SECURITY_SENSITIVE_AUDIT_ACTIONS: readonly AuditAction[] = Object.f
   AUDIT_ACTIONS.BILLING_OUTCOME_UNKNOWN_RESOLUTION_REJECTED,
   AUDIT_ACTIONS.BILLING_OUTCOME_UNKNOWN_CHARGED,
   AUDIT_ACTIONS.BILLING_OUTCOME_UNKNOWN_WRITTEN_OFF,
+  // Phase 7 PR 7-6d-1: each creates an account or changes what a customer may spend.
+  AUDIT_ACTIONS.BILLING_ACCOUNT_OPERATION_REQUESTED,
+  AUDIT_ACTIONS.BILLING_ACCOUNT_OPERATION_APPROVED,
+  AUDIT_ACTIONS.BILLING_ACCOUNT_OPERATION_REJECTED,
+  AUDIT_ACTIONS.BILLING_WALLET_PROVISIONED,
+  AUDIT_ACTIONS.BILLING_CREDIT_ACCOUNT_PROVISIONED,
+  AUDIT_ACTIONS.BILLING_CREDIT_LIMIT_CHANGED,
+  AUDIT_ACTIONS.BILLING_ACCOUNT_FROZEN,
+  AUDIT_ACTIONS.BILLING_ACCOUNT_UNFROZEN,
 ]);
 
 export function isSecuritySensitiveAction(action: string): boolean {

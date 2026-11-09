@@ -128,6 +128,8 @@ export class MetricsService implements OnModuleInit {
   readonly billingOutcomeUnknownOpen: Gauge<'channel'>;
   // Phase 7 PR 7-6c — operator resolution of unknown outcomes.
   readonly billingOutcomeUnknownResolutions: Counter<'action' | 'outcome'>;
+  // Phase 7 PR 7-6d-1 — billing-account operations.
+  readonly billingAccountOperations: Counter<'action' | 'outcome'>;
 
   constructor(private readonly config: AppConfigService) {
     this.registry.setDefaultLabels({
@@ -329,6 +331,11 @@ export class MetricsService implements OnModuleInit {
     this.billingOutcomeUnknownResolutions = this.counter({
       name: 'acc_billing_outcome_unknown_resolutions_total',
       help: 'Operator resolutions of unknown outcomes, by action (charge, write_off) and outcome: executed, pending (awaiting a second approver), rejected, refused (insufficient funds or account state). Counted after commit.',
+      labelNames: ['action', 'outcome'],
+    });
+    this.billingAccountOperations = this.counter({
+      name: 'acc_billing_account_operations_total',
+      help: 'Billing-account operations by action (provision, credit_limit_change, freeze, unfreeze) and outcome: executed, pending (awaiting a second approver), rejected. Counted after commit.',
       labelNames: ['action', 'outcome'],
     });
   }

@@ -98,4 +98,8 @@ export const ORG_ID_EXEMPT_TABLES: readonly string[] = [
   // application-role privilege at all: written and read only by the 0057 SECURITY DEFINER
   // functions (platform billing.manage); RLS on, no policy.
   'billing_unknown_resolutions',
+  // Phase 7 PR 7-6d-1 (migration 0059): billing-account operations (provisioning, credit
+  // limits, freeze). No application-role privilege at all: written and read only by the
+  // 0059 SECURITY DEFINER functions (platform billing.manage); RLS on, no policy.
+  'billing_account_operations',
 ];

@@ -222,6 +222,13 @@ export const ERROR_CODES = {
   /** `403`: the requester cannot approve or reject their own request (dual control). */
   BILLING_RESOLUTION_SELF_APPROVAL: 'BILLING_RESOLUTION_SELF_APPROVAL',
 
+  // --- Billing: account operations (Phase 7 PR 7-6d-1, D-76d-1, D-76d-4) -------
+  // Platform billing.manage only; self-approval reuses BILLING_RESOLUTION_SELF_APPROVAL.
+  /** `409`: not possible now — already provisioned, no such account, already frozen or active, closed organization, or one already pending. */
+  BILLING_ACCOUNT_OPERATION_CONFLICT: 'BILLING_ACCOUNT_OPERATION_CONFLICT',
+  /** `409`: the approved amount, the credit limit or the account status no longer matches the request; nothing executed. */
+  BILLING_ACCOUNT_OPERATION_STALE: 'BILLING_ACCOUNT_OPERATION_STALE',
+
   // --- Pagination (`API.md` §8a) -------------------------------------------
   /**
    * The cursor was malformed, its signature did not verify, or it was minted

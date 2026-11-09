@@ -1170,6 +1170,98 @@ export class UnknownOutcomeSchema {
   status!: string;
 }
 
+/**
+ * Phase 7 PR 7-6d-1 — a billing account as the platform sees it, or `null` when not
+ * provisioned. Inline rather than a `$ref`: OpenAPI 3.0 cannot make a `$ref` nullable.
+ */
+const PLATFORM_BILLING_ACCOUNT = {
+  type: 'object',
+  nullable: true,
+  required: [
+    'account',
+    'id',
+    'status',
+    'balancePaise',
+    'creditLimitPaise',
+    'usedPaise',
+    'reservedPaise',
+    'availablePaise',
+    'version',
+    'createdAt',
+    'updatedAt',
+  ],
+  properties: {
+    account: { type: 'string', enum: ['wallet', 'credit_account'] },
+    id: uuid,
+    status: { type: 'string', enum: ['active', 'frozen'] },
+    balancePaise: { type: 'integer', minimum: 0, nullable: true, description: 'Wallet only.' },
+    creditLimitPaise: {
+      type: 'integer',
+      minimum: 0,
+      nullable: true,
+      description: 'Credit account only.',
+    },
+    usedPaise: { type: 'integer', minimum: 0, nullable: true, description: 'Credit account only.' },
+    reservedPaise: { type: 'integer', minimum: 0 },
+    availablePaise: {
+      type: 'integer',
+      description:
+        'balance − reserved, or limit − used − reserved; may be negative after a limit decrease.',
+    },
+    version: { type: 'integer', minimum: 0 },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  },
+  additionalProperties: false,
+} as const;
+
+@ApiSchema({ name: 'BillingAccounts' })
+export class BillingAccountsSchema {
+  @ApiProperty(uuid) orgId!: string;
+  @ApiProperty(PLATFORM_BILLING_ACCOUNT as never) wallet!: Record<string, unknown> | null;
+  @ApiProperty(PLATFORM_BILLING_ACCOUNT as never) creditAccount!: Record<string, unknown> | null;
+}
+
+/** Phase 7 PR 7-6d-1 — a billing-account operation. */
+@ApiSchema({ name: 'AccountOperation' })
+export class AccountOperationSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty(uuid) orgId!: string;
+  @ApiProperty({ enum: ['wallet', 'credit_account'] }) account!: string;
+  @ApiProperty({ enum: ['provision', 'credit_limit_change', 'freeze', 'unfreeze'] }) kind!: string;
+  @ApiProperty({ enum: ['pending', 'executed', 'rejected'] }) status!: string;
+  @ApiProperty({ ...nullablePaise, description: 'The new limit of a credit-limit change.' })
+  amountPaise!: number | null;
+  @ApiProperty({ ...nullablePaise, description: 'The limit the requester saw.' })
+  previousLimitPaise!: number | null;
+  @ApiProperty({ description: 'Whether a second approver is required.' }) dualControl!: boolean;
+  @ApiProperty({
+    ...nullablePaise,
+    description:
+      'The dual-control threshold in force at request (server configuration); null when unset.',
+  })
+  thresholdPaise!: number | null;
+  @ApiProperty() reason!: string;
+  @ApiProperty(uuid) requestedBy!: string;
+  @ApiProperty(timestamp) requestedAt!: string;
+  @ApiProperty(nullableUuid) approvedBy!: string | null;
+  @ApiProperty(nullableTimestamp) approvedAt!: string | null;
+  @ApiProperty(nullableUuid) rejectedBy!: string | null;
+  @ApiProperty(nullableTimestamp) rejectedAt!: string | null;
+  @ApiProperty({ type: 'string', nullable: true }) rejectionReason!: string | null;
+  @ApiProperty(nullableTimestamp) executedAt!: string | null;
+}
+
+@ApiSchema({ name: 'AccountOperationResult' })
+export class AccountOperationResultSchema {
+  @ApiProperty({ type: AccountOperationSchema }) operation!: AccountOperationSchema;
+  @ApiProperty({
+    ...PLATFORM_BILLING_ACCOUNT,
+    description: 'The affected account after the operation; null when it does not exist.',
+  } as never)
+  account!: Record<string, unknown> | null;
+}
+
 /** Phase 7 PR 7-6c — an operator resolution of an unknown outcome. */
 @ApiSchema({ name: 'UnknownResolution' })
 export class UnknownResolutionSchema {
