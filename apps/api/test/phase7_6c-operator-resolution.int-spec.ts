@@ -46,6 +46,8 @@ describe('Phase 7-6c: operator resolution of unknown outcomes', () => {
   let channelId: string;
   let providerId: string;
   let planId: string;
+  /** Further rate cards created by individual tests (removed in teardown). */
+  const extraPlans: string[] = [];
   const tenants: TenantFixture[] = [];
   const users: string[] = [];
   let A: TenantFixture; // prepaid, charge_per_logical_message, wallet 10000
@@ -198,11 +200,13 @@ describe('Phase 7-6c: operator resolution of unknown outcomes', () => {
           await tx.execute(sql`DELETE FROM ${sql.identifier(table)} WHERE org_id = ${orgs}`);
         }
         await tx.execute(sql`DELETE FROM provider_cost_rates WHERE provider_id = ${providerId}`);
-        await tx.execute(
-          sql`DELETE FROM pricing_rules WHERE plan_version_id IN (SELECT id FROM pricing_plan_versions WHERE plan_id = ${planId})`,
-        );
-        await tx.execute(sql`DELETE FROM pricing_plan_versions WHERE plan_id = ${planId}`);
-        await tx.execute(sql`DELETE FROM pricing_plans WHERE id = ${planId}`);
+        for (const plan of [planId, ...extraPlans]) {
+          await tx.execute(
+            sql`DELETE FROM pricing_rules WHERE plan_version_id IN (SELECT id FROM pricing_plan_versions WHERE plan_id = ${plan})`,
+          );
+          await tx.execute(sql`DELETE FROM pricing_plan_versions WHERE plan_id = ${plan}`);
+          await tx.execute(sql`DELETE FROM pricing_plans WHERE id = ${plan}`);
+        }
         await tx.execute(sql`DELETE FROM providers WHERE id = ${providerId}`);
         // The suite's platform users: the last-platform-administrator guard (a trigger)
         // would otherwise refuse removing the only super administrator of a fresh clone.
@@ -302,6 +306,8 @@ describe('Phase 7-6c: operator resolution of unknown outcomes', () => {
       earlier?: 'reached' | 'not_reached';
       status?: string;
       postpaid?: boolean;
+      /** false: no reservation was ever held (e.g. a zero price). */
+      reserve?: boolean;
     } = {},
   ): Promise<Planted> {
     const status = o.status ?? 'outcome_unknown';
@@ -349,7 +355,7 @@ describe('Phase 7-6c: operator resolution of unknown outcomes', () => {
         );
     }
     // L cannot cover a reservation and F is frozen: neither holds one.
-    if (!o.postpaid && t !== F && t !== L) {
+    if (!o.postpaid && t !== F && t !== L && o.reserve !== false) {
       await h.admin.execute(sql`
         SELECT * FROM app_ledger_post(${t.orgId}, 'reservation', ${id}, ${o.perAttempt ? 60 : 50},
           'wallet', ${id}, NULL, 'p76c', NULL)`);
@@ -649,6 +655,80 @@ describe('Phase 7-6c: operator resolution of unknown outcomes', () => {
       'reservation_release@m:60',
       'customer_charge@u:60',
     ]);
+  });
+
+  it('a zero customer price: no customer_charge is posted; with evidence the provider cost still is, as on the automatic path; without evidence nothing is posted', async () => {
+    // Policy U posts the automatic path's identities. 7.5 settlement posts no customer_charge
+    // for a zero price (app_dispatch_message_settle: price > 0 only) but posts a reached
+    // attempt's provider cost whatever the customer price (app_dispatch_attempt_settle). The
+    // operator charge mirrors both; O-1 still gates the provider cost on evidence.
+    const Z = await tenant('p76c-z');
+    await h.admin.transaction(async (tx) => {
+      const plan = await tx.execute<{ id: string }>(
+        sql`INSERT INTO pricing_plans (name) VALUES (${`p76c-zero-${uuidv7()}`}) RETURNING id`,
+      );
+      extraPlans.push(plan.rows[0]!.id);
+      const v = await tx.execute<{ id: string }>(
+        sql`INSERT INTO pricing_plan_versions (plan_id, version_number) VALUES (${plan.rows[0]!.id}, 1) RETURNING id`,
+      );
+      await tx.execute(
+        sql`INSERT INTO pricing_rules (plan_version_id, channel_id, unit_price_e4) VALUES (${v.rows[0]!.id}, ${channelId}, 0)`,
+      );
+      await tx.execute(
+        sql`UPDATE pricing_plan_versions SET status = 'active', effective_from = now() WHERE id = ${v.rows[0]!.id}`,
+      );
+      await tx.execute(
+        sql`INSERT INTO customer_pricing_assignments (org_id, plan_id, effective_from) VALUES (${Z.orgId}, ${plan.rows[0]!.id}, now())`,
+      );
+    });
+    await h.admin.insert(schema.organizationProviderAssignments).values({
+      orgId: Z.orgId,
+      channelId,
+      providerId,
+      priority: 1,
+      status: 'active',
+    });
+    // An empty wallet: a zero charge never reaches the funds check.
+    await h.admin.execute(sql`INSERT INTO wallets (org_id, balance_paise) VALUES (${Z.orgId}, 0)`);
+
+    // Evidenced: at the threshold (0), so it executes on request.
+    threshold(0);
+    const ev = await plant(Z, { evidenced: true, reserve: false });
+    expect(await registerItem(Z, ev.id)).toMatchObject({
+      estimatedExposure: { customerPaise: 0, providerCostPaise: 20 },
+    });
+    const r = (await charge(requester, ev.id).expect(201)).body.data;
+    expect(r).toMatchObject({
+      status: 'executed',
+      customerAmountPaise: 0,
+      providerCostPaise: 20,
+      evidence: 'evidenced',
+      postsProviderCost: true,
+      dualControl: false,
+      chargedPaise: 0,
+      providerCostPostedPaise: 20,
+    });
+    expect(await facts(ev)).toEqual(['provider_cost@u:20']);
+    expect(await wallet(Z)).toEqual({ balance: 0, reserved: 0 });
+    expect(await registerItem(Z, ev.id)).toMatchObject({ status: 'charged' });
+    expect(await audits(r.id)).toEqual([
+      AUDIT_ACTIONS.BILLING_OUTCOME_UNKNOWN_RESOLUTION_REQUESTED,
+      AUDIT_ACTIONS.BILLING_OUTCOME_UNKNOWN_CHARGED,
+    ]);
+
+    // Unevidenced: dual control regardless; nothing at all is posted.
+    const un = await plant(Z, { reserve: false });
+    const p = (await charge(requester, un.id).expect(201)).body.data;
+    expect(p).toMatchObject({ status: 'pending', dualControl: true, postsProviderCost: false });
+    const done = await approve(approver, p.id, 0).expect(200);
+    expect(done.body.data).toMatchObject({
+      status: 'executed',
+      chargedPaise: 0,
+      providerCostPostedPaise: 0,
+    });
+    expect(await facts(un)).toEqual([]);
+    expect(await registerItem(Z, un.id)).toMatchObject({ status: 'charged_without_cost' });
+    expect(await wallet(Z)).toEqual({ balance: 0, reserved: 0 });
   });
 
   it('a credit account: used grows by the charge, reserved does not', async () => {
