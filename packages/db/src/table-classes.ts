@@ -88,4 +88,8 @@ export const ORG_ID_EXEMPT_TABLES: readonly string[] = [
   // written and read only by the SECURITY DEFINER rating functions.
   'customer_pricing_assignments',
   'pricing_evaluations',
+  // Phase 7 PR 7-5 (migration 0054): the reached-provider classification of settled
+  // attempts. No application-role privilege at all: written and read only by the
+  // acc_dispatch settlement functions (SECURITY DEFINER); RLS on, no policy.
+  'message_attempt_billing',
 ];

@@ -8,6 +8,7 @@ import {
   rcsProviderSupports,
   type AuthPrincipal,
   type DeliveryReceiptType,
+  type ProviderFailureCategory,
   type ProviderStatus,
   type RcsMessageType,
   type SimulatorBehavior,
@@ -97,6 +98,48 @@ const DISPATCH_PRINCIPAL: AuthPrincipal = Object.freeze({
 });
 
 export const LEASE_DURATION_MS = 30_000;
+
+/**
+ * Phase 7 PR 7-5: whether a settled provider result means the attempt reached the
+ * provider (OD-7-4: provider cost is recorded for each such attempt; under
+ * `charge_per_attempt` it is charged when the chain ends accepted). Pinned per
+ * category, never per vendor. TIMEOUT and UNKNOWN are outcome_unknown (OD-7-4U):
+ * never "reached". CONFIGURATION_ERROR is ours, not the provider's.
+ */
+export const REACHED_PROVIDER: Readonly<Record<ProviderFailureCategory | 'ACCEPTED', boolean>> =
+  Object.freeze({
+    ACCEPTED: true,
+    PROVIDER_ERROR: true,
+    RATE_LIMITED: true,
+    AUTH_ERROR: true,
+    INVALID_REQUEST: true,
+    INVALID_RECIPIENT: true,
+    UNSUPPORTED_CONTENT: true,
+    CONFIGURATION_ERROR: false,
+    TIMEOUT: false,
+    UNKNOWN: false,
+  });
+
+/**
+ * Phase 7 PR 7-5: refusals of the pre-submit reservation top-up and attempt rating
+ * (`app_dispatch_attempt_reserve`), by SQLSTATE. Each terminates the message
+ * `failed` before any provider call, and its reservation is released.
+ */
+const ATTEMPT_BILLING_REFUSALS: Readonly<Record<string, string>> = Object.freeze({
+  BL001: 'BILLING_ACCOUNT_NOT_CONFIGURED',
+  BL002: 'BILLING_ACCOUNT_FROZEN',
+  BL003: 'BILLING_INSUFFICIENT_FUNDS',
+  BL007: 'BILLING_PRICE_NOT_CONFIGURED',
+  BL008: 'BILLING_PROVIDER_COST_NOT_CONFIGURED',
+  BL009: 'BILLING_UNITS_CHANGED',
+});
+
+function sqlState(error: unknown): string | undefined {
+  const e = error as { code?: unknown; cause?: { code?: unknown } } | null | undefined;
+  if (typeof e?.code === 'string') return e.code;
+  if (typeof e?.cause?.code === 'string') return e.cause.code;
+  return undefined;
+}
 
 @Injectable()
 export class DispatcherService {
@@ -196,9 +239,13 @@ export class DispatcherService {
       const queueResult = await client.query<{
         claim_token: string | null;
         dispatch_epoch: number;
-      }>(`SELECT claim_token, dispatch_epoch FROM message_dispatch_queue WHERE message_id = $1`, [
-        claim.messageId,
-      ]);
+      }>(
+        // Phase 7 PR 7-5: the fence is read under the queue-row lock (§1zi.1: queue row
+        // first in every dispatch transaction), so lease recovery (SKIP LOCKED) cannot
+        // take the row while this transaction may settle money for it.
+        `SELECT claim_token, dispatch_epoch FROM message_dispatch_queue WHERE message_id = $1 FOR UPDATE`,
+        [claim.messageId],
+      );
       const queueRows = queueResult.rows;
 
       if (
@@ -228,7 +275,13 @@ export class DispatcherService {
       const stateResult = await client.query<{
         status: string;
         current_attempt_id: string | null;
-      }>(`SELECT status, current_attempt_id FROM messages WHERE id = $1`, [claim.messageId]);
+        billing_enforced: boolean;
+      }>(`SELECT status, current_attempt_id, billing_enforced FROM messages WHERE id = $1`, [
+        claim.messageId,
+      ]);
+      // Phase 7 PR 7-5: settlement applies only to messages submitted under billing
+      // enforcement (immutable on the message; never the current flag).
+      const enforced = stateResult.rows[0]?.billing_enforced === true;
       if (stateResult.rows[0]?.status === 'submitting') {
         const reason = await this.settleAbandonedSubmission(
           client,
@@ -293,6 +346,7 @@ export class DispatcherService {
            VALUES ($1, $2, $3, 'message.failed', '{"reason":"Organization is closed"}')`,
           [uuidv7(), claim.orgId, claim.messageId],
         );
+        await this.settleMessageBilling(client, enforced);
         await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
           claim.messageId,
         ]);
@@ -353,6 +407,7 @@ export class DispatcherService {
            VALUES ($1, $2, $3, 'message.failed', $4)`,
           [uuidv7(), claim.orgId, claim.messageId, JSON.stringify({ reason, attempts: 0 })],
         );
+        await this.settleMessageBilling(client, enforced);
         await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
           claim.messageId,
         ]);
@@ -395,6 +450,7 @@ export class DispatcherService {
             JSON.stringify({ reason: block, attempts: priorAttemptCount }),
           ],
         );
+        await this.settleMessageBilling(client, enforced);
         await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
           claim.messageId,
         ]);
@@ -453,6 +509,7 @@ export class DispatcherService {
             JSON.stringify({ reason, attempts: priorAttemptCount }),
           ],
         );
+        await this.settleMessageBilling(client, enforced);
         await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
           claim.messageId,
         ]);
@@ -504,6 +561,7 @@ export class DispatcherService {
               }),
             ],
           );
+          await this.settleMessageBilling(client, enforced);
           await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
             claim.messageId,
           ]);
@@ -598,6 +656,7 @@ export class DispatcherService {
             }),
           ],
         );
+        await this.settleMessageBilling(client, enforced);
         await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
           claim.messageId,
         ]);
@@ -608,6 +667,10 @@ export class DispatcherService {
           error: 'NO_ELIGIBLE_PROVIDER',
         };
       }
+
+      // Phase 7 PR 7-5: a refused pre-submit top-up undoes the attempt (and the
+      // queued -> submitting transition) to this savepoint, then fails the message.
+      if (enforced) await client.query('SAVEPOINT billing_attempt');
 
       // Create message attempt
       attemptId = uuidv7();
@@ -660,6 +723,41 @@ export class DispatcherService {
           JSON.stringify({ attemptNumber, providerId: selectedProviderId }),
         ],
       );
+
+      // Phase 7 PR 7-5 (RQ-2, D-74-3): rate this attempt and top up the reservation when
+      // the remaining reservation is below its price — before any provider call. The
+      // units re-derived for submission must equal those persisted at submission.
+      if (enforced) {
+        const refusal = await this.reserveAttempt(
+          client,
+          attemptId,
+          mapping.sms ? mapping.sms.segments : 1,
+        );
+        if (refusal) {
+          await client.query('ROLLBACK TO SAVEPOINT billing_attempt');
+          const reason = `${refusal}: refused before provider submission`;
+          await client.query(
+            `UPDATE messages
+             SET status = 'failed',
+                 failure_reason = $1,
+                 completed_at = now(),
+                 updated_at = now()
+             WHERE id = $2`,
+            [reason, claim.messageId],
+          );
+          await client.query(
+            `INSERT INTO message_events (id, org_id, message_id, event_type, payload)
+             VALUES ($1, $2, $3, 'message.failed', $4)`,
+            [uuidv7(), claim.orgId, claim.messageId, JSON.stringify({ reason: refusal })],
+          );
+          await this.settleMessageBilling(client, enforced);
+          await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
+            claim.messageId,
+          ]);
+          await client.query('COMMIT');
+          return { messageId: claim.messageId, outcome: 'failed', error: refusal };
+        }
+      }
 
       // Read simulator_behavior capability from PostgreSQL (ADR-014 §10, D19)
       let simulatorBehavior: SimulatorBehavior = 'SUCCESS';
@@ -766,6 +864,7 @@ export class DispatcherService {
            VALUES ($1, $2, $3, $4, 'message.failed', '{"reason":"Organization is closed"}')`,
           [uuidv7(), claim.orgId, claim.messageId, attemptId],
         );
+        await this.settleMessageBilling(client, enforced);
         await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
           claim.messageId,
         ]);
@@ -817,9 +916,11 @@ export class DispatcherService {
         dispatch_epoch: number;
         claim_token: string | null;
       }>(
+        // Phase 7 PR 7-5 (OD-7-2): the settlement fence is read FOR UPDATE.
         `SELECT dispatch_epoch, claim_token
          FROM message_dispatch_queue
-         WHERE message_id = $1`,
+         WHERE message_id = $1
+         FOR UPDATE`,
         [claim.messageId],
       );
       const fenceRows = fenceResult.rows;
@@ -901,6 +1002,7 @@ export class DispatcherService {
             initialDelivery,
           ],
         );
+        await this.settleAttemptBilling(client, enforced, attemptId, REACHED_PROVIDER.ACCEPTED);
 
         await client.query(
           `UPDATE messages
@@ -932,6 +1034,7 @@ export class DispatcherService {
           receipts,
         });
 
+        await this.settleMessageBilling(client, enforced);
         await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
           claim.messageId,
         ]);
@@ -962,6 +1065,8 @@ export class DispatcherService {
            WHERE id = $3`,
           [unknownReason, settled.result.latencyMs, attemptId, initialDelivery],
         );
+        // OD-7-4U: an unknown outcome never reached-billed: no provider cost, no charge.
+        await this.settleAttemptBilling(client, enforced, attemptId, false);
 
         await client.query(
           `UPDATE messages
@@ -997,6 +1102,7 @@ export class DispatcherService {
         });
 
         // Delete from queue (terminal, non-retryable, zero fallback per ADR-014 D16)
+        await this.settleMessageBilling(client, enforced);
         await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
           claim.messageId,
         ]);
@@ -1019,6 +1125,12 @@ export class DispatcherService {
              completed_at = now()
          WHERE id = $3`,
         [fullFailureReason, settled.result.latencyMs, attemptId],
+      );
+      await this.settleAttemptBilling(
+        client,
+        enforced,
+        attemptId,
+        failureCategory ? REACHED_PROVIDER[failureCategory] : false,
       );
 
       const isFallbackEligible =
@@ -1134,6 +1246,7 @@ export class DispatcherService {
         receipts,
       });
 
+      await this.settleMessageBilling(client, enforced);
       await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [
         claim.messageId,
       ]);
@@ -1157,6 +1270,53 @@ export class DispatcherService {
       };
     } finally {
       client.release();
+    }
+  }
+
+  /**
+   * Phase 7 PR 7-5: charges (on a confirmed accepted chain) and releases the reservation,
+   * in the transaction that finishes the message, while the claim row still exists
+   * (`app_dispatch_message_settle` verifies the live claim). Nothing for a message not
+   * submitted under billing enforcement.
+   */
+  private async settleMessageBilling(client: PoolClient, enforced: boolean): Promise<void> {
+    if (!enforced) return;
+    await client.query(`SELECT * FROM app_dispatch_message_settle()`);
+  }
+
+  /**
+   * Phase 7 PR 7-5: records whether a settled attempt reached the provider and, if it did,
+   * its provider cost — after the attempt's terminal status is written, in the same
+   * transaction (`app_dispatch_attempt_settle`).
+   */
+  private async settleAttemptBilling(
+    client: PoolClient,
+    enforced: boolean,
+    attemptId: string,
+    reached: boolean,
+  ): Promise<void> {
+    if (!enforced) return;
+    await client.query(`SELECT * FROM app_dispatch_attempt_settle($1, $2)`, [attemptId, reached]);
+  }
+
+  /**
+   * Phase 7 PR 7-5: rates the new attempt and tops up the reservation if needed
+   * (`app_dispatch_attempt_reserve`). Returns the refusal code for a billing refusal
+   * (the caller rolls back to its savepoint and fails the message); rethrows anything
+   * else.
+   */
+  private async reserveAttempt(
+    client: PoolClient,
+    attemptId: string,
+    units: number,
+  ): Promise<string | null> {
+    try {
+      await client.query(`SELECT * FROM app_dispatch_attempt_reserve($1, $2)`, [attemptId, units]);
+      return null;
+    } catch (error) {
+      const refusal = ATTEMPT_BILLING_REFUSALS[sqlState(error) ?? ''];
+      if (!refusal) throw error;
+      return refusal;
     }
   }
 
@@ -1304,6 +1464,17 @@ export class DispatcherService {
       });
     }
 
+    // Phase 7 PR 7-5 (OD-7-4U): an abandoned submission is never charged and carries no
+    // provider cost; its reservation is released in this transaction, which finishes the
+    // message, while the (recovery or new) claim is still live.
+    const billing = await client.query<{ billing_enforced: boolean }>(
+      `SELECT billing_enforced FROM messages WHERE id = $1`,
+      [messageId],
+    );
+    const enforced = billing.rows[0]?.billing_enforced === true;
+    if (attemptId) await this.settleAttemptBilling(client, enforced, attemptId, false);
+    await this.settleMessageBilling(client, enforced);
+
     // Delete from queue (non-retryable)
     await client.query(`DELETE FROM message_dispatch_queue WHERE message_id = $1`, [messageId]);
     return reason;
@@ -1313,85 +1484,107 @@ export class DispatcherService {
    * Recovers expired leases (P3-D11 / ADR-014 D18).
    * Attempts that expired during 'submitting' status cannot be safely retried
    * and must be terminalized as OUTCOME_UNKNOWN (terminal, non-retryable).
+   *
+   * Phase 7 PR 7-5 (OD-7-2): **one expired lease per transaction**. Settlement takes
+   * the organization's billing account, so a batch spanning organizations could
+   * deadlock with another recovery run; and a lease that fails (a poison lease) must
+   * not hold back the others. A failing lease is rolled back, logged and skipped for
+   * the rest of this run; it is retried on the next cycle, never re-sent. The first
+   * error is rethrown once every other lease has been recovered.
    */
   async recoverExpiredLeases(): Promise<number> {
     const client = await this.pool.connect();
+    const skipped: string[] = [];
+    let firstError: unknown = null;
+    let recovered = 0;
     try {
-      await client.query('BEGIN');
-
-      const expiredResult = await client.query<{
-        message_id: string;
-        org_id: string;
-        claim_token: string | null;
-        dispatch_epoch: number;
-      }>(
-        `SELECT message_id, org_id, claim_token, dispatch_epoch
-         FROM message_dispatch_queue
-         WHERE claimed_until < now()
-         FOR UPDATE SKIP LOCKED`,
-      );
-      const expired = expiredResult.rows;
-
-      let recovered = 0;
-
-      for (const row of expired) {
-        // Claim the expired queue row for recovery
-        const recoveryToken = randomUUID();
-        await client.query(
-          `UPDATE message_dispatch_queue
-           SET claim_token = $1,
-               claimed_until = now() + interval '30 seconds',
-               dispatch_epoch = dispatch_epoch + 1
-           WHERE message_id = $2`,
-          [recoveryToken, row.message_id],
-        );
-
-        // Set dispatch context under the active recovery claim
-        await client.query(
-          `SELECT set_config('app.current_org_id', $1, true),
-                  set_config('app.dispatch_message_id', $2, true),
-                  set_config('app.dispatch_claim_token', $3, true)`,
-          [row.org_id, row.message_id, recoveryToken],
-        );
-
-        // Check if message is in 'submitting' status
-        const msgResult = await client.query<{
-          status: string;
-          current_attempt_id: string | null;
-        }>(`SELECT status, current_attempt_id FROM messages WHERE id = $1`, [row.message_id]);
-        const msgRows = msgResult.rows;
-
-        if (msgRows[0]?.status === 'submitting') {
-          await this.settleAbandonedSubmission(
-            client,
-            row.org_id,
-            row.message_id,
-            msgRows[0].current_attempt_id,
+      for (;;) {
+        let messageId: string | null = null;
+        try {
+          await client.query('BEGIN');
+          const expiredResult = await client.query<{
+            message_id: string;
+            org_id: string;
+            claim_token: string | null;
+            dispatch_epoch: number;
+          }>(
+            `SELECT message_id, org_id, claim_token, dispatch_epoch
+             FROM message_dispatch_queue
+             WHERE claimed_until < now()
+               AND NOT (message_id = ANY($1::uuid[]))
+             ORDER BY claimed_until, message_id
+             LIMIT 1
+             FOR UPDATE SKIP LOCKED`,
+            [skipped],
           );
-        } else {
-          // Message was not submitting (e.g. queued/routing): release claim for redelivery
+          const row = expiredResult.rows[0];
+          if (!row) {
+            await client.query('COMMIT');
+            break;
+          }
+          messageId = row.message_id;
+
+          // Claim the expired queue row for recovery
+          const recoveryToken = randomUUID();
           await client.query(
             `UPDATE message_dispatch_queue
-             SET claim_token = NULL,
-                 claimed_until = NULL,
-                 claimed_by = NULL
-             WHERE message_id = $1`,
-            [row.message_id],
+             SET claim_token = $1,
+                 claimed_until = now() + interval '30 seconds',
+                 dispatch_epoch = dispatch_epoch + 1
+             WHERE message_id = $2`,
+            [recoveryToken, row.message_id],
           );
+
+          // Set dispatch context under the active recovery claim
+          await client.query(
+            `SELECT set_config('app.current_org_id', $1, true),
+                    set_config('app.dispatch_message_id', $2, true),
+                    set_config('app.dispatch_claim_token', $3, true)`,
+            [row.org_id, row.message_id, recoveryToken],
+          );
+
+          // Check if message is in 'submitting' status
+          const msgResult = await client.query<{
+            status: string;
+            current_attempt_id: string | null;
+          }>(`SELECT status, current_attempt_id FROM messages WHERE id = $1`, [row.message_id]);
+          const msgRows = msgResult.rows;
+
+          if (msgRows[0]?.status === 'submitting') {
+            await this.settleAbandonedSubmission(
+              client,
+              row.org_id,
+              row.message_id,
+              msgRows[0].current_attempt_id,
+            );
+          } else {
+            // Message was not submitting (e.g. queued/routing): release claim for redelivery
+            await client.query(
+              `UPDATE message_dispatch_queue
+               SET claim_token = NULL,
+                   claimed_until = NULL,
+                   claimed_by = NULL
+               WHERE message_id = $1`,
+              [row.message_id],
+            );
+          }
+
+          await client.query('COMMIT');
+          recovered++;
+        } catch (error) {
+          await client.query('ROLLBACK').catch(() => undefined);
+          this.logger.error(failureLogEntry('Failed to recover expired leases', error));
+          firstError ??= error;
+          // Without a row there is nothing to skip: the failure is not lease-specific.
+          if (messageId === null) break;
+          skipped.push(messageId);
         }
-
-        recovered++;
       }
-
-      await client.query('COMMIT');
-      return recovered;
-    } catch (error) {
-      await client.query('ROLLBACK').catch(() => undefined);
-      this.logger.error(failureLogEntry('Failed to recover expired leases', error));
-      throw error;
     } finally {
       client.release();
     }
+    if (firstError !== null) throw firstError;
+    return recovered;
   }
 
   /**

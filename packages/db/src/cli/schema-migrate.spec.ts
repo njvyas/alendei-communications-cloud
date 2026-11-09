@@ -330,9 +330,9 @@ describe('three barriers (U14.1a 0042, U14.1b 0043, Phase 5.0 0045) — journal 
 
   // Pins the journal shape at the time of Phase 8B.1: 0042, 0043, then 0044 (the prefix of
   // the third barrier), the 0045 guard, 0046, the forward fix 0047, 0048 (resolver facts), 0049
-  // (support delivery filter), 0050 (ledger foundation), 0051 (pricing and rating), 0052 (campaign foundation) and 0053 (funds reservation) as the newest.
+  // (support delivery filter), 0050 (ledger foundation), 0051 (pricing and rating), 0052 (campaign foundation), 0053 (funds reservation) and 0054 (settlement) as the newest.
   // Update when a later migration is added.
-  it('0043 follows 0042; the 0045 guard follows 0044; 0046 to 0053 are the newest', () => {
+  it('0043 follows 0042; the 0045 guard follows 0044; 0046 to 0054 are the newest', () => {
     expect(at43).toBe(guardAt + 1);
     expect(at45).toBe(at43 + 2);
     expect(expected[at45 - 1]?.tag).toBe('0044_phase5_0_delivery_foundation');
@@ -344,29 +344,30 @@ describe('three barriers (U14.1a 0042, U14.1b 0043, Phase 5.0 0045) — journal 
     expect(expected[at45 + 6]?.tag).toBe('0051_phase7_2_pricing_rating');
     expect(expected[at45 + 7]?.tag).toBe('0052_phase8b_campaign_foundation');
     expect(expected[at45 + 8]?.tag).toBe('0053_phase7_4_funds_reservation');
-    expect(expected).toHaveLength(at45 + 9);
+    expect(expected[at45 + 9]?.tag).toBe('0054_phase7_5_settlement');
+    expect(expected).toHaveLength(at45 + 10);
   });
 
   it.each<[string, Row[] | null, string[]]>([
     [
       'fresh database',
       null,
-      [`apply:${guardAt}`, 'barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:9'],
+      [`apply:${guardAt}`, 'barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:10'],
     ],
     [
       'database at 0041',
       rowsFor(guardAt),
-      ['barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:9'],
+      ['barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:10'],
     ],
     [
       'database at 0042 (U14.1a applied)',
       rowsFor(guardAt + 1),
-      ['verify:a', 'barrier:b', 'apply:2', 'barrier:c', 'apply:9'],
+      ['verify:a', 'barrier:b', 'apply:2', 'barrier:c', 'apply:10'],
     ],
     [
       'database at 0044 (Phase 5.0 M1 applied)',
       rowsFor(at45),
-      ['verify:a', 'verify:b', 'barrier:c', 'apply:9'],
+      ['verify:a', 'verify:b', 'barrier:c', 'apply:10'],
     ],
     ['up to date', rowsFor(expected.length), ['verify:a', 'verify:b', 'verify:c']],
   ])(
