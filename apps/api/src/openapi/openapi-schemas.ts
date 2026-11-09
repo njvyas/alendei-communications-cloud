@@ -1125,3 +1125,47 @@ export class BillingUsageSchema {
   @ApiProperty({ type: BillingUsageDayRowSchema, isArray: true })
   daily!: BillingUsageDayRowSchema[];
 }
+
+// --- Phase 7 PR 7-6b: the unknown-outcome register (platform, billing.manage) --------
+
+@ApiSchema({ name: 'UnknownOutcomeExposure' })
+export class UnknownOutcomeExposureSchema {
+  @ApiProperty({
+    type: 'integer',
+    minimum: 0,
+    nullable: true,
+    description:
+      'ESTIMATE, not a ledger entry: the customer price the automatic path would have charged (E_m, or the unknown attempt E_a under charge_per_attempt). Integer paise.',
+  })
+  customerPaise!: number | null;
+  @ApiProperty({
+    type: 'integer',
+    minimum: 0,
+    nullable: true,
+    description:
+      'ESTIMATE, not a ledger entry: the provider cost rated for the unknown attempt, when there is one. Integer paise.',
+  })
+  providerCostPaise!: number | null;
+}
+
+@ApiSchema({ name: 'UnknownOutcome' })
+export class UnknownOutcomeSchema {
+  @ApiProperty(uuid) messageId!: string;
+  @ApiProperty(uuid) orgId!: string;
+  @ApiProperty({ enum: [...CHANNEL_CODES] }) channelCode!: string;
+  @ApiProperty({ enum: ['charge_per_logical_message', 'charge_per_attempt'] })
+  billingPolicy!: string;
+  @ApiProperty(timestamp) completedAt!: string;
+  @ApiProperty({ type: 'integer', minimum: 0 }) ageSeconds!: number;
+  @ApiProperty(nullableUuid) attemptId!: string | null;
+  @ApiProperty(nullableUuid) providerId!: string | null;
+  @ApiProperty({ type: UnknownOutcomeExposureSchema })
+  estimatedExposure!: UnknownOutcomeExposureSchema;
+  @ApiProperty({ enum: ['evidenced', 'unevidenced'] }) evidence!: string;
+  @ApiProperty({
+    enum: ['open', 'pending_approval', 'charged', 'charged_without_cost', 'written_off'],
+    description:
+      'Derived from the ledger. pending_approval and written_off arrive with operator resolution (7-6c).',
+  })
+  status!: string;
+}

@@ -6,6 +6,8 @@ import { LedgerPartitionStartupCheck } from './ledger-partition-startup.check';
 import { MessageReservationService } from './message-reservation.service';
 import { PricingController } from './pricing.controller';
 import { PricingService } from './pricing.service';
+import { UnknownOutcomeRegisterController } from './unknown-register.controller';
+import { UnknownOutcomeRegisterService } from './unknown-register.service';
 
 /**
  * Phase 7 billing (`DECISIONS.md` §1zi).
@@ -17,16 +19,18 @@ import { PricingService } from './pricing.service';
  *   the message submission core only, under `BILLING_ENFORCEMENT_ENABLED`).
  *
  * - PR 7-6a: tenant billing reads (`BillingReadController`, `billing.read`, read-only).
+ * - PR 7-6b: the unknown-outcome register (platform, `billing.manage`, read-only).
  *
  * No account creation or money movement here.
  */
 @Module({
-  controllers: [PricingController, BillingReadController],
+  controllers: [PricingController, BillingReadController, UnknownOutcomeRegisterController],
   providers: [
     LedgerPartitionStartupCheck,
     PricingService,
     MessageReservationService,
     BillingReadService,
+    UnknownOutcomeRegisterService,
   ],
   exports: [MessageReservationService],
 })

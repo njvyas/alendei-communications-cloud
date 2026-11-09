@@ -121,6 +121,8 @@ export class MetricsService implements OnModuleInit {
   readonly ledgerPartitionCheckFailures: Counter<never>;
   // Phase 7 PR 7-5 — the bounded retry of the dispatcher's settlement transaction (OD-7-2).
   readonly dispatchSettlementRetries: Counter<'outcome'>;
+  // Phase 7 PR 7-6b — the unknown-outcome register (baseline §6.5, Policy U).
+  readonly billingOutcomeUnknownOpen: Gauge<'channel'>;
 
   constructor(private readonly config: AppConfigService) {
     this.registry.setDefaultLabels({
@@ -313,6 +315,11 @@ export class MetricsService implements OnModuleInit {
       name: 'acc_dispatch_settlement_retries_total',
       help: 'Dispatcher settlement transactions (T3) that failed at least once, by outcome: succeeded (committed on a retry), exhausted (deadlock or serialization failure past the bounded retry, or too little lease left), non_retryable (any other error). The provider call is never repeated; an unsettled submission is left to lease recovery.',
       labelNames: ['outcome'],
+    });
+    this.billingOutcomeUnknownOpen = this.gauge({
+      name: 'acc_billing_outcome_unknown_open',
+      help: 'Open unknown-outcome register items (billed under enforcement, outcome_unknown, not charged), by channel, as of the last register read.',
+      labelNames: ['channel'],
     });
   }
 
