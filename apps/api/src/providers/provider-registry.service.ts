@@ -98,7 +98,7 @@ export interface ProviderTestSendView {
   /** The provider's answer: accepted, or rejected with a normalized failure. A rejection is data, not an HTTP error. */
   readonly outcome: 'accepted' | 'rejected';
   readonly providerMessageId: string | null;
-  readonly failure: ProviderFailure | null;
+  readonly failure: Omit<ProviderFailure, 'origin'> | null;
   readonly latencyMs: number;
   /** Whether this submission was the circuit's half-open probe (Phase 2.3). */
   readonly circuitProbe: boolean;
@@ -574,7 +574,17 @@ export class ProviderRegistryService {
       correlationId,
       outcome: result.outcome,
       providerMessageId: result.outcome === 'accepted' ? result.providerMessageId : null,
-      failure: result.outcome === 'rejected' ? result.failure : null,
+      // The API's failure shape is unchanged: `origin` (Phase 7 PR 7-5) is a billing
+      // classification, not part of the test-send contract.
+      failure:
+        result.outcome === 'rejected'
+          ? {
+              category: result.failure.category,
+              retryable: result.failure.retryable,
+              providerCode: result.failure.providerCode,
+              message: result.failure.message,
+            }
+          : null,
       latencyMs: result.latencyMs,
       circuitProbe: settled.circuitProbe,
       healthState: recorded.healthState,

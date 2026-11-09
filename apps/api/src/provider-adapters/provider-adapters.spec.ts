@@ -297,6 +297,8 @@ describe('SimulatorAdapter — the seven submission-time behaviours, determinist
       category?: string;
       retryable?: boolean;
       providerCode?: string | null;
+      /** Phase 7 PR 7-5: a simulated provider answer is `provider`; the executor's timeout is `local`. */
+      origin?: 'provider' | 'local';
       latencyMs: number;
     }
   > = {
@@ -310,6 +312,7 @@ describe('SimulatorAdapter — the seven submission-time behaviours, determinist
       category: 'TIMEOUT',
       retryable: true,
       providerCode: null,
+      origin: 'local',
       latencyMs: PROVIDER_SUBMISSION_DEFAULTS.TIMEOUT_MS,
     },
     '500': {
@@ -317,6 +320,7 @@ describe('SimulatorAdapter — the seven submission-time behaviours, determinist
       category: 'PROVIDER_ERROR',
       retryable: true,
       providerCode: 'SIM-500',
+      origin: 'provider',
       latencyMs: 0,
     },
     '429': {
@@ -324,6 +328,7 @@ describe('SimulatorAdapter — the seven submission-time behaviours, determinist
       category: 'RATE_LIMITED',
       retryable: true,
       providerCode: 'SIM-429',
+      origin: 'provider',
       latencyMs: 0,
     },
     INVALID_CREDENTIALS: {
@@ -331,6 +336,7 @@ describe('SimulatorAdapter — the seven submission-time behaviours, determinist
       category: 'AUTH_ERROR',
       retryable: false,
       providerCode: 'SIM-401',
+      origin: 'provider',
       latencyMs: 0,
     },
     INVALID_REQUEST: {
@@ -338,6 +344,7 @@ describe('SimulatorAdapter — the seven submission-time behaviours, determinist
       category: 'INVALID_REQUEST',
       retryable: false,
       providerCode: 'SIM-400',
+      origin: 'provider',
       latencyMs: 0,
     },
   };
@@ -363,6 +370,7 @@ describe('SimulatorAdapter — the seven submission-time behaviours, determinist
           category: expected.category,
           retryable: expected.retryable,
           providerCode: expected.providerCode,
+          origin: expected.origin,
         });
         expect('providerMessageId' in result).toBe(false);
       }
@@ -574,7 +582,13 @@ describe('ProviderSubmissionExecutor — normalization', () => {
         outcome: 'rejected',
         submissionId: 'forged',
         correlationId: 'forged',
-        failure: { category: 'AUTH_ERROR', retryable: true, providerCode: 'X', message: 'm' },
+        failure: {
+          category: 'AUTH_ERROR',
+          retryable: true,
+          providerCode: 'X',
+          message: 'm',
+          origin: 'provider',
+        },
         latencyMs: 999,
       }),
     );
@@ -583,6 +597,51 @@ describe('ProviderSubmissionExecutor — normalization', () => {
       correlationId: submission().correlationId,
       failure: { category: 'AUTH_ERROR', retryable: false },
       latencyMs: 0,
+    });
+  });
+
+  // Phase 7 PR 7-5 (owner decision 09-Nov-2026): whether a provider response decided a
+  // failure is recorded at this boundary, never inferred from the category name.
+  describe('failure origin', () => {
+    const rejectedWith = (failure: Record<string, unknown>) =>
+      executeWith(() =>
+        Promise.resolve({
+          outcome: 'rejected',
+          submissionId: 's',
+          correlationId: 'c',
+          failure: { retryable: false, providerCode: null, message: 'm', ...failure },
+          latencyMs: 1,
+        } as never),
+      );
+
+    it('a provider-originated authentication failure keeps origin provider', async () => {
+      const result = await rejectedWith({ category: 'AUTH_ERROR', origin: 'provider' });
+      expect(result.outcome === 'rejected' && result.failure).toMatchObject({
+        category: 'AUTH_ERROR',
+        origin: 'provider',
+      });
+    });
+
+    it('a locally detected authentication failure keeps origin local', async () => {
+      const result = await rejectedWith({ category: 'AUTH_ERROR', origin: 'local' });
+      expect(result.outcome === 'rejected' && result.failure.origin).toBe('local');
+    });
+
+    it.each([undefined, 'remote', 'PROVIDER', true])(
+      'an absent or unrecognised origin (%s) is held to local',
+      async (origin) => {
+        const result = await rejectedWith({ category: 'PROVIDER_ERROR', origin });
+        expect(result.outcome === 'rejected' && result.failure.origin).toBe('local');
+      },
+    );
+
+    it('the executor’s own failures are local: an adapter that threw, a result outside the contract', async () => {
+      const threw = await executeWith(() => Promise.reject(new Error('boom')));
+      expect(
+        threw.outcome === 'rejected' && [threw.failure.category, threw.failure.origin],
+      ).toEqual(['UNKNOWN', 'local']);
+      const bogus = await executeWith(() => Promise.resolve({ outcome: 'delivered' } as never));
+      expect(bogus.outcome === 'rejected' && bogus.failure.origin).toBe('local');
     });
   });
 

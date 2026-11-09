@@ -23,6 +23,7 @@ import {
   CircuitAdmissions,
   type AdmissionIssuer,
   type CircuitAdmission,
+  type SettledRecord,
   type SettledSubmission,
 } from '../provider-adapters/circuit-admission';
 import { MetricsService } from '../observability/metrics.service';
@@ -74,6 +75,24 @@ export interface RecordedState {
 }
 
 type HealthCause = 'submission' | 'probe' | 'override';
+
+/**
+ * Phase 7 PR 7-5 (OD-7-2 recording split): a settled submission's record, taken
+ * from the admission ledger exactly once (`takeSubmissionRecord`). Opaque: only
+ * this store can read it, and it can be written in more than one transaction —
+ * the dispatcher's settlement transaction (T3) is retried, its provider call never.
+ */
+export interface SubmissionRecord {
+  readonly __submissionRecord: unique symbol;
+}
+
+/** What a written submission record leaves to do once its transaction has committed. */
+export interface WrittenSubmission extends RecordedState {
+  /** Emits the metrics and logs of this recording. Idempotent; call only after COMMIT. */
+  readonly afterCommit: () => void;
+}
+
+const SUBMISSION_RECORDS = new WeakMap<object, SettledRecord>();
 
 /**
  * The only writer of provider health and circuit state (Phase 2.3,
@@ -198,7 +217,46 @@ export class ProviderStateStore {
     settled: SettledSubmission,
     options?: { attemptId?: string | null },
   ): Promise<RecordedState> {
-    const { providerId, ticket, result } = this.#issuer.takeForRecording(settled);
+    const written = await this.writeSubmissionRecord(
+      tx,
+      principal,
+      this.takeSubmissionRecord(settled),
+      options,
+    );
+    written.afterCommit();
+    return { healthState: written.healthState, circuitState: written.circuitState };
+  }
+
+  /**
+   * Phase 7 PR 7-5 (OD-7-2): takes the settled submission's record from the admission
+   * ledger — once. A plain ticket, an unsettled admission, a forgery or a second take
+   * is refused (`CircuitAdmissionRequired`) before anything is read or written. The
+   * returned record can then be written in a retried transaction without re-taking it.
+   */
+  takeSubmissionRecord(settled: SettledSubmission): SubmissionRecord {
+    const taken = this.#issuer.takeForRecording(settled);
+    const record = Object.freeze({}) as SubmissionRecord;
+    SUBMISSION_RECORDS.set(record, taken);
+    return record;
+  }
+
+  /**
+   * Phase 7 PR 7-5 (OD-7-2): writes a taken record in `tx` — database only. Every
+   * metric and log line is deferred to the returned `publish`, which the caller runs
+   * after COMMIT, so a rolled-back and retried transaction counts nothing twice.
+   * Everything is re-read inside `tx`: a retry re-evaluates the circuit and health on
+   * the state it finds then.
+   */
+  async writeSubmissionRecord(
+    tx: Transaction,
+    principal: AuthPrincipal,
+    record: SubmissionRecord,
+    options?: { attemptId?: string | null },
+  ): Promise<WrittenSubmission> {
+    const taken = SUBMISSION_RECORDS.get(record);
+    if (!taken) throw new Error('writeSubmissionRecord: not a record taken by this store');
+    const { providerId, ticket, result } = taken;
+    const effects: Array<() => void> = [];
     const provider = await loadProvider(tx, providerId, { forUpdate: true });
     const now = this.clock.now();
     const outcome = submissionOutcome(result);
@@ -251,18 +309,30 @@ export class ProviderStateStore {
       decision.transitions,
       decision.window,
       policyRow.version,
+      effects,
     );
-    await this.recordHealthChange(tx, principal, provider, healthState, 'submission');
+    await this.recordHealthChange(tx, principal, provider, healthState, 'submission', effects);
 
     if (ticket.probeId !== null) {
-      this.metrics?.providerCircuitProbes.inc({
-        provider: providerId,
-        outcome: decision.effect === 'stale' ? 'stale' : decision.effect.slice('probe_'.length),
-      });
+      effects.push(() =>
+        this.metrics?.providerCircuitProbes.inc({
+          provider: providerId,
+          outcome: decision.effect === 'stale' ? 'stale' : decision.effect.slice('probe_'.length),
+        }),
+      );
     }
-    this.setCircuitGauge(providerId, decision.next.state);
-    this.setHealthGauge(providerId, healthState);
-    return { healthState, circuitState: decision.next.state };
+    effects.push(() => this.setCircuitGauge(providerId, decision.next.state));
+    effects.push(() => this.setHealthGauge(providerId, healthState));
+    let emitted = false;
+    return {
+      healthState,
+      circuitState: decision.next.state,
+      afterCommit: () => {
+        if (emitted) return;
+        emitted = true;
+        for (const effect of effects) effect();
+      },
+    };
   }
 
   /** Records a health-check probe (§5e). Health only: a probe never moves the circuit. */
@@ -483,7 +553,9 @@ export class ProviderStateStore {
     transitions: readonly CircuitTransition[],
     window: { samples: number; failures: number } | null,
     policyVersion: number,
+    effects?: Array<() => void>,
   ): Promise<void> {
+    const emit = (effect: () => void) => (effects ? effects.push(effect) : effect());
     for (const t of transitions) {
       // HIGH-6: System actors (e.g. background dispatcher) hold no audit_logs INSERT privilege.
       if (principal.actorType !== 'system') {
@@ -502,11 +574,6 @@ export class ProviderStateStore {
           },
         );
       }
-      this.metrics?.providerCircuitTransitions.inc({
-        provider: providerId,
-        from_state: t.from,
-        to_state: t.to,
-      });
       const line = {
         msg: `provider circuit ${t.from} -> ${t.to}`,
         providerId,
@@ -516,8 +583,15 @@ export class ProviderStateStore {
         circuitPolicyVersion: policyVersion,
         correlationId: RequestContext.correlationId(),
       };
-      if (t.to === 'open') this.logger.warn(line);
-      else this.logger.log(line);
+      emit(() => {
+        this.metrics?.providerCircuitTransitions.inc({
+          provider: providerId,
+          from_state: t.from,
+          to_state: t.to,
+        });
+        if (t.to === 'open') this.logger.warn(line);
+        else this.logger.log(line);
+      });
     }
   }
 
@@ -527,8 +601,10 @@ export class ProviderStateStore {
     provider: ProviderRow,
     healthState: ProviderHealthState,
     cause: HealthCause,
+    effects?: Array<() => void>,
   ): Promise<void> {
     if (healthState === provider.healthState) return;
+    const emit = (effect: () => void) => (effects ? effects.push(effect) : effect());
     // HIGH-6: System actors (e.g. background dispatcher) hold no audit_logs INSERT privilege.
     if (principal.actorType !== 'system') {
       await this.access.record(
@@ -540,19 +616,21 @@ export class ProviderStateStore {
         { healthState, source: cause === 'override' ? 'manual' : 'automatic', cause },
       );
     }
-    this.metrics?.providerHealthTransitions.inc({
-      provider: provider.id,
-      from_state: provider.healthState,
-      to_state: healthState,
-    });
     const line = {
       msg: `provider health ${provider.healthState} -> ${healthState}`,
       providerId: provider.id,
       cause,
       correlationId: RequestContext.correlationId(),
     };
-    if (healthState === 'critical' || healthState === 'offline') this.logger.warn(line);
-    else this.logger.log(line);
+    emit(() => {
+      this.metrics?.providerHealthTransitions.inc({
+        provider: provider.id,
+        from_state: provider.healthState,
+        to_state: healthState,
+      });
+      if (healthState === 'critical' || healthState === 'offline') this.logger.warn(line);
+      else this.logger.log(line);
+    });
   }
 
   private setCircuitGauge(providerId: string, state: ProviderCircuitState): void {

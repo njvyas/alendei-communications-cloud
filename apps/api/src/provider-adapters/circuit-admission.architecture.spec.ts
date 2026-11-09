@@ -15,8 +15,9 @@ import ts from 'typescript';
  *   - who may import the adapters, the registry, the ledger and the executor;
  *   - who may construct a ledger, an executor, a registry or an adapter;
  *   - who may reference `send` (on any adapter), `submit`, `claimIssuer`,
- *     `claimRedeemer`, `execute`, `probe`, `admit`, `recordSubmission` and
- *     the registry's `resolve`;
+ *     `claimRedeemer`, `execute`, `probe`, `admit`, `recordSubmission`,
+ *     `takeSubmissionRecord` / `writeSubmissionRecord` (Phase 7 PR 7-5: the
+ *     dispatcher's retried settlement transaction) and the registry's `resolve`;
  *   - every adapter class extends `GuardedProviderAdapter`;
  *   - routing eligibility never touches an admission.
  * A scanner self-test runs the same rules over known-bad fixture files, so a
@@ -68,6 +69,11 @@ const MEMBER_RULES: Allowlist = {
   'ProviderSubmissionExecutor.probe': ['providers/provider-health.service.ts'],
   'ProviderStateStore.admit': SUBMISSION_PATHS,
   'ProviderStateStore.recordSubmission': SUBMISSION_PATHS,
+  // Phase 7 PR 7-5 (OD-7-2 recording split): only the dispatcher takes a record once and
+  // writes it in its retried settlement transaction; the store's own recordSubmission is the
+  // one-shot composition of the two.
+  'ProviderStateStore.takeSubmissionRecord': [STORE, 'messages/dispatch/dispatcher.service.ts'],
+  'ProviderStateStore.writeSubmissionRecord': [STORE, 'messages/dispatch/dispatcher.service.ts'],
   'ProviderAdapterRegistry.resolve': [EXECUTOR],
   // Phase 5.0 PR-C: webhook verification and parsing — they send nothing and need no
   // admission — are reached only by the ingress pipeline.
@@ -489,7 +495,11 @@ describe('circuit admission — structural invariant, by the type checker (ADR-0
       ]),
     );
     expect(seen(LEDGER)).toContain('references GuardedProviderAdapter.submit');
-    expect(seen(STORE)).toEqual(['references CircuitAdmissions.claimIssuer']);
+    expect(seen(STORE)).toEqual([
+      'references CircuitAdmissions.claimIssuer',
+      'references ProviderStateStore.takeSubmissionRecord',
+      'references ProviderStateStore.writeSubmissionRecord',
+    ]);
     expect(seen(SUBMISSION_PATHS[0]!)).toEqual([
       'references ProviderStateStore.admit',
       'references ProviderStateStore.recordSubmission',
@@ -497,7 +507,8 @@ describe('circuit admission — structural invariant, by the type checker (ADR-0
     ]);
     expect(seen(SUBMISSION_PATHS[1]!)).toEqual([
       'references ProviderStateStore.admit',
-      'references ProviderStateStore.recordSubmission',
+      'references ProviderStateStore.takeSubmissionRecord',
+      'references ProviderStateStore.writeSubmissionRecord',
       'references ProviderSubmissionExecutor.execute',
     ]);
     expect(seen('providers/provider-health.service.ts')).toEqual([

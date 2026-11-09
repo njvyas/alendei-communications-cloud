@@ -305,6 +305,11 @@ export class ProviderSubmissionExecutor {
   }
 }
 
+/**
+ * A failure the executor decides itself — a timeout, an adapter that threw, a
+ * result outside the contract. No provider response decided it: origin `local`
+ * (Phase 7 PR 7-5).
+ */
 function rejected(
   submission: ProviderSubmission,
   category: (typeof PROVIDER_FAILURE_CATEGORIES)[number],
@@ -320,6 +325,7 @@ function rejected(
       retryable: RETRYABLE_FAILURE_CATEGORIES.includes(category),
       providerCode: null,
       message,
+      origin: 'local',
     },
     latencyMs,
   };
@@ -356,6 +362,10 @@ function normalize(
         retryable: RETRYABLE_FAILURE_CATEGORIES.includes(result.failure.category),
         providerCode: result.failure.providerCode ?? null,
         message: result.failure.message,
+        // Phase 7 PR 7-5: only an explicit `provider` origin counts as a provider
+        // response; anything else (absent, unrecognised) is held to `local`, so an
+        // adapter that does not say a provider answered is never billed as one.
+        origin: result.failure.origin === 'provider' ? 'provider' : 'local',
       },
       latencyMs,
     };

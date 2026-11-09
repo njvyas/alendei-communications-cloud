@@ -14,7 +14,9 @@ import { AppConfigService } from '../src/config/app-config.service';
 import { DISPATCH_POOL } from '../src/database/database.tokens';
 import { CredentialService } from '../src/iam/credential.service';
 import { applyDeliveryEvent } from '../src/messages/delivery/delivery-writer';
-import { DispatcherService, REACHED_PROVIDER } from '../src/messages/dispatch/dispatcher.service';
+import { DispatcherService } from '../src/messages/dispatch/dispatcher.service';
+import { MetricsService } from '../src/observability/metrics.service';
+import { ProviderSubmissionExecutor } from '../src/provider-adapters/submission-executor';
 import {
   PASSWORD,
   PREFIX,
@@ -434,24 +436,42 @@ describe('Phase 7-5: settlement and the reservation lifecycle (enforcement on)',
       expect(await wallet(s.tenant.orgId)).toEqual({ balance: 100_000, reserved: 0 });
     });
 
-    it.each(Object.entries(REACHED_PROVIDER))(
-      'classification pinned: %s reached = %s',
-      (key, value) => {
-        const expected: Record<string, boolean> = {
-          ACCEPTED: true,
-          PROVIDER_ERROR: true,
-          RATE_LIMITED: true,
-          AUTH_ERROR: true,
-          INVALID_REQUEST: true,
-          INVALID_RECIPIENT: true,
-          UNSUPPORTED_CONTENT: true,
-          CONFIGURATION_ERROR: false,
-          TIMEOUT: false,
-          UNKNOWN: false,
-        };
-        expect(value).toBe(expected[key]);
-      },
-    );
+    // Owner decision (09-Nov-2026): reached only when a provider response decided it.
+    it('a provider-originated authentication failure reached the provider: cost, no charge, release', async () => {
+      const s = await org('p75-auth', ['INVALID_CREDENTIALS']);
+      const id = await send(s);
+      const res = await dispatch(id);
+      expect([res.outcome, res.error?.startsWith('AUTH_ERROR')]).toEqual(['failed', true]);
+      expect(await reached(id)).toEqual([true]);
+      expect(await facts(id)).toEqual([
+        { entry: 'reservation', anchor: 'message', amount: 50 },
+        { entry: 'provider_cost', anchor: 'attempt', amount: 20 },
+        { entry: 'reservation_release', anchor: 'message', amount: 50 },
+      ]);
+    });
+
+    it('a rate-limit answer from the provider reached it: cost recorded, then fallback', async () => {
+      const s = await org('p75-429', ['429', 'SUCCESS']);
+      const id = await send(s);
+      expect((await dispatch(id)).outcome).toBe('failed');
+      expect((await dispatch(id)).outcome).toBe('accepted');
+      expect(await reached(id)).toEqual([true, true]);
+      expect((await facts(id)).filter((f) => f.entry === 'provider_cost')).toHaveLength(2);
+    });
+
+    it('a locally detected failure (no provider response) is not reached: no cost, release', async () => {
+      // An unknown simulator behaviour is refused by the adapter's own checks before
+      // anything reaches the provider: CONFIGURATION_ERROR, origin local.
+      const s = await org('p75-local', ['NOT_A_BEHAVIOUR']);
+      const id = await send(s);
+      const res = await dispatch(id);
+      expect([res.outcome, res.error?.startsWith('CONFIGURATION_ERROR')]).toEqual(['failed', true]);
+      expect(await reached(id)).toEqual([false]);
+      expect(await facts(id)).toEqual([
+        { entry: 'reservation', anchor: 'message', amount: 50 },
+        { entry: 'reservation_release', anchor: 'message', amount: 50 },
+      ]);
+    });
   });
 
   // --- 2. outcome unknown ---------------------------------------------------------
@@ -791,6 +811,195 @@ describe('Phase 7-5: settlement and the reservation lifecycle (enforcement on)',
         balance: 100_000 - 300,
         reserved: 600 - 300,
       });
+    });
+  });
+
+  // --- 7. the T3 settlement retry (OD-7-2) ------------------------------------------
+
+  describe('7. settlement retry: the provider is called once, facts are written once', () => {
+    let executor: ProviderSubmissionExecutor;
+    let metrics: MetricsService;
+    let execute: jest.SpyInstance;
+
+    beforeAll(() => {
+      executor = h.app.get(ProviderSubmissionExecutor);
+      metrics = h.app.get(MetricsService);
+    });
+    beforeEach(() => {
+      execute = jest.spyOn(executor, 'execute');
+    });
+    afterEach(async () => {
+      execute.mockRestore();
+      await h.admin.execute(sql`DROP TRIGGER IF EXISTS p75_fault ON message_events`);
+      await h.admin.execute(sql`DROP FUNCTION IF EXISTS p75_fault()`);
+      await h.admin.execute(sql`DROP SEQUENCE IF EXISTS p75_fault_seq`);
+    });
+
+    /**
+     * Makes the next `times` settlement transactions of `messageId` fail with SQLSTATE
+     * `code`, at the message.accepted event — after the attempt update, the recording and
+     * the provider cost, so a rollback really has work to undo. The trigger raises a real
+     * error: PostgreSQL aborts the transaction exactly as for a deadlock. The counter is a
+     * sequence, which a rollback does not reset.
+     */
+    async function failSettlement(messageId: string, times: number, code: string) {
+      expect(messageId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(code).toMatch(/^[0-9A-Z]{5}$/);
+      await h.admin.execute(sql`CREATE SEQUENCE p75_fault_seq`);
+      await h.admin.execute(
+        sql.raw(`CREATE FUNCTION p75_fault() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+          SET search_path = public, pg_temp AS $f$
+          BEGIN
+            IF nextval('p75_fault_seq') <= ${times} THEN
+              RAISE EXCEPTION 'injected settlement fault' USING ERRCODE = '${code}';
+            END IF;
+            RETURN NEW;
+          END $f$`),
+      );
+      await h.admin.execute(
+        sql.raw(`CREATE TRIGGER p75_fault BEFORE INSERT ON message_events FOR EACH ROW
+          WHEN (NEW.message_id = '${messageId}'::uuid AND NEW.event_type = 'message.accepted')
+          EXECUTE FUNCTION p75_fault()`),
+      );
+    }
+    const faultsRaised = async () =>
+      Number(
+        (
+          await h.admin.execute<{ n: string }>(
+            sql`SELECT CASE WHEN is_called THEN last_value ELSE 0 END::text AS n FROM p75_fault_seq`,
+          )
+        ).rows[0]!.n,
+      );
+    const samples = async (messageId: string) =>
+      Number(
+        (
+          await h.admin.execute<{ n: string }>(
+            sql`SELECT count(*)::text AS n FROM provider_health h
+                  JOIN message_attempts a ON a.id = h.attempt_id WHERE a.message_id = ${messageId}`,
+          )
+        ).rows[0]!.n,
+      );
+    const events = async (messageId: string, type: string) =>
+      Number(
+        (
+          await h.admin.execute<{ n: string }>(
+            sql`SELECT count(*)::text AS n FROM message_events WHERE message_id = ${messageId} AND event_type = ${type}`,
+          )
+        ).rows[0]!.n,
+      );
+    const retries = async (outcome: string) =>
+      (await metrics.dispatchSettlementRetries.get()).values.find(
+        (v) => v.labels.outcome === outcome,
+      )?.value ?? 0;
+
+    it('a deadlock in T3 is retried: accepted, one provider call, every fact, sample and event once', async () => {
+      const s = await org('p75-r1', ['SUCCESS']);
+      const id = await send(s);
+      await failSettlement(id, 1, '40P01');
+      const succeeded = await retries('succeeded');
+      expect((await dispatch(id)).outcome).toBe('accepted');
+      expect(await faultsRaised()).toBe(2); // one failed run, one committed run
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(await facts(id)).toEqual([
+        { entry: 'reservation', anchor: 'message', amount: 50 },
+        { entry: 'provider_cost', anchor: 'attempt', amount: 20 },
+        { entry: 'customer_charge', anchor: 'message', amount: 50 },
+      ]);
+      expect(await samples(id)).toBe(1);
+      expect(await events(id, 'message.accepted')).toBe(1);
+      expect(await reached(id)).toEqual([true]);
+      expect(await wallet(s.tenant.orgId)).toEqual({ balance: 99_950, reserved: 0 });
+      expect(await retries('succeeded')).toBe(succeeded + 1);
+    });
+
+    it('serialization failures are retried up to the bound: the third run commits', async () => {
+      const s = await org('p75-r2', ['SUCCESS']);
+      const id = await send(s);
+      await failSettlement(id, 2, '40001');
+      expect((await dispatch(id)).outcome).toBe('accepted');
+      expect(await faultsRaised()).toBe(3);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(await facts(id)).toHaveLength(3);
+      expect(await samples(id)).toBe(1);
+    });
+
+    it('retry exhaustion: nothing settled, claim held; lease recovery then releases without charging, and nothing is re-sent', async () => {
+      const s = await org('p75-r3', ['SUCCESS']);
+      const id = await send(s);
+      await failSettlement(id, 3, '40P01');
+      const exhausted = await retries('exhausted');
+      const res = await dispatch(id);
+      expect(res.outcome).toBe('unknown');
+      expect(await faultsRaised()).toBe(3);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(await status(id)).toBe('submitting');
+      expect(await facts(id)).toEqual([{ entry: 'reservation', anchor: 'message', amount: 50 }]);
+      expect(await samples(id)).toBe(0);
+      expect(await retries('exhausted')).toBe(exhausted + 1);
+
+      await h.admin.execute(
+        sql`UPDATE message_dispatch_queue SET claimed_until = now() - interval '1 second' WHERE message_id = ${id}`,
+      );
+      expect(await dispatcher.recoverExpiredLeases()).toBe(1);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(await status(id)).toBe('outcome_unknown');
+      expect(await facts(id)).toEqual([
+        { entry: 'reservation', anchor: 'message', amount: 50 },
+        { entry: 'reservation_release', anchor: 'message', amount: 50 },
+      ]);
+      expect(await wallet(s.tenant.orgId)).toEqual({ balance: 100_000, reserved: 0 });
+      expect(await dispatcher.recoverExpiredLeases()).toBe(0); // and once only
+      expect(await facts(id)).toHaveLength(2);
+    });
+
+    it('a non-retryable error is not retried; the message is left to lease recovery', async () => {
+      const s = await org('p75-r4', ['SUCCESS']);
+      const id = await send(s);
+      await failSettlement(id, 1, '23514');
+      const nonRetryable = await retries('non_retryable');
+      expect((await dispatch(id)).outcome).toBe('unknown');
+      expect(await faultsRaised()).toBe(1);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(await status(id)).toBe('submitting');
+      expect(await facts(id)).toEqual([{ entry: 'reservation', anchor: 'message', amount: 50 }]);
+      expect(await retries('non_retryable')).toBe(nonRetryable + 1);
+    });
+
+    it('no retry with less than 5 s of lease left', async () => {
+      const s = await org('p75-r5', ['SUCCESS']);
+      const id = await send(s);
+      await failSettlement(id, 1, '40P01');
+      await h.admin.execute(sql`DELETE FROM message_dispatch_queue WHERE message_id <> ${id}`);
+      const [claim] = await dispatcher.claimBatch(1);
+      await h.admin.execute(
+        sql`UPDATE message_dispatch_queue SET claimed_until = now() + interval '4 seconds' WHERE message_id = ${id}`,
+      );
+      expect((await dispatcher.processClaim(claim!)).outcome).toBe('unknown');
+      expect(await faultsRaised()).toBe(1);
+      expect(await status(id)).toBe('submitting');
+      expect(await facts(id)).toEqual([{ entry: 'reservation', anchor: 'message', amount: 50 }]);
+    });
+
+    it('a claim superseded while the provider answered is fenced at T3: nothing recorded or settled', async () => {
+      const s = await org('p75-r6', ['SUCCESS']);
+      const id = await send(s);
+      execute.mockRestore();
+      const original = executor.execute.bind(executor);
+      execute = jest.spyOn(executor, 'execute');
+      execute.mockImplementation(async (...args: Parameters<typeof original>) => {
+        const result = await original(...args);
+        // Another worker (or recovery) takes the claim over: a new token and epoch.
+        await h.admin.execute(
+          sql`UPDATE message_dispatch_queue SET claim_token = ${randomUUID()}, dispatch_epoch = dispatch_epoch + 1
+               WHERE message_id = ${id}`,
+        );
+        return result;
+      });
+      expect((await dispatch(id)).outcome).toBe('fenced');
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(await facts(id)).toEqual([{ entry: 'reservation', anchor: 'message', amount: 50 }]);
+      expect(await samples(id)).toBe(0);
+      expect(await reached(id)).toEqual([]);
     });
   });
 

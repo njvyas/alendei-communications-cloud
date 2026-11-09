@@ -11,6 +11,7 @@ import {
   type ProviderAdapterCapabilities,
   type ProviderAdapterContext,
   type ProviderFailureCategory,
+  type ProviderFailureOrigin,
   type ProviderHealthCheckOptions,
   type ProviderHealthProbe,
   type ParsedWebhookRequest,
@@ -43,6 +44,7 @@ export class ProviderAdapterUnsupportedOperation extends Error {
 }
 
 /** What each failing behaviour simulates, as the provider would answer it. */
+/** Each is an answer of the simulated provider: its origin is `provider`. */
 const FAILURES: Readonly<
   Record<
     Exclude<SimulatorBehavior, 'SUCCESS' | 'SLOW_RESPONSE' | 'TIMEOUT'>,
@@ -177,6 +179,7 @@ export class SimulatorAdapter extends GuardedProviderAdapter {
           null,
           'The simulator needs an explicit behaviour',
           0,
+          'local',
         ),
       );
     }
@@ -220,7 +223,14 @@ export class SimulatorAdapter extends GuardedProviderAdapter {
     const elapsed = () => Math.round(this.#timer.now() - started);
 
     if (!(SIMULATOR_BEHAVIORS as readonly string[]).includes(behavior)) {
-      return this.reject(submission, 'CONFIGURATION_ERROR', null, 'Unknown simulator behaviour', 0);
+      return this.reject(
+        submission,
+        'CONFIGURATION_ERROR',
+        null,
+        'Unknown simulator behaviour',
+        0,
+        'local',
+      );
     }
     if (!this.capabilities().channels.includes(context.channel)) {
       return this.reject(
@@ -229,6 +239,7 @@ export class SimulatorAdapter extends GuardedProviderAdapter {
         null,
         'The simulator does not serve this channel',
         0,
+        'local',
       );
     }
     // A provider serves one channel: a submission labelled for another is ours to fix.
@@ -239,6 +250,7 @@ export class SimulatorAdapter extends GuardedProviderAdapter {
         null,
         'The submission channel does not match the provider channel',
         0,
+        'local',
       );
     }
     // SMS metadata, when carried, must be well formed, and only SMS carries it.
@@ -262,6 +274,7 @@ export class SimulatorAdapter extends GuardedProviderAdapter {
           'SIM-400',
           'Simulated provider rejected malformed SMS metadata',
           0,
+          'provider',
         );
       }
     }
@@ -275,6 +288,7 @@ export class SimulatorAdapter extends GuardedProviderAdapter {
           'SIM-400',
           'Simulated provider rejected malformed RCS content',
           0,
+          'provider',
         );
       }
       if (!rcsProviderSupports(context.capabilities, submission.rcs.messageType)) {
@@ -284,6 +298,7 @@ export class SimulatorAdapter extends GuardedProviderAdapter {
           'SIM-415',
           'Simulated provider does not carry this RCS message type',
           0,
+          'provider',
         );
       }
     }
@@ -307,6 +322,7 @@ export class SimulatorAdapter extends GuardedProviderAdapter {
           null,
           'Simulated provider did not answer',
           elapsed(),
+          'local',
         );
       default: {
         const failure = FAILURES[behavior];
@@ -316,6 +332,7 @@ export class SimulatorAdapter extends GuardedProviderAdapter {
           failure.providerCode,
           failure.message,
           elapsed(),
+          'provider',
         );
       }
     }
@@ -346,12 +363,19 @@ export class SimulatorAdapter extends GuardedProviderAdapter {
     };
   }
 
+  /**
+   * A refusal. `origin` (Phase 7 PR 7-5): `provider` for an answer of the simulated
+   * provider (its failure behaviours and its rejection of the content it received);
+   * `local` for the adapter's own checks before anything reaches the provider
+   * (no or unknown behaviour, a channel mismatch).
+   */
   private reject(
     submission: ProviderSubmission,
     category: ProviderFailureCategory,
     providerCode: string | null,
     message: string,
     latencyMs: number,
+    origin: ProviderFailureOrigin,
   ): ProviderSubmissionResult {
     return {
       outcome: 'rejected',
@@ -362,6 +386,7 @@ export class SimulatorAdapter extends GuardedProviderAdapter {
         retryable: RETRYABLE_FAILURE_CATEGORIES.includes(category),
         providerCode,
         message,
+        origin,
       },
       latencyMs,
     };

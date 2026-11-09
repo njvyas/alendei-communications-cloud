@@ -119,6 +119,8 @@ export class MetricsService implements OnModuleInit {
   readonly ledgerPartitionHeadroomMonths: Gauge<never>;
   readonly ledgerPartitionUnprotected: Gauge<never>;
   readonly ledgerPartitionCheckFailures: Counter<never>;
+  // Phase 7 PR 7-5 — the bounded retry of the dispatcher's settlement transaction (OD-7-2).
+  readonly dispatchSettlementRetries: Counter<'outcome'>;
 
   constructor(private readonly config: AppConfigService) {
     this.registry.setDefaultLabels({
@@ -306,6 +308,11 @@ export class MetricsService implements OnModuleInit {
       name: 'acc_billing_ledger_partition_check_failures_total',
       help: 'Startup partition verifications that could not read the partition report.',
       labelNames: [],
+    });
+    this.dispatchSettlementRetries = this.counter({
+      name: 'acc_dispatch_settlement_retries_total',
+      help: 'Dispatcher settlement transactions (T3) that failed at least once, by outcome: succeeded (committed on a retry), exhausted (deadlock or serialization failure past the bounded retry, or too little lease left), non_retryable (any other error). The provider call is never repeated; an unsettled submission is left to lease recovery.',
+      labelNames: ['outcome'],
     });
   }
 

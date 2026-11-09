@@ -98,6 +98,44 @@ describe('Phase 7-5: dispatcher settlement', () => {
     );
   });
 
+  it('the retried settlement transaction cannot reach the provider or an admission (baseline D-6)', () => {
+    const body = (name: string) => {
+      const start = dispatcher.indexOf(`private async ${name}(`);
+      expect([name, start > 0]).toEqual([name, true]);
+      const next = dispatcher.indexOf('\n  private async ', start + 1);
+      return dispatcher.slice(start, next > 0 ? next : undefined);
+    };
+    for (const name of ['settleWithRetry', 'settleSubmission', 'remainingLeaseMs']) {
+      const code = body(name);
+      for (const forbidden of [
+        /executor\./,
+        /\.execute\(/,
+        /\.admit\(/,
+        /takeSubmissionRecord/,
+        /recordSubmission\(/,
+        /claimBatch|processClaim/,
+      ]) {
+        expect([name, String(forbidden), forbidden.test(code)]).toEqual([
+          name,
+          String(forbidden),
+          false,
+        ]);
+      }
+    }
+    // The record is taken once, outside the retry, immediately before it.
+    const processClaim = dispatcher.slice(dispatcher.indexOf('async processClaim('));
+    expect(processClaim).toMatch(
+      /const record = this\.providerStateStore\.takeSubmissionRecord\(settled\);\s+return await this\.settleWithRetry\(/,
+    );
+    expect(dispatcher.match(/takeSubmissionRecord\(/g)).toHaveLength(1);
+  });
+
+  it('only deadlocks and serialization failures are retried, a bounded number of times', () => {
+    expect(dispatcher).toMatch(/static readonly SETTLEMENT_MAX_ATTEMPTS = 3;/);
+    expect(dispatcher).toMatch(/static readonly SETTLEMENT_MIN_LEASE_MS = 5_000;/);
+    expect(dispatcher).toMatch(/if \(code !== '40P01' && code !== '40001'\)/);
+  });
+
   it('lease recovery takes one expired lease per transaction', () => {
     const recovery = dispatcher.slice(dispatcher.indexOf('async recoverExpiredLeases'));
     expect(recovery).toMatch(/LIMIT 1\s+FOR UPDATE SKIP LOCKED/);
