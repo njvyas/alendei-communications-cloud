@@ -411,6 +411,13 @@
     {
       "idx": 58,
       "version": "7",
+      "when": 1794528000000,
+      "tag": "0058_phase8a_segments",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
       "when": 1794614400000,
       "tag": "0059_phase7_6d1_account_provisioning",
       "breakpoints": true

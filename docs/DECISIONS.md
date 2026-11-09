@@ -3143,8 +3143,8 @@ Each is a draft, stopped for owner review. Billing enforcement stays disabled; n
 
 **Migration number.**
 - At authorisation `develop` ended at `0057`, and the open draft PR #99 (Phase 8A.1) claimed `0058_phase8a_segments`.
-- This PR therefore uses **`0059_phase7_6d1_account_provisioning`**. Its journal entry is idx 58 with `when` 1794614400000, later than #99's `0058` (1794528000000).
-- Whichever merges second places its entry in order on rebase. Coordination was recorded on PR #99.
+- This PR therefore uses **`0059_phase7_6d1_account_provisioning`**, with journal `when` 1794614400000, later than #99's `0058` (1794528000000). Coordination was recorded on PR #99.
+- #99 then merged (`6f0a6c9`, 09-Nov-2026), and this PR was rebased onto it: `0059` is journal idx 59, directly after `0058`.
 - **No migration number claimed by another PR is used.**
 
 **As built.**
@@ -3197,7 +3197,7 @@ Each is a draft, stopped for owner review. Billing enforcement stays disabled; n
   - `billing.credit_limit.changed`;
   - `billing.account.frozen`, `billing.account.unfrozen`.
 - **Metric:** `acc_billing_account_operations_total{action,outcome}`, where `action` is the kind; counted after commit.
-- **History proof:** `59|bfa41eef0e970253fdb93d5a9af6d64e` (`0000`–`0057`, `0059`), computed on a disposable clone and recorded in `RELEASE.md`.
+- **History proof:** `60|52f403f970a0ef1bc9b591f6d70d7e25` (`0000`–`0059`), computed on a disposable clone and recorded in `RELEASE.md`.
 
 **Tests.**
 - **`packages/db/src/test/phase7_6d1-account-operations.int-spec.ts` (10):**
@@ -3240,11 +3240,13 @@ Each is a draft, stopped for owner review. Billing enforcement stays disabled; n
 
    | Count | Before | After |
    |---|---|---|
-   | Application operations | 180 | 192 |
-   | Scoped routes | 167 | 179 |
-   | Deferred-target routes | 142 | 154 |
-   | `Idempotency-Key` handlers | 20 | 29 |
-   | Migrations | 58 | 59 |
+   | Application operations | 186 | 198 |
+   | Scoped routes | 173 | 185 |
+   | Deferred-target routes | 148 | 160 |
+   | `Idempotency-Key` handlers | 21 | 30 |
+   | Migrations | 59 | 60 |
+
+   Baselines are `develop` after Phase 8A.1 (#99).
 
 ## 3. Risks explicitly accepted by design (not oversights)
 

@@ -59,6 +59,7 @@ export const CONTENT_TABLES = [
   'messages',
   'message_attempts',
   'message_events',
+  'segments',
 ] as const;
 
 /**

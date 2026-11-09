@@ -97,6 +97,7 @@ describe('table classes — tenancy records, tenant content, exemptions', () => 
         'message_attempts',
         'message_events',
         'messages',
+        'segments',
         'suppressions',
         'templates',
       ]);
