@@ -1,4 +1,4 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
   IsIn,
@@ -8,16 +8,20 @@ import {
   IsString,
   IsUUID,
   IsBoolean,
+  Matches,
   MaxLength,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
 import {
   AUDIENCE_TAG_MATCH_MODES,
   CONTACT_IDENTITY_STATUSES,
   CONSENT_EVENT_TYPES,
+  CUSTOM_FIELD_OPERATORS,
   type AudienceTagMatchMode,
   type ContactIdentityStatus,
   type ConsentEventType,
+  type CustomFieldOperator,
 } from '@acc/contracts';
 
 import { ListQueryDto } from '../common/http/list-query.dto';
@@ -121,6 +125,21 @@ export class GetEffectiveConsentDto {
   consentType!: string;
 }
 
+export class CustomFieldFilterDto {
+  @IsString()
+  @Matches(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/, {
+    message:
+      'field must start with a letter and contain only alphanumeric characters, underscores or hyphens (max 64 chars)',
+  })
+  field!: string;
+
+  @IsIn(CUSTOM_FIELD_OPERATORS)
+  operator!: CustomFieldOperator;
+
+  @IsOptional()
+  value?: string | number | boolean;
+}
+
 export class ResolveAudienceDto extends ListQueryDto {
   @IsOptional()
   @IsUUID()
@@ -173,4 +192,20 @@ export class ResolveAudienceDto extends ListQueryDto {
   )
   @IsBoolean()
   requireOptIn?: boolean;
+
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return value;
+      }
+    }
+    return value;
+  })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CustomFieldFilterDto)
+  customFieldFilters?: CustomFieldFilterDto[];
 }

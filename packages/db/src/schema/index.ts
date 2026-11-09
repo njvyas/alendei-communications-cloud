@@ -13,3 +13,4 @@ export * from './webhooks';
 export * from './pricing';
 export * from './campaigns';
 export * from './billing';
+export * from './segments';

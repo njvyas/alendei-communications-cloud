@@ -1212,19 +1212,23 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
                                               templateId: uuidv7(),
                                               recipientSource: { type: 'all_contacts' },
                                             }
-                                          : method !== 'PATCH'
-                                            ? {}
-                                            : template.includes('/branding')
-                                              ? { brandName: `Brand ${suffix()}` }
-                                              : template.includes('/users/')
-                                                ? { phone: '+15551234567' }
-                                                : template.includes('/contacts/')
-                                                  ? { firstName: `x ${suffix()}` }
-                                                  : template.includes('/identities/')
-                                                    ? { isPrimary: true }
-                                                    : template.includes('/provider-assignments/')
-                                                      ? { priority: 2 }
-                                                      : { name: `x ${suffix()}` },
+                                          : template.endsWith('/segments') && method === 'POST'
+                                            ? {
+                                                name: `s-${suffix()}`,
+                                              }
+                                            : method !== 'PATCH'
+                                              ? {}
+                                              : template.includes('/branding')
+                                                ? { brandName: `Brand ${suffix()}` }
+                                                : template.includes('/users/')
+                                                  ? { phone: '+15551234567' }
+                                                  : template.includes('/contacts/')
+                                                    ? { firstName: `x ${suffix()}` }
+                                                    : template.includes('/identities/')
+                                                      ? { isPrimary: true }
+                                                      : template.includes('/provider-assignments/')
+                                                        ? { priority: 2 }
+                                                        : { name: `x ${suffix()}` },
         });
         expect(`${method} ${template} → ${res.status}`).toMatch(/→ (404|403)$/);
       }
@@ -1444,7 +1448,8 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
       template.includes('/resellers') ||
       template.includes('/support') ||
       template.includes('/audience') ||
-      template.includes('/campaigns');
+      template.includes('/campaigns') ||
+      template.includes('/segments');
 
     it('every operation succeeded with every credential its document declares', () => {
       const document = validator.document as { paths: Record<string, Record<string, Json>> };
