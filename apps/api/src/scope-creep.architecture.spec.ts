@@ -1793,6 +1793,7 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       'resellers',
       'role_permissions',
       'roles',
+      'segments',
       'sessions',
       'suppressions',
       'teams',

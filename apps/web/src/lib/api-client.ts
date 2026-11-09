@@ -3,6 +3,10 @@ import type {
   ApiErrorResponse,
   ApiPagedResponse,
   AssignmentStatus,
+  AudienceResolutionResponse,
+  ListSegmentsResponse,
+  SegmentCriteria,
+  SegmentResponse,
   ChannelCode,
   ChannelStatus,
   ConsentEventResponse,
@@ -2603,6 +2607,122 @@ export const contactsApi = {
       method: 'GET',
       signal,
     });
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Segments API (Phase 8A.1)
+// -----------------------------------------------------------------------------
+
+export interface CreateSegmentParams {
+  readonly name: string;
+  readonly description?: string;
+  readonly criteria?: SegmentCriteria;
+}
+
+export interface UpdateSegmentParams {
+  readonly name?: string;
+  readonly description?: string;
+  readonly criteria?: SegmentCriteria;
+}
+
+export interface ListSegmentsParams {
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: string;
+}
+
+export interface PreviewSegmentParams {
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly channel?: string;
+  readonly channelId?: string;
+}
+
+export const segmentsApi = {
+  async create(
+    workspaceId: string,
+    params: CreateSegmentParams,
+    idempotencyKey?: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<SegmentResponse>> {
+    const headers: Record<string, string> = {};
+    if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+    return apiFetch<ApiDataResponse<SegmentResponse>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/segments`,
+      {
+        method: 'POST',
+        headers,
+        body: params,
+        signal,
+      },
+    );
+  },
+
+  async list(
+    workspaceId: string,
+    params: ListSegmentsParams = {},
+    signal?: AbortSignal,
+  ): Promise<ListSegmentsResponse> {
+    const search = new URLSearchParams();
+    if (params.cursor) search.set('cursor', params.cursor);
+    if (params.limit) search.set('limit', String(params.limit));
+    if (params.sort) search.set('sort', params.sort);
+    const query = search.toString();
+    return apiFetch<ListSegmentsResponse>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/segments${query ? `?${query}` : ''}`,
+      { method: 'GET', signal },
+    );
+  },
+
+  async get(
+    workspaceId: string,
+    segmentId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<SegmentResponse>> {
+    return apiFetch<ApiDataResponse<SegmentResponse>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/segments/${encodeURIComponent(segmentId)}`,
+      { method: 'GET', signal },
+    );
+  },
+
+  async update(
+    workspaceId: string,
+    segmentId: string,
+    params: UpdateSegmentParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<SegmentResponse>> {
+    return apiFetch<ApiDataResponse<SegmentResponse>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/segments/${encodeURIComponent(segmentId)}`,
+      {
+        method: 'PATCH',
+        body: params,
+        signal,
+      },
+    );
+  },
+
+  async delete(workspaceId: string, segmentId: string, signal?: AbortSignal): Promise<void> {
+    await apiFetch(
+      `/workspaces/${encodeURIComponent(workspaceId)}/segments/${encodeURIComponent(segmentId)}`,
+      { method: 'DELETE', signal },
+    );
+  },
+
+  async preview(
+    workspaceId: string,
+    segmentId: string,
+    params: PreviewSegmentParams = {},
+    signal?: AbortSignal,
+  ): Promise<AudienceResolutionResponse> {
+    return apiFetch<AudienceResolutionResponse>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/segments/${encodeURIComponent(segmentId)}/preview`,
+      {
+        method: 'POST',
+        body: params,
+        signal,
+      },
+    );
   },
 };
 

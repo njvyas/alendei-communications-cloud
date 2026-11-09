@@ -348,29 +348,30 @@ describe('three barriers (U14.1a 0042, U14.1b 0043, Phase 5.0 0045) — journal 
     expect(expected[at45 + 10]?.tag).toBe('0055_phase7_6a_tenant_billing_reads');
     expect(expected[at45 + 11]?.tag).toBe('0056_phase7_6b_unknown_outcome_register');
     expect(expected[at45 + 12]?.tag).toBe('0057_phase7_6c_operator_resolution');
-    expect(expected).toHaveLength(at45 + 13);
+    expect(expected[at45 + 13]?.tag).toBe('0058_phase8a_segments');
+    expect(expected).toHaveLength(at45 + 14);
   });
 
   it.each<[string, Row[] | null, string[]]>([
     [
       'fresh database',
       null,
-      [`apply:${guardAt}`, 'barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:13'],
+      [`apply:${guardAt}`, 'barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:14'],
     ],
     [
       'database at 0041',
       rowsFor(guardAt),
-      ['barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:13'],
+      ['barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:14'],
     ],
     [
       'database at 0042 (U14.1a applied)',
       rowsFor(guardAt + 1),
-      ['verify:a', 'barrier:b', 'apply:2', 'barrier:c', 'apply:13'],
+      ['verify:a', 'barrier:b', 'apply:2', 'barrier:c', 'apply:14'],
     ],
     [
       'database at 0044 (Phase 5.0 M1 applied)',
       rowsFor(at45),
-      ['verify:a', 'verify:b', 'barrier:c', 'apply:13'],
+      ['verify:a', 'verify:b', 'barrier:c', 'apply:14'],
     ],
     ['up to date', rowsFor(expected.length), ['verify:a', 'verify:b', 'verify:c']],
   ])(

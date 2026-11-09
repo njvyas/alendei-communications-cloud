@@ -1,6 +1,7 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   ERROR_CODES,
+  CUSTOM_FIELD_OPERATORS,
   PAGE_LIMITS,
   PERMISSIONS,
   isTerminalMessageStatus,
@@ -87,6 +88,22 @@ function identityNotFound(id: string): AppException {
     logContext: { requestedIdentityId: id },
   });
 }
+
+const FORBIDDEN_CUSTOM_FIELDS = new Set([
+  'tags',
+  'tag_list',
+  'id',
+  'orgid',
+  'org_id',
+  'workspaceid',
+  'workspace_id',
+  'deletedat',
+  'deleted_at',
+  'createdat',
+  'created_at',
+  'updatedat',
+  'updated_at',
+]);
 
 function channelNotFound(id: string): AppException {
   return new AppException({
@@ -1276,6 +1293,80 @@ export class ContactsService {
               WHERE lower(elem) IN (${tagListSql})
             )`,
           );
+        }
+      }
+
+      // Custom Field Filtering (allowlist validated)
+      if (dto.customFieldFilters && dto.customFieldFilters.length > 0) {
+        for (const filter of dto.customFieldFilters) {
+          const field = filter.field?.trim();
+          if (!field || !/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(field)) {
+            throw new AppException({
+              status: HttpStatus.BAD_REQUEST,
+              code: ERROR_CODES.VALIDATION_FAILED,
+              message: `Invalid custom field name '${filter.field}'`,
+              logContext: { field: filter.field },
+            });
+          }
+
+          if (FORBIDDEN_CUSTOM_FIELDS.has(field.toLowerCase())) {
+            throw new AppException({
+              status: HttpStatus.BAD_REQUEST,
+              code: ERROR_CODES.VALIDATION_FAILED,
+              message: `Custom field filter cannot target reserved field '${field}'`,
+              logContext: { field },
+            });
+          }
+
+          if (!CUSTOM_FIELD_OPERATORS.includes(filter.operator)) {
+            throw new AppException({
+              status: HttpStatus.BAD_REQUEST,
+              code: ERROR_CODES.VALIDATION_FAILED,
+              message: `Invalid operator '${filter.operator}' for custom field filter`,
+              logContext: { operator: filter.operator },
+            });
+          }
+
+          if (filter.operator === 'exists') {
+            predicates.push(sql`${schema.contacts.metadata} ? ${field}`);
+          } else if (filter.operator === 'does_not_exist') {
+            predicates.push(sql`NOT (${schema.contacts.metadata} ? ${field})`);
+          } else {
+            if (filter.value === undefined || filter.value === null) {
+              throw new AppException({
+                status: HttpStatus.BAD_REQUEST,
+                code: ERROR_CODES.VALIDATION_FAILED,
+                message: `Operator '${filter.operator}' requires a non-null value`,
+                logContext: { operator: filter.operator, field },
+              });
+            }
+
+            if (filter.operator === 'equals') {
+              if (typeof filter.value === 'boolean' || typeof filter.value === 'number') {
+                predicates.push(
+                  sql`${schema.contacts.metadata}->${field} = ${JSON.stringify(filter.value)}::jsonb`,
+                );
+              } else {
+                predicates.push(
+                  sql`lower(${schema.contacts.metadata}->>${field}) = lower(${String(filter.value)})`,
+                );
+              }
+            } else if (filter.operator === 'not_equals') {
+              if (typeof filter.value === 'boolean' || typeof filter.value === 'number') {
+                predicates.push(
+                  sql`(${schema.contacts.metadata}->${field} IS NULL OR ${schema.contacts.metadata}->${field} != ${JSON.stringify(filter.value)}::jsonb)`,
+                );
+              } else {
+                predicates.push(
+                  sql`(${schema.contacts.metadata}->>${field} IS NULL OR lower(${schema.contacts.metadata}->>${field}) != lower(${String(filter.value)}))`,
+                );
+              }
+            } else if (filter.operator === 'contains') {
+              predicates.push(
+                sql`${schema.contacts.metadata}->>${field} ILIKE ${'%' + String(filter.value) + '%'}`,
+              );
+            }
+          }
         }
       }
 
