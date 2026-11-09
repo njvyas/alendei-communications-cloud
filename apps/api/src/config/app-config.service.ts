@@ -164,6 +164,13 @@ export class AppConfigService {
     } as const;
   }
 
+  /** Phase 7 PR 7-4: funds reservation at submission (`BILLING_ENFORCEMENT_ENABLED`). */
+  get billing() {
+    return {
+      enforcementEnabled: this.get('BILLING_ENFORCEMENT_ENABLED'),
+    } as const;
+  }
+
   get sms() {
     return {
       templateVariableMaxLength: this.get('SMS_TEMPLATE_VARIABLE_MAX_LENGTH'),

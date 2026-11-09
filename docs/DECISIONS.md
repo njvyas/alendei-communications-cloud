@@ -2720,6 +2720,88 @@ Owner approval 08-Nov-2026: OD-P-1, OD-P-2 and OD-P-3 approved, PR 7-2 authorise
 4. **Key compatibility across the deploy.** That keys stored before the deploy still replay is proved by pinning the stored fingerprint to the five-field body (an equality test). A cross-deploy run is not used.
 5. **Documentation scope.** The handover also proposed several documentation items: the `ROADMAP.md` status line, an `ARCHITECTURE.md` note, the `0052` proof in `RELEASE.md` and a correction note to the Phase 8B handover. They are not in this PR, by the owner's instruction not to broaden it.
 
+### 1zi.7 PR 7-4 as built: funds reservation at submission (migration `0053`)
+**Owner decisions, 09-Nov-2026.** The Phase 7.4 handover (`docs/PHASE-7-4-RESERVATION-HANDOVER.md`) was approved with D-74-1 to D-74-4, and PR 7-4 was authorised as one draft PR:
+- **D-4 (decided before 7-4):** `Idempotency-Key` is mandatory on `POST /messages` whenever billing enforcement is enabled. The optional-key behaviour is preserved while it is disabled. Same-key replay, changed-request rejection and concurrent-request safety are mandatory.
+- **D-74-1, error contract:**
+  - `402 BILLING_INSUFFICIENT_FUNDS`;
+  - `422 BILLING_PRICE_NOT_CONFIGURED`;
+  - `422 BILLING_ACCOUNT_NOT_CONFIGURED`;
+  - `403 BILLING_ACCOUNT_FROZEN`;
+  - `503 BILLING_BUSY`.
+- **D-74-2:** missing and frozen accounts fail closed. There is no automatic account provisioning during submission.
+- **D-74-3:** the extra per-attempt reservation (RQ-2) belongs to 7-5, not 7-4. In 7-5, top up whenever the remaining reservation is less than the next attempt's price. The dispatcher is not modified in 7-4.
+- **D-74-4:** enforcement defaults off. Startup refuses it outside tests until 7-5 is complete. Enabling it later requires account provisioning and funding, a readiness report and explicit owner approval.
+- **Binding constraints:**
+  - the reservation is atomic with message creation, pricing evaluation and the existing submission transaction;
+  - `app_message_reserve(message_id)` is the sole reservation entry point of the application role, and derives every financial input from database state;
+  - the 7.1 writer and 7.2 rating functions are neither modified nor granted;
+  - the 40 characterisation tests stay byte-identical with enforcement off;
+  - nothing campaign-specific is added.
+
+**As built.**
+- **Configuration.** `BILLING_ENFORCEMENT_ENABLED`, default `false`. `validateEnv` refuses `true` unless `NODE_ENV=test` and `APP_ENV=test`, so the API does not start.
+- **Migration `0053` (expand-only).**
+  - Six `messages` columns:
+    - `billable_units`, `billable_unit` (`pricing_unit`) and `sms_encoding`, set on every new message;
+    - `billing_enforced`, `billing_mode_snapshot` and `billing_policy_snapshot`, the snapshot set only under enforcement.
+  - Their shape is enforced by CHECKs. A `BEFORE UPDATE` trigger refuses any change to them for every principal (`42501`). Existing rows carry `NULL` units and `billing_enforced = false`.
+  - The function `app_message_reserve(uuid)`: SECURITY DEFINER, `search_path` pinned, `EXECUTE` for `acc_app` only. It makes no other grant and redefines no 7.1 or 7.2 object.
+- **`app_message_reserve`.**
+  - **Caller check first:** a valid tenant content context (`app_content_context_valid`) and a message of that organisation, else `42501`.
+  - **Then:**
+    - the message must be enforced, with units matching its channel (`22023`);
+    - its snapshot must equal the organisation's current billing settings (`40001` otherwise).
+  - **Sizing:**
+    - `charge_per_logical_message`: E_m from `app_rate_message`, with the evaluation recorded.
+    - `charge_per_attempt`: N × the highest price over the N distinct actively assigned providers for the channel, via read-only `app_price_lookup`, with no evaluation recorded.
+  - A missing price is `BL007`. A zero amount posts nothing.
+  - The reservation is posted through `app_ledger_post` on the snapshot's account. The writer takes the message lock and then the account lock (last), and refuses `BL001`, `BL002` or `BL003`. A repeated call is a no-op.
+- **The core.**
+  - Units are computed from the existing SMS segment analysis (WhatsApp and RCS = 1). Under enforcement, the organisation's billing settings are read before the insert (step 7b).
+  - Reservation is the **last** step (11), through `MessageReservationService`, the only application caller of the entry point. It sets `lock_timeout` to 2 s and maps SQLSTATEs per D-74-1. `55P03`, `40P01` and `40001` map to `503`; anything else surfaces as a `500`.
+  - The core reads the flag itself, so no caller can opt out.
+  - A refusal aborts the transaction, so nothing persists: message, queue row, event, contact, evaluation, fact, balance or idempotency record.
+- **The adapter.** Under enforcement, a request without a key is refused with `400 IDEMPOTENCY_KEY_REQUIRED` before any transaction. The fingerprint, route and replay are unchanged. A key created while enforcement was off replays its original response and reserves nothing.
+- **Lock order (T0).** Idempotency claim, then contact savepoint, then the new rows (message, queue, event, evaluation), then the transaction's own message row, then the **billing account** (the only billing wait point), then the new fact. This is consistent with §1zi.1 ("T0: billing account only, then new rows").
+- **Contract.**
+  - The five error codes are in `@acc/contracts`; `BILLING_BUSY` is retryable.
+  - OpenAPI `POST /messages` documents `402` and `503`, the billing refusals and the conditional key requirement.
+  - `apps/web` is unchanged.
+- **Unchanged:**
+  - the dispatcher;
+  - 7.1 and 7.2 objects and grants (`app_ledger_post`, `app_rate_message` and `app_price_lookup` stay executable by no application role);
+  - the 7-3 characterisation suite, byte-identical and green with enforcement off;
+  - campaign code.
+- **History proof:** `54|0da48027841ad60bfa378f2545b97264` (`0000`–`0053`), computed on a disposable clone and recorded in `RELEASE.md`.
+
+**Tests.**
+- `packages/db/src/test/phase7_4-reservation.int-spec.ts` (27):
+  - privileges and the static check that `0053` touches no 7.1 or 7.2 object;
+  - column shape and immutability;
+  - every caller-check refusal;
+  - a reservation derived from database state, posted once;
+  - `BL003` at exact exhaustion.
+- `apps/api/test/phase7_4-reservation.int-spec.ts` (25), with enforcement on:
+  - per-message and per-attempt sizing, postpaid, SMS rounded once per transaction, UCS-2, RCS, a zero price and an API key;
+  - every fail-closed refusal, with nothing persisted in any of the nine tables and no amounts disclosed;
+  - existing refusals precede money;
+  - idempotency: key required, replay, mismatch, 8 concurrent, retry after a refusal, a key from before enforcement;
+  - 20 concurrent sends against funds for exactly 7 (7 accepted, 13 refused, no overspend);
+  - the concurrent first-send contact race;
+  - a held account lock (`503` after 2 s, another organisation unaffected, retry succeeds);
+  - rollback after `submit`;
+  - reserved equals the reservation facts for every organisation.
+- Unit tests: the error mapping, the startup guard, and structural tests (one reservation path; no application code names the 7.1/7.2 functions or posts a settlement fact). A planted second caller fails them.
+
+**Deviations from the handover.**
+1. **The core reads the flag itself.** Handover §13.1 had the caller pass it in `SubmissionContext`. Reading it in the core means no caller (including a future campaign executor) can bypass reservation. `SubmissionContext` is unchanged.
+2. **No reservation metric.** The proposed `acc_billing_reservations_total` counter is not added. A counter incremented inside the transaction would count reservations that later roll back. It is deferred to 7-5, which can publish after COMMIT.
+3. **`RELEASE.md` baseline list.** The `0052` proof (`53|8b3f4018a42c3c46607b956d3dc7fdae`), not recorded by PR #92, is added as a previous baseline so the chain is complete.
+4. **The snapshot-mismatch and no-candidate cases use `40001`**, mapped to `503 BILLING_BUSY`, which the handover listed under "busy". They are tested at the database level, and the mapping in the unit test.
+
+**Carried to 7-5 (not implemented).** Settlement, release and charges; the RQ-2 top-up (D-74-3); re-deriving units at dispatch; attempt units; removing the startup guard. Settlement follows the message's own `billing_enforced` and snapshot, never the current flag.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

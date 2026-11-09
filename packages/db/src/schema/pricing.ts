@@ -17,6 +17,9 @@ import { organizations } from './tenancy';
 
 export const pricingVersionStatus = pgEnum('pricing_version_status', ['draft', 'active']);
 
+/** The rating unit of a channel (`app_pricing_unit_for_channel`, migration `0051`). */
+export const pricingUnit = pgEnum('pricing_unit', ['sms_segment', 'message']);
+
 export const pricingPlans = pgTable('pricing_plans', {
   id: primaryId(),
   name: text('name').notNull(),

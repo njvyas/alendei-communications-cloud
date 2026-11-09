@@ -39,10 +39,14 @@ export class MessagesController {
   @RequiresPermission(PERMISSIONS.MESSAGES_SEND, { target: 'deferred', because: AT_ORG })
   @HttpCode(HttpStatus.ACCEPTED)
   @AcceptedCredentials('userSession', 'apiKey')
-  @ApiIdempotencyKey()
-  @ApiOperation({ summary: 'Send a message' })
+  @ApiIdempotencyKey({ requiredWhen: 'while billing enforcement is enabled on the deployment' })
+  @ApiOperation({
+    summary: 'Send a message',
+    description:
+      'While billing enforcement is enabled (Phase 7 PR 7-4), funds are reserved atomically with the message, after every other check: `402 BILLING_INSUFFICIENT_FUNDS`, `422 BILLING_PRICE_NOT_CONFIGURED`, `422 BILLING_ACCOUNT_NOT_CONFIGURED`, `403 BILLING_ACCOUNT_FROZEN` and `503 BILLING_BUSY` (retryable) refuse the request and nothing is created.',
+  })
   @ApiData(QueuedMessageSchema, { status: 202 })
-  @ApiErrors(400, 401, 403, 404, 409, 422, 429)
+  @ApiErrors(400, 401, 402, 403, 404, 409, 422, 429, 503)
   async send(
     @Body() dto: SendMessageDto,
     @IdempotencyKey() idempotencyKey: string | null,

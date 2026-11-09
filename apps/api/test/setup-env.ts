@@ -42,3 +42,8 @@ process.env.RATE_LIMIT_API_KEY_FAILURE_MAX = '20';
 // Suites that drive `DispatcherService` by hand assert exact claims, epochs and
 // queue rows; a background loop in the same database would take that work first.
 process.env.DISPATCH_WORKER_ENABLED = 'false';
+
+// Billing enforcement (Phase 7 PR 7-4) is off unless a suite turns it on
+// (`billing-enforcement.env.ts`), so a developer's `.env` cannot change what the
+// send-path suites assert.
+process.env.BILLING_ENFORCEMENT_ENABLED = 'false';

@@ -19,6 +19,7 @@ import { and, eq, gte, lt, sql, type SQL } from 'drizzle-orm';
 import { AuthorizationService } from '../auth/authorization.service';
 import { RequestContext } from '../common/context/request-context';
 import { AppException } from '../common/errors/app.exception';
+import { AppConfigService } from '../config/app-config.service';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
 import { TenantDatabase } from '../database/tenant-database.service';
 import { IdempotencyService, type IdempotentOutcome } from '../idempotency/idempotency.service';
@@ -76,6 +77,7 @@ export class MessagesService {
     private readonly idempotency: IdempotencyService,
     private readonly submission: MessageSubmissionCore,
     private readonly lists: ListQuery,
+    private readonly config: AppConfigService,
   ) {}
 
   /** Newest first by the UUIDv7 id, which orders by creation. */
@@ -93,6 +95,13 @@ export class MessagesService {
    * the `messages.send` check, the optional `Idempotency-Key` (fingerprint, replay,
    * `202`) and the response shape — and nothing else. Message creation itself is
    * `MessageSubmissionCore.submit`, in the same transaction.
+   *
+   * Owner decision D-4 (Phase 7 PR 7-4): while billing enforcement is enabled the
+   * key is **mandatory** — without one the request is refused with
+   * `400 IDEMPOTENCY_KEY_REQUIRED` before any transaction, so nothing runs. With
+   * enforcement off the key stays optional, exactly as before. The fingerprint,
+   * route and replay are unchanged, so keys stored before enforcement was enabled
+   * still replay (and reserve nothing: a replay never runs `work`).
    */
   async sendMessage(
     principal: AuthPrincipal,
@@ -100,6 +109,13 @@ export class MessagesService {
     idempotencyKey: string | null,
   ): Promise<IdempotentOutcome<{ data: QueuedMessageResponse }>> {
     const orgId = requireOrganization(principal);
+    if (idempotencyKey === null && this.config.billing.enforcementEnabled) {
+      throw new AppException({
+        status: HttpStatus.BAD_REQUEST,
+        code: ERROR_CODES.IDEMPOTENCY_KEY_REQUIRED,
+        message: 'This operation requires an Idempotency-Key header',
+      });
+    }
 
     const authorize = (tx: Transaction) =>
       authorizeSubmission(this.authorization, tx, principal, orgId);
