@@ -166,7 +166,12 @@ GRANT EXECUTE ON FUNCTION app_billing_unknown_register(uuid, text, text, text, i
 --> statement-breakpoint
 
 -- Open items per channel, for the gauge acc_billing_outcome_unknown_open{channel}:
--- enforced outcome_unknown messages with no customer charge on the automatic anchor.
+-- enforced outcome_unknown messages with no customer charge on the automatic anchor —
+-- the message under charge_per_logical_message, the unknown attempt under
+-- charge_per_attempt. The charge lookup names the ledger fact's full key, including the
+-- partition key derived from the anchor (anchor_month = app_uuidv7_month(anchor),
+-- IMMUTABLE), and runs as a LATERAL subquery per message, so each lookup is pruned at
+-- run time to the one monthly partition that can hold the fact (PR #97 review).
 CREATE OR REPLACE FUNCTION app_billing_unknown_open_counts()
 RETURNS TABLE (channel_code text, open_items bigint)
 LANGUAGE plpgsql
@@ -188,13 +193,22 @@ BEGIN
        WHERE x.message_id = m.id AND x.status = 'outcome_unknown'
        ORDER BY x.attempt_number DESC LIMIT 1
     ) a ON true
+    CROSS JOIN LATERAL (
+      SELECT CASE WHEN m.billing_policy_snapshot = 'charge_per_attempt' THEN a.id ELSE m.id END
+               AS expected_charge_anchor
+    ) e
+    LEFT JOIN LATERAL (
+      SELECT 1 AS found
+        FROM usage_ledger l
+       WHERE l.anchor_month = app_uuidv7_month(e.expected_charge_anchor)
+         AND l.anchor_id = e.expected_charge_anchor
+         AND l.fact_kind = 'customer_charge'
+         AND l.message_id = m.id
+       LIMIT 1
+    ) c ON true
    WHERE m.billing_enforced
      AND m.status = 'outcome_unknown'
-     AND NOT EXISTS (
-       SELECT 1 FROM usage_ledger l
-        WHERE l.message_id = m.id
-          AND l.fact_kind = 'customer_charge'
-          AND l.anchor_id = CASE WHEN m.billing_policy_snapshot = 'charge_per_attempt' THEN a.id ELSE m.id END)
+     AND c.found IS NULL
    GROUP BY 1;
 END;
 $$;

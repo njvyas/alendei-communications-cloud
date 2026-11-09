@@ -3017,11 +3017,19 @@ The owner reviewed `docs/PHASE-7-6-BILLING-APIS-HANDOVER.md` and decided as foll
   - `billing.manage` at platform scope, as the pricing catalogue authorizes; signed-in user sessions only, enforced in the service.
   - Oldest first, with a signed cursor and filters `orgId`, `channelCode`, `evidence`, `status`, `minAgeHours`.
 - **Gauge:** `acc_billing_outcome_unknown_open{channel}`, the open items per channel, set on each register read.
+- **Open-count lookup (owner review of PR #97):**
+  - **Defect:** `app_billing_unknown_open_counts()` looked up the charge on the partitioned ledger without the partition key, so every lookup could scan every monthly partition.
+  - **Fix:** the function now computes the expected charge anchor per message (the message under `charge_per_logical_message`, the unknown attempt under `charge_per_attempt`). It looks the charge up by the fact's full key — `anchor_month = app_uuidv7_month(anchor)`, `anchor_id`, `fact_kind`, `message_id` — in a per-message `LATERAL … LIMIT 1`, so each lookup is pruned at run time to the anchor's one monthly partition.
+  - **Unchanged:** semantics; an item without an anchor is still open.
 - **Unchanged:** every 7.1–7.6a object, settlement semantics and tenant policies. Nothing charges, writes off or resolves.
-- **History proof:** `57|d02afdb275c613ec5498d632c354684c` (`0000`–`0056`), computed on a disposable clone and recorded in `RELEASE.md`.
+- **History proof:** `57|9ca199b262ad93e21fb8af9560e58147` (`0000`–`0056`), computed on a disposable clone and recorded in `RELEASE.md`.
 
 **Tests.**
-- `packages/db/src/test/phase7_6b-unknown-register.int-spec.ts` (4): privileges and definer settings, the static check (no policy, table privilege or write), the tenant policies unchanged, and `42501` for a caller without a user or without platform `billing.manage`.
+- `packages/db/src/test/phase7_6b-unknown-register.int-spec.ts` (6). Two of these come from the PR #97 review:
+  - **open counts under both policies:** only a charge on the policy's automatic anchor closes an item; a charge on the other anchor, or no attempt, leaves it open;
+  - **pruning, on the function's own query in `EXPLAIN ANALYZE`:** only the anchors' monthly partition executes and every other partition is pruned. With the `anchor_month` predicate removed, all 25 partitions execute and the test fails.
+
+  The original four: privileges and definer settings, the static check (no policy, table privilege or write), the tenant policies unchanged, and `42501` for a caller without a user or without platform `billing.manage`.
 - `apps/api/test/phase7_6b-unknown-register.int-spec.ts` (18), fixtures rated by `app_rate_message` and charged through `app_ledger_post`:
   - exactly the enforced unknown outcomes, oldest first;
   - exposure under both policies;

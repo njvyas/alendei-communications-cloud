@@ -421,7 +421,15 @@ describe('Phase 7-6b: the unknown-outcome register', () => {
     const { rows } = await h.admin.execute<{ n: string }>(sql`
       SELECT count(*)::text AS n FROM messages msg
        WHERE msg.billing_enforced AND msg.status = 'outcome_unknown' AND msg.channel_id = ${channelId}
-         AND NOT EXISTS (SELECT 1 FROM usage_ledger l WHERE l.message_id = msg.id AND l.fact_kind = 'customer_charge')`);
+         AND NOT EXISTS (
+           SELECT 1 FROM usage_ledger l
+            WHERE l.message_id = msg.id AND l.fact_kind = 'customer_charge'
+              -- the automatic anchor: the message, or under charge_per_attempt its unknown attempt
+              AND l.anchor_id = CASE WHEN msg.billing_policy_snapshot = 'charge_per_attempt'
+                                     THEN (SELECT x.id FROM message_attempts x
+                                            WHERE x.message_id = msg.id AND x.status = 'outcome_unknown'
+                                            ORDER BY x.attempt_number DESC LIMIT 1)
+                                     ELSE msg.id END)`);
     const gauge = await h.app.get(MetricsService).billingOutcomeUnknownOpen.get();
     const whatsapp = gauge.values.find((v) => v.labels.channel === 'whatsapp')?.value;
     expect(whatsapp).toBe(Number(rows[0]!.n));
