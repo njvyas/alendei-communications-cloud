@@ -13,6 +13,7 @@ import {
   type Harness,
   type TenantFixture,
 } from './auth-harness';
+import { CampaignsService } from '../src/campaigns/campaigns.service';
 import { CredentialService } from '../src/iam/credential.service';
 
 const url = (p: string) => `/${PREFIX}${p}`;
@@ -1272,6 +1273,196 @@ describe('Phase 8B.1: Campaigns Foundation Integration Suite', () => {
         .where(eq(schema.campaignRecipients.campaignId, campaignId));
       expect(recipients).toHaveLength(2);
       expect(recipients.map((r) => r.contactId)).not.toContain(newContactId);
+    });
+
+    it('deterministically halts materialisation and prevents recipient insertion when campaign is cancelled concurrently across batches', async () => {
+      const campaignsService = h.app.get(CampaignsService);
+      const tagCancel = `concurrent_cancel_${uuidv7().slice(0, 8)}`;
+
+      // Create 4 contacts matching tagCancel with primary whatsapp identities
+      for (let i = 1; i <= 4; i++) {
+        const c = await request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/contacts`))
+          .set('authorization', `Bearer ${tokenA}`)
+          .send({ firstName: `ConcCancelUser${i}`, metadata: { tags: [tagCancel] } });
+        await request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/contacts/${c.body.data.id}/identities`))
+          .set('authorization', `Bearer ${tokenA}`)
+          .send({
+            channelId: whatsappChannelId,
+            rawAddress: `+1555771000${i}`,
+            isPrimary: true,
+          });
+      }
+
+      // Create campaign in draft
+      const createRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({
+          name: 'Concurrent Cancel Materialisation Campaign',
+          channel: 'whatsapp',
+          templateId: templateNoVarsWaA,
+          recipientSource: { type: 'tag_segment', tag: tagCancel },
+          scheduleMode: 'immediate',
+        });
+      expect(createRes.status).toBe(201);
+      const campaignId = createRes.body.data.id;
+
+      let hookFired = false;
+      campaignsService.setMaterializationBatchLimitForTesting(2);
+      campaignsService.onMaterializationBatchInsertedForTesting = async (
+        batchIndex,
+        _insertedCount,
+        cId,
+      ) => {
+        if (cId === campaignId && batchIndex === 1) {
+          hookFired = true;
+          // Concurrent cancellation while materialisation is in flight
+          const cancelRes = await request(h.app.getHttpServer())
+            .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/cancel`))
+            .set('authorization', `Bearer ${tokenA}`);
+          expect(cancelRes.status).toBe(200);
+          expect(cancelRes.body.data.status).toBe('cancelled');
+        }
+      };
+
+      try {
+        // Materialize audience: Batch 1 (2 recipients) inserts, hook fires and cancels campaign,
+        // Batch 2 encounters cancelled campaign under row lock and aborts with 409 conflict
+        const matRes = await request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/materialize`))
+          .set('authorization', `Bearer ${tokenA}`);
+
+        expect(matRes.status).toBe(409);
+        expect(matRes.body.error.code).toBe(ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT);
+        expect(matRes.body.error.message).toContain(
+          "Cannot materialize audience for campaign in 'cancelled' state",
+        );
+        expect(hookFired).toBe(true);
+
+        // Verify recipient count in DB: Batch 1 was committed before cancel, Batch 2 was prevented
+        const recipients = await h.admin
+          .select()
+          .from(schema.campaignRecipients)
+          .where(eq(schema.campaignRecipients.campaignId, campaignId));
+        expect(recipients).toHaveLength(2);
+
+        // Verify campaign row: terminal cancelled state, completedAt set, draft metrics not overwritten
+        const [dbCampaign] = await h.admin
+          .select()
+          .from(schema.campaigns)
+          .where(eq(schema.campaigns.id, campaignId));
+        expect(dbCampaign!.status).toBe('cancelled');
+        expect(dbCampaign!.completedAt).not.toBeNull();
+
+        // Repeated materialization remains blocked with 409 conflict
+        const repeatRes = await request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/materialize`))
+          .set('authorization', `Bearer ${tokenA}`);
+        expect(repeatRes.status).toBe(409);
+        expect(repeatRes.body.error.code).toBe(ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT);
+      } finally {
+        campaignsService.resetMaterializationBatchLimitForTesting();
+        campaignsService.onMaterializationBatchInsertedForTesting = undefined;
+      }
+    });
+
+    it('deterministically halts materialisation and freezes audience when campaign is scheduled concurrently across batches', async () => {
+      const campaignsService = h.app.get(CampaignsService);
+      const tagSched = `concurrent_sched_${uuidv7().slice(0, 8)}`;
+
+      // Create 4 contacts matching tagSched with primary whatsapp identities
+      for (let i = 1; i <= 4; i++) {
+        const c = await request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/contacts`))
+          .set('authorization', `Bearer ${tokenA}`)
+          .send({ firstName: `ConcSchedUser${i}`, metadata: { tags: [tagSched] } });
+        await request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/contacts/${c.body.data.id}/identities`))
+          .set('authorization', `Bearer ${tokenA}`)
+          .send({
+            channelId: whatsappChannelId,
+            rawAddress: `+1555772000${i}`,
+            isPrimary: true,
+          });
+      }
+
+      // Create campaign in draft
+      const createRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenantA.workspaceId}/campaigns`))
+        .set('authorization', `Bearer ${tokenA}`)
+        .send({
+          name: 'Concurrent Schedule Materialisation Campaign',
+          channel: 'whatsapp',
+          templateId: templateNoVarsWaA,
+          recipientSource: { type: 'tag_segment', tag: tagSched },
+          scheduleMode: 'immediate',
+        });
+      expect(createRes.status).toBe(201);
+      const campaignId = createRes.body.data.id;
+
+      let hookFired = false;
+      const validFuture = new Date(Date.now() + 3600_000).toISOString();
+      campaignsService.setMaterializationBatchLimitForTesting(2);
+      campaignsService.onMaterializationBatchInsertedForTesting = async (
+        batchIndex,
+        _insertedCount,
+        cId,
+      ) => {
+        if (cId === campaignId && batchIndex === 1) {
+          hookFired = true;
+          // Concurrent scheduling while materialisation is in flight
+          const schedRes = await request(h.app.getHttpServer())
+            .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/schedule`))
+            .set('authorization', `Bearer ${tokenA}`)
+            .send({ scheduledAt: validFuture });
+          expect(schedRes.status).toBe(200);
+          expect(schedRes.body.data.status).toBe('scheduled');
+          expect(schedRes.body.data.metrics.totalRecipients).toBe(2);
+        }
+      };
+
+      try {
+        // Materialize audience: Batch 1 (2 recipients) inserts, hook fires and schedules campaign,
+        // Batch 2 encounters scheduled campaign under row lock, halts further inserts.
+        const matRes = await request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/materialize`))
+          .set('authorization', `Bearer ${tokenA}`);
+
+        expect(matRes.status).toBe(200);
+        expect(matRes.body.data.campaignId).toBe(campaignId);
+        expect(matRes.body.data.totalRecipients).toBe(2);
+        expect(matRes.body.data.materialized).toBe(2);
+        expect(hookFired).toBe(true);
+
+        // Verify database recipient rows: exactly 2 recipients, no Batch 2 inserts after schedule
+        const recipients = await h.admin
+          .select()
+          .from(schema.campaignRecipients)
+          .where(eq(schema.campaignRecipients.campaignId, campaignId));
+        expect(recipients).toHaveLength(2);
+
+        // Verify campaign row: scheduled status, metrics.totalRecipients is 2 and consistent
+        const [dbCampaign] = await h.admin
+          .select()
+          .from(schema.campaigns)
+          .where(eq(schema.campaigns.id, campaignId));
+        expect(dbCampaign!.status).toBe('scheduled');
+        expect(dbCampaign!.scheduledAt).not.toBeNull();
+        expect((dbCampaign!.metrics as { totalRecipients: number }).totalRecipients).toBe(2);
+
+        // Repeated materialization returns the frozen snapshot with materialized: 0
+        const repeatRes = await request(h.app.getHttpServer())
+          .post(url(`/workspaces/${tenantA.workspaceId}/campaigns/${campaignId}/materialize`))
+          .set('authorization', `Bearer ${tokenA}`);
+        expect(repeatRes.status).toBe(200);
+        expect(repeatRes.body.data.totalRecipients).toBe(2);
+        expect(repeatRes.body.data.materialized).toBe(0);
+      } finally {
+        campaignsService.resetMaterializationBatchLimitForTesting();
+        campaignsService.onMaterializationBatchInsertedForTesting = undefined;
+      }
     });
   });
 

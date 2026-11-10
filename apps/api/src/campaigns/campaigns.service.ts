@@ -145,6 +145,25 @@ export class CampaignsService {
     tieBreaker: schema.campaignRecipients.id,
   };
 
+  private materializationBatchLimit = 500;
+
+  /** @internal For testing concurrency and multi-batch behaviour */
+  setMaterializationBatchLimitForTesting(limit: number): void {
+    this.materializationBatchLimit = limit;
+  }
+
+  /** @internal Reset testing batch limit */
+  resetMaterializationBatchLimitForTesting(): void {
+    this.materializationBatchLimit = 500;
+  }
+
+  /** @internal Hook called synchronously after each materialisation batch is committed to test concurrent races */
+  public onMaterializationBatchInsertedForTesting?: (
+    batchIndex: number,
+    insertedCount: number,
+    campaignId: string,
+  ) => Promise<void> | void;
+
   /** Validates workspace existence within org and RLS, then authorizes permission. */
   async assertWorkspaceAccess(
     tx: Transaction,
@@ -912,7 +931,8 @@ export class CampaignsService {
 
     let cursor: string | undefined = undefined;
     let newlyMaterialized = 0;
-    const batchLimit = 500;
+    const batchLimit = this.materializationBatchLimit;
+    let batchIndex = 0;
 
     do {
       const pageRes = await this.contactsService.resolveAudience(
@@ -959,23 +979,87 @@ export class CampaignsService {
           .filter((row): row is NonNullable<typeof row> => row !== null);
 
         if (eligibleRows.length > 0) {
-          const inserted = await this.db.withRequestTenant(async (tx) => {
+          const batchResult = await this.db.withRequestTenant(async (tx) => {
             await this.assertWorkspaceAccess(
               tx,
               principal,
               workspaceId,
               PERMISSIONS.CAMPAIGNS_MANAGE,
             );
-            return tx
+
+            // Row-level lock campaign row to serialize with concurrent lifecycle transitions
+            const [lockedCampaign] = await tx
+              .select({
+                id: schema.campaigns.id,
+                status: schema.campaigns.status,
+              })
+              .from(schema.campaigns)
+              .where(
+                and(
+                  eq(schema.campaigns.id, campaign.id),
+                  eq(schema.campaigns.workspaceId, workspaceId),
+                  eq(schema.campaigns.orgId, orgId),
+                  isNull(schema.campaigns.deletedAt),
+                ),
+              )
+              .for('no key update')
+              .limit(1);
+
+            if (!lockedCampaign) {
+              throw campaignNotFound(campaign.id);
+            }
+
+            if (lockedCampaign.status !== 'draft') {
+              return {
+                aborted: true as const,
+                status: lockedCampaign.status,
+                insertedCount: 0,
+              };
+            }
+
+            const inserted = await tx
               .insert(schema.campaignRecipients)
               .values(eligibleRows)
               .onConflictDoNothing({
                 target: [schema.campaignRecipients.campaignId, schema.campaignRecipients.contactId],
               })
               .returning({ id: schema.campaignRecipients.id });
+
+            return {
+              aborted: false as const,
+              status: lockedCampaign.status,
+              insertedCount: inserted.length,
+            };
           });
 
-          newlyMaterialized += inserted.length;
+          if (batchResult.aborted) {
+            if (
+              batchResult.status === 'cancelled' ||
+              batchResult.status === 'completed' ||
+              batchResult.status === 'running' ||
+              batchResult.status === 'paused'
+            ) {
+              throw new AppException({
+                status: HttpStatus.CONFLICT,
+                code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+                message: `Cannot materialize audience for campaign in '${batchResult.status}' state`,
+                details: { currentStatus: batchResult.status },
+              });
+            }
+            // For 'scheduled', the campaign has transitioned to scheduled. Halt further materialization batches.
+            break;
+          }
+
+          newlyMaterialized += batchResult.insertedCount;
+          batchIndex++;
+
+          if (this.onMaterializationBatchInsertedForTesting) {
+            await this.onMaterializationBatchInsertedForTesting(
+              batchIndex,
+              batchResult.insertedCount,
+              campaign.id,
+            );
+          }
         }
       }
 
@@ -985,6 +1069,37 @@ export class CampaignsService {
 
     const totalRecipients = await this.db.withRequestTenant(async (tx) => {
       await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.CAMPAIGNS_MANAGE);
+
+      const [lockedCampaign] = await tx
+        .select({
+          id: schema.campaigns.id,
+          status: schema.campaigns.status,
+          metrics: schema.campaigns.metrics,
+        })
+        .from(schema.campaigns)
+        .where(
+          and(
+            eq(schema.campaigns.id, campaign.id),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+          ),
+        )
+        .for('no key update')
+        .limit(1);
+
+      if (!lockedCampaign) {
+        throw campaignNotFound(campaign.id);
+      }
+
+      if (lockedCampaign.status === 'cancelled' || lockedCampaign.status === 'completed') {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message: `Cannot materialize audience for campaign in '${lockedCampaign.status}' state`,
+          details: { currentStatus: lockedCampaign.status },
+        });
+      }
 
       const [countRow] = await tx
         .select({ count: sql<number>`count(*)::int` })
@@ -999,38 +1114,49 @@ export class CampaignsService {
 
       const count = Number(countRow?.count ?? 0);
 
-      const currentMetrics = (campaign.metrics as Record<string, unknown>) ?? {};
-      const updatedMetrics = {
-        ...currentMetrics,
-        totalRecipients: count,
-      };
+      // Guard: only update campaign metrics if the campaign is still in 'draft' state.
+      // If a concurrent lifecycle transition (e.g. schedule, cancel) won, do not overwrite metrics.
+      if (lockedCampaign.status === 'draft') {
+        const currentMetrics = (lockedCampaign.metrics as Record<string, unknown>) ?? {};
+        const updatedMetrics = {
+          ...currentMetrics,
+          totalRecipients: count,
+        };
 
-      await tx
-        .update(schema.campaigns)
-        .set({
-          metrics: updatedMetrics,
-          updatedAt: new Date(),
-        })
-        .where(eq(schema.campaigns.id, campaign.id));
+        await tx
+          .update(schema.campaigns)
+          .set({
+            metrics: updatedMetrics,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(schema.campaigns.id, campaign.id),
+              eq(schema.campaigns.workspaceId, workspaceId),
+              eq(schema.campaigns.orgId, orgId),
+              eq(schema.campaigns.status, 'draft'),
+            ),
+          );
 
-      await this.audit.record(
-        {
-          scopeType: 'workspace',
-          scopeId: workspaceId,
-          ...actorFromPrincipal(principal),
-          action: 'campaign.audience_materialized',
-          resourceType: 'Campaign',
-          resourceId: campaign.id,
-          outcome: 'success',
-          before: null,
-          after: null,
-          metadata: {
-            totalRecipients: count,
-            newlyMaterialized,
+        await this.audit.record(
+          {
+            scopeType: 'workspace',
+            scopeId: workspaceId,
+            ...actorFromPrincipal(principal),
+            action: 'campaign.audience_materialized',
+            resourceType: 'Campaign',
+            resourceId: campaign.id,
+            outcome: 'success',
+            before: null,
+            after: null,
+            metadata: {
+              totalRecipients: count,
+              newlyMaterialized,
+            },
           },
-        },
-        tx,
-      );
+          tx,
+        );
+      }
 
       return count;
     });
@@ -1193,14 +1319,13 @@ export class CampaignsService {
     return this.db.withRequestTenant(async (tx) => {
       await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.CAMPAIGNS_MANAGE);
 
-      const [updatedRow] = await tx
-        .update(schema.campaigns)
-        .set({
-          status: 'scheduled',
-          scheduleMode: 'scheduled',
-          scheduledAt: scheduledAtDate,
-          updatedAt: new Date(),
+      const [lockedCampaign] = await tx
+        .select({
+          id: schema.campaigns.id,
+          status: schema.campaigns.status,
+          metrics: schema.campaigns.metrics,
         })
+        .from(schema.campaigns)
         .where(
           and(
             eq(schema.campaigns.id, campaignId),
@@ -1210,6 +1335,56 @@ export class CampaignsService {
             inArray(schema.campaigns.status, ['draft', 'scheduled']),
           ),
         )
+        .for('no key update')
+        .limit(1);
+
+      if (!lockedCampaign) {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message:
+            'Campaign lifecycle transition conflict: campaign status was modified concurrently or is not in a valid state',
+          details: { campaignId },
+        });
+      }
+
+      const [countRow] = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(schema.campaignRecipients)
+        .where(
+          and(
+            eq(schema.campaignRecipients.campaignId, campaignId),
+            eq(schema.campaignRecipients.workspaceId, workspaceId),
+            eq(schema.campaignRecipients.orgId, orgId),
+          ),
+        );
+
+      const recipientCount = Number(countRow?.count ?? 0);
+      if (recipientCount === 0) {
+        throw new AppException({
+          status: HttpStatus.UNPROCESSABLE_ENTITY,
+          code: ERROR_CODES.CAMPAIGN_AUDIENCE_EMPTY,
+          message: 'Campaign audience is empty. Cannot schedule campaign without recipients.',
+          logContext: { campaignId },
+        });
+      }
+
+      const currentMetrics = (lockedCampaign.metrics as Record<string, unknown>) ?? {};
+      const updatedMetrics = {
+        ...currentMetrics,
+        totalRecipients: recipientCount,
+      };
+
+      const [updatedRow] = await tx
+        .update(schema.campaigns)
+        .set({
+          status: 'scheduled',
+          scheduleMode: 'scheduled',
+          scheduledAt: scheduledAtDate,
+          metrics: updatedMetrics,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.campaigns.id, campaignId))
         .returning();
 
       if (!updatedRow) {
@@ -1235,7 +1410,7 @@ export class CampaignsService {
           after: null,
           metadata: {
             scheduledAt: scheduledAtDate.toISOString(),
-            totalRecipients,
+            totalRecipients: recipientCount,
           },
         },
         tx,
@@ -1262,15 +1437,10 @@ export class CampaignsService {
     return this.db.withRequestTenant(async (tx) => {
       await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.CAMPAIGNS_MANAGE);
 
-      const [existing] = await tx
-        .select({
-          campaign: schema.campaigns,
-          channelCode: sql<string>`app_channel_code(${schema.campaigns.channelId})`,
-          templateName: schema.templates.name,
-          templateBody: schema.templates.body,
-        })
+      // Lock campaign row first to serialize with concurrent operations
+      const [campaignRow] = await tx
+        .select()
         .from(schema.campaigns)
-        .leftJoin(schema.templates, eq(schema.campaigns.templateId, schema.templates.id))
         .where(
           and(
             eq(schema.campaigns.id, campaignId),
@@ -1279,17 +1449,17 @@ export class CampaignsService {
             isNull(schema.campaigns.deletedAt),
           ),
         )
+        .for('no key update')
         .limit(1);
 
-      if (!existing) throw campaignNotFound(campaignId);
+      if (!campaignRow) throw campaignNotFound(campaignId);
 
-      const campaign = existing.campaign;
-      if (campaign.status === 'completed' || campaign.status === 'cancelled') {
+      if (campaignRow.status === 'completed' || campaignRow.status === 'cancelled') {
         throw new AppException({
           status: HttpStatus.CONFLICT,
           code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
-          message: `Cannot cancel a campaign in '${campaign.status}' state`,
-          details: { currentStatus: campaign.status },
+          message: `Cannot cancel a campaign in '${campaignRow.status}' state`,
+          details: { currentStatus: campaignRow.status },
         });
       }
 
@@ -1332,17 +1502,30 @@ export class CampaignsService {
           before: null,
           after: null,
           metadata: {
-            previousStatus: campaign.status,
+            previousStatus: campaignRow.status,
           },
         },
         tx,
       );
 
+      const [template] = await tx
+        .select({
+          name: schema.templates.name,
+          body: schema.templates.body,
+        })
+        .from(schema.templates)
+        .where(eq(schema.templates.id, campaignRow.templateId))
+        .limit(1);
+
+      const channelResult = await tx.execute<{ code: string }>(
+        sql`SELECT app_channel_code(${campaignRow.channelId}) AS code`,
+      );
+
       const joinedRow: CampaignJoinedRow = {
         ...updatedRow!,
-        channelCode: existing.channelCode,
-        templateName: existing.templateName,
-        templateBody: existing.templateBody,
+        channelCode: channelResult.rows[0]?.code ?? 'unknown',
+        templateName: template?.name ?? null,
+        templateBody: template?.body ?? null,
       };
 
       return campaignView(joinedRow);
