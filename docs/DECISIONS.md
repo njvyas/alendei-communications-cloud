@@ -3346,6 +3346,24 @@ Each is a draft, stopped for owner review. Billing enforcement stays disabled; n
    | `Idempotency-Key` handlers | 30 | 31 |
    | Migrations | 60 | 61 |
 
+**PR #101 review corrections (10-Nov-2026).** Service and DTO layers only. Migration `0060`, the database functions, the ledger semantics and the permissions are unchanged; the history proof is unchanged.
+1. **Refusal recording is durable, raced safely and never silent.** The best-effort `noteRefusal()` that swallowed every error is replaced by `recordRefusal()`, which runs in its own transaction after the refused approval rolled back:
+   - **On the operation:** `app_billing_account_note_refusal` re-derives the refusal and records it only if it still holds (unchanged). The refusal the approval observed is **always** written to the audit log (`billing.account_operation.refused`, outcome `failure`, metadata `refusal`, `recordedOnOperation`), in the same transaction.
+   - **The race:** if the wallet was unfrozen (or the operation resolved) between the refused approval and this transaction, the database declines to record a state it can no longer confirm. The audit record still captures the observed refusal, marked `stateChangedBeforeRecording: true`, so the result is `audit_only` rather than nothing. The operation stays pending and approvable; no funds move.
+   - **Failures:** transient errors (`40001`, `40P01`, `55P03`) are retried, up to three runs. Any other failure, or exhausted retries, is logged at error level (operation id, observed refusal, SQLSTATE, no amounts), counted (`acc_billing_account_refusal_record_failures_total`) and reported to the caller.
+   - **Response:** the `403`/`422` refusal now carries `details: { refusal, refusalRecorded }`, with `refusalRecorded` one of `operation_and_audit`, `audit_only` or `failed`. The recording transaction is atomic, so a failure leaves nothing half-recorded.
+2. **Strict calendar dates.** `receivedOn` and `expectedReceivedOn` are validated as real calendar dates (Gregorian leap-year rule; years 1900 onwards) in addition to the `YYYY-MM-DD` format. An impossible date (for example `2026-02-30`, `2025-02-29`, `1900-02-29`, `2026-04-31`, month `13` or `00`, day `00`) is `400 VALIDATION_FAILED` and never reaches the database; `2024-02-29`, `2000-02-29` and `1999-12-31` are accepted. A future date is still refused by the database (`400`).
+
+**Tests added:**
+- **Unit `account-operations.dto.spec.ts` (25):** valid, impossible, leap and pre-1900 dates; non-strings; both DTO fields.
+- **API (4 more, 18 in total):**
+  - the unfreeze race, injected between the refused approval and the recording: `audit_only`, the operation pending and then approvable;
+  - an injected audit failure: `failed` reported, error logged, counter incremented, nothing half-recorded, and a later refusal recorded normally;
+  - a transient failure retried, then recorded in full;
+  - impossible dates `400` and leap/historical dates `201` over HTTP, for both fields.
+- **Mutation checks, each caught:** recording failures made silent again (no log, no counter); the race left with no record.
+- **Contract check:** the OpenAPI DTO-reconciliation suite maps the new `isCalendarDate` validator to the documented `format: date`. The OpenAPI document itself is unchanged.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

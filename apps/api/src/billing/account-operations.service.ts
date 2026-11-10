@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable, Optional } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger, Optional } from '@nestjs/common';
 import {
   AUDIT_ACTIONS,
   ERROR_CODES,
@@ -202,8 +202,13 @@ function sqlState(error: unknown): string | undefined {
   return undefined;
 }
 
-function refusal(status: HttpStatus, code: ErrorCode, message: string): AppException {
-  return new AppException({ status, code, message });
+function refusal(
+  status: HttpStatus,
+  code: ErrorCode,
+  message: string,
+  details?: Record<string, unknown>,
+): AppException {
+  return new AppException({ status, code, message, details });
 }
 
 const SELF_APPROVAL = () =>
@@ -287,6 +292,27 @@ function executedAction(op: AccountOperationView): AuditAction {
 
 /** Approval refusals that leave a pending recharge pending, with the reason recorded on it. */
 const ACCOUNT_STATE_REFUSALS = new Set(['BL001', 'BL002']);
+/** The refusal an approval observed, by its SQLSTATE. */
+const OBSERVED_REFUSAL: Readonly<Record<string, string>> = {
+  BL001: 'account_not_configured',
+  BL002: 'account_frozen',
+};
+/** Errors on which the refusal-recording transaction is retried. */
+const TRANSIENT = new Set(['40001', '40P01', '55P03']);
+/** At most this many runs of the refusal-recording transaction. */
+const REFUSAL_RECORD_ATTEMPTS = 3;
+
+/**
+ * How an approval refusal was recorded:
+ * - `operation_and_audit`: on the pending operation (`last_refusal`, re-derived and confirmed by
+ *   the database) and in the audit log;
+ * - `audit_only`: the account's state changed before it could be recorded (for example the wallet
+ *   was unfrozen in between), so the database declined to record a state it can no longer
+ *   confirm; the observed refusal is in the audit log, marked as such;
+ * - `failed`: nothing could be recorded — logged at error level and counted
+ *   (`acc_billing_account_refusal_record_failures_total`), and reported to the caller.
+ */
+export type RefusalRecording = 'operation_and_audit' | 'audit_only' | 'failed';
 
 export interface AccountOperationInput {
   readonly account: BillingAccountName;
@@ -312,6 +338,8 @@ export interface AccountOperationInput {
  */
 @Injectable()
 export class AccountOperationsService {
+  private readonly logger = new Logger(AccountOperationsService.name);
+
   constructor(
     private readonly db: TenantDatabase,
     private readonly authorization: AuthorizationService,
@@ -517,11 +545,19 @@ export class AccountOperationsService {
       if (!outcome.replayed) this.count(outcome.body.data.operation.kind, 'executed');
       return outcome;
     } catch (error) {
-      if (kind === 'recharge' && ACCOUNT_STATE_REFUSALS.has(sqlState(error) ?? '')) {
-        // The approval rolled back (its key is not consumed); the recharge stays pending with
-        // the refusal recorded — re-derived by the database — and audited.
-        await this.noteRefusal(principal, id);
+      const state = sqlState(error) ?? '';
+      if (kind === 'recharge' && ACCOUNT_STATE_REFUSALS.has(state)) {
+        // The approval rolled back (its key is not consumed; the recharge stays pending). The
+        // refusal is recorded in its own transaction; how it was recorded is reported, never
+        // silently dropped.
+        const observed = OBSERVED_REFUSAL[state]!;
+        const recorded = await this.recordRefusal(principal, id, observed);
         this.count('recharge', 'refused');
+        const base = translate(error) as AppException;
+        throw refusal(base.getStatus(), base.code as ErrorCode, base.message, {
+          refusal: observed,
+          refusalRecorded: recorded,
+        });
       }
       throw translate(error);
     }
@@ -627,38 +663,65 @@ export class AccountOperationsService {
 
   // --- helpers --------------------------------------------------------------------------
 
-  /** Records an approval refusal on the pending recharge, in its own transaction; best effort. */
-  private async noteRefusal(principal: AuthPrincipal, id: string): Promise<void> {
-    try {
-      await this.db.withRequestTenant(async (tx) => {
-        const { rows } = await tx.execute<{ refusal: string | null }>(
-          sql`SELECT app_billing_account_note_refusal(${id}::uuid) AS refusal`,
-        );
-        if (!rows[0]?.refusal) return;
-        const op = await this.load(tx, id);
-        await this.audit.record(
-          {
-            scopeType: 'platform',
-            scopeId: null,
-            ...actorFromPrincipal(principal),
-            action: AUDIT_ACTIONS.BILLING_ACCOUNT_OPERATION_REFUSED,
-            resourceType: 'BillingAccountOperation',
-            resourceId: op.id,
-            outcome: 'failure',
-            before: null,
-            after: { ...op },
-            metadata: {
-              orgId: op.orgId,
-              account: op.account,
-              kind: op.kind,
-              refusal: rows[0].refusal,
+  /**
+   * Records an approval refusal, in its own transaction (the approval itself rolled back).
+   * The database re-derives the refusal from the account and records it on the operation only
+   * if it still holds; the observed refusal is always audited — so a race in which the wallet is
+   * unfrozen between the refused approval and this transaction leaves an `audit_only` record
+   * rather than none. Transient errors are retried; any other failure is logged at error level,
+   * counted and returned as `failed` — never swallowed.
+   */
+  private async recordRefusal(
+    principal: AuthPrincipal,
+    id: string,
+    observed: string,
+  ): Promise<RefusalRecording> {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.db.withRequestTenant(async (tx) => {
+          const { rows } = await tx.execute<{ refusal: string | null }>(
+            sql`SELECT app_billing_account_note_refusal(${id}::uuid) AS refusal`,
+          );
+          const confirmed = rows[0]?.refusal ?? null;
+          const op = await this.load(tx, id);
+          await this.audit.record(
+            {
+              scopeType: 'platform',
+              scopeId: null,
+              ...actorFromPrincipal(principal),
+              action: AUDIT_ACTIONS.BILLING_ACCOUNT_OPERATION_REFUSED,
+              resourceType: 'BillingAccountOperation',
+              resourceId: op.id,
+              outcome: 'failure',
+              before: null,
+              after: { ...op },
+              metadata: {
+                orgId: op.orgId,
+                account: op.account,
+                kind: op.kind,
+                refusal: observed,
+                recordedOnOperation: confirmed !== null,
+                ...(confirmed === null ? { stateChangedBeforeRecording: true } : {}),
+              },
             },
-          },
-          tx,
-        );
-      });
-    } catch {
-      // The refusal itself is still returned to the caller.
+            tx,
+          );
+          return confirmed === null ? 'audit_only' : 'operation_and_audit';
+        });
+      } catch (error) {
+        const state = sqlState(error);
+        if (attempt < REFUSAL_RECORD_ATTEMPTS && TRANSIENT.has(state ?? '')) continue;
+        this.logger.error({
+          msg: 'billing account operation: an approval refusal could not be recorded',
+          operationId: id,
+          refusal: observed,
+          attempts: attempt,
+          sqlState: state ?? null,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        this.metrics?.billingAccountRefusalRecordFailures.inc();
+        return 'failed';
+      }
     }
   }
 

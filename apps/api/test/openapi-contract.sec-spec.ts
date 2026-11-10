@@ -521,6 +521,10 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
           case 'isIso8601':
             target.format = 'date-time';
             break;
+          // Phase 7 PR 7-6d-2 (PR #101 review): a real calendar date, documented as `format: date`.
+          case 'isCalendarDate':
+            target.format = 'date';
+            break;
           case 'maxLength':
             target.maxLength = c0;
             break;

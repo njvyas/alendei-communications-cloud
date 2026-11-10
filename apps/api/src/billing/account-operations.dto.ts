@@ -11,6 +11,8 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateBy,
+  type ValidationOptions,
 } from 'class-validator';
 import { PAGE_LIMITS } from '@acc/contracts';
 
@@ -29,6 +31,37 @@ export const ACCOUNT_OPERATION_KINDS = [
 /** A payment reference as the database admits it (normalised: whitespace removed, upper case). */
 export const PAYMENT_REFERENCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 ./_-]{0,119}$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * A real calendar date in `YYYY-MM-DD` (PR #101 review): the format alone admits impossible
+ * dates such as `2026-02-30`, which the database would refuse with a conversion error. Years
+ * before 1900 are refused (no plausible payment receipt; and two-digit-year ambiguity in
+ * `Date.UTC`). Leap years follow the Gregorian rule (`2024-02-29` and `2000-02-29` valid,
+ * `2025-02-29` and `1900-02-29` not).
+ */
+export function isCalendarDate(value: unknown): boolean {
+  if (typeof value !== 'string' || !ISO_DATE.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number) as [number, number, number];
+  if (year < 1900) return false;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  );
+}
+
+/** Validates {@link isCalendarDate}. */
+export function IsCalendarDate(options?: ValidationOptions): PropertyDecorator {
+  return ValidateBy(
+    {
+      name: 'isCalendarDate',
+      validator: {
+        validate: (value) => isCalendarDate(value),
+        defaultMessage: () => '$property must be a valid calendar date (YYYY-MM-DD)',
+      },
+    },
+    options,
+  );
+}
 export type AccountOperationKind = (typeof ACCOUNT_OPERATION_KINDS)[number];
 export const ACCOUNT_OPERATION_STATUSES = ['pending', 'executed', 'rejected'] as const;
 
@@ -87,6 +120,7 @@ export class WalletRechargeDto {
   /** When the money was received (`YYYY-MM-DD`, not in the future). */
   @IsString()
   @Matches(ISO_DATE)
+  @IsCalendarDate()
   @ApiProperty({ type: 'string', format: 'date', pattern: ISO_DATE.source })
   receivedOn!: string;
 
@@ -125,6 +159,7 @@ export class ApproveAccountOperationDto {
   @IsOptional()
   @IsString()
   @Matches(ISO_DATE)
+  @IsCalendarDate()
   @ApiPropertyOptional({ type: 'string', format: 'date', pattern: ISO_DATE.source })
   expectedReceivedOn?: string;
 }

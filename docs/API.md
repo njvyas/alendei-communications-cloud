@@ -174,7 +174,7 @@ Platform administration of rate cards, provider cost rates and rate-card assignm
 - **Body:** `{ amountPaise, paymentReference, receivedOn, reason }`.
   - `amountPaise` is the net spendable amount credited to the wallet, in integer paise (D-76d-2); tax treatment stays with Phase 7.7.
   - `paymentReference` is the external receipt (1–120 characters: letters, digits, space, `.`, `/`, `_`, `-`; starting with a letter or digit).
-  - `receivedOn` is `YYYY-MM-DD`, not in the future.
+  - `receivedOn` is a real calendar date `YYYY-MM-DD` (1900 onwards), not in the future; an impossible date is `400`. The approval's `expectedReceivedOn` is validated the same way.
 - **Result:** `201`, `executed` or `pending`.
   - An executed recharge posts one immutable ledger entry anchored on the operation: the balance rises and reservations are unchanged.
   - Pending, rejected and refused recharges post nothing.
@@ -185,7 +185,7 @@ Platform administration of rate cards, provider cost rates and rate-card assignm
 - **Payment references:** unique per organization among pending and executed recharges, after normalisation (whitespace removed, upper case). Reuse is `409 BILLING_ACCOUNT_OPERATION_CONFLICT`; a rejected recharge frees its reference. One recharge may be pending per organization.
 - **Frozen wallet (D-76d-4):**
   - a request is refused (`403 BILLING_ACCOUNT_FROZEN`) and records nothing;
-  - an approval is refused the same way, and the recharge stays pending with `lastRefusal` recorded and audited (`billing.account_operation.refused`);
+  - an approval is refused the same way, and the recharge stays pending with `lastRefusal` recorded and audited (`billing.account_operation.refused`). The error's `details` report `{ refusal, refusalRecorded }`: `operation_and_audit`, `audit_only` (the wallet's state changed before it could be recorded, so only the audit log holds it) or `failed` (logged and counted for operators);
   - the same `Idempotency-Key` can be retried after unfreezing.
 
   An organization without a wallet is `409`. Credit accounts are never recharged.

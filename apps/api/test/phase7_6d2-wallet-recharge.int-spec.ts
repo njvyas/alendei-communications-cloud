@@ -5,6 +5,8 @@ import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import request from 'supertest';
 import { uuidv7 } from 'uuidv7';
 
+import { AuditWriter } from '../src/audit/audit-writer.service';
+import { AccountOperationsService } from '../src/billing/account-operations.service';
 import { AppConfigService } from '../src/config/app-config.service';
 import { CredentialService } from '../src/iam/credential.service';
 import { MetricsService } from '../src/observability/metrics.service';
@@ -556,6 +558,10 @@ describe('Phase 7-6d-2: wallet recharge', () => {
       403,
       ERROR_CODES.BILLING_ACCOUNT_FROZEN,
     ]);
+    expect(blocked.body.error.details).toEqual({
+      refusal: 'account_frozen',
+      refusalRecorded: 'operation_and_audit',
+    });
     const kept = (
       await request(h.app.getHttpServer())
         .get(url(`/platform/billing/account-operations/${pending.id}`))
@@ -580,6 +586,206 @@ describe('Phase 7-6d-2: wallet recharge', () => {
     await approve(approver, un.id).expect(200);
     await approveRecharge(approver, pending, {}, key).expect(200);
     expect(await rechargeFacts(t)).toEqual([600]);
+  });
+
+  // --- PR #101 review: refusal recording is durable, raced safely and never silent -------------
+
+  /** The refused-approval audit rows of an operation, with the metadata that matters here. */
+  async function refusalAudits(id: string) {
+    const { rows } = await h.admin.execute<{ outcome: string; metadata: Record<string, unknown> }>(
+      sql`SELECT outcome, metadata FROM audit_logs WHERE resource_id = ${id} AND action = ${AUDIT_ACTIONS.BILLING_ACCOUNT_OPERATION_REFUSED} ORDER BY occurred_at, id`,
+    );
+    return rows;
+  }
+
+  async function operationRow(id: string) {
+    const { rows } = await h.admin.execute<Record<string, unknown>>(
+      sql`SELECT status, last_refusal, approved_by FROM billing_account_operations WHERE id = ${id}`,
+    );
+    return rows[0]!;
+  }
+
+  /** A pending recharge on a wallet that is then frozen. */
+  async function frozenPending(label: string) {
+    const t = await walletTenant(label);
+    const pending = (await recharge(t, 450).expect(201)).body.data.operation;
+    await op(t, '/wallet/freeze').expect(201);
+    return { t, pending };
+  }
+
+  const setWalletStatus = (t: TenantFixture, status: 'active' | 'frozen') =>
+    h.admin.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL session_replication_role = replica`);
+      await tx.execute(
+        sql`UPDATE wallets SET status = ${status}::billing_account_status WHERE org_id = ${t.orgId}`,
+      );
+    });
+
+  it('race: the wallet is unfrozen between the refused approval and the refusal record — the refusal is still audited (audit only), the operation stays pending and approvable', async () => {
+    const { t, pending } = await frozenPending('p76d2-race');
+    const service = h.app.get(AccountOperationsService) as unknown as {
+      recordRefusal: (...args: unknown[]) => Promise<unknown>;
+    };
+    // Capture the original before spying (a spy-bound original would recurse).
+    const original = service.recordRefusal.bind(service);
+    const spy = jest.spyOn(service, 'recordRefusal').mockImplementation(async (...args) => {
+      await setWalletStatus(t, 'active'); // the unfreeze lands in between
+      return original(...args);
+    });
+    try {
+      const res = await approveRecharge(approver, pending);
+      expect([res.status, res.body.error?.code, res.body.error?.details]).toEqual([
+        403,
+        ERROR_CODES.BILLING_ACCOUNT_FROZEN,
+        { refusal: 'account_frozen', refusalRecorded: 'audit_only' },
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
+    // The database declined to record a state it can no longer confirm …
+    expect(await operationRow(pending.id)).toMatchObject({
+      status: 'pending',
+      last_refusal: null,
+      approved_by: null,
+    });
+    // … but the observed refusal is durably audited, marked as such.
+    expect(await refusalAudits(pending.id)).toEqual([
+      {
+        outcome: 'failure',
+        metadata: expect.objectContaining({
+          refusal: 'account_frozen',
+          recordedOnOperation: false,
+          stateChangedBeforeRecording: true,
+        }),
+      },
+    ]);
+    expect(await rechargeFacts(t)).toEqual([]);
+    // Nothing was lost or double-applied: the recharge can now be approved.
+    await approveRecharge(approver, pending).expect(200);
+    expect(await rechargeFacts(t)).toEqual([450]);
+  });
+
+  it('a recording failure is never silent: reported to the caller as failed, logged, counted; nothing half-recorded', async () => {
+    const { t, pending } = await frozenPending('p76d2-fail');
+    const audit = h.app.get(AuditWriter);
+    const original = audit.record.bind(audit);
+    const spy = jest.spyOn(audit, 'record').mockImplementation(async (input, tx) => {
+      if (input.action === AUDIT_ACTIONS.BILLING_ACCOUNT_OPERATION_REFUSED) {
+        throw new Error('simulated audit store failure');
+      }
+      return original(input, tx);
+    });
+    const service = h.app.get(AccountOperationsService) as unknown as {
+      logger: { error: (...args: unknown[]) => void };
+    };
+    const logged = jest.spyOn(service.logger, 'error');
+    const failures = async () =>
+      (await metrics.billingAccountRefusalRecordFailures.get()).values.reduce(
+        (n, v) => n + v.value,
+        0,
+      );
+    const before = await failures();
+    try {
+      const res = await approveRecharge(approver, pending);
+      expect([res.status, res.body.error?.code, res.body.error?.details]).toEqual([
+        403,
+        ERROR_CODES.BILLING_ACCOUNT_FROZEN,
+        { refusal: 'account_frozen', refusalRecorded: 'failed' },
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await failures()).toBe(before + 1);
+    expect(logged).toHaveBeenCalledWith(
+      expect.objectContaining({
+        msg: 'billing account operation: an approval refusal could not be recorded',
+        operationId: pending.id,
+        refusal: 'account_frozen',
+      }),
+    );
+    logged.mockRestore();
+    // The recording transaction rolled back as a whole: no refusal on the row, no audit row.
+    expect(await operationRow(pending.id)).toMatchObject({ status: 'pending', last_refusal: null });
+    expect(await refusalAudits(pending.id)).toEqual([]);
+    expect(await rechargeFacts(t)).toEqual([]);
+    // A later refused approval records normally.
+    const again = await approveRecharge(approver, pending);
+    expect(again.body.error?.details).toEqual({
+      refusal: 'account_frozen',
+      refusalRecorded: 'operation_and_audit',
+    });
+    expect(await operationRow(pending.id)).toMatchObject({ last_refusal: 'account_frozen' });
+  });
+
+  it('a transient failure while recording is retried, and the refusal is then recorded in full', async () => {
+    const { pending } = await frozenPending('p76d2-retry');
+    const audit = h.app.get(AuditWriter);
+    const original = audit.record.bind(audit);
+    let failed = 0;
+    const spy = jest.spyOn(audit, 'record').mockImplementation(async (input, tx) => {
+      if (input.action === AUDIT_ACTIONS.BILLING_ACCOUNT_OPERATION_REFUSED && failed < 2) {
+        failed += 1;
+        throw Object.assign(new Error('could not serialize access'), { code: '40001' });
+      }
+      return original(input, tx);
+    });
+    try {
+      const res = await approveRecharge(approver, pending);
+      expect(res.body.error?.details).toEqual({
+        refusal: 'account_frozen',
+        refusalRecorded: 'operation_and_audit',
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(failed).toBe(2);
+    expect(await operationRow(pending.id)).toMatchObject({ last_refusal: 'account_frozen' });
+    expect(await refusalAudits(pending.id)).toHaveLength(1);
+  });
+
+  // --- PR #101 review: strict calendar dates -------------------------------------------------------
+
+  it('impossible calendar dates are refused with 400 (never a database conversion error); leap-day and historical dates are accepted', async () => {
+    const t = await walletTenant('p76d2-dates');
+    threshold(1_000_000);
+    for (const receivedOn of [
+      '2026-02-30',
+      '2025-02-29',
+      '1900-02-29',
+      '2026-04-31',
+      '2026-13-01',
+      '2026-00-10',
+      '2026-01-00',
+    ]) {
+      const res = await recharge(t, 100, ref(), { receivedOn });
+      expect([receivedOn, res.status, res.body.error?.code]).toEqual([
+        receivedOn,
+        400,
+        ERROR_CODES.VALIDATION_FAILED,
+      ]);
+    }
+    for (const receivedOn of ['2024-02-29', '2000-02-29', '1999-12-31']) {
+      const res = await recharge(t, 100, ref(), { receivedOn });
+      expect([receivedOn, res.status, res.body.data?.operation?.receivedOn]).toEqual([
+        receivedOn,
+        201,
+        receivedOn,
+      ]);
+    }
+    expect(await ledgerFacts(t)).toBe(3);
+    // The approval's expectedReceivedOn is validated the same way (400, not 409 or 500).
+    threshold(null);
+    const pending = (await recharge(t, 100, ref(), { receivedOn: '2024-02-29' }).expect(201)).body
+      .data.operation;
+    for (const expectedReceivedOn of ['2024-02-30', '2023-02-29']) {
+      const res = await approveRecharge(approver, pending, { expectedReceivedOn });
+      expect([expectedReceivedOn, res.status, res.body.error?.code]).toEqual([
+        expectedReceivedOn,
+        400,
+        ERROR_CODES.VALIDATION_FAILED,
+      ]);
+    }
+    await approveRecharge(approver, pending).expect(200);
   });
 
   it('no wallet (only a credit account): a recharge is refused; credit accounts are never recharged', async () => {
@@ -767,6 +973,6 @@ describe('Phase 7-6d-2: wallet recharge', () => {
     expect(value('executed')).toBeGreaterThanOrEqual(10);
     expect(value('pending')).toBeGreaterThanOrEqual(5);
     expect(value('rejected')).toBeGreaterThanOrEqual(1);
-    expect(value('refused')).toBeGreaterThanOrEqual(2);
+    expect(value('refused')).toBeGreaterThanOrEqual(5);
   });
 });
