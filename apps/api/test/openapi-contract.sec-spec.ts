@@ -486,7 +486,14 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
         switch (rule.type === 'customValidation' ? rule.name : rule.type) {
           case 'conditionalValidation':
             if (rule.name === 'isOptional') e.required = false;
-            else e.nullable = true; // ValidateIf(value !== null): null admitted
+            else {
+              // `@ValidateIf(condition)`: the documented shape follows from what the condition
+              // skips — `null` skipped means nullable (ValidateIf(value !== null)); `undefined`
+              // skipped means optional (ValidateIf(value !== undefined), PR #101 review).
+              const condition = c0 as (o: unknown, v: unknown) => boolean;
+              if (!condition({}, null)) e.nullable = true;
+              if (!condition({}, undefined)) e.required = false;
+            }
             break;
           case 'nestedValidation':
             e.nested = true;

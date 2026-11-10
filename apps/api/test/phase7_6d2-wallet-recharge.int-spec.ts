@@ -788,6 +788,61 @@ describe('Phase 7-6d-2: wallet recharge', () => {
     await approveRecharge(approver, pending).expect(200);
   });
 
+  // --- PR #101 final review: explicit null evidence is refused; omission stays valid ------------
+
+  it('approval evidence: omitted fields stay valid for non-recharge approvals; explicit null for either field is 400; valid recharge evidence still works; impossible dates stay 400', async () => {
+    const t = await walletTenant('p76d2-null');
+    await op(t, '/credit-account').expect(201);
+
+    // Non-recharge flows with the evidence fields omitted: unchanged.
+    await op(t, '/wallet/freeze').expect(201);
+    const un = (await op(t, '/wallet/unfreeze').expect(201)).body.data.operation;
+    // …but an explicit null is refused even here.
+    for (const body of [{ expectedReceivedOn: null }, { expectedPaymentReference: null }]) {
+      const res = await post(approver, `/account-operations/${un.id}/approve`, body);
+      expect([JSON.stringify(body), res.status, res.body.error?.code]).toEqual([
+        JSON.stringify(body),
+        400,
+        ERROR_CODES.VALIDATION_FAILED,
+      ]);
+    }
+    await post(approver, `/account-operations/${un.id}/approve`, {}).expect(200);
+    const inc = (
+      await op(t, '/credit-limit', { newLimitPaise: 300, previousLimitPaise: 0 }).expect(201)
+    ).body.data.operation;
+    await post(approver, `/account-operations/${inc.id}/approve`, {
+      expectedAmountPaise: 300,
+    }).expect(200);
+
+    // A recharge approval: explicit null for either evidence field is 400 and changes nothing.
+    const pending = (await recharge(t, 640, ref(), { receivedOn: '2024-02-29' }).expect(201)).body
+      .data.operation;
+    for (const override of [
+      { expectedPaymentReference: null },
+      { expectedReceivedOn: null },
+      { expectedPaymentReference: null, expectedReceivedOn: null },
+    ]) {
+      const res = await approveRecharge(approver, pending, override);
+      expect([JSON.stringify(override), res.status, res.body.error?.code]).toEqual([
+        JSON.stringify(override),
+        400,
+        ERROR_CODES.VALIDATION_FAILED,
+      ]);
+    }
+    // Impossible calendar dates remain 400.
+    const impossible = await approveRecharge(approver, pending, {
+      expectedReceivedOn: '2023-02-29',
+    });
+    expect([impossible.status, impossible.body.error?.code]).toEqual([
+      400,
+      ERROR_CODES.VALIDATION_FAILED,
+    ]);
+    expect(await rechargeFacts(t)).toEqual([]);
+    // Valid evidence still approves.
+    await approveRecharge(approver, pending).expect(200);
+    expect(await rechargeFacts(t)).toEqual([640]);
+  });
+
   it('no wallet (only a credit account): a recharge is refused; credit accounts are never recharged', async () => {
     const t = await tenant('p76d2-nowal');
     await op(t, '/credit-account').expect(201);

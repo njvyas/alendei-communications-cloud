@@ -179,7 +179,7 @@ Platform administration of rate cards, provider cost rates and rate-card assignm
   - An executed recharge posts one immutable ledger entry anchored on the operation: the balance rises and reservations are unchanged.
   - Pending, rejected and refused recharges post nothing.
 - **Dual control (D-76d-1):** a recharge waits for a second approver while `BILLING_DUAL_CONTROL_THRESHOLD_PAISE` is unset or the amount exceeds it.
-  - Approval goes through `POST /platform/billing/account-operations/{id}/approve` with `expectedAmountPaise`, `expectedPaymentReference` and `expectedReceivedOn`, all required.
+  - Approval goes through `POST /platform/billing/account-operations/{id}/approve` with `expectedAmountPaise`, `expectedPaymentReference` and `expectedReceivedOn`, all required. For other operations the two evidence fields are omitted; an explicit `null` is `400` for any operation.
   - Any mismatch is `409 BILLING_ACCOUNT_OPERATION_STALE`. The reference is compared after normalisation.
   - The requester can neither approve nor reject.
 - **Payment references:** unique per organization among pending and executed recharges, after normalisation (whitespace removed, upper case). Reuse is `409 BILLING_ACCOUNT_OPERATION_CONFLICT`; a rejected recharge frees its reference. One recharge may be pending per organization.

@@ -12,6 +12,7 @@ import {
   Min,
   MinLength,
   ValidateBy,
+  ValidateIf,
   type ValidationOptions,
 } from 'class-validator';
 import { PAGE_LIMITS } from '@acc/contracts';
@@ -144,8 +145,12 @@ export class ApproveAccountOperationDto {
   @ApiPropertyOptional({ type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER })
   expectedAmountPaise?: number;
 
-  /** Recharge only, required: the payment reference the approver saw (binding, D-76d-1). */
-  @IsOptional()
+  /**
+   * Recharge only, required: the payment reference the approver saw (binding, D-76d-1).
+   * Omitting it is valid (non-recharge approvals); an explicit `null` is not (PR #101 review):
+   * only `undefined` skips the validators below.
+   */
+  @ValidateIf((_o, value) => value !== undefined)
   @IsString()
   @Matches(PAYMENT_REFERENCE_PATTERN)
   @ApiPropertyOptional({
@@ -155,8 +160,11 @@ export class ApproveAccountOperationDto {
   })
   expectedPaymentReference?: string;
 
-  /** Recharge only, required: the received date the approver saw (binding). */
-  @IsOptional()
+  /**
+   * Recharge only, required: the received date the approver saw (binding). Omitting it is
+   * valid; an explicit `null` is not (PR #101 review).
+   */
+  @ValidateIf((_o, value) => value !== undefined)
   @IsString()
   @Matches(ISO_DATE)
   @IsCalendarDate()

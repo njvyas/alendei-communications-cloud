@@ -64,4 +64,23 @@ describe('calendar-date validation', () => {
     ]);
     expect(errorsOf(ApproveAccountOperationDto, { expectedReceivedOn: '2000-02-29' })).toEqual([]);
   });
+
+  // PR #101 review: omission is valid; an explicit null is not.
+  it('approval evidence: omitted is valid, explicit null is refused for either field', () => {
+    expect(errorsOf(ApproveAccountOperationDto, {})).toEqual([]);
+    expect(errorsOf(ApproveAccountOperationDto, { expectedAmountPaise: 5 })).toEqual([]);
+    expect(errorsOf(ApproveAccountOperationDto, { expectedReceivedOn: null })).toEqual([
+      'expectedReceivedOn',
+    ]);
+    expect(errorsOf(ApproveAccountOperationDto, { expectedPaymentReference: null })).toEqual([
+      'expectedPaymentReference',
+    ]);
+    expect(
+      errorsOf(ApproveAccountOperationDto, {
+        expectedAmountPaise: 5,
+        expectedPaymentReference: 'UTR1',
+        expectedReceivedOn: '2024-02-29',
+      }),
+    ).toEqual([]);
+  });
 });

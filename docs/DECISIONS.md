@@ -3364,6 +3364,17 @@ Each is a draft, stopped for owner review. Billing enforcement stays disabled; n
 - **Mutation checks, each caught:** recording failures made silent again (no log, no counter); the race left with no record.
 - **Contract check:** the OpenAPI DTO-reconciliation suite maps the new `isCalendarDate` validator to the documented `format: date`. The OpenAPI document itself is unchanged.
 
+**PR #101 final correction (10-Nov-2026): explicit `null` approval evidence.** DTO only; migration `0060`, database functions, ledger semantics, permissions and other billing behaviour unchanged, and the history proof is unchanged.
+- **Change:** `ApproveAccountOperationDto.expectedPaymentReference` and `.expectedReceivedOn` use `@ValidateIf((_o, value) => value !== undefined)` instead of `@IsOptional()`. `@IsOptional()` skipped validation for `null` too.
+  - Omitting either field is still valid (non-recharge approvals).
+  - An explicit `null` for either is now `400 VALIDATION_FAILED`, for any operation.
+  - The string, pattern and calendar-date validators are retained.
+- **Contract test:** the OpenAPI contract suite now derives the documented shape of a `@ValidateIf` from its condition (`null` skipped → nullable; `undefined` skipped → optional). Existing `ValidateIf(value !== null)` fields are interpreted as before. The OpenAPI document is unchanged.
+- **Tests:**
+  - unit (+1, 26 in total): omitted valid, explicit `null` refused per field, full evidence valid;
+  - API (+1, 19 in total): non-recharge approvals with the fields omitted (unfreeze, credit-limit increase) still succeed; explicit `null` for either field, or both, is `400` on a recharge and on a non-recharge approval; impossible dates stay `400`; valid evidence still approves and credits once.
+- **Mutation check:** restoring `@IsOptional()` on `expectedReceivedOn` fails the API test.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.
