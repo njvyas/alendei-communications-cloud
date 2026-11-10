@@ -123,6 +123,12 @@ export const AUDIT_ACTIONS = {
   BILLING_WALLET_RECHARGED: 'billing.wallet.recharged',
   BILLING_ACCOUNT_OPERATION_REFUSED: 'billing.account_operation.refused',
 
+  // Phase 8A.2: Contacts Import & Export
+  CONTACT_IMPORTED: 'contact.imported',
+  CONTACT_IMPORT_FAILED: 'contact.import_failed',
+  CONTACT_EXPORTED: 'contact.exported',
+  CONTACT_EXPORT_FAILED: 'contact.export_failed',
+
   AUTHORIZATION_DENIED: 'authorization.denied',
 } as const;
 

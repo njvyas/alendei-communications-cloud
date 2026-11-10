@@ -24,6 +24,7 @@ import { CredentialService } from '../src/iam/credential.service';
 import { PROVIDER_CLOCK, type ProviderClock } from '../src/providers/provider-clock';
 import { REDIS_CLIENT } from '../src/redis/redis.module';
 import { configureWebhookBodyParsing } from '../src/webhooks/webhook-body-parsing';
+import { configureContactImportBodyParsing } from '../src/contacts/contact-import-body-parsing';
 
 export const PASSWORD = 'a-sufficiently-long-test-passphrase';
 export const PREFIX = 'api/v1';
@@ -220,6 +221,8 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   app.use(cookieParser());
   // Phase 5.0 PR-C: the same route-scoped raw-body capture as main.ts (plan §1.3).
   configureWebhookBodyParsing(app, app.get(AppConfigService));
+  // Phase 8A-2: route-scoped body parsing for contact imports up to 5 MB (JSON and CSV)
+  configureContactImportBodyParsing(app);
   app.useGlobalPipes(validationPipe());
   app.useGlobalFilters(new AllExceptionsFilter());
   app.setGlobalPrefix(PREFIX, { exclude: ['metrics', 'health', 'health/live', 'health/ready'] });
@@ -504,6 +507,7 @@ export async function destroyTenant(admin: Database, tenant: TenantFixture): Pro
   await admin
     .execute(sql`DELETE FROM contact_identities WHERE org_id = ${tenant.orgId}`)
     .catch(() => {});
+  await admin.execute(sql`DELETE FROM segments WHERE org_id = ${tenant.orgId}`).catch(() => {});
   await admin.execute(sql`DELETE FROM contacts WHERE org_id = ${tenant.orgId}`).catch(() => {});
   await admin
     .execute(sql`DELETE FROM organization_provider_assignments WHERE org_id = ${tenant.orgId}`)

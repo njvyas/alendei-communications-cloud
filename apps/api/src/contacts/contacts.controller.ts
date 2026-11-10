@@ -24,13 +24,17 @@ import {
   CreateContactDto,
   CreateContactIdentityDto,
   CreateConsentEventDto,
+  ExportContactsDto,
   GetEffectiveConsentDto,
+  ImportContactsDto,
   ListContactActivitiesDto,
   ListContactsDto,
   ResolveAudienceDto,
   UpdateContactDto,
   UpdateContactIdentityDto,
 } from './contacts.dto';
+import { ContactExportService } from './contact-export.service';
+import { ContactImportService } from './contact-import.service';
 import { ContactsService } from './contacts.service';
 
 const AT_WORKSPACE = 'the target is the workspace resolved from path or contact record';
@@ -38,7 +42,11 @@ const AT_WORKSPACE = 'the target is the workspace resolved from path or contact 
 @ApiTags('contacts')
 @Controller()
 export class ContactsController {
-  constructor(private readonly contacts: ContactsService) {}
+  constructor(
+    private readonly contacts: ContactsService,
+    private readonly importService: ContactImportService,
+    private readonly exportService: ContactExportService,
+  ) {}
 
   // --- Contacts under workspace ------------------------------------------------
 
@@ -80,6 +88,64 @@ export class ContactsController {
     );
     response.status(outcome.status);
     return outcome.body;
+  }
+
+  // --- Contacts Bulk Import & Export (Phase 8A-2) ------------------------------
+
+  @Post('workspaces/:workspaceId/contacts/import')
+  @RequiresPermission(PERMISSIONS.CONTACTS_IMPORT, { target: 'deferred', because: AT_WORKSPACE })
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Import contacts, identities and consent into a workspace' })
+  @ApiErrors(400, 401, 403, 404, 409, 413, 415, 422, 429)
+  async importContacts(
+    @Param('workspaceId', new ParseUUIDPipe()) workspaceId: string,
+    @Body() dto: ImportContactsDto,
+    @Query() query: Record<string, string | undefined>,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const mergedDto: ImportContactsDto = {
+      ...dto,
+      mode: dto.mode ?? (query.mode as ImportContactsDto['mode']),
+      duplicateStrategy:
+        dto.duplicateStrategy ??
+        (query.duplicateStrategy as ImportContactsDto['duplicateStrategy']),
+      defaultPhoneChannelId: dto.defaultPhoneChannelId ?? query.defaultPhoneChannelId,
+      defaultEmailChannelId: dto.defaultEmailChannelId ?? query.defaultEmailChannelId,
+    };
+
+    const outcome = await this.importService.importContacts(
+      requestPrincipal(),
+      workspaceId,
+      mergedDto,
+    );
+    response.status(outcome.status);
+    return outcome.body;
+  }
+
+  @Post('workspaces/:workspaceId/contacts/export')
+  @RequiresPermission(PERMISSIONS.CONTACTS_EXPORT, { target: 'deferred', because: AT_WORKSPACE })
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Stream contacts export from a workspace' })
+  @ApiErrors(400, 401, 403, 404, 422, 429)
+  async exportContactsPost(
+    @Param('workspaceId', new ParseUUIDPipe()) workspaceId: string,
+    @Body() dto: ExportContactsDto,
+    @Res() response: Response,
+  ) {
+    await this.exportService.exportContacts(requestPrincipal(), workspaceId, dto, response);
+  }
+
+  @Get('workspaces/:workspaceId/contacts/export')
+  @RequiresPermission(PERMISSIONS.CONTACTS_EXPORT, { target: 'deferred', because: AT_WORKSPACE })
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({ summary: 'Stream contacts export from a workspace (GET download)' })
+  @ApiErrors(400, 401, 403, 404, 422, 429)
+  async exportContactsGet(
+    @Param('workspaceId', new ParseUUIDPipe()) workspaceId: string,
+    @Query() query: ExportContactsDto,
+    @Res() response: Response,
+  ) {
+    await this.exportService.exportContacts(requestPrincipal(), workspaceId, query, response);
   }
 
   @Get('workspaces/:workspaceId/contacts/:contactId')
