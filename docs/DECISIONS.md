@@ -3375,6 +3375,53 @@ Each is a draft, stopped for owner review. Billing enforcement stays disabled; n
   - API (+1, 19 in total): non-recharge approvals with the fields omitted (unfreeze, credit-limit increase) still succeed; explicit `null` for either field, or both, is `400` on a recharge and on a non-recharge approval; impossible dates stay `400`; valid evidence still approves and credits once.
 - **Mutation check:** restoring `@IsOptional()` on `expectedReceivedOn` fails the API test.
 
+### 1zi.16 PR 7-7a as built: `billing:reconcile`, read-only reconciliation (no migration)
+**Owner authorisation, 10-Nov-2026,** after PR #101 merged (`36cd1e5`): PR 7-7a only, against the Rev 2 handover (`PHASE-7-7A-RECONCILE-HANDOVER.md`), checks C-1 to C-6.
+- **Approved defaults:** stale-reservation threshold 24 hours; statement timeout 120 s (lock timeout 5 s); exit `0` clean, `1` any finding (warnings included), `2` unable to complete. The 60 s per-organisation runtime target is measured and reported, not enforced.
+- **Out of scope:** C-7/C-8, migrations, APIs, metrics, dashboards, repairs, ledger changes and every other Phase 7.7 slice. Enforcement stays disabled. No QA or production change.
+- **Phase 7.7 handover documents** (Rev 2, as approved, byte-identical to the evidence copies) are added under `docs/`: `PHASE-7-7-IMPLEMENTATION-HANDOVER.md`, `PHASE-7-7-DECISION-REGISTER.md`, `PHASE-7-7-TRACEABILITY.md`, `PHASE-7-7A-RECONCILE-HANDOVER.md`. Decisions D-77-1 to D-77-8 remain open; 7-7a needs none of them.
+
+**As built.**
+- **No migration.** This PR adds no migration, and no function, policy or grant changes.
+  - **Built against `develop` `36cd1e5`** (implementation commit `b4df53a`): the history proof was `61|da9371bb1f6a3e2cdc765f88823e8f02` (`0000`–`0060`), unchanged.
+  - **After `develop` `347812c` was merged in** (PR #102, Phase 8A-2, migration `0061`; merge commit `56d80ec`, no conflicts): the full proof at this head is `62|7a3898277442949a5652454b5c12150c`, which is `develop`'s own proof. The first 61 migration entries remain unchanged at `61|da9371bb1f6a3e2cdc765f88823e8f02`.
+- **`packages/db/src/maintenance/billing-reconcile.ts`:** the checks, the report model and the human renderer. Pure evaluators (`evaluateBalances`, `evaluateMessages`, `partitionFindings`, `exitCodeFor`) are separated from the SQL so that each rule is unit-tested without a database.
+- **`packages/db/src/cli/billing-reconcile.ts`:** `npm run billing:reconcile -- [--org <uuid> ...] [--since <YYYY-MM>] [--stale-hours <n>] [--statement-timeout-ms <n>] [--json <path|->] [--quiet]`. It runs as the schema owner (`DATABASE_ADMIN_URL`, the pattern of `db:ledger:partitions`) on one connection (`application_name = acc-billing-reconcile`). Invalid arguments, a connection failure or any unexpected error produce a failed report and exit `2`.
+- **Read-only guarantee.**
+  - One `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY` transaction (one snapshot; PostgreSQL refuses any write), with `SET LOCAL statement_timeout` and `lock_timeout`.
+  - Each check runs under `SAVEPOINT reconcile_check`, so a failing check is reported as `error` without aborting the others; the run is then incomplete (exit `2`).
+  - Before `COMMIT`, `txid_current_if_assigned()` must be `NULL`; otherwise the run fails with "a transaction id was assigned". The report states `readOnly: true` and `transactionIdAssigned`.
+  - No partition-creation, ensure, writer (`app_ledger_post`) or `app_billing_*` mutation function is called. C-5 reads `app_ledger_partition_report()` (STABLE, SECURITY INVOKER) and maps it with the existing pure `evaluateLedgerPartitions`.
+- **Checks and stable finding identifiers** (`<check>:<rule>:<subject values joined by />`):
+  - **C-1** (full history per account; `--since` does not apply): `wallet_balance`, `wallet_reserved`, `credit_used`, `credit_reserved`. Operator charges (`reference_note = 'outcome_unknown_resolved'`) are excluded from the reserved formula, because they never reduce `reserved` (§1zi.12).
+  - **C-2** (terminal billed messages): `outstanding_reservation`, `charge_mismatch`, `unexpected_charge`, `unauthorised_operator_charge`, `unexpected_operator_charge`, `operator_charge_mismatch`, `missing_evaluation`. Expected charges follow the 7.5 policy rules and, for executed resolutions, the D-76c-1 charge lines.
+  - **C-3:** `provider_cost_mismatch`, `unexpected_provider_cost`, `missing_evaluation`.
+  - **C-4:** `stale_reservation` (warning) for non-terminal messages older than the threshold that still hold a reservation.
+  - **C-5:** `current_month_missing` (critical), `gap`, `unprotected`, `orphan` (error), `headroom` (critical below 2 months, warning below 6).
+  - **C-6:** the unknown-outcome register, derived exactly as `app_billing_unknown_register` (`0057`) derives it, without paging or filters, plus the run's org and month scope. It is a listing only: it never produces findings and never resolves anything (A-1 asserts field-by-field parity with the register function).
+- **Reports.** The human report (header with database, history proof, snapshot time, read-only and transaction-id status; one block per check; summary and exit code) and the versioned JSON report (`reportVersion: 1`, as specified in handover §5, plus `complete`, `error`, `runtimeTargetMs`, per-check `durationMs` and `info`). `--json -` prints JSON instead of the human report; a JSON file is written with mode `0600`.
+
+**Deviations from the handover, and why.**
+- **C-2/C-3/C-4 ledger lookups use a per-row `LATERAL … LIMIT 1`** on the full fact key. At volume, the planner otherwise replaced the per-anchor lookups with hash joins over every partition: 100 sequential partition scans (4 lookups × 25 partitions), so no pruning. With `LIMIT 1`, which changes no result because the key is unique, the lookups are parameterised scans pruned at run time to the anchor's month: 12 executed partition scans (4 × 3 populated months), with no sequential scan. The CI pruning test asserts this on a multi-month fixture.
+- **The C-1 "no sequential scan" property is evidenced at volume, not asserted in CI.** On the small CI fixture the planner legitimately chooses sequential scans on tiny heaps, so a plan-shape assertion would be unstable. CI records the C-1 plan and asserts that every partition is visited, as full history requires. In the volume run, every populated partition is read by Bitmap Heap Scan on the `(org_id, occurred_at)` index, for both a 70,000-row organisation and a 10-row organisation. The only `Seq Scan` nodes are on empty future partitions (0 rows).
+
+**Volume measurement** (evidence, not a CI gate; disposable clone; development host): one organisation with 100,000 ledger facts across 3 months and 30,000 messages (half `charge_per_logical_message`, half `charge_per_attempt`).
+- **`--org` run:** 8,090 ms, exit `0`, 0 findings. Of that, C-2 took 7,957 ms; C-1 took 69 ms. **The 60 s target is met.**
+- **Full run:** 8,180 ms, exit `0`.
+- Before the `LIMIT 1` change, the same fixture took about 4.0 s, using unpruned hash joins. The pruned plan costs more at this size because each anchor is probed individually. It scales with the organisation's own messages rather than with the total partition count.
+
+**Tests.**
+- **Unit (39):** arguments, exit codes, the JSON shape and human rendering, C-1 to C-4 rule scenarios, C-5 thresholds with a shifted clock (A-10), and R-4. R-4 is a static scan of the reconcile sources, with comments removed, for write, DDL, `set_config`, ensure, writer and billing-mutation calls; the scan requires the READ ONLY `BEGIN` and the transaction-id check.
+- **DB integration (11; disposable clones):** A-1 clean run, with R-1 statement log, R-2 `transactionIdAssigned: false`, R-3 before/after state fingerprint and C-6 parity; A-2 to A-9 seeded defects; A-11 all defects at once with no early stop; A-12 the command's exit codes (clean `0`, invalid arguments, no database and statement timeout all `2`); and partition pruning with the C-1 plan recorded. Fixtures are built through the real provisioning, recharge, writer and resolution paths; defects are injected as committed owner changes and removed in teardown.
+- **Mutation checks, each caught:**
+  - **M-1**, dropping `READ ONLY` and injecting an `UPDATE`: R-4 and 10 DB tests fail.
+  - **M-2**, removing the `anchor_month` predicate from the C-2 charge lookup: the pruning test fails, with 24 extra partitions executed.
+  - **M-3**, ignoring `reference_note` in C-1: A-1 and A-12 fail.
+  - **M-4**, C-2 accepting any non-zero charge amount: A-5 and A-11 fail.
+- **Test hygiene fix found by M-2:** the pruning test now rolls back its READ ONLY transaction on a failed assertion, so the pooled connection is never returned inside it.
+
+**Accepted risk.** C-6 duplicates the register derivation of `0057` in application SQL, because calling the paged register function would apply its paging and filters. The A-1 parity test is the guard against drift: any change to the register must keep it green.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.
