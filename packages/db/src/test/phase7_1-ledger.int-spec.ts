@@ -35,7 +35,10 @@ import {
 const run = promisify(execFile);
 const PACKAGE_ROOT = resolve(__dirname, '../..');
 const APP_ROLES = ['acc_app', 'acc_auth', 'acc_relay', 'acc_dispatch', 'acc_delivery'] as const;
-const DISABLED_TYPES = ['recharge', 'refund', 'adjustment', 'tax', 'discount', 'reseller_markup'];
+// Phase 7 PR 7-6d-2 (0060, owner-authorised 09-Nov-2026): `recharge` left this list — the writer now
+// accepts it, but only for an executing recharge operation (wallet only, no message), so the
+// message-shaped post below is still refused (22023).
+const DISABLED_TYPES = ['refund', 'adjustment', 'tax', 'discount', 'reseller_markup'];
 const PRIVILEGES = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
 // Phase 7 PR 7-6c (0057, owner decision C-1): the writer gained a defaulted tenth argument,
 // p_mode, and was recreated with the same privileges (none for any application role).
@@ -639,7 +642,7 @@ describe('Phase 7 PR 7-1 — ledger and billing-account foundation (migration 00
           env: process.env,
           timeout: 300_000,
         });
-        expect(stdout).toContain('Schema up to date (60 migrations verified).');
+        expect(stdout).toContain('Schema up to date (61 migrations verified).');
         expect(stdout).toContain('Ledger partitions: created 0 partition(s).');
         expect(stdout).toMatch(
           /usage_ledger partitions ok: headroom 24 month\(s\); 25 partition\(s\); no gaps; all protected; no orphans/,
@@ -1099,6 +1102,16 @@ describe('Phase 7 PR 7-1 — ledger and billing-account foundation (migration 00
             }),
           ]).toEqual([type, 'BL000']);
         }
+        expect(
+          await postCode(c, {
+            org: A.orgId,
+            type: 'recharge',
+            anchor: m.messageId,
+            amount: 1,
+            account: 'wallet',
+            message: m.messageId,
+          }),
+        ).toBe('22023');
         expect(
           (
             await c.query(`SELECT count(*)::int AS n FROM usage_ledger WHERE org_id = $1`, [

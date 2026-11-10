@@ -30,6 +30,7 @@ import {
   ApproveAccountOperationDto,
   CreditLimitChangeDto,
   ListAccountOperationsQueryDto,
+  WalletRechargeDto,
 } from './account-operations.dto';
 import { AccountOperationsService, type AccountOperationInput } from './account-operations.service';
 
@@ -280,6 +281,40 @@ export class AccountOperationsController {
     );
   }
 
+  @Post('organizations/:orgId/recharges')
+  @OptionalTenantContext()
+  @RequiresPermission(PERMISSIONS.BILLING_MANAGE, { target: 'deferred', because: PLATFORM_BILLING })
+  @HttpCode(HttpStatus.CREATED)
+  @AcceptedCredentials('userSession')
+  @ApiIdempotencyKey({ required: true })
+  @ApiOperation({
+    summary: 'Record a wallet recharge (money received off-system)',
+    description: `${KEYED} Phase 7 PR 7-6d-2. Credits the net spendable amount (D-76d-2) as one ledger entry: the balance rises, reservations are unchanged. The payment reference is unique per organization after normalisation (whitespace removed, upper case): reuse is 409. Waits for a second approver while BILLING_DUAL_CONTROL_THRESHOLD_PAISE is unset or the amount exceeds it (D-76d-1). A frozen wallet is refused (403 BILLING_ACCOUNT_FROZEN). No reversal (D-76d-5).`,
+  })
+  @ApiData(AccountOperationResultSchema, { status: 201 })
+  @ApiErrors(400, 401, 403, 404, 409, 422, 429, 503)
+  async recharge(
+    @Param('orgId', new ParseUUIDPipe()) orgId: string,
+    @Body() dto: WalletRechargeDto,
+    @IdempotencyKey() key: string | null,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    return send(
+      response,
+      await this.operations.recharge(
+        requestPrincipal(),
+        orgId,
+        {
+          amountPaise: dto.amountPaise,
+          paymentReference: dto.paymentReference,
+          receivedOn: dto.receivedOn,
+          reason: dto.reason,
+        },
+        key,
+      ),
+    );
+  }
+
   @Post('account-operations/:id/approve')
   @OptionalTenantContext()
   @RequiresPermission(PERMISSIONS.BILLING_MANAGE, { target: 'deferred', because: PLATFORM_BILLING })
@@ -288,7 +323,7 @@ export class AccountOperationsController {
   @ApiIdempotencyKey({ required: true })
   @ApiOperation({
     summary: 'Approve a pending account operation (a different user than the requester)',
-    description: `${KEYED} Bound to \`expectedAmountPaise\` (the new limit of a credit-limit change; absent for an unfreeze) and to the account's state: otherwise 409 BILLING_ACCOUNT_OPERATION_STALE and nothing executes. The requester cannot approve (403 BILLING_RESOLUTION_SELF_APPROVAL).`,
+    description: `${KEYED} Bound to \`expectedAmountPaise\` (the new limit of a credit-limit change, or a recharge's amount; absent for an unfreeze) and, for a recharge, to \`expectedPaymentReference\` and \`expectedReceivedOn\` as well; otherwise 409 BILLING_ACCOUNT_OPERATION_STALE and nothing executes. The requester cannot approve (403 BILLING_RESOLUTION_SELF_APPROVAL). A recharge approval refused because the wallet is frozen (403) or missing (422) leaves the request pending with the refusal recorded.`,
   })
   @ApiData(AccountOperationResultSchema)
   @ApiErrors(400, 401, 403, 404, 409, 422, 429, 503)
@@ -300,7 +335,16 @@ export class AccountOperationsController {
   ) {
     return send(
       response,
-      await this.operations.approve(requestPrincipal(), id, dto.expectedAmountPaise, key),
+      await this.operations.approve(
+        requestPrincipal(),
+        id,
+        {
+          amountPaise: dto.expectedAmountPaise,
+          paymentReference: dto.expectedPaymentReference,
+          receivedOn: dto.expectedReceivedOn,
+        },
+        key,
+      ),
     );
   }
 

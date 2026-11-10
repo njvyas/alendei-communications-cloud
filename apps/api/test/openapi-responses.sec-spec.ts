@@ -344,7 +344,12 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
       await tx.execute(sql`DELETE FROM wallets WHERE org_id = ${orgId}`);
       // Phase 7 PR 7-6d-1: the administered organizations' operations and accounts.
       for (const org of accountOrgs) {
-        for (const table of ['billing_account_operations', 'wallets', 'credit_accounts']) {
+        for (const table of [
+          'billing_account_operations',
+          'usage_ledger',
+          'wallets',
+          'credit_accounts',
+        ]) {
           await tx.execute(sql`DELETE FROM ${sql.identifier(table)} WHERE org_id = ${org}`);
         }
       }
@@ -867,6 +872,44 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
         201,
         'credit unfreeze',
       );
+      // Phase 7 PR 7-6d-2: a wallet recharge, approved with its evidence by the second user.
+      // (The wallet was frozen above and its unfreeze rejected: unfreeze it first.)
+      const walletUnfreeze = await call('/wallet/unfreeze', { reason: 'OA' });
+      expectStatus(walletUnfreeze, 201, 'wallet unfreeze (again)');
+      expectStatus(
+        await hit(
+          'POST',
+          `platform/billing/account-operations/${walletUnfreeze.body.data.operation.id}/approve`,
+          { ...as.session(approver), headers: keyed(), body: {} },
+        ),
+        200,
+        'account operation approve (unfreeze)',
+      );
+      const receivedOn = new Date().toISOString().slice(0, 10);
+      const rechargeReq = await call('/recharges', {
+        amountPaise: 500,
+        paymentReference: `OA-${suffix()}`,
+        receivedOn,
+        reason: 'OA',
+      });
+      expectStatus(rechargeReq, 201, 'wallet recharge');
+      expectStatus(
+        await hit(
+          'POST',
+          `platform/billing/account-operations/${rechargeReq.body.data.operation.id}/approve`,
+          {
+            ...as.session(approver),
+            headers: keyed(),
+            body: {
+              expectedAmountPaise: 500,
+              expectedPaymentReference: rechargeReq.body.data.operation.paymentReference,
+              expectedReceivedOn: receivedOn,
+            },
+          },
+        ),
+        200,
+        'wallet recharge approve',
+      );
       expectStatus(
         await hit('GET', 'platform/billing/account-operations', as.session(platform)),
         200,
@@ -1263,80 +1306,90 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
               ? { expectedAmountPaise: 1 }
               : template.endsWith('/reject')
                 ? { reason: 'test' }
-                : // Phase 7 PR 7-6d-1: billing-account administration.
-                  template.endsWith('/credit-limit')
-                  ? { newLimitPaise: 1, previousLimitPaise: 0, reason: 'test' }
-                  : /\/(wallet|credit-account)(\/(freeze|unfreeze))?$/.test(template) &&
-                      method === 'POST'
-                    ? { reason: 'test' }
-                    : template.endsWith('/resolutions') && method === 'POST'
-                      ? { action: 'write_off', reason: 'test' }
-                      : template.endsWith('/test-send')
-                        ? { behavior: 'SUCCESS' }
-                        : template.endsWith('/simulator/delivery-events')
-                          ? { attemptId: uuidv7(), scenario: { outcome: 'DELIVERED' } }
-                          : template.endsWith('/health-check')
-                            ? { behavior: 'HEALTHY' }
-                            : template.endsWith('/health') && method === 'POST'
-                              ? { override: null }
-                              : template.endsWith('/domains') && method === 'POST'
-                                ? { domain: `d-${suffix()}.example.com` }
-                                : template.endsWith('/consent-events') && method === 'POST'
-                                  ? {
-                                      channelId: uuidv7(),
-                                      consentType: 'marketing',
-                                      event: 'grant',
-                                      occurredAt: new Date().toISOString(),
-                                      source: 'test',
-                                    }
-                                  : template.endsWith('/identities') && method === 'POST'
+                : // Phase 7 PR 7-6d-2: wallet recharge.
+                  template.endsWith('/recharges')
+                  ? {
+                      amountPaise: 1,
+                      paymentReference: `OA${suffix()}`,
+                      receivedOn: new Date().toISOString().slice(0, 10),
+                      reason: 'test',
+                    }
+                  : // Phase 7 PR 7-6d-1: billing-account administration.
+                    template.endsWith('/credit-limit')
+                    ? { newLimitPaise: 1, previousLimitPaise: 0, reason: 'test' }
+                    : /\/(wallet|credit-account)(\/(freeze|unfreeze))?$/.test(template) &&
+                        method === 'POST'
+                      ? { reason: 'test' }
+                      : template.endsWith('/resolutions') && method === 'POST'
+                        ? { action: 'write_off', reason: 'test' }
+                        : template.endsWith('/test-send')
+                          ? { behavior: 'SUCCESS' }
+                          : template.endsWith('/simulator/delivery-events')
+                            ? { attemptId: uuidv7(), scenario: { outcome: 'DELIVERED' } }
+                            : template.endsWith('/health-check')
+                              ? { behavior: 'HEALTHY' }
+                              : template.endsWith('/health') && method === 'POST'
+                                ? { override: null }
+                                : template.endsWith('/domains') && method === 'POST'
+                                  ? { domain: `d-${suffix()}.example.com` }
+                                  : template.endsWith('/consent-events') && method === 'POST'
                                     ? {
                                         channelId: uuidv7(),
-                                        rawAddress: '+15551234567',
+                                        consentType: 'marketing',
+                                        event: 'grant',
+                                        occurredAt: new Date().toISOString(),
+                                        source: 'test',
                                       }
-                                    : (template.endsWith('/lift') ||
-                                          template.endsWith('/suspend') ||
-                                          template.endsWith('/close')) &&
-                                        method === 'POST'
-                                      ? { reason: 'test' }
-                                      : template.endsWith('/simulate-approval') && method === 'POST'
-                                        ? { targetStatus: 'approved' }
-                                        : template.includes('/provider-assignments') &&
-                                            method === 'POST' &&
-                                            !template.endsWith('/enable') &&
-                                            !template.endsWith('/disable')
-                                          ? {
-                                              providerId: uuidv7(),
-                                              priority: 1,
-                                            }
-                                          : template.endsWith('/rules') && method === 'PUT'
-                                            ? { rules: [] }
-                                            : template.endsWith('/campaigns') && method === 'POST'
-                                              ? {
-                                                  name: `c-${suffix()}`,
-                                                  channel: 'sms',
-                                                  templateId: uuidv7(),
-                                                  recipientSource: { type: 'all_contacts' },
-                                                }
-                                              : template.endsWith('/segments') && method === 'POST'
+                                    : template.endsWith('/identities') && method === 'POST'
+                                      ? {
+                                          channelId: uuidv7(),
+                                          rawAddress: '+15551234567',
+                                        }
+                                      : (template.endsWith('/lift') ||
+                                            template.endsWith('/suspend') ||
+                                            template.endsWith('/close')) &&
+                                          method === 'POST'
+                                        ? { reason: 'test' }
+                                        : template.endsWith('/simulate-approval') &&
+                                            method === 'POST'
+                                          ? { targetStatus: 'approved' }
+                                          : template.includes('/provider-assignments') &&
+                                              method === 'POST' &&
+                                              !template.endsWith('/enable') &&
+                                              !template.endsWith('/disable')
+                                            ? {
+                                                providerId: uuidv7(),
+                                                priority: 1,
+                                              }
+                                            : template.endsWith('/rules') && method === 'PUT'
+                                              ? { rules: [] }
+                                              : template.endsWith('/campaigns') && method === 'POST'
                                                 ? {
-                                                    name: `s-${suffix()}`,
+                                                    name: `c-${suffix()}`,
+                                                    channel: 'sms',
+                                                    templateId: uuidv7(),
+                                                    recipientSource: { type: 'all_contacts' },
                                                   }
-                                                : method !== 'PATCH'
-                                                  ? {}
-                                                  : template.includes('/branding')
-                                                    ? { brandName: `Brand ${suffix()}` }
-                                                    : template.includes('/users/')
-                                                      ? { phone: '+15551234567' }
-                                                      : template.includes('/contacts/')
-                                                        ? { firstName: `x ${suffix()}` }
-                                                        : template.includes('/identities/')
-                                                          ? { isPrimary: true }
-                                                          : template.includes(
-                                                                '/provider-assignments/',
-                                                              )
-                                                            ? { priority: 2 }
-                                                            : { name: `x ${suffix()}` },
+                                                : template.endsWith('/segments') &&
+                                                    method === 'POST'
+                                                  ? {
+                                                      name: `s-${suffix()}`,
+                                                    }
+                                                  : method !== 'PATCH'
+                                                    ? {}
+                                                    : template.includes('/branding')
+                                                      ? { brandName: `Brand ${suffix()}` }
+                                                      : template.includes('/users/')
+                                                        ? { phone: '+15551234567' }
+                                                        : template.includes('/contacts/')
+                                                          ? { firstName: `x ${suffix()}` }
+                                                          : template.includes('/identities/')
+                                                            ? { isPrimary: true }
+                                                            : template.includes(
+                                                                  '/provider-assignments/',
+                                                                )
+                                                              ? { priority: 2 }
+                                                              : { name: `x ${suffix()}` },
         });
         expect(`${method} ${template} → ${res.status}`).toMatch(/→ (404|403)$/);
       }

@@ -130,6 +130,8 @@ export class MetricsService implements OnModuleInit {
   readonly billingOutcomeUnknownResolutions: Counter<'action' | 'outcome'>;
   // Phase 7 PR 7-6d-1 — billing-account operations.
   readonly billingAccountOperations: Counter<'action' | 'outcome'>;
+  // Phase 7 PR 7-6d-2 (PR #101 review): approval refusals that could not be recorded.
+  readonly billingAccountRefusalRecordFailures: Counter<string>;
 
   constructor(private readonly config: AppConfigService) {
     this.registry.setDefaultLabels({
@@ -335,8 +337,13 @@ export class MetricsService implements OnModuleInit {
     });
     this.billingAccountOperations = this.counter({
       name: 'acc_billing_account_operations_total',
-      help: 'Billing-account operations by action (provision, credit_limit_change, freeze, unfreeze) and outcome: executed, pending (awaiting a second approver), rejected. Counted after commit.',
+      help: 'Billing-account operations by action (provision, credit_limit_change, freeze, unfreeze, recharge) and outcome: executed, pending (awaiting a second approver), rejected, refused (recharge refused for the wallet state). Counted after commit.',
       labelNames: ['action', 'outcome'],
+    });
+    this.billingAccountRefusalRecordFailures = this.counter({
+      name: 'acc_billing_account_refusal_record_failures_total',
+      help: 'Recharge approval refusals that could not be recorded (on the operation or in the audit log) after bounded retries. Each is also logged at error level and reported to the caller (refusalRecorded: failed). Alert on any increase.',
+      labelNames: [],
     });
   }
 

@@ -1071,9 +1071,9 @@ export class BillingAccountSchema {
 export class BillingLedgerEntrySchema {
   @ApiProperty(uuid) id!: string;
   @ApiProperty({
-    enum: ['reservation', 'reservation_release', 'customer_charge'],
+    enum: ['reservation', 'reservation_release', 'customer_charge', 'recharge'],
     description:
-      'reservation: funds held at submission; reservation_release: a hold returned; customer_charge: a settled charge.',
+      'reservation: funds held at submission; reservation_release: a hold returned; customer_charge: a settled charge; recharge: funds credited to the wallet (amount and time only).',
   })
   entryType!: string;
   @ApiProperty({ ...paiseAmount, minimum: 1 }) amountPaise!: number;
@@ -1228,9 +1228,14 @@ export class AccountOperationSchema {
   @ApiProperty(uuid) id!: string;
   @ApiProperty(uuid) orgId!: string;
   @ApiProperty({ enum: ['wallet', 'credit_account'] }) account!: string;
-  @ApiProperty({ enum: ['provision', 'credit_limit_change', 'freeze', 'unfreeze'] }) kind!: string;
+  @ApiProperty({ enum: ['provision', 'credit_limit_change', 'freeze', 'unfreeze', 'recharge'] })
+  kind!: string;
   @ApiProperty({ enum: ['pending', 'executed', 'rejected'] }) status!: string;
-  @ApiProperty({ ...nullablePaise, description: 'The new limit of a credit-limit change.' })
+  @ApiProperty({
+    ...nullablePaise,
+    description:
+      'The new limit of a credit-limit change, or the net spendable amount of a recharge (D-76d-2).',
+  })
   amountPaise!: number | null;
   @ApiProperty({ ...nullablePaise, description: 'The limit the requester saw.' })
   previousLimitPaise!: number | null;
@@ -1250,6 +1255,30 @@ export class AccountOperationSchema {
   @ApiProperty(nullableTimestamp) rejectedAt!: string | null;
   @ApiProperty({ type: 'string', nullable: true }) rejectionReason!: string | null;
   @ApiProperty(nullableTimestamp) executedAt!: string | null;
+  @ApiProperty({
+    type: 'string',
+    nullable: true,
+    description:
+      'Recharge: the external payment reference (platform only; never shown to tenants).',
+  })
+  paymentReference!: string | null;
+  @ApiProperty({
+    type: 'string',
+    format: 'date',
+    nullable: true,
+    description: 'Recharge: when the money was received.',
+  })
+  receivedOn!: string | null;
+  @ApiProperty({ ...nullableUuid, description: 'Recharge: the ledger entry it posted.' })
+  resultLedgerId!: string | null;
+  @ApiProperty({
+    type: 'string',
+    nullable: true,
+    enum: ['account_frozen', 'account_not_configured', null],
+    description: 'Why the last approval was refused; the request stayed pending.',
+  })
+  lastRefusal!: string | null;
+  @ApiProperty(nullableTimestamp) lastRefusedAt!: string | null;
 }
 
 @ApiSchema({ name: 'AccountOperationResult' })
