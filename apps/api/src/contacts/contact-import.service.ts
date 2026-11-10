@@ -344,12 +344,36 @@ export class ContactImportService {
       const tags = tagsRaw
         ? tagsRaw
             .split(/[;,]/)
-            .map((t) => t.trim())
+            .map((t) => unescapeCsvFormulaField(t.trim()))
             .filter((t) => t.length > 0)
         : undefined;
 
       const customFields: Record<string, unknown> = {};
+
+      // Check for customFields column (JSON serialized from export)
+      const customFieldsRaw = lowerMap['customfields'] ?? lowerMap['custom_fields'] ?? '';
+      if (customFieldsRaw && customFieldsRaw.trim().length > 0) {
+        const unescapedRaw = unescapeCsvFormulaField(customFieldsRaw.trim());
+        try {
+          const parsed = JSON.parse(unescapedRaw);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+              customFields[k] = typeof v === 'string' ? unescapeCsvFormulaField(v) : v;
+            }
+          }
+        } catch {
+          customFields['customFields'] = unescapedRaw;
+        }
+      }
+
       const standardKeys = new Set([
+        'id',
+        'createdat',
+        'created_at',
+        'updatedat',
+        'updated_at',
+        'customfields',
+        'custom_fields',
         'firstname',
         'first',
         'givenname',
@@ -410,8 +434,8 @@ export class ContactImportService {
         rowNumber: record.rowNumber,
         firstName: firstNameRaw ? unescapeCsvFormulaField(firstNameRaw) : null,
         lastName: lastNameRaw ? unescapeCsvFormulaField(lastNameRaw) : null,
-        phone: phoneRaw ? phoneRaw : null,
-        email: emailRaw ? emailRaw : null,
+        phone: phoneRaw ? unescapeCsvFormulaField(phoneRaw) : null,
+        email: emailRaw ? unescapeCsvFormulaField(emailRaw) : null,
         tags,
         customFields: Object.keys(customFields).length > 0 ? customFields : undefined,
         consent,

@@ -9,7 +9,8 @@ import { AppException } from '../common/errors/app.exception';
 
 /**
  * Parses RFC 4180 CSV text into a 2D array of strings.
- * Throws 400 CSV_MALFORMED on unclosed quotes or syntax errors.
+ * Throws 400 CSV_MALFORMED on unclosed quotes, quotes inside unquoted fields,
+ * or unexpected characters following closing quotes.
  */
 export function parseCsv(text: string): string[][] {
   // Strip UTF-8 BOM if present
@@ -22,57 +23,136 @@ export function parseCsv(text: string): string[][] {
   let currentRecord: string[] = [];
   let currentField = '';
   let inQuotes = false;
+  let fieldStarted = false;
+  let isQuotedField = false;
+  let lineNumber = 1;
   let i = 0;
   const len = input.length;
+
+  const pushField = () => {
+    currentRecord.push(currentField);
+    currentField = '';
+    inQuotes = false;
+    fieldStarted = false;
+    isQuotedField = false;
+  };
+
+  const pushRecord = () => {
+    pushField();
+    resultList.push(currentRecord);
+    currentRecord = [];
+  };
 
   while (i < len) {
     const char = input[i];
 
-    if (inQuotes) {
+    if (!fieldStarted) {
+      // Beginning of a new field
       if (char === '"') {
-        // Lookahead for escaped quote `""`
-        if (i + 1 < len && input[i + 1] === '"') {
-          currentField += '"';
-          i += 2;
-          continue;
-        } else {
-          // Closing quote
-          inQuotes = false;
-          i++;
-          continue;
-        }
-      } else {
-        currentField += char;
-        i++;
-        continue;
-      }
-    } else {
-      // Not in quotes
-      if (char === '"') {
+        fieldStarted = true;
+        isQuotedField = true;
         inQuotes = true;
         i++;
         continue;
       } else if (char === ',') {
-        currentRecord.push(currentField);
-        currentField = '';
+        pushField();
         i++;
         continue;
       } else if (char === '\r') {
-        // CRLF check
         if (i + 1 < len && input[i + 1] === '\n') {
           i++;
         }
-        currentRecord.push(currentField);
-        resultList.push(currentRecord);
-        currentRecord = [];
-        currentField = '';
+        pushRecord();
+        lineNumber++;
         i++;
         continue;
       } else if (char === '\n') {
-        currentRecord.push(currentField);
-        resultList.push(currentRecord);
-        currentRecord = [];
-        currentField = '';
+        pushRecord();
+        lineNumber++;
+        i++;
+        continue;
+      } else {
+        fieldStarted = true;
+        isQuotedField = false;
+        currentField += char;
+        i++;
+        continue;
+      }
+    }
+
+    // fieldStarted is true
+    if (isQuotedField) {
+      if (inQuotes) {
+        if (char === '"') {
+          // Lookahead for escaped quote `""`
+          if (i + 1 < len && input[i + 1] === '"') {
+            currentField += '"';
+            i += 2;
+            continue;
+          } else {
+            // Closing quote
+            inQuotes = false;
+            i++;
+            continue;
+          }
+        } else {
+          if (char === '\n') {
+            lineNumber++;
+          }
+          currentField += char;
+          i++;
+          continue;
+        }
+      } else {
+        // Character encountered after closing quote
+        if (char === ',') {
+          pushField();
+          i++;
+          continue;
+        } else if (char === '\r') {
+          if (i + 1 < len && input[i + 1] === '\n') {
+            i++;
+          }
+          pushRecord();
+          lineNumber++;
+          i++;
+          continue;
+        } else if (char === '\n') {
+          pushRecord();
+          lineNumber++;
+          i++;
+          continue;
+        } else {
+          throw new AppException({
+            status: HttpStatus.BAD_REQUEST,
+            code: ERROR_CODES.CSV_MALFORMED,
+            message: `Malformed CSV at line ${lineNumber}: unexpected character '${char}' following closing quote`,
+          });
+        }
+      }
+    } else {
+      // Unquoted field
+      if (char === '"') {
+        throw new AppException({
+          status: HttpStatus.BAD_REQUEST,
+          code: ERROR_CODES.CSV_MALFORMED,
+          message: `Malformed CSV at line ${lineNumber}: quote found inside unquoted field`,
+        });
+      } else if (char === ',') {
+        pushField();
+        i++;
+        continue;
+      } else if (char === '\r') {
+        if (i + 1 < len && input[i + 1] === '\n') {
+          i++;
+        }
+        pushRecord();
+        lineNumber++;
+        i++;
+        continue;
+      } else if (char === '\n') {
+        pushRecord();
+        lineNumber++;
         i++;
         continue;
       } else {
@@ -87,14 +167,13 @@ export function parseCsv(text: string): string[][] {
     throw new AppException({
       status: HttpStatus.BAD_REQUEST,
       code: ERROR_CODES.CSV_MALFORMED,
-      message: 'Malformed CSV: unclosed quote detected',
+      message: `Malformed CSV at line ${lineNumber}: unclosed quote detected`,
     });
   }
 
   // Push final field/record if input did not end with newline
-  if (currentField.length > 0 || currentRecord.length > 0) {
-    currentRecord.push(currentField);
-    resultList.push(currentRecord);
+  if (fieldStarted || currentRecord.length > 0) {
+    pushRecord();
   }
 
   // Discard empty trailing record (e.g. single trailing newline at EOF)

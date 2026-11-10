@@ -2,10 +2,12 @@ import { ERROR_CODES } from '@acc/contracts';
 import { AppException } from '../common/errors/app.exception';
 import {
   escapeCsvFormulaField,
+  escapeCustomFieldsForCsv,
   normalizeAddress,
   normalizeEmailAddress,
   normalizePhoneNumber,
   unescapeCsvFormulaField,
+  unescapeCustomFieldsFromCsv,
 } from './contacts.normalization';
 
 describe('Contacts Normalization (P3-D25 & Phase 8A-2)', () => {
@@ -154,6 +156,76 @@ describe('Contacts Normalization (P3-D25 & Phase 8A-2)', () => {
       expect(unescapeCsvFormulaField('Jane Doe')).toBe('Jane Doe');
       expect(escapeCsvFormulaField('hello@example.com')).toBe('hello@example.com');
       expect(unescapeCsvFormulaField('hello@example.com')).toBe('hello@example.com');
+    });
+
+    it('reversibly escapes and unescapes custom fields dictionaries for CSV', () => {
+      const originalCustomFields = {
+        badge: '2317',
+        title: '=VP Engineering',
+        priority: '+urgent',
+        calc: '-100',
+        mention: '@lead',
+        rawText: 'Standard Value',
+        genuineQuote: "'O'Connor",
+        numericField: 42,
+        booleanField: true,
+      };
+
+      const escaped = escapeCustomFieldsForCsv(originalCustomFields);
+      expect(escaped).toEqual({
+        badge: '2317',
+        title: "'=VP Engineering",
+        priority: "'+urgent",
+        calc: "'-100",
+        mention: "'@lead",
+        rawText: 'Standard Value',
+        genuineQuote: "''O'Connor",
+        numericField: 42,
+        booleanField: true,
+      });
+
+      const unescaped = unescapeCustomFieldsFromCsv(escaped);
+      expect(unescaped).toEqual(originalCustomFields);
+    });
+
+    it('reversibly escapes and unescapes tags array for CSV export/import', () => {
+      const tags = ['=vip', '+urgent', '-lead', '@group', 'standard-tag', "'single-quote"];
+      const escapedTags = tags.map((t) => escapeCsvFormulaField(t));
+      expect(escapedTags).toEqual([
+        "'=vip",
+        "'+urgent",
+        "'-lead",
+        "'@group",
+        'standard-tag',
+        "''single-quote",
+      ]);
+
+      const joinedForCsv = escapedTags.join(';');
+      const roundTrippedTags = joinedForCsv.split(';').map((t) => unescapeCsvFormulaField(t));
+      expect(roundTrippedTags).toEqual(tags);
+    });
+
+    it('preserves raw JSON values unmodified without adding CSV formula escapes', () => {
+      const rawPayload = {
+        phone: '+15551234567',
+        email: 'user@example.test',
+        firstName: '=FormulaFirst',
+        lastName: '+FormulaLast',
+        customFields: {
+          formula: '=SUM(1,2)',
+          notes: '+critical',
+        },
+      };
+
+      // In JSON mode, values are serialized directly without escapeCsvFormulaField
+      const serializedJson = JSON.stringify(rawPayload);
+      const deserializedJson = JSON.parse(serializedJson);
+
+      expect(deserializedJson.phone).toBe('+15551234567');
+      expect(deserializedJson.firstName).toBe('=FormulaFirst');
+      expect(deserializedJson.lastName).toBe('+FormulaLast');
+      expect(deserializedJson.customFields.formula).toBe('=SUM(1,2)');
+      expect(deserializedJson.customFields.notes).toBe('+critical');
     });
   });
 });

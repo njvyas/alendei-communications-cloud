@@ -57,6 +57,42 @@ describe('CSV Parser (RFC 4180)', () => {
     );
   });
 
+  it('rejects quotes inside unquoted fields with 400 CSV_MALFORMED', () => {
+    const csv1 = 'firstName,lastName,phone\nAli"ce,Smith,+15551234567';
+    expect(() => parseCsv(csv1)).toThrow(
+      expect.objectContaining({
+        code: ERROR_CODES.CSV_MALFORMED,
+        message: expect.stringContaining('quote found inside unquoted field'),
+      }),
+    );
+
+    const csv2 = 'col1,col2\nval1,val"2';
+    expect(() => parseCsv(csv2)).toThrow(
+      expect.objectContaining({
+        code: ERROR_CODES.CSV_MALFORMED,
+        message: expect.stringContaining('quote found inside unquoted field'),
+      }),
+    );
+  });
+
+  it('rejects characters following a closing quote with 400 CSV_MALFORMED', () => {
+    const csv1 = 'firstName,lastName,phone\n"Alice"Smith,Smith,+15551234567';
+    expect(() => parseCsv(csv1)).toThrow(
+      expect.objectContaining({
+        code: ERROR_CODES.CSV_MALFORMED,
+        message: expect.stringContaining('unexpected character'),
+      }),
+    );
+
+    const csv2 = 'firstName,lastName,phone\n"Alice" ,Smith,+15551234567';
+    expect(() => parseCsv(csv2)).toThrow(
+      expect.objectContaining({
+        code: ERROR_CODES.CSV_MALFORMED,
+        message: expect.stringContaining('unexpected character'),
+      }),
+    );
+  });
+
   it('serializes rows according to RFC 4180', () => {
     expect(serializeCsvRow(['Alice', 'Smith', '+15551234567'])).toBe('Alice,Smith,+15551234567');
     expect(serializeCsvRow(['Bob', 'Hello, World', null])).toBe('Bob,"Hello, World",');
@@ -64,6 +100,26 @@ describe('CSV Parser (RFC 4180)', () => {
       'Charlie,"He said ""hi""",true',
     );
     expect(serializeCsvRow(['Multi', 'Line 1\nLine 2', 42])).toBe('Multi,"Line 1\nLine 2",42');
+    expect(serializeCsvRow(['1', '{"badge":"2317","notes":"urgent, critical"}'])).toBe(
+      '1,"{""badge"":""2317"",""notes"":""urgent, critical""}"',
+    );
+  });
+
+  it('correctly round-trips complex JSON customFields via RFC 4180 escaping and parsing', () => {
+    const originalJson = JSON.stringify({
+      badge: '2317',
+      formula: "'=cmd|' /C calc'!A0",
+      notes: 'Contains "quotes" and, commas',
+    });
+    const serialized = serializeCsvRow(['contact-id', originalJson]);
+    expect(serialized).toContain('"{""badge"":""2317""');
+    const parsed = parseCsv(serialized);
+    expect(parsed).toEqual([['contact-id', originalJson]]);
+    expect(JSON.parse(parsed[0]![1]!)).toEqual({
+      badge: '2317',
+      formula: "'=cmd|' /C calc'!A0",
+      notes: 'Contains "quotes" and, commas',
+    });
   });
 
   it('parses CSV into structured objects', () => {

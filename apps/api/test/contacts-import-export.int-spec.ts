@@ -492,7 +492,7 @@ describe('Phase 8A-2: Contact Import & Export Integration Suite', () => {
     it('imports CSV with RFC 4180 parsing, stripping formula apostrophes reversibly', async () => {
       const csvData = [
         'firstName,lastName,phone,email,tags',
-        '="Formula",\'\'O\'Connor,\'+15551239876,formula@test.com,"tag1, tag2"',
+        "'=Formula,''O'Connor,'+15551239876,formula@test.com,\"tag1, tag2\"",
         "Normal,User,'+15557778888,normal@test.com,general",
       ].join('\r\n');
 
@@ -527,16 +527,125 @@ describe('Phase 8A-2: Contact Import & Export Integration Suite', () => {
     });
 
     it('rejects malformed CSV syntax with 400 CSV_MALFORMED', async () => {
-      const malformedCsv = 'firstName,lastName,phone\n"Unterminated quote,Smith,+15551234567';
-
-      const res = await request(h.app.getHttpServer())
+      // 1. Unterminated quote
+      const unterminatedCsv = 'firstName,lastName,phone\n"Unterminated quote,Smith,+15551234567';
+      const res1 = await request(h.app.getHttpServer())
         .post(url(`/workspaces/${tenant.workspaceId}/contacts/import`))
         .set('authorization', `Bearer ${token}`)
         .set('Content-Type', 'text/csv')
-        .send(malformedCsv);
+        .send(unterminatedCsv);
 
-      expect(res.status).toBe(400);
-      expect(res.body.error.code).toBe(ERROR_CODES.CSV_MALFORMED);
+      expect(res1.status).toBe(400);
+      expect(res1.body.error.code).toBe(ERROR_CODES.CSV_MALFORMED);
+
+      // 2. Quote inside unquoted field
+      const quoteInUnquotedCsv = 'firstName,lastName,phone\nAli"ce,Smith,+15551234567';
+      const res2 = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenant.workspaceId}/contacts/import`))
+        .set('authorization', `Bearer ${token}`)
+        .set('Content-Type', 'text/csv')
+        .send(quoteInUnquotedCsv);
+
+      expect(res2.status).toBe(400);
+      expect(res2.body.error.code).toBe(ERROR_CODES.CSV_MALFORMED);
+      expect(res2.body.error.message).toContain('quote found inside unquoted field');
+
+      // 3. Characters following a closing quote
+      const charsAfterQuoteCsv = 'firstName,lastName,phone\n"Alice"Smith,Smith,+15551234567';
+      const res3 = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenant.workspaceId}/contacts/import`))
+        .set('authorization', `Bearer ${token}`)
+        .set('Content-Type', 'text/csv')
+        .send(charsAfterQuoteCsv);
+
+      expect(res3.status).toBe(400);
+      expect(res3.body.error.code).toBe(ERROR_CODES.CSV_MALFORMED);
+      expect(res3.body.error.message).toContain('unexpected character');
+    });
+
+    it('executes full CSV export and import round-trip preserving custom fields and formula triggers', async () => {
+      // 1. Seed initial contact with formula triggers, genuine apostrophes, tags and custom fields
+      await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenant.workspaceId}/contacts/import`))
+        .set('authorization', `Bearer ${token}`)
+        .send({
+          contacts: [
+            {
+              firstName: '=FormulaFirst',
+              lastName: '+FormulaLast',
+              phone: '+15557778899',
+              email: 'roundtrip@example.test',
+              tags: ['=vip', '+priority', 'normal'],
+              customFields: {
+                badge: '7788',
+                cmd: '=calc',
+                notes: '+urgent_notes',
+                leader: "'O'Brian",
+              },
+            },
+          ],
+        })
+        .expect(200);
+
+      // 2. Export to CSV
+      const exportRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenant.workspaceId}/contacts/export`))
+        .set('authorization', `Bearer ${token}`)
+        .send({ format: 'csv' });
+
+      expect(exportRes.status).toBe(200);
+      const csvText = exportRes.text;
+
+      // Verify header has customFields
+      const lines = csvText.trim().split('\r\n');
+      expect(lines[0]).toBe('id,firstName,lastName,phone,email,tags,customFields,createdAt');
+
+      // Verify formula protection in exported CSV text
+      expect(csvText).toContain("'+15557778899");
+      expect(csvText).toContain("''O'Brian"); // genuine apostrophe doubled
+      expect(csvText).toContain("'=FormulaFirst");
+      expect(csvText).toContain("'+FormulaLast");
+      expect(csvText).toContain("'=vip;'+priority;normal");
+
+      // 3. Clear workspace contacts to verify clean re-import
+      await h.admin.execute(
+        sql`DELETE FROM contact_identities WHERE workspace_id = ${tenant.workspaceId}`,
+      );
+      await h.admin.execute(sql`DELETE FROM contacts WHERE workspace_id = ${tenant.workspaceId}`);
+
+      // 4. Import the exported CSV back
+      const importRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenant.workspaceId}/contacts/import`))
+        .set('authorization', `Bearer ${token}`)
+        .set('Content-Type', 'text/csv')
+        .send(csvText);
+
+      expect(importRes.status).toBe(200);
+      expect(importRes.body.summary.created).toBe(1);
+
+      // 5. Query the imported contact from database and verify exact restoration
+      const [reimported] = await h.admin
+        .select()
+        .from(schema.contacts)
+        .where(eq(schema.contacts.workspaceId, tenant.workspaceId));
+
+      expect(reimported).toBeDefined();
+      expect(reimported!.firstName).toBe('=FormulaFirst');
+      expect(reimported!.lastName).toBe('+FormulaLast');
+
+      const meta = reimported!.metadata as Record<string, unknown>;
+      expect(meta.tags).toEqual(['=vip', '+priority', 'normal']);
+      expect(meta.badge).toBe('7788');
+      expect(meta.cmd).toBe('=calc');
+      expect(meta.notes).toBe('+urgent_notes');
+      expect(meta.leader).toBe("'O'Brian"); // restored verbatim!
+
+      // Verify phone normalized address is clean E.164
+      const [identity] = await h.admin
+        .select()
+        .from(schema.contactIdentities)
+        .where(eq(schema.contactIdentities.contactId, reimported!.id));
+      expect(identity!.normalizedAddress).toBe('+15557778899');
     });
   });
 
@@ -603,12 +712,15 @@ describe('Phase 8A-2: Contact Import & Export Integration Suite', () => {
       expect(lines.some((l) => l.startsWith('#'))).toBe(false);
 
       // Header row
-      expect(lines[0]).toBe('id,firstName,lastName,phone,email,tags,createdAt');
+      expect(lines[0]).toBe('id,firstName,lastName,phone,email,tags,customFields,createdAt');
 
       // Formula safety on phone: exported phone must start with apostrophe '+1...
       expect(text).toContain("'+15551112233");
       expect(text).toContain("'+15559998877");
       expect(text).toContain("'+15554443322");
+
+      // Custom fields serialized per RFC 4180
+      expect(text).toContain('"{""badge"":""2317""}"');
     });
 
     it('supports GET download route with equivalent streaming response', async () => {

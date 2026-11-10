@@ -19,7 +19,7 @@ import {
   workspaceNotFound,
 } from '../workspaces/workspace-administration.service';
 import type { ExportContactsDto } from './contacts.dto';
-import { escapeCsvFormulaField } from './contacts.normalization';
+import { escapeCsvFormulaField, escapeCustomFieldsForCsv } from './contacts.normalization';
 import { serializeCsvRow } from './csv-parser';
 
 const EXPORT_CEILING = 50000;
@@ -187,8 +187,16 @@ export class ContactExportService {
       // 5. Keyset Streaming
       if (format === 'csv') {
         response.write(
-          serializeCsvRow(['id', 'firstName', 'lastName', 'phone', 'email', 'tags', 'createdAt']) +
-            '\r\n',
+          serializeCsvRow([
+            'id',
+            'firstName',
+            'lastName',
+            'phone',
+            'email',
+            'tags',
+            'customFields',
+            'createdAt',
+          ]) + '\r\n',
         );
       } else {
         response.write(
@@ -290,7 +298,11 @@ export class ContactExportService {
             const emailEscaped = contact.email ? escapeCsvFormulaField(contact.email) : '';
             const firstEscaped = contact.firstName ? escapeCsvFormulaField(contact.firstName) : '';
             const lastEscaped = contact.lastName ? escapeCsvFormulaField(contact.lastName) : '';
-            const tagsEscaped = escapeCsvFormulaField(contact.tags.join(';'));
+            const tagsEscaped = contact.tags.map((t) => escapeCsvFormulaField(t)).join(';');
+            const escapedCustomFields = escapeCustomFieldsForCsv(contact.customFields);
+            const customFieldsEscaped = escapedCustomFields
+              ? JSON.stringify(escapedCustomFields)
+              : '';
 
             const line =
               serializeCsvRow([
@@ -300,6 +312,7 @@ export class ContactExportService {
                 phoneEscaped,
                 emailEscaped,
                 tagsEscaped,
+                customFieldsEscaped,
                 contact.createdAt,
               ]) + '\r\n';
 

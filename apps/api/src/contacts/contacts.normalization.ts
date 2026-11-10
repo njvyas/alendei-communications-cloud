@@ -135,3 +135,53 @@ export function unescapeCsvFormulaField(value: string): string {
   }
   return value;
 }
+
+/**
+ * Recursively escapes string values inside a customFields dictionary for spreadsheet-safe CSV export.
+ */
+export function escapeCustomFieldsForCsv(
+  fields: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  if (!fields || typeof fields !== 'object' || Object.keys(fields).length === 0) {
+    return null;
+  }
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(fields)) {
+    if (typeof v === 'string') {
+      result[k] = escapeCsvFormulaField(v);
+    } else if (v && typeof v === 'object' && !Array.isArray(v)) {
+      result[k] = escapeCustomFieldsForCsv(v as Record<string, unknown>);
+    } else if (Array.isArray(v)) {
+      result[k] = v.map((item) => (typeof item === 'string' ? escapeCsvFormulaField(item) : item));
+    } else {
+      result[k] = v;
+    }
+  }
+  return result;
+}
+
+/**
+ * Recursively unescapes string values inside a customFields dictionary from CSV import.
+ */
+export function unescapeCustomFieldsFromCsv(
+  fields: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  if (!fields || typeof fields !== 'object' || Object.keys(fields).length === 0) {
+    return null;
+  }
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(fields)) {
+    if (typeof v === 'string') {
+      result[k] = unescapeCsvFormulaField(v);
+    } else if (v && typeof v === 'object' && !Array.isArray(v)) {
+      result[k] = unescapeCustomFieldsFromCsv(v as Record<string, unknown>);
+    } else if (Array.isArray(v)) {
+      result[k] = v.map((item) =>
+        typeof item === 'string' ? unescapeCsvFormulaField(item) : item,
+      );
+    } else {
+      result[k] = v;
+    }
+  }
+  return result;
+}
