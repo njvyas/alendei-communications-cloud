@@ -113,6 +113,10 @@ export const PERMISSIONS = {
   // content table exists. Phase 3.1 activates them.
   CONTACTS_READ: 'contacts.read',
   CONTACTS_MANAGE: 'contacts.manage',
+  /** Import contacts, identities and consent records into a workspace. */
+  CONTACTS_IMPORT: 'contacts.import',
+  /** Export contacts, identities and consent records from a workspace. */
+  CONTACTS_EXPORT: 'contacts.export',
   TEMPLATES_READ: 'templates.read',
   TEMPLATES_MANAGE: 'templates.manage',
   SUPPRESSIONS_READ: 'suppressions.read',
@@ -231,6 +235,8 @@ export const PERMISSION_CLASS: Readonly<Record<PermissionKey, PermissionClass>> 
   [P.PLATFORM_SUPPORT_READ]: 'platform',
   [P.CONTACTS_READ]: 'tenant_content',
   [P.CONTACTS_MANAGE]: 'tenant_content',
+  [P.CONTACTS_IMPORT]: 'tenant_content',
+  [P.CONTACTS_EXPORT]: 'tenant_content',
   [P.TEMPLATES_READ]: 'tenant_content',
   [P.TEMPLATES_MANAGE]: 'tenant_content',
   [P.SUPPRESSIONS_READ]: 'tenant_content',
@@ -319,6 +325,8 @@ export const PERMISSION_ALLOWED_SCOPES: Readonly<Record<PermissionKey, readonly 
     [P.PLATFORM_SUPPORT_READ]: PLATFORM_ONLY_SCOPE,
     [P.CONTACTS_READ]: Object.freeze(['organization', 'workspace']),
     [P.CONTACTS_MANAGE]: Object.freeze(['organization', 'workspace']),
+    [P.CONTACTS_IMPORT]: Object.freeze(['organization', 'workspace']),
+    [P.CONTACTS_EXPORT]: Object.freeze(['organization', 'workspace']),
     [P.TEMPLATES_READ]: Object.freeze(['organization']),
     [P.TEMPLATES_MANAGE]: Object.freeze(['organization']),
     [P.SUPPRESSIONS_READ]: Object.freeze(['organization']),

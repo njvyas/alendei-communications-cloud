@@ -125,3 +125,89 @@ export interface AudienceResolutionResponse {
   readonly totalCount: number;
   readonly page: PageInfo;
 }
+
+// --- Contact Import & Export Contracts (Phase 8A.2) --------------------------
+
+export const IMPORT_MODES = ['abort_on_error', 'skip_invalid'] as const;
+export type ImportMode = (typeof IMPORT_MODES)[number];
+
+export const DUPLICATE_STRATEGIES = ['skip', 'update', 'fail'] as const;
+export type DuplicateStrategy = (typeof DUPLICATE_STRATEGIES)[number];
+
+export interface ImportContactRow {
+  readonly rowNumber?: number;
+  readonly firstName?: string | null;
+  readonly lastName?: string | null;
+  readonly phone?: string | null;
+  readonly email?: string | null;
+  readonly tags?: readonly string[];
+  readonly customFields?: Record<string, unknown>;
+  readonly consent?: {
+    readonly channelCode: 'whatsapp' | 'sms' | 'email' | 'rcs';
+    readonly consentType: string;
+    readonly event: ConsentEventType;
+    readonly occurredAt?: string;
+    readonly source?: string;
+  };
+}
+
+export interface ImportContactsRequest {
+  readonly mode?: ImportMode;
+  readonly duplicateStrategy?: DuplicateStrategy;
+  readonly defaultPhoneChannelId?: string;
+  readonly defaultEmailChannelId?: string;
+  readonly contacts?: readonly ImportContactRow[];
+}
+
+export interface ImportRowError {
+  readonly row: number;
+  readonly identifier?: string | null;
+  readonly code: string;
+  readonly message: string;
+}
+
+export interface ImportRowResult {
+  readonly row: number;
+  readonly action: 'created' | 'updated' | 'skipped';
+  readonly contactId?: string;
+  readonly reason?: string;
+}
+
+export interface ImportSummary {
+  readonly totalCount: number;
+  readonly processedCount: number;
+  readonly created: number;
+  readonly updated: number;
+  readonly skipped: number;
+  readonly failed: number;
+}
+
+export interface ImportContactsResponse {
+  readonly summary: ImportSummary;
+  readonly errors: readonly ImportRowError[];
+  readonly results: readonly ImportRowResult[];
+}
+
+export const EXPORT_FORMATS = ['csv', 'json'] as const;
+export type ExportFormat = (typeof EXPORT_FORMATS)[number];
+
+export interface ExportContactsRequest {
+  readonly format?: ExportFormat;
+  readonly segmentId?: string;
+  readonly tags?: readonly string[];
+  readonly tagMatchMode?: AudienceTagMatchMode;
+  readonly channel?: 'whatsapp' | 'sms' | 'email' | 'rcs';
+  readonly requireOptIn?: boolean;
+  readonly consentType?: string;
+  readonly customFieldFilters?: readonly {
+    readonly field: string;
+    readonly operator: string;
+    readonly value?: unknown;
+  }[];
+}
+
+export interface ExportMetadata {
+  readonly totalExported: number;
+  readonly truncated: boolean;
+  readonly ceiling: number;
+}

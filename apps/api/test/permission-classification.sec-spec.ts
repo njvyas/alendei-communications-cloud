@@ -747,7 +747,7 @@ describe('migration 0026: permission classification and scope eligibility (ADR-0
     it('passes on the current database', async () => {
       await asOwnerRolledBack(async (c) => {
         await c.query(
-          "DELETE FROM permissions WHERE key IN ('platform.support.read', 'billing.read', 'billing.manage', 'pricing.read', 'pricing.manage', 'campaigns.read', 'campaigns.manage')",
+          "DELETE FROM permissions WHERE key IN ('platform.support.read', 'billing.read', 'billing.manage', 'pricing.read', 'pricing.manage', 'campaigns.read', 'campaigns.manage', 'contacts.import', 'contacts.export')",
         );
         await c.query(verification());
       });
@@ -756,7 +756,7 @@ describe('migration 0026: permission classification and scope eligibility (ADR-0
     it('names a permission key it cannot classify', async () => {
       await asOwnerRolledBack(async (c) => {
         await c.query(
-          "DELETE FROM permissions WHERE key IN ('platform.support.read', 'billing.read', 'billing.manage', 'pricing.read', 'pricing.manage', 'campaigns.read', 'campaigns.manage')",
+          "DELETE FROM permissions WHERE key IN ('platform.support.read', 'billing.read', 'billing.manage', 'pricing.read', 'pricing.manage', 'campaigns.read', 'campaigns.manage', 'contacts.import', 'contacts.export')",
         );
         await c.query(
           "INSERT INTO permissions (key, domain, action, classification, allowed_scope_types) VALUES ('zz.unknown', 'zz', 'unknown', 'tenancy_administration', '{organization}')",
@@ -772,7 +772,7 @@ describe('migration 0026: permission classification and scope eligibility (ADR-0
     it('names a role already carrying a permission it is ineligible for', async () => {
       await asOwnerRolledBack(async (c) => {
         await c.query(
-          "DELETE FROM permissions WHERE key IN ('platform.support.read', 'billing.read', 'billing.manage', 'pricing.read', 'pricing.manage', 'campaigns.read', 'campaigns.manage')",
+          "DELETE FROM permissions WHERE key IN ('platform.support.read', 'billing.read', 'billing.manage', 'pricing.read', 'pricing.manage', 'campaigns.read', 'campaigns.manage', 'contacts.import', 'contacts.export')",
         );
         await c.query('ALTER TABLE role_permissions DISABLE TRIGGER trg_role_permissions_validate');
         await c.query(attach, [platformRole.alendei_support, perm['contacts.read']]);

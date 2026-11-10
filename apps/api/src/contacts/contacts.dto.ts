@@ -18,10 +18,14 @@ import {
   CONTACT_IDENTITY_STATUSES,
   CONSENT_EVENT_TYPES,
   CUSTOM_FIELD_OPERATORS,
+  DUPLICATE_STRATEGIES,
+  IMPORT_MODES,
   type AudienceTagMatchMode,
   type ContactIdentityStatus,
   type ConsentEventType,
   type CustomFieldOperator,
+  type DuplicateStrategy,
+  type ImportMode,
 } from '@acc/contracts';
 
 import { ListQueryDto } from '../common/http/list-query.dto';
@@ -192,6 +196,162 @@ export class ResolveAudienceDto extends ListQueryDto {
   )
   @IsBoolean()
   requireOptIn?: boolean;
+
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return value;
+      }
+    }
+    return value;
+  })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CustomFieldFilterDto)
+  customFieldFilters?: CustomFieldFilterDto[];
+}
+
+export class ImportContactConsentDto {
+  @IsIn(['whatsapp', 'sms', 'email', 'rcs'])
+  channelCode!: 'whatsapp' | 'sms' | 'email' | 'rcs';
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(64)
+  consentType!: string;
+
+  @IsIn(CONSENT_EVENT_TYPES)
+  event!: ConsentEventType;
+
+  @IsOptional()
+  @IsISO8601()
+  occurredAt?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  source?: string;
+}
+
+export class ImportContactRowDto {
+  @IsOptional()
+  rowNumber?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  firstName?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  lastName?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  phone?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  email?: string | null;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  tags?: string[];
+
+  @IsOptional()
+  @IsObject()
+  customFields?: Record<string, unknown>;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ImportContactConsentDto)
+  consent?: ImportContactConsentDto;
+}
+
+export class ImportContactsDto {
+  @IsOptional()
+  @IsIn(IMPORT_MODES)
+  mode?: ImportMode;
+
+  @IsOptional()
+  @IsIn(DUPLICATE_STRATEGIES)
+  duplicateStrategy?: DuplicateStrategy;
+
+  @IsOptional()
+  @IsUUID()
+  defaultPhoneChannelId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  defaultEmailChannelId?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ImportContactRowDto)
+  contacts?: ImportContactRowDto[];
+
+  @IsOptional()
+  @IsString()
+  csv?: string;
+}
+
+export class ExportContactsDto {
+  @IsOptional()
+  @IsIn(['csv', 'json'])
+  format?: 'csv' | 'json';
+
+  @IsOptional()
+  @IsUUID()
+  segmentId?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      return value
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    if (Array.isArray(value)) {
+      return value.map((s) => String(s).trim()).filter(Boolean);
+    }
+    return value;
+  })
+  @IsArray()
+  @IsString({ each: true })
+  tags?: string[];
+
+  @IsOptional()
+  @IsIn(AUDIENCE_TAG_MATCH_MODES)
+  tagMatchMode?: AudienceTagMatchMode;
+
+  @IsOptional()
+  @IsIn(['whatsapp', 'sms', 'email', 'rcs'])
+  channel?: 'whatsapp' | 'sms' | 'email' | 'rcs';
+
+  @IsOptional()
+  @Transform(({ value }) =>
+    value === 'true' || value === true
+      ? true
+      : value === 'false' || value === false
+        ? false
+        : value,
+  )
+  @IsBoolean()
+  requireOptIn?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  consentType?: string;
 
   @IsOptional()
   @Transform(({ value }) => {
