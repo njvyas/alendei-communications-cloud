@@ -214,7 +214,6 @@ const mockDetails: Record<string, unknown> = {
         deliveryStatus: 'delivered',
         deliveredAt: '2026-11-07T10:14:05.000Z',
         readAt: '2026-11-07T10:15:30.000Z',
-        providerMessageId: 'wamid.HBgLMTEwMDAwMDAwMBICABEYEjFDNDhGOUU4NDUzM0IwMDYA',
       },
     ],
   },
@@ -246,7 +245,6 @@ const mockDetails: Record<string, unknown> = {
         deliveryStatus: 'delivered',
         deliveredAt: '2026-11-07T10:04:12.000Z',
         readAt: null,
-        providerMessageId: 'wamid.HBgL5550155META01',
       },
       {
         id: 'att-p50-06-2',
@@ -259,7 +257,6 @@ const mockDetails: Record<string, unknown> = {
         deliveryStatus: 'pending',
         deliveredAt: null,
         readAt: null,
-        providerMessageId: null,
       },
     ],
   },

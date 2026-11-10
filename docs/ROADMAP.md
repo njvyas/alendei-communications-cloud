@@ -17,7 +17,7 @@ No phase's work proceeds to the next phase until its own ACCEPTANCE gate is sign
 | 2 | Provider abstraction + simulator |
 | 3 | WhatsApp |
 | 4 | SMS + RCS |
-| 5 | Provider/channel failover |
+| 5 | Provider/channel failover (5.0 delivery-outcome ingestion merged, not accepted — §8a) |
 | 6 | Admin control center |
 | 7 | Billing (usage ledger + Pricing & Rating Engine) |
 | 8A | Contacts / CDP |
@@ -565,6 +565,33 @@ Evidence summary (17-Oct-2026, current working tree):
 - *Before any real WhatsApp provider:* propose for owner approval a structured template contract (template identity and provider template mapping), variable validation rules, language handling and simulator tests, and decide P3-D22/P3-D24 explicitly.
 
 ## 8. Phase 5 — Provider/channel failover
+
+### 8a. Phase 5.0 — delivery-outcome ingestion (prerequisite increment)
+
+**Status (08-Nov-2026): IMPLEMENTED AND MERGED to `develop`; NOT deployed to QA; NOT accepted.** Phase 5.0 adds delivery evidence (delivery receipts) as the input the Phase 5 failover engine needs. It does **not** deliver the failover engine. Design frozen 07-Nov-2026 (Option B, two axes); decisions in `DECISIONS.md` §1zh; operator and verification guide in `DELIVERY_OUTCOMES.md`.
+
+| PR | Scope | Merge commit | Migrations |
+|---|---|---|---|
+| #77 (PR-A) | Delivery schema, `acc_delivery` role, `webhook_events`, guards, contracts | `04023c0` | 0044–0046 |
+| #78 (PR-B) | Dispatcher settlement on the delivery axis, simulator receipts | `f61b4c8` | 0047 |
+| #79 | Frontend: delivery outcomes in the console | `6f16680` | — |
+| #81 (PR-C) | Webhook ingress (URL form), key administration, OD-19 log redaction | `9bc1f2e` | 0048 |
+| #83 (PR-D) | Delivery read APIs, list filter, usage `delivery` block, platform-support filter | `5ecc573` | 0049 |
+| #84 (PR-E) | Ingress header form, operator simulator trigger, escalation-race fixture, docs | `f564cc6` | — |
+
+- **Migrations 0044–0049:** committed history proof `50|36a91c1259daa5bcf6ec6847880dea98` (`RELEASE.md` §5.2). Not applied to QA; QA's last recorded proof is `44|d02a3079…` (`c92a8c4`).
+- **Ingress:** `DELIVERY_WEBHOOKS_ENABLED` defaults to `false` in code and in the environment templates. Enabling it in an environment requires steps S0–S8 (`DELIVERY_OUTCOMES.md` §3), each separately authorised.
+- **Simulator only:** no real provider adapter, credential or outbound connection exists. Phase 5.0 is not approval for real provider connectivity, credentials, live traffic or production.
+- **OD-9:** provider message references are platform-staff-only; tenant responses and the tenant console do not carry `providerMessageId` or a delivering-attempt id.
+- **Not in Phase 5.0:** timers, pollers, workers, escalation and fallback on delivery evidence (the escalation race is proven by a test fixture only); `webhook_events` retention (OD-15); `expired` state (OD-2); OD-17 and OD-20; a platform route for `webhook_events`.
+
+**Remaining gates (none started; each needs owner authorisation; QA deferred until owner access is restored):**
+1. Release-commit decision (`develop` also carries Phase 8A work, #80 and #82), local post-merge verification of that commit, and a 44→50 rehearsal on a copy of the QA database.
+2. QA deploy with ingress disabled (S0–S4): backup, migrate, proof, `acc_delivery` password and role reconcile, smoke and regression, read-API and console checks.
+3. QA ingress enablement and simulator acceptance (S5–S8), including the OD-19 nginx redaction on the QA host.
+4. Phase 5.0 acceptance by the owner.
+
+### 8b. Phase 5 — failover engine (original scope, not started)
 
 **Amended by ADR-014 (06-Oct-2026):** basic provider-to-provider fallback within one channel is delivered by **Phase 3**, not here. Phase 5 retains cross-channel fallback and the remaining fallback-engine scope below; the boundary is in ADR-014 §8 (D30): Phase 3 builds same-channel provider-to-provider fallback driven by submission outcomes (no delivery in Phase 3); delivery-outcome wait windows, `fallback_policies`/`fallback_steps` and cross-channel chains stay here. Phase 3's termination rule is open (D14). Routing weights, routing-policy CRUD and canary stay outside Phase 3 (ADR-014 F18).
 
