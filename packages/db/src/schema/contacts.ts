@@ -51,6 +51,7 @@ export const contacts = pgTable(
     unique('contacts_id_workspace_org_key').on(table.id, table.workspaceId, table.orgId),
     index('contacts_org_id_idx').on(table.orgId),
     index('contacts_workspace_id_idx').on(table.workspaceId),
+    index('contacts_workspace_id_id_idx').on(table.workspaceId, table.id),
     index('contacts_workspace_created_at_id_idx').on(table.workspaceId, table.createdAt, table.id),
   ],
 );

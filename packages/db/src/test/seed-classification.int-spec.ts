@@ -59,7 +59,7 @@ describe('seed.ts writes the classification and allowed scopes from packages/con
       env: process.env,
       timeout: 120_000,
     });
-    expect(stdout).toContain('Permissions seeded: 53');
+    expect(stdout).toContain('Permissions seeded: 55');
     expect(stdout).toContain('Platform role seeded: alendei_super_admin (42 permissions)');
 
     expect(await row('providers.read')).toEqual({

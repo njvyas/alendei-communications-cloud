@@ -122,8 +122,8 @@ describe('permission classification (ADR-015 R-5)', () => {
     }
   });
 
-  it('has exactly the 37 pre-ADR-015 keys, delegate_tenant, platform.support.read, the eight ADR-014 §6 keys, the four Phase 7 keys and the two Phase 8B keys', () => {
-    expect(ALL_PERMISSION_KEYS).toHaveLength(53);
+  it('has exactly the 37 pre-ADR-015 keys, delegate_tenant, platform.support.read, the eight ADR-014 §6 keys, the four Phase 7 keys, the two Phase 8B keys and the two Phase 8A-2 keys', () => {
+    expect(ALL_PERMISSION_KEYS).toHaveLength(55);
     expect(sorted(ALL_PERMISSION_KEYS)).toEqual(
       sorted([
         ...PRE_ADR_015_KEYS,
@@ -133,6 +133,8 @@ describe('permission classification (ADR-015 R-5)', () => {
         ...Object.keys(PHASE_7_KEYS),
         'campaigns.read',
         'campaigns.manage',
+        'contacts.import',
+        'contacts.export',
       ]),
     );
   });
@@ -164,7 +166,9 @@ describe('permission classification (ADR-015 R-5)', () => {
             ? 'tenant_content'
             : key in PHASE_7_KEYS
               ? PHASE_7_KEYS[key]!.cls
-              : key.startsWith('campaigns.')
+              : key.startsWith('campaigns.') ||
+                  key === 'contacts.import' ||
+                  key === 'contacts.export'
                 ? 'tenant_content'
                 : 'tenancy_administration';
       expect(`${key}=${PERMISSION_CLASS[key]}`).toBe(`${key}=${expected}`);
@@ -175,6 +179,8 @@ describe('permission classification (ADR-015 R-5)', () => {
         'billing.read',
         'campaigns.read',
         'campaigns.manage',
+        'contacts.import',
+        'contacts.export',
       ]),
     );
   });
@@ -206,8 +212,8 @@ describe('permission classification (ADR-015 R-5)', () => {
   it('isTenantContentPermission and permissionAllowedAt fail closed on unknown keys', () => {
     expect(isTenantContentPermission('contacts.read')).toBe(true);
     expect(isTenantContentPermission('users.read')).toBe(false);
-    expect(isTenantContentPermission('contacts.export')).toBe(false);
-    expect(permissionAllowedAt('contacts.export', 'organization')).toBe(false);
+    expect(isTenantContentPermission('unknown.permission')).toBe(false);
+    expect(permissionAllowedAt('unknown.permission', 'organization')).toBe(false);
     expect(permissionAllowedAt('users.read', 'team')).toBe(true);
   });
 });
@@ -218,7 +224,12 @@ describe('role definitions under R-5 and R-6', () => {
     expect(sorted(superAdmin.permissions)).toEqual(
       sorted(
         ALL_PERMISSION_KEYS.filter(
-          (k) => !(k in ADR_014_SECTION_6) && k !== 'billing.read' && !k.startsWith('campaigns.'),
+          (k) =>
+            !(k in ADR_014_SECTION_6) &&
+            k !== 'billing.read' &&
+            !k.startsWith('campaigns.') &&
+            k !== 'contacts.import' &&
+            k !== 'contacts.export',
         ),
       ),
     );
@@ -241,7 +252,7 @@ describe('role definitions under R-5 and R-6', () => {
     }
   });
 
-  it('org_admin carries exactly the tenant-content keys (eight §6 keys, billing.read, campaigns.read, campaigns.manage); no other tenant role carries any', () => {
+  it('org_admin carries exactly the tenant-content keys (eight §6 keys, billing.read, campaigns.read, campaigns.manage, contacts.import, contacts.export); no other tenant role carries any', () => {
     const content = (key: string) =>
       sorted(roleDefinition(key).permissions.filter(isTenantContentPermission));
     expect(content(TENANT_ROLE_KEYS.ORG_ADMIN)).toEqual(
@@ -257,6 +268,8 @@ describe('role definitions under R-5 and R-6', () => {
         'billing.read',
         'campaigns.read',
         'campaigns.manage',
+        'contacts.import',
+        'contacts.export',
       ]),
     );
     for (const role of TENANT_ROLE_DEFINITIONS.filter(
@@ -310,12 +323,12 @@ describe('role definitions under R-5 and R-6', () => {
     expect(Object.isFrozen(DELEGABLE_TENANT_SYSTEM_ROLES)).toBe(true);
   });
 
-  it('the API surface is the catalogue minus the four inert Phase 7 keys (47 keys)', () => {
+  it('the API surface is the catalogue minus the four inert Phase 7 keys (51 keys)', () => {
     expect(
       sorted(ALL_PERMISSION_KEYS.filter((k) => !API_SURFACE_PERMISSION_KEYS.includes(k))),
     ).toEqual(sorted(Object.keys(PHASE_7_KEYS)));
     expect(API_SURFACE_PERMISSION_KEYS).toContain(DELEGATE);
-    expect(API_SURFACE_PERMISSION_KEYS).toHaveLength(49);
+    expect(API_SURFACE_PERMISSION_KEYS).toHaveLength(51);
   });
 });
 

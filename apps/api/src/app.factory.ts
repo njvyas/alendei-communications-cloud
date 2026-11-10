@@ -10,6 +10,7 @@ import { AppModule } from './app.module';
 import { AppConfigService } from './config/app-config.service';
 import { mountDevelopmentSwaggerUi } from './openapi/openapi-dev-ui';
 import { configureWebhookBodyParsing } from './webhooks/webhook-body-parsing';
+import { configureContactImportBodyParsing } from './contacts/contact-import-body-parsing';
 
 /**
  * Builds the production application: the module graph plus every piece of
@@ -58,6 +59,9 @@ export function configureApp(app: NestExpressApplication, config: AppConfigServi
   // Phase 5.0 PR-C: the provider webhook ingress keeps its exact raw bytes (signature
   // verification, plan §1.3); every other route's body parsing is untouched.
   configureWebhookBodyParsing(app, config);
+
+  // Phase 8A-2: route-scoped body parsing for contact imports up to 5 MB (JSON and CSV)
+  configureContactImportBodyParsing(app);
 
   // Proxy headers are trusted for exactly the configured number of hops, and
   // `0` — the default — trusts none: the client address is the socket peer and

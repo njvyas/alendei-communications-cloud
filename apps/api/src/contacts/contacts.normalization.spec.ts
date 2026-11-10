@@ -1,12 +1,14 @@
 import { ERROR_CODES } from '@acc/contracts';
 import { AppException } from '../common/errors/app.exception';
 import {
+  escapeCsvFormulaField,
   normalizeAddress,
   normalizeEmailAddress,
   normalizePhoneNumber,
+  unescapeCsvFormulaField,
 } from './contacts.normalization';
 
-describe('Contacts Normalization (P3-D25)', () => {
+describe('Contacts Normalization (P3-D25 & Phase 8A-2)', () => {
   describe('normalizePhoneNumber', () => {
     it('accepts valid E.164 phone numbers', () => {
       expect(normalizePhoneNumber('+12025550123')).toBe('+12025550123');
@@ -19,6 +21,12 @@ describe('Contacts Normalization (P3-D25)', () => {
       expect(normalizePhoneNumber('+44 7911 123456')).toBe('+447911123456');
     });
 
+    it('strips single quote safety prefix if and only if remainder conforms to E.164', () => {
+      expect(normalizePhoneNumber("'+12025550123")).toBe('+12025550123');
+      expect(normalizePhoneNumber("'+44 7911 123456")).toBe('+447911123456');
+      expect(normalizePhoneNumber(" '+919876543210' ")).toBe('+919876543210');
+    });
+
     it('rejects numbers missing leading + with PHONE_MISSING_COUNTRY_CODE (no guessing)', () => {
       expect.assertions(3);
       try {
@@ -29,6 +37,21 @@ describe('Contacts Normalization (P3-D25)', () => {
         expect(appErr.code).toBe(ERROR_CODES.PHONE_MISSING_COUNTRY_CODE);
         expect(appErr.getStatus()).toBe(400);
       }
+    });
+
+    it('rejects quoted numbers missing leading + with PHONE_MISSING_COUNTRY_CODE', () => {
+      expect(() => normalizePhoneNumber("'2025550123")).toThrow(
+        expect.objectContaining({ code: ERROR_CODES.PHONE_MISSING_COUNTRY_CODE }),
+      );
+    });
+
+    it('rejects quoted numbers with leading + but invalid format with INVALID_PHONE_NUMBER', () => {
+      expect(() => normalizePhoneNumber("'+123")).toThrow(
+        expect.objectContaining({ code: ERROR_CODES.INVALID_PHONE_NUMBER }),
+      );
+      expect(() => normalizePhoneNumber("'+0123456789")).toThrow(
+        expect.objectContaining({ code: ERROR_CODES.INVALID_PHONE_NUMBER }),
+      );
     });
 
     it('rejects numbers starting with + but failing E.164 length/characters with INVALID_PHONE_NUMBER', () => {
@@ -90,6 +113,47 @@ describe('Contacts Normalization (P3-D25)', () => {
       expect(() => normalizeAddress('5550002222')).toThrow(
         expect.objectContaining({ code: ERROR_CODES.PHONE_MISSING_COUNTRY_CODE }),
       );
+    });
+  });
+
+  describe('CSV Formula Injection Defense & Round-trip Reversibility', () => {
+    it('escapes and unescapes formula trigger characters (=, +, -, @, \\t, \\r)', () => {
+      const formulaCases = [
+        "=cmd|' /C calc'!A0",
+        '+15551234567',
+        '+SUM(A1:A10)',
+        '-42',
+        '@SUM(B1)',
+        '\tTAB_INDENT',
+        '\rCR_PREFIX',
+      ];
+
+      for (const val of formulaCases) {
+        const escaped = escapeCsvFormulaField(val);
+        expect(escaped).toBe(`'${val}`);
+        if (val.startsWith('+') && /^\+[1-9]\d{6,14}$/.test(val)) {
+          // Phones are decoded via normalizePhoneNumber
+          expect(normalizePhoneNumber(escaped)).toBe(val);
+        } else {
+          const unescaped = unescapeCsvFormulaField(escaped);
+          expect(unescaped).toBe(val);
+        }
+      }
+    });
+
+    it('doubles and reversibly restores genuine leading apostrophes', () => {
+      const apostropheVal = "'O'Connor";
+      const escaped = escapeCsvFormulaField(apostropheVal);
+      expect(escaped).toBe("''O'Connor");
+      const unescaped = unescapeCsvFormulaField(escaped);
+      expect(unescaped).toBe(apostropheVal);
+    });
+
+    it('leaves standard text unmodified', () => {
+      expect(escapeCsvFormulaField('Jane Doe')).toBe('Jane Doe');
+      expect(unescapeCsvFormulaField('Jane Doe')).toBe('Jane Doe');
+      expect(escapeCsvFormulaField('hello@example.com')).toBe('hello@example.com');
+      expect(unescapeCsvFormulaField('hello@example.com')).toBe('hello@example.com');
     });
   });
 });
