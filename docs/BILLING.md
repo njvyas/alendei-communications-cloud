@@ -8,6 +8,8 @@ Note: GST rate/rule references below are architectural placeholders describing *
 
 `usage_ledger` (`DATABASE.md` §9) is append-only. Wallet balances, credit-used amounts, invoice totals, and every billing dashboard number are **materialized/derived views recomputed from the ledger**, never hand-maintained counters that could drift from it. If a materialized balance and a fresh ledger aggregation ever disagree, the ledger aggregation is correct by definition, and the discrepancy is a bug to fix, not a number to reconcile away.
 
+The read-only operator command `npm run billing:reconcile` (`RUNBOOK.md` §5, `DECISIONS.md` §1zi.16) checks this invariant: it compares every wallet and credit account with its full ledger history, and terminal messages with their policy-correct charges, reservations and provider costs. It reports discrepancies and never repairs them.
+
 ## 2. Ledger entry types
 
 | `entry_type` | Meaning | Sign convention |

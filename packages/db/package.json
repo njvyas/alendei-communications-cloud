@@ -25,7 +25,8 @@
     "test": "npm run test:unit && npm run test:integration",
     "test:unit": "jest --selectProjects unit --passWithNoTests",
     "test:integration": "jest --selectProjects integration --runInBand --passWithNoTests",
-    "test:disposable": "jest --selectProjects disposable --runInBand"
+    "test:disposable": "jest --selectProjects disposable --runInBand",
+    "billing:reconcile": "tsx src/cli/billing-reconcile.ts"
   },
   "dependencies": {
     "@acc/contracts": "*",

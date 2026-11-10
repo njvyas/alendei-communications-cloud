@@ -57,6 +57,19 @@ These are Phase 0 procedural placeholders describing the *shape* of each runbook
 3. Correct the materialized value to match the ledger aggregation (a cache-repair operation, not a financial adjustment — no new ledger row is needed for this specific correction, since nothing about the underlying financial facts changed, only the cached projection of them).
 4. File the root cause (likely a missed event in the ledger-writer consumer, or a race in the materialization job) for engineering follow-up.
 
+**Billing reconciliation (`billing:reconcile`, Phase 7 PR 7-7a, `DECISIONS.md` §1zi.16):**
+1. Run `npm run billing:reconcile` with `DATABASE_ADMIN_URL` set, optionally narrowed with `--org <uuid>` (repeatable) and `--since <YYYY-MM>`. Add `--json <path>` for the versioned JSON report. The command opens one `READ ONLY` transaction, never writes, repairs or resolves anything, and fails (exit `2`) if a transaction id was assigned.
+2. Read the exit code: `0` clean; `1` at least one finding (warnings included); `2` the run could not complete (arguments, connection, a statement or lock timeout, or a check error). An incomplete run is not evidence of a clean ledger; re-run it, or raise `--statement-timeout-ms` (default 120 s).
+3. Each finding has a stable id `<check>:<rule>:<subject>`, a severity, and exact expected and actual amounts in paise:
+   - C-1: an account differs from its ledger history;
+   - C-2: a charge or reservation does not match the policy;
+   - C-3: a provider cost does not match;
+   - C-4: a stale open reservation (warning, default threshold 24 h);
+   - C-5: partition health.
+
+   C-6 lists the unknown-outcome register and never produces findings.
+4. The report contains financial data: keep the JSON file (written mode `0600`) out of tickets and chat. Repairs are separate, audited operations; they are not part of this command. For an account difference, follow the wallet/ledger inconsistency procedure above.
+
 **Fallback storm (a widely-used provider degrades, causing a spike in concurrent escalations):**
 1. Recognize via the fallback-trigger-rate metric spike (`OBSERVABILITY.md` §5) correlated with one provider's health/circuit transition.
 2. Confirm the `deadline_at` poller (`FALLBACK_ENGINE.md` §4) is keeping up — check for growing backlog on the partial index it scans (`DATABASE.md` §13); scale poller workers horizontally if needed (safe to do so, since `FOR UPDATE SKIP LOCKED` makes additional workers purely additive, never a correctness risk).
