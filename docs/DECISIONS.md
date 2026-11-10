@@ -3382,7 +3382,9 @@ Each is a draft, stopped for owner review. Billing enforcement stays disabled; n
 - **Phase 7.7 handover documents** (Rev 2, as approved, byte-identical to the evidence copies) are added under `docs/`: `PHASE-7-7-IMPLEMENTATION-HANDOVER.md`, `PHASE-7-7-DECISION-REGISTER.md`, `PHASE-7-7-TRACEABILITY.md`, `PHASE-7-7A-RECONCILE-HANDOVER.md`. Decisions D-77-1 to D-77-8 remain open; 7-7a needs none of them.
 
 **As built.**
-- **No migration.** The history proof is unchanged (`61|da9371bb1f6a3e2cdc765f88823e8f02`), and no function, policy or grant changes.
+- **No migration.** This PR adds no migration, and no function, policy or grant changes.
+  - **Built against `develop` `36cd1e5`** (implementation commit `b4df53a`): the history proof was `61|da9371bb1f6a3e2cdc765f88823e8f02` (`0000`–`0060`), unchanged.
+  - **After `develop` `347812c` was merged in** (PR #102, Phase 8A-2, migration `0061`; merge commit `56d80ec`, no conflicts): the full proof at this head is `62|7a3898277442949a5652454b5c12150c`, which is `develop`'s own proof. The first 61 migration entries remain unchanged at `61|da9371bb1f6a3e2cdc765f88823e8f02`.
 - **`packages/db/src/maintenance/billing-reconcile.ts`:** the checks, the report model and the human renderer. Pure evaluators (`evaluateBalances`, `evaluateMessages`, `partitionFindings`, `exitCodeFor`) are separated from the SQL so that each rule is unit-tested without a database.
 - **`packages/db/src/cli/billing-reconcile.ts`:** `npm run billing:reconcile -- [--org <uuid> ...] [--since <YYYY-MM>] [--stale-hours <n>] [--statement-timeout-ms <n>] [--json <path|->] [--quiet]`. It runs as the schema owner (`DATABASE_ADMIN_URL`, the pattern of `db:ledger:partitions`) on one connection (`application_name = acc-billing-reconcile`). Invalid arguments, a connection failure or any unexpected error produce a failed report and exit `2`.
 - **Read-only guarantee.**
