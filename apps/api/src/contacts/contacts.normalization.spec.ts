@@ -3,11 +3,13 @@ import { AppException } from '../common/errors/app.exception';
 import {
   escapeCsvFormulaField,
   escapeCustomFieldsForCsv,
+  escapeTagsForCsv,
   normalizeAddress,
   normalizeEmailAddress,
   normalizePhoneNumber,
   unescapeCsvFormulaField,
   unescapeCustomFieldsFromCsv,
+  unescapeTagsFromCsv,
 } from './contacts.normalization';
 
 describe('Contacts Normalization (P3-D25 & Phase 8A-2)', () => {
@@ -158,8 +160,8 @@ describe('Contacts Normalization (P3-D25 & Phase 8A-2)', () => {
       expect(unescapeCsvFormulaField('hello@example.com')).toBe('hello@example.com');
     });
 
-    it('reversibly escapes and unescapes custom fields dictionaries for CSV', () => {
-      const originalCustomFields = {
+    it('reversibly escapes and unescapes deeply nested custom fields dictionaries at any depth for CSV', () => {
+      const complexCustomFields = {
         badge: '2317',
         title: '=VP Engineering',
         priority: '+urgent',
@@ -169,40 +171,86 @@ describe('Contacts Normalization (P3-D25 & Phase 8A-2)', () => {
         genuineQuote: "'O'Connor",
         numericField: 42,
         booleanField: true,
+        nestedObject: {
+          innerFormula: '=INNER_CALC(1)',
+          innerTag: '+innerPriority',
+          nestedArray: ['=arrItem1', '+arrItem2', 'regular'],
+          deepObject: {
+            deepKey: '@deepMention',
+            deepArrayOfObjects: [
+              { itemFormula: '=ARRAY_OBJ_FORMULA' },
+              { itemText: 'plain text', nestedSubArr: ['-negativeValue'] },
+            ],
+          },
+        },
+        arrayOfArrays: [
+          ['=nestedGrid1', '+nestedGrid2'],
+          ['plainGrid', "'O'Brian"],
+        ],
       };
 
-      const escaped = escapeCustomFieldsForCsv(originalCustomFields);
-      expect(escaped).toEqual({
-        badge: '2317',
-        title: "'=VP Engineering",
-        priority: "'+urgent",
-        calc: "'-100",
-        mention: "'@lead",
-        rawText: 'Standard Value',
-        genuineQuote: "''O'Connor",
-        numericField: 42,
-        booleanField: true,
-      });
+      const escaped = escapeCustomFieldsForCsv(complexCustomFields);
+      expect(escaped).toBeDefined();
 
+      // Deep string assertions
+      const nested = (escaped as Record<string, unknown>).nestedObject as Record<string, unknown>;
+      const deepObj = nested.deepObject as Record<string, unknown>;
+      const deepArrOfObjs = deepObj.deepArrayOfObjects as Array<Record<string, unknown>>;
+      expect(nested.innerFormula).toBe("'=INNER_CALC(1)");
+      expect(nested.innerTag).toBe("'+innerPriority");
+      expect(nested.nestedArray).toEqual(["'=arrItem1", "'+arrItem2", 'regular']);
+      expect(deepObj.deepKey).toBe("'@deepMention");
+      expect(deepArrOfObjs[0]?.itemFormula).toBe("'=ARRAY_OBJ_FORMULA");
+      expect(deepArrOfObjs[1]?.nestedSubArr).toEqual(["'-negativeValue"]);
+
+      const grid = (escaped as Record<string, unknown>).arrayOfArrays as string[][];
+      expect(grid[0]).toEqual(["'=nestedGrid1", "'+nestedGrid2"]);
+      expect(grid[1]).toEqual(['plainGrid', "''O'Brian"]);
+
+      // Exact round trip restoration
       const unescaped = unescapeCustomFieldsFromCsv(escaped);
-      expect(unescaped).toEqual(originalCustomFields);
+      expect(unescaped).toEqual(complexCustomFields);
     });
 
-    it('reversibly escapes and unescapes tags array for CSV export/import', () => {
-      const tags = ['=vip', '+urgent', '-lead', '@group', 'standard-tag', "'single-quote"];
-      const escapedTags = tags.map((t) => escapeCsvFormulaField(t));
-      expect(escapedTags).toEqual([
-        "'=vip",
-        "'+urgent",
-        "'-lead",
-        "'@group",
-        'standard-tag',
-        "''single-quote",
-      ]);
+    it('losslessly escapes and unescapes tags containing commas, semicolons, quotes, line breaks, and formula triggers', () => {
+      const complexTags = [
+        'tag,with,comma',
+        'tag;with;semicolon',
+        'tag "with" quotes',
+        "tag 'with' single quotes",
+        'tag\nwith\nnewline',
+        'tag\r\nwith\rcrlf',
+        '=FormulaTag',
+        '+PriorityTag',
+        '-MinusTag',
+        '@MentionTag',
+        'regular-tag',
+      ];
 
-      const joinedForCsv = escapedTags.join(';');
-      const roundTrippedTags = joinedForCsv.split(';').map((t) => unescapeCsvFormulaField(t));
-      expect(roundTrippedTags).toEqual(tags);
+      // Export: serialized as JSON array with formula escaping
+      const escapedJsonStr = escapeTagsForCsv(complexTags);
+      expect(escapedJsonStr).toContain('tag,with,comma');
+      expect(escapedJsonStr).toContain('tag;with;semicolon');
+      expect(escapedJsonStr).toContain("'=FormulaTag");
+      expect(escapedJsonStr).toContain("'+PriorityTag");
+
+      // Import: unescaped back to exact array
+      const roundTripped = unescapeTagsFromCsv(escapedJsonStr);
+      expect(roundTripped).toEqual(complexTags);
+    });
+
+    it('gracefully falls back to comma/semicolon splitting for plain non-JSON tags input', () => {
+      const legacyTags1 = 'vip, priority, newsletter';
+      expect(unescapeTagsFromCsv(legacyTags1)).toEqual(['vip', 'priority', 'newsletter']);
+
+      const legacyTags2 = 'sales; marketing; lead';
+      expect(unescapeTagsFromCsv(legacyTags2)).toEqual(['sales', 'marketing', 'lead']);
+
+      const legacyTagsWithFormula = "'=vip, '+priority, normal";
+      expect(unescapeTagsFromCsv(legacyTagsWithFormula)).toEqual(['=vip', '+priority', 'normal']);
+
+      expect(unescapeTagsFromCsv('')).toBeUndefined();
+      expect(unescapeTagsFromCsv(null)).toBeUndefined();
     });
 
     it('preserves raw JSON values unmodified without adding CSV formula escapes', () => {

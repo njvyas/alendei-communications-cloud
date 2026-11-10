@@ -136,8 +136,42 @@ export function unescapeCsvFormulaField(value: string): string {
   return value;
 }
 
+function escapeAnyForCsv(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return escapeCsvFormulaField(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => escapeAnyForCsv(item));
+  }
+  if (value && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      result[k] = escapeAnyForCsv(v);
+    }
+    return result;
+  }
+  return value;
+}
+
+function unescapeAnyFromCsv(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return unescapeCsvFormulaField(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => unescapeAnyFromCsv(item));
+  }
+  if (value && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      result[k] = unescapeAnyFromCsv(v);
+    }
+    return result;
+  }
+  return value;
+}
+
 /**
- * Recursively escapes string values inside a customFields dictionary for spreadsheet-safe CSV export.
+ * Recursively escapes string values inside a customFields dictionary at any depth for spreadsheet-safe CSV export.
  */
 export function escapeCustomFieldsForCsv(
   fields: Record<string, unknown> | null | undefined,
@@ -145,23 +179,11 @@ export function escapeCustomFieldsForCsv(
   if (!fields || typeof fields !== 'object' || Object.keys(fields).length === 0) {
     return null;
   }
-  const result: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(fields)) {
-    if (typeof v === 'string') {
-      result[k] = escapeCsvFormulaField(v);
-    } else if (v && typeof v === 'object' && !Array.isArray(v)) {
-      result[k] = escapeCustomFieldsForCsv(v as Record<string, unknown>);
-    } else if (Array.isArray(v)) {
-      result[k] = v.map((item) => (typeof item === 'string' ? escapeCsvFormulaField(item) : item));
-    } else {
-      result[k] = v;
-    }
-  }
-  return result;
+  return escapeAnyForCsv(fields) as Record<string, unknown>;
 }
 
 /**
- * Recursively unescapes string values inside a customFields dictionary from CSV import.
+ * Recursively unescapes string values inside a customFields dictionary at any depth from CSV import.
  */
 export function unescapeCustomFieldsFromCsv(
   fields: Record<string, unknown> | null | undefined,
@@ -169,19 +191,42 @@ export function unescapeCustomFieldsFromCsv(
   if (!fields || typeof fields !== 'object' || Object.keys(fields).length === 0) {
     return null;
   }
-  const result: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(fields)) {
-    if (typeof v === 'string') {
-      result[k] = unescapeCsvFormulaField(v);
-    } else if (v && typeof v === 'object' && !Array.isArray(v)) {
-      result[k] = unescapeCustomFieldsFromCsv(v as Record<string, unknown>);
-    } else if (Array.isArray(v)) {
-      result[k] = v.map((item) =>
-        typeof item === 'string' ? unescapeCsvFormulaField(item) : item,
-      );
-    } else {
-      result[k] = v;
-    }
+  return unescapeAnyFromCsv(fields) as Record<string, unknown>;
+}
+
+/**
+ * Serializes tags into a lossless JSON array string for CSV export, with formula protection.
+ * Preserves commas, semicolons, quotes, and line breaks within tags.
+ */
+export function escapeTagsForCsv(tags: string[] | null | undefined): string {
+  if (!tags || tags.length === 0) {
+    return '';
   }
-  return result;
+  const escaped = tags.map((t) => escapeCsvFormulaField(t));
+  return JSON.stringify(escaped);
+}
+
+/**
+ * Deserializes tags from a CSV string. Supports lossless JSON array representation
+ * as well as legacy comma/semicolon delimited strings.
+ */
+export function unescapeTagsFromCsv(raw: string | null | undefined): string[] | undefined {
+  if (!raw || raw.trim().length === 0) {
+    return undefined;
+  }
+  const unescapedRaw = unescapeCsvFormulaField(raw.trim());
+  try {
+    const parsed = JSON.parse(unescapedRaw);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((item) => (typeof item === 'string' ? unescapeCsvFormulaField(item) : String(item)))
+        .filter((item) => item.length > 0);
+    }
+  } catch {
+    // Fallback for simple comma/semicolon delimited strings
+  }
+  return unescapedRaw
+    .split(/[;,]/)
+    .map((t) => unescapeCsvFormulaField(t.trim()))
+    .filter((t) => t.length > 0);
 }

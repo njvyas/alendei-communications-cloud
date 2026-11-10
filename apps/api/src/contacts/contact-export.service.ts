@@ -19,7 +19,11 @@ import {
   workspaceNotFound,
 } from '../workspaces/workspace-administration.service';
 import type { ExportContactsDto } from './contacts.dto';
-import { escapeCsvFormulaField, escapeCustomFieldsForCsv } from './contacts.normalization';
+import {
+  escapeCsvFormulaField,
+  escapeCustomFieldsForCsv,
+  escapeTagsForCsv,
+} from './contacts.normalization';
 import { serializeCsvRow } from './csv-parser';
 
 const EXPORT_CEILING = 50000;
@@ -46,9 +50,7 @@ function extractTags(metadata: unknown): string[] {
   const m = metadata as Record<string, unknown>;
   const rawTags = m.tags ?? m.tag_list;
   if (Array.isArray(rawTags)) {
-    return rawTags
-      .filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
-      .map((t) => t.trim());
+    return rawTags.filter((t): t is string => typeof t === 'string' && t.length > 0);
   }
   if (typeof rawTags === 'string') {
     return rawTags
@@ -298,7 +300,7 @@ export class ContactExportService {
             const emailEscaped = contact.email ? escapeCsvFormulaField(contact.email) : '';
             const firstEscaped = contact.firstName ? escapeCsvFormulaField(contact.firstName) : '';
             const lastEscaped = contact.lastName ? escapeCsvFormulaField(contact.lastName) : '';
-            const tagsEscaped = contact.tags.map((t) => escapeCsvFormulaField(t)).join(';');
+            const tagsEscaped = escapeTagsForCsv(contact.tags);
             const escapedCustomFields = escapeCustomFieldsForCsv(contact.customFields);
             const customFieldsEscaped = escapedCustomFields
               ? JSON.stringify(escapedCustomFields)

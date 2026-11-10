@@ -28,6 +28,8 @@ import {
   normalizeEmailAddress,
   normalizePhoneNumber,
   unescapeCsvFormulaField,
+  unescapeCustomFieldsFromCsv,
+  unescapeTagsFromCsv,
 } from './contacts.normalization';
 import { parseCsvToObjects } from './csv-parser';
 
@@ -54,9 +56,7 @@ function extractTags(metadata: unknown): string[] {
   const m = metadata as Record<string, unknown>;
   const rawTags = m.tags ?? m.tag_list;
   if (Array.isArray(rawTags)) {
-    return rawTags
-      .filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
-      .map((t) => t.trim());
+    return rawTags.filter((t): t is string => typeof t === 'string' && t.length > 0);
   }
   if (typeof rawTags === 'string') {
     return rawTags
@@ -340,13 +340,7 @@ export class ContactImportService {
       const phoneRaw = lowerMap['phone'] ?? lowerMap['phonenumber'] ?? lowerMap['mobile'] ?? '';
       const emailRaw = lowerMap['email'] ?? lowerMap['emailaddress'] ?? '';
       const tagsRaw = lowerMap['tags'] ?? lowerMap['taglist'] ?? '';
-
-      const tags = tagsRaw
-        ? tagsRaw
-            .split(/[;,]/)
-            .map((t) => unescapeCsvFormulaField(t.trim()))
-            .filter((t) => t.length > 0)
-        : undefined;
+      const tags = unescapeTagsFromCsv(tagsRaw);
 
       const customFields: Record<string, unknown> = {};
 
@@ -357,8 +351,9 @@ export class ContactImportService {
         try {
           const parsed = JSON.parse(unescapedRaw);
           if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-              customFields[k] = typeof v === 'string' ? unescapeCsvFormulaField(v) : v;
+            const unescapedObj = unescapeCustomFieldsFromCsv(parsed as Record<string, unknown>);
+            if (unescapedObj) {
+              Object.assign(customFields, unescapedObj);
             }
           }
         } catch {
@@ -457,6 +452,8 @@ export class ContactImportService {
     );
     const catalogue = catalogueRes.rows;
 
+    const ALLOWED_PHONE_CHANNEL_CODES = new Set(['sms', 'whatsapp', 'rcs', 'voice']);
+
     if (phoneId) {
       const found = catalogue.find((c) => c.id === phoneId);
       if (!found) {
@@ -464,6 +461,13 @@ export class ContactImportService {
           status: HttpStatus.BAD_REQUEST,
           code: ERROR_CODES.VALIDATION_FAILED,
           message: `Default phone channel '${phoneId}' not found`,
+        });
+      }
+      if (!ALLOWED_PHONE_CHANNEL_CODES.has(found.code)) {
+        throw new AppException({
+          status: HttpStatus.BAD_REQUEST,
+          code: ERROR_CODES.VALIDATION_FAILED,
+          message: `Channel '${phoneId}' (${found.code}) is not an allowed phone channel (sms, whatsapp, rcs, voice)`,
         });
       }
     } else {
@@ -487,6 +491,13 @@ export class ContactImportService {
           status: HttpStatus.BAD_REQUEST,
           code: ERROR_CODES.VALIDATION_FAILED,
           message: `Default email channel '${emailId}' not found`,
+        });
+      }
+      if (found.code !== 'email') {
+        throw new AppException({
+          status: HttpStatus.BAD_REQUEST,
+          code: ERROR_CODES.VALIDATION_FAILED,
+          message: `Channel '${emailId}' (${found.code}) is not an email channel`,
         });
       }
     } else {
@@ -619,34 +630,56 @@ export class ContactImportService {
     let phoneMatchContactId: string | null = null;
     if (normPhone) {
       const phoneRes = await tx.execute<{ contact_id: string }>(
-        sql`SELECT ci.contact_id
+        sql`SELECT DISTINCT ci.contact_id
             FROM contact_identities ci
             JOIN app_channel_catalogue() ch ON ch.id = ci.channel_id
             WHERE ci.workspace_id = ${workspaceId}
               AND ci.status = 'active'
               AND ci.normalized_address = ${normPhone}
               AND ch.code IN ('sms', 'whatsapp', 'rcs', 'voice')
-            LIMIT 1`,
+            LIMIT 2`,
       );
-      if (phoneRes.rows[0]) {
-        phoneMatchContactId = phoneRes.rows[0].contact_id;
+      if (phoneRes.rows.length > 1) {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.IDENTITY_CONFLICT,
+          message: `Phone '${normPhone}' matches multiple distinct contacts across phone channels (${phoneRes.rows.map((r) => r.contact_id).join(', ')})`,
+          logContext: {
+            phone: normPhone,
+            matchingContactIds: phoneRes.rows.map((r) => r.contact_id),
+          },
+        });
+      }
+      if (phoneRes.rows.length === 1) {
+        phoneMatchContactId = phoneRes.rows[0]!.contact_id;
       }
     }
 
     let emailMatchContactId: string | null = null;
     if (normEmail) {
       const emailRes = await tx.execute<{ contact_id: string }>(
-        sql`SELECT ci.contact_id
+        sql`SELECT DISTINCT ci.contact_id
             FROM contact_identities ci
             JOIN app_channel_catalogue() ch ON ch.id = ci.channel_id
             WHERE ci.workspace_id = ${workspaceId}
               AND ci.status = 'active'
               AND ci.normalized_address = ${normEmail}
               AND ch.code = 'email'
-            LIMIT 1`,
+            LIMIT 2`,
       );
-      if (emailRes.rows[0]) {
-        emailMatchContactId = emailRes.rows[0].contact_id;
+      if (emailRes.rows.length > 1) {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.IDENTITY_CONFLICT,
+          message: `Email '${normEmail}' matches multiple distinct contacts (${emailRes.rows.map((r) => r.contact_id).join(', ')})`,
+          logContext: {
+            email: normEmail,
+            matchingContactIds: emailRes.rows.map((r) => r.contact_id),
+          },
+        });
+      }
+      if (emailRes.rows.length === 1) {
+        emailMatchContactId = emailRes.rows[0]!.contact_id;
       }
     }
 

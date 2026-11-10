@@ -483,6 +483,183 @@ describe('Phase 8A-2: Contact Import & Export Integration Suite', () => {
       expect(res.status).toBe(422);
       expect(res.body.error.code).toBe(ERROR_CODES.IMPORT_ROW_LIMIT_EXCEEDED);
     });
+
+    it('rejects defaultPhoneChannelId pointing to an email channel before processing rows', async () => {
+      const channels = await h.admin.execute<{ id: string; code: string }>(
+        sql`SELECT id, code::text FROM app_channel_catalogue()`,
+      );
+      const emailCh = channels.rows.find((c) => c.code === 'email')!;
+
+      const res = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenant.workspaceId}/contacts/import`))
+        .set('authorization', `Bearer ${token}`)
+        .send({
+          defaultPhoneChannelId: emailCh.id,
+          contacts: [{ firstName: 'Invalid', phone: '+15551112222' }],
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe(ERROR_CODES.VALIDATION_FAILED);
+      expect(res.body.error.message).toContain('not an allowed phone channel');
+
+      // Zero contacts written
+      const countRes = await h.admin
+        .select({ count: sql<number>`count(*)::int` })
+        .from(schema.contacts)
+        .where(eq(schema.contacts.workspaceId, tenant.workspaceId));
+      expect(countRes[0]!.count).toBe(0);
+    });
+
+    it('rejects defaultEmailChannelId pointing to an SMS channel before processing rows', async () => {
+      const channels = await h.admin.execute<{ id: string; code: string }>(
+        sql`SELECT id, code::text FROM app_channel_catalogue()`,
+      );
+      const smsCh = channels.rows.find((c) => c.code === 'sms')!;
+
+      const res = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenant.workspaceId}/contacts/import`))
+        .set('authorization', `Bearer ${token}`)
+        .send({
+          defaultEmailChannelId: smsCh.id,
+          contacts: [{ firstName: 'Invalid', email: 'invalid@example.test' }],
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe(ERROR_CODES.VALIDATION_FAILED);
+      expect(res.body.error.message).toContain('not an email channel');
+
+      // Zero contacts written
+      const countRes = await h.admin
+        .select({ count: sql<number>`count(*)::int` })
+        .from(schema.contacts)
+        .where(eq(schema.contacts.workspaceId, tenant.workspaceId));
+      expect(countRes[0]!.count).toBe(0);
+    });
+
+    it('detects ambiguous phone identity matches across distinct contacts and fails closed with 409 IDENTITY_CONFLICT', async () => {
+      const channels = await h.admin.execute<{ id: string; code: string }>(
+        sql`SELECT id, code::text FROM app_channel_catalogue()`,
+      );
+      const smsCh = channels.rows.find((c) => c.code === 'sms')!;
+      const waCh = channels.rows.find((c) => c.code === 'whatsapp')!;
+
+      // Contact 1 on SMS
+      const c1Id = uuidv7();
+      await h.admin.insert(schema.contacts).values({
+        id: c1Id,
+        orgId: tenant.orgId,
+        workspaceId: tenant.workspaceId,
+        firstName: 'Contact',
+        lastName: 'One',
+      });
+      await h.admin.insert(schema.contactIdentities).values({
+        id: uuidv7(),
+        orgId: tenant.orgId,
+        workspaceId: tenant.workspaceId,
+        contactId: c1Id,
+        channelId: smsCh.id,
+        rawAddress: '+15559990001',
+        normalizedAddress: '+15559990001',
+        isPrimary: true,
+        status: 'active',
+      });
+
+      // Contact 2 on WhatsApp with same normalized phone number
+      const c2Id = uuidv7();
+      await h.admin.insert(schema.contacts).values({
+        id: c2Id,
+        orgId: tenant.orgId,
+        workspaceId: tenant.workspaceId,
+        firstName: 'Contact',
+        lastName: 'Two',
+      });
+      await h.admin.insert(schema.contactIdentities).values({
+        id: uuidv7(),
+        orgId: tenant.orgId,
+        workspaceId: tenant.workspaceId,
+        contactId: c2Id,
+        channelId: waCh.id,
+        rawAddress: '+15559990001',
+        normalizedAddress: '+15559990001',
+        isPrimary: true,
+        status: 'active',
+      });
+
+      // Attempt to import row with phone +15559990001
+      const res = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenant.workspaceId}/contacts/import`))
+        .set('authorization', `Bearer ${token}`)
+        .send({
+          contacts: [{ firstName: 'Ambiguous', phone: '+15559990001' }],
+        });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe(ERROR_CODES.IDENTITY_CONFLICT);
+      expect(res.body.error.message).toContain(
+        'matches multiple distinct contacts across phone channels',
+      );
+    });
+
+    it('preserves legitimate multiple channel identities belonging to the same contact', async () => {
+      const channels = await h.admin.execute<{ id: string; code: string }>(
+        sql`SELECT id, code::text FROM app_channel_catalogue()`,
+      );
+      const smsCh = channels.rows.find((c) => c.code === 'sms')!;
+      const waCh = channels.rows.find((c) => c.code === 'whatsapp')!;
+
+      // Contact 1 with both SMS and WhatsApp identities
+      const c1Id = uuidv7();
+      await h.admin.insert(schema.contacts).values({
+        id: c1Id,
+        orgId: tenant.orgId,
+        workspaceId: tenant.workspaceId,
+        firstName: 'Dual',
+        lastName: 'Channel',
+      });
+      await h.admin.insert(schema.contactIdentities).values({
+        id: uuidv7(),
+        orgId: tenant.orgId,
+        workspaceId: tenant.workspaceId,
+        contactId: c1Id,
+        channelId: smsCh.id,
+        rawAddress: '+15559990002',
+        normalizedAddress: '+15559990002',
+        isPrimary: true,
+        status: 'active',
+      });
+      await h.admin.insert(schema.contactIdentities).values({
+        id: uuidv7(),
+        orgId: tenant.orgId,
+        workspaceId: tenant.workspaceId,
+        contactId: c1Id,
+        channelId: waCh.id,
+        rawAddress: '+15559990002',
+        normalizedAddress: '+15559990002',
+        isPrimary: false,
+        status: 'active',
+      });
+
+      // Update import for +15559990002
+      const res = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenant.workspaceId}/contacts/import`))
+        .set('authorization', `Bearer ${token}`)
+        .send({
+          duplicateStrategy: 'update',
+          contacts: [{ firstName: 'DualUpdated', phone: '+15559990002' }],
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.summary.updated).toBe(1);
+
+      const [c] = await h.admin.select().from(schema.contacts).where(eq(schema.contacts.id, c1Id));
+      expect(c!.firstName).toBe('DualUpdated');
+
+      const identities = await h.admin
+        .select()
+        .from(schema.contactIdentities)
+        .where(eq(schema.contactIdentities.contactId, c1Id));
+      expect(identities).toHaveLength(2);
+    });
   });
 
   // ===========================================================================
@@ -605,7 +782,7 @@ describe('Phase 8A-2: Contact Import & Export Integration Suite', () => {
       expect(csvText).toContain("''O'Brian"); // genuine apostrophe doubled
       expect(csvText).toContain("'=FormulaFirst");
       expect(csvText).toContain("'+FormulaLast");
-      expect(csvText).toContain("'=vip;'+priority;normal");
+      expect(csvText).toContain('"[""\'=vip"",""\'+priority"",""normal""]"');
 
       // 3. Clear workspace contacts to verify clean re-import
       await h.admin.execute(
@@ -646,6 +823,222 @@ describe('Phase 8A-2: Contact Import & Export Integration Suite', () => {
         .from(schema.contactIdentities)
         .where(eq(schema.contactIdentities.contactId, reimported!.id));
       expect(identity!.normalizedAddress).toBe('+15557778899');
+    });
+
+    it('proves exact restoration of formula-triggering values at every supported depth in customFields through CSV export and import', async () => {
+      // Clean workspace contacts first
+      await h.admin.execute(
+        sql`DELETE FROM contact_identities WHERE workspace_id = ${tenant.workspaceId}`,
+      );
+      await h.admin.execute(sql`DELETE FROM contacts WHERE workspace_id = ${tenant.workspaceId}`);
+
+      const deepCustomFields = {
+        topLevelFormula: '=cmd',
+        topLevelApostrophe: "'genuine",
+        nestedLevel1: {
+          formulaPlus: '+SUM(1,2)',
+          doubleApostrophe: "''double",
+          nestedLevel2: {
+            deepFormulaAt: '@lookup',
+            deepFormulaHyphen: '-100',
+            deepTab: '\tindent',
+            deepCarriageReturn: '\rreturn',
+          },
+        },
+        stringArray: ['=first', "''quoted", '+third', '-fourth', '@fifth', '\tsixth', 'regular'],
+        arrayOfObjects: [
+          {
+            fieldInArrObj: '=arrCmd',
+            nestedArrInObj: ['+innerArrFormula', 'normalInner'],
+          },
+        ],
+        nestedArrays: [
+          ['=matrixA', '+matrixB'],
+          ["'matrixC", 'matrixD'],
+        ],
+      };
+
+      // 1. Seed contact with deep custom fields via JSON import
+      await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenant.workspaceId}/contacts/import`))
+        .set('authorization', `Bearer ${token}`)
+        .send({
+          contacts: [
+            {
+              firstName: 'Deep',
+              lastName: 'CustomFields',
+              phone: '+15553334455',
+              email: 'deep@example.test',
+              customFields: deepCustomFields,
+            },
+          ],
+        })
+        .expect(200);
+
+      // 2. Verify JSON export keeps values untouched
+      const jsonRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenant.workspaceId}/contacts/export`))
+        .set('authorization', `Bearer ${token}`)
+        .send({ format: 'json' })
+        .expect(200);
+
+      const jsonParsed = JSON.parse(jsonRes.text);
+      expect(jsonParsed.data[0].customFields).toEqual(deepCustomFields);
+
+      // 3. Export to CSV
+      const exportRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenant.workspaceId}/contacts/export`))
+        .set('authorization', `Bearer ${token}`)
+        .send({ format: 'csv' });
+
+      expect(exportRes.status).toBe(200);
+      const csvText = exportRes.text;
+
+      // Verify formula protection was applied across all levels in CSV
+      expect(csvText).toContain('""topLevelFormula"":""\'=cmd""');
+      expect(csvText).toContain('""topLevelApostrophe"":""\'\'genuine""');
+      expect(csvText).toContain('""formulaPlus"":""\'+SUM(1,2)""');
+      expect(csvText).toContain('""deepFormulaAt"":""\'@lookup""');
+      expect(csvText).toContain('""deepFormulaHyphen"":""\'-100""');
+      expect(csvText).toContain('""fieldInArrObj"":""\'=arrCmd""');
+
+      // 4. Wipe database contacts
+      await h.admin.execute(
+        sql`DELETE FROM contact_identities WHERE workspace_id = ${tenant.workspaceId}`,
+      );
+      await h.admin.execute(sql`DELETE FROM contacts WHERE workspace_id = ${tenant.workspaceId}`);
+
+      // 5. Import the CSV back
+      const importRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenant.workspaceId}/contacts/import`))
+        .set('authorization', `Bearer ${token}`)
+        .set('Content-Type', 'text/csv')
+        .send(csvText);
+
+      expect(importRes.status).toBe(200);
+      expect(importRes.body.summary.created).toBe(1);
+
+      // 6. Query reimported contact and assert exact restoration
+      const [reimported] = await h.admin
+        .select()
+        .from(schema.contacts)
+        .where(eq(schema.contacts.workspaceId, tenant.workspaceId));
+
+      expect(reimported).toBeDefined();
+      const meta = reimported!.metadata as Record<string, unknown>;
+
+      expect(meta.topLevelFormula).toBe('=cmd');
+      expect(meta.topLevelApostrophe).toBe("'genuine");
+      expect(meta.nestedLevel1).toEqual({
+        formulaPlus: '+SUM(1,2)',
+        doubleApostrophe: "''double",
+        nestedLevel2: {
+          deepFormulaAt: '@lookup',
+          deepFormulaHyphen: '-100',
+          deepTab: '\tindent',
+          deepCarriageReturn: '\rreturn',
+        },
+      });
+      expect(meta.stringArray).toEqual([
+        '=first',
+        "''quoted",
+        '+third',
+        '-fourth',
+        '@fifth',
+        '\tsixth',
+        'regular',
+      ]);
+      expect(meta.arrayOfObjects).toEqual([
+        {
+          fieldInArrObj: '=arrCmd',
+          nestedArrInObj: ['+innerArrFormula', 'normalInner'],
+        },
+      ]);
+      expect(meta.nestedArrays).toEqual([
+        ['=matrixA', '+matrixB'],
+        ["'matrixC", 'matrixD'],
+      ]);
+    });
+
+    it('proves lossless tags containing commas, semicolons, quotes, line breaks, and formula triggers survive CSV round-trip intact', async () => {
+      // Clean workspace contacts first
+      await h.admin.execute(
+        sql`DELETE FROM contact_identities WHERE workspace_id = ${tenant.workspaceId}`,
+      );
+      await h.admin.execute(sql`DELETE FROM contacts WHERE workspace_id = ${tenant.workspaceId}`);
+
+      const complexTags = [
+        'tag,with,commas',
+        'tag;with;semicolons',
+        'tag "with" quotes',
+        'tag\nwith\nnewline',
+        'tag\r\nwith\rcrlf',
+        '=formulaTag',
+        '+plusTag',
+        '-minusTag',
+        '@atTag',
+        '\ttabTag',
+        "'apostropheTag",
+        "''doubleApostropheTag",
+        'simple_tag',
+      ];
+
+      // 1. Seed contact with complex tags
+      await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenant.workspaceId}/contacts/import`))
+        .set('authorization', `Bearer ${token}`)
+        .send({
+          contacts: [
+            {
+              firstName: 'TagMaster',
+              lastName: 'Tester',
+              phone: '+15556667788',
+              email: 'tagmaster@example.test',
+              tags: complexTags,
+            },
+          ],
+        })
+        .expect(200);
+
+      // 2. Export to CSV
+      const exportRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenant.workspaceId}/contacts/export`))
+        .set('authorization', `Bearer ${token}`)
+        .send({ format: 'csv' });
+
+      expect(exportRes.status).toBe(200);
+      const csvText = exportRes.text;
+
+      // Verify formula protection was applied to tags starting with formula triggers
+      expect(csvText).toContain('""\'=formulaTag""');
+      expect(csvText).toContain('""\'\'apostropheTag""');
+      expect(csvText).toContain('""\'\'\'doubleApostropheTag""');
+
+      // 3. Wipe database contacts
+      await h.admin.execute(
+        sql`DELETE FROM contact_identities WHERE workspace_id = ${tenant.workspaceId}`,
+      );
+      await h.admin.execute(sql`DELETE FROM contacts WHERE workspace_id = ${tenant.workspaceId}`);
+
+      // 4. Import the CSV back
+      const importRes = await request(h.app.getHttpServer())
+        .post(url(`/workspaces/${tenant.workspaceId}/contacts/import`))
+        .set('authorization', `Bearer ${token}`)
+        .set('Content-Type', 'text/csv')
+        .send(csvText);
+
+      expect(importRes.status).toBe(200);
+      expect(importRes.body.summary.created).toBe(1);
+
+      // 5. Query reimported contact and assert exact restoration
+      const [reimported] = await h.admin
+        .select()
+        .from(schema.contacts)
+        .where(eq(schema.contacts.workspaceId, tenant.workspaceId));
+
+      expect(reimported).toBeDefined();
+      const meta = reimported!.metadata as Record<string, unknown>;
+      expect(meta.tags).toEqual(complexTags);
     });
   });
 
