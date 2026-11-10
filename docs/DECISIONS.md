@@ -3422,6 +3422,86 @@ Each is a draft, stopped for owner review. Billing enforcement stays disabled; n
 
 **Accepted risk.** C-6 duplicates the register derivation of `0057` in application SQL, because calling the paged register function would apply its paging and filters. The A-1 parity test is the guard against drift: any change to the register must keep it green.
 
+## 1zj. Phase 8C Journeys / Automation: owner-approved foundation, 10-Nov-2026
+
+### 1zj.1 Approval and owner decisions
+**Handover:** `PHASE-8C-JOURNEYS-HANDOVER.md` (Rev 1, with §16 recording the approval), `PHASE-8C-DEPENDENCY-RISK-REGISTER.md` (Rev 2) and `PHASE-8C-DECISION-REGISTER.md` (Rev 2). Baseline `develop` `b5517bc`.
+
+**Authorised:** 8C-1 to 8C-4 only, the non-sending foundation. The runner and sending switches stay off. Each PR is separate, draft and unmerged. **Not authorised:** 8B-3, 8C-5/8C-6 sending, webhook execution, unrelated roadmap work, and QA or production deployment.
+
+**Owner decisions:**
+1. **Automated sending identity (OD-8C-1, also D-5).** A shared, organisation-owned automation sending principal serves campaigns and journeys. It uses short-lived, execution-scoped capabilities, preserves initiator attribution, and supports administrator pause and revocation. The initiating user's departure does not automatically terminate an authorised automation.
+2. **Sequencing (OD-8C-2).** Build 8C-1 to 8C-4 first. The shared sending identity is built in 8B-3, and journey sending in 8C-6 must reuse it.
+3. **Webhook/API action steps (OD-8C-3).** Placeholders only; no outbound HTTP in 8C.
+
+**Facts recorded at the baseline:**
+- PR #94 delivered audience materialisation, previews and scheduling validation. Campaign dispatch (8B-3) is not built (`CAMPAIGN_DISPATCH_DISABLED`).
+- Consent and suppression are enforced in the shared submission core and re-checked at dispatch (§1za). Reservation runs inside the core (§1zi.7).
+
+### 1zj.2 PR 8C-1 as built: journey definitions (migration `0062`)
+**Migration number.** `0062` was verified free against `develop` `b5517bc`: the latest is `0061`, no recently pushed remote branch carries `0062`+, and the only open PR with a migration is #65 (`0041`, not reused).
+
+**Schema (`0062`, expand-only).**
+- `journey_status` (`draft, active, paused, archived`) and `journey_version_status` (`draft, published, retired`) enums.
+- **`journeys`:** Model B RLS (select/insert/update for `acc_app`), composite workspace FK, unique `(id, workspace_id, org_id)`, soft delete.
+- **`journey_versions`:**
+  - composite FK `(journey_id, workspace_id, org_id) → journeys`;
+  - unique `(journey_id, version_number)`, and at most one draft per journey (partial unique index);
+  - CHECKs on the SHA-256 shape, on the graph being an object, and on `status = 'draft' ⇔ published_at IS NULL`.
+- **`trg_journey_versions_guard`:**
+  - identity columns never change and no version is deleted;
+  - a draft may become `published`, never `retired`;
+  - a published version may only become `retired`, with every other column unchanged;
+  - a retired version never changes.
+- **Permissions:** `journeys.read` and `journeys.manage` (`tenant_content`; organization and workspace scopes), granted to `org_admin` only.
+- **Grants:** `SELECT, INSERT, UPDATE` on both tables to `acc_app`; nothing for other roles.
+
+**Contract (`packages/contracts/src/journeys.ts`).**
+- The graph v1 types and the node catalogue: entry (api/event/schedule), send_message, three waits, condition, wait_for_outcome, update_contact, exit, and the placeholders webhook, crm_action, human_handoff and ai_handoff.
+- `validateJourneyGraph`, shared with the builder, checks:
+  - limits (200 nodes, 256 KiB) and node keys;
+  - per-node fields; edges and a single entry;
+  - reachability; **acyclicity**; at least one reachable exit;
+  - send references must name a `send_message` node that **dominates** the referencing node.
+- Placeholder nodes produce warnings, never errors.
+- `canonicalJourneyJson` makes the hash independent of key order.
+
+**API (`/workspaces/:workspaceId/journeys`, `journeys` module).**
+- List (status and name filters, keyset), create (version 1 holds the default graph), get, patch and soft-delete (draft or archived only).
+- Versions: list, get, create a draft (copy of the latest published version; `409 JOURNEY_DRAFT_EXISTS`).
+- `PUT …/graph` (optimistic, on `expectedGraphSha256`), `validate`, and `publish`.
+  - **Publication freezes the version and activates nothing.**
+  - **Validation is referential as well as structural:** templates exist in the organisation, are approved, match the channel and have every placeholder mapped; segments exist in the workspace.
+- `Idempotency-Key` is **required** on the three creating POSTs (create, new version, publish). `PUT` uses replace semantics.
+- Every mutation is audited (`journey.*`).
+- New error codes: `JOURNEY_NOT_FOUND`, `JOURNEY_VERSION_NOT_FOUND`, `JOURNEY_VERSION_IMMUTABLE`, `JOURNEY_GRAPH_CONFLICT`, `JOURNEY_GRAPH_INVALID`, `JOURNEY_DRAFT_EXISTS`, `JOURNEY_LIFECYCLE_CONFLICT`.
+
+**Not built:** activation, executions, the queue, triggers, the runner, sends and outbound HTTP. The module imports no messaging, dispatch, billing or provider code.
+
+**Deviations from the handover.**
+1. **Permission grants.** The handover proposed `campaign_editor` as well [P]. The repository pins "no tenant role other than `org_admin` carries a tenant-content key" (`permission-classification.spec.ts`), and 8B-1 granted `campaigns.*` to `org_admin` only. 8C-1 follows that precedent. Widening `campaign_editor` is left to an owner decision covering both domains.
+2. **No `If-Match` header.** The draft's concurrency token is a body field, `expectedGraphSha256`, on `PUT …/graph` and `publish`, consistent with the DTO validation used elsewhere.
+3. **Publisher attribution.** `published_by` is the user, and is `NULL` for an API-key principal. The actor is always in the audit log.
+
+**Tests:**
+- contracts 14 (`test/journeys.test.ts`), plus the existing tests;
+- API integration 12 (`journeys.int-spec.ts`):
+  - idempotency (required, replay, mismatch);
+  - CRUD and keyset paging, with literal `%` matching;
+  - cross-workspace and cross-organisation `404`, and `403` without `journeys.manage`;
+  - optimistic drafts and referential validation;
+  - publish once (immutable, replay), with no message or queue row created;
+  - one draft under concurrency (`201` + `409`);
+  - the database guard and the composite FK.
+- **Updated pins:**
+  - scope-creep: module and table allowlists; outbox, worker and lifecycle vocabulary pins with this citation (*publish* is version publication, *schedule* is trigger vocabulary, *delivered*/*webhook* are contract names; nothing runs);
+  - permission classification (57 keys; API surface 53);
+  - the migration journal pin (`0062` newest).
+- **OpenAPI.** The journey operations document their success responses (`Journey`, `JourneyVersion`, `JourneyVersionSummary`, `JourneyGraphValidationReport`). They are exercised with both a user session and an API key in `openapi-responses.sec-spec.ts`; campaigns and segments were instead exempted from that check. The nullable version summaries are inline objects, because OpenAPI 3.0 cannot make a `$ref` nullable. The suite also found that `PUT …/graph` refused an unsaveable body before looking up an unknown journey; the lookup now comes first, so an unknown id is `404`.
+- **Mutation checks, each caught:**
+  - removing the dominance check from `validateJourneyGraph`: the "every path" contract test fails;
+  - removing the draft-hash comparison: two API tests fail.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

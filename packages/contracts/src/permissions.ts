@@ -130,6 +130,12 @@ export const PERMISSIONS = {
   /** Create, update, configure and administer campaigns (organization and workspace scopes). */
   CAMPAIGNS_MANAGE: 'campaigns.manage',
 
+  // --- Journeys (Phase 8C PR 8C-1; handover approved 10-Nov-2026) -------------
+  /** Read journeys, their versions and graphs (organization and workspace scopes). */
+  JOURNEYS_READ: 'journeys.read',
+  /** Create, edit, version and publish journeys (organization and workspace scopes). */
+  JOURNEYS_MANAGE: 'journeys.manage',
+
   // --- Billing and pricing (Phase 7 PR 7-1, DECISIONS.md §1zi) ---------------
   // INERT CATALOGUE ENTRIES in PR 7-1: the classification, the allowed scopes
   // and the seeded role grants are in force, but no route checks them and the
@@ -245,6 +251,8 @@ export const PERMISSION_CLASS: Readonly<Record<PermissionKey, PermissionClass>> 
   [P.MESSAGES_SEND]: 'tenant_content',
   [P.CAMPAIGNS_READ]: 'tenant_content',
   [P.CAMPAIGNS_MANAGE]: 'tenant_content',
+  [P.JOURNEYS_READ]: 'tenant_content',
+  [P.JOURNEYS_MANAGE]: 'tenant_content',
   // Phase 7 PR 7-1 (DP-1): `billing.read` is organization-only, and the only class
   // that keeps an organization-only key off the platform roles is tenant content
   // (`SUPER_ADMIN_PERMISSIONS`; a role may carry a key only when its scopes are a
@@ -335,6 +343,8 @@ export const PERMISSION_ALLOWED_SCOPES: Readonly<Record<PermissionKey, readonly 
     [P.MESSAGES_SEND]: Object.freeze(['organization', 'workspace']),
     [P.CAMPAIGNS_READ]: Object.freeze(['organization', 'workspace']),
     [P.CAMPAIGNS_MANAGE]: Object.freeze(['organization', 'workspace']),
+    [P.JOURNEYS_READ]: Object.freeze(['organization', 'workspace']),
+    [P.JOURNEYS_MANAGE]: Object.freeze(['organization', 'workspace']),
     [P.BILLING_READ]: Object.freeze(['organization']),
     [P.BILLING_MANAGE]: PLATFORM_ONLY_SCOPE,
     [P.PRICING_READ]: PLATFORM_ONLY_SCOPE,

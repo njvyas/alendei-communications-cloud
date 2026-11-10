@@ -313,7 +313,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 7 PR 7-6d-2 added the wallet recharge route (platform billing.manage, target deferred): 185 → 186 scoped.
     // Phase 8A PR 8A-2 added 3 contact import/export routes (workspace-scoped import and export; target deferred): 186 → 189 scoped.
     // Phase 8B.2 added 7 scoped campaign routes (preview, materialize, schedule, cancel, pause, resume, recipients): 189 → 196 scoped.
-    expect(scoped.length).toBe(196);
+    // Phase 8C PR 8C-1 added 11 journey-definition routes (workspace-scoped; target deferred): 196 → 207 scoped.
+    expect(scoped.length).toBe(207);
     expect(exempt.length).toBe(7);
     expect(open.length).toBe(9);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
@@ -351,7 +352,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 7 PR 7-6d-2 added the wallet recharge route, targeting the deferred platform scope: 160 → 161.
     // Phase 8A PR 8A-2 added 3 contact import/export routes, targeting the deferred workspace: 161 → 164.
     // Phase 8B.2 added 7 campaign routes, each targeting deferred workspace context: 164 → 171.
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(171);
+    // Phase 8C PR 8C-1 added 11 journey-definition routes, targeting the deferred workspace: 171 → 182.
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(182);
   });
 });
 

@@ -14,3 +14,4 @@ export * from './pricing';
 export * from './campaigns';
 export * from './billing';
 export * from './segments';
+export * from './journeys';

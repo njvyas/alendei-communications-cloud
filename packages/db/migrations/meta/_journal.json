@@ -435,6 +435,13 @@
       "when": 1794787200000,
       "tag": "0061_phase8a_contact_import_export",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1794873600000,
+      "tag": "0062_phase8c1_journey_foundation",
+      "breakpoints": true
     }
   ]
 }

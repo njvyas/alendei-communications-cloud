@@ -61,6 +61,9 @@ const TABLES = [
   // platform-scope claim) and the definer-only pricing evaluations.
   'customer_pricing_assignments',
   'idempotency_keys',
+  // Phase 8C PR 8C-1 (migration 0062): journey definitions and versions.
+  'journey_versions',
+  'journeys',
   // Phase 7 PR 7-5 (migration 0054): the definer-only attempt classification; no grant, RLS on.
   'message_attempt_billing',
   // Phase 3.3 (migration 0033): message orchestrator and dispatch tables
@@ -133,6 +136,8 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
     // Phase 7 PR 7-2: append-only; platform scope only (RLS).
     customer_pricing_assignments: 'INSERT,SELECT',
     idempotency_keys: 'INSERT,SELECT',
+    journey_versions: 'INSERT,SELECT,UPDATE',
+    journeys: 'INSERT,SELECT,UPDATE',
     message_attempts: 'INSERT,SELECT,UPDATE',
     message_dispatch_queue: 'DELETE,INSERT,SELECT,UPDATE',
     message_events: 'INSERT,SELECT',

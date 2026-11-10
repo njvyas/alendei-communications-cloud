@@ -27,6 +27,9 @@ import {
   PRICING_RATE_MAX_E4,
   PRICING_UNITS,
   PRICING_VERSION_STATUSES,
+  JOURNEY_GRAPH_ISSUE_CODES,
+  JOURNEY_STATUSES,
+  JOURNEY_VERSION_STATUSES,
 } from '@acc/contracts';
 import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 
@@ -1345,4 +1348,97 @@ export class UnknownResolutionSchema {
   })
   lastRefusal!: string | null;
   @ApiProperty(nullableTimestamp) lastRefusedAt!: string | null;
+}
+
+// --- Phase 8C PR 8C-1: journey definitions ------------------------------------------------
+
+const sha256Hex = { type: 'string', pattern: '^[0-9a-f]{64}$' } as const;
+
+/**
+ * A nullable version summary, inline (as `PROVIDER_FAILURE`): OpenAPI 3.0 cannot make a `$ref`
+ * nullable, so `null` is admitted on the object itself.
+ */
+const NULLABLE_VERSION_SUMMARY = {
+  type: 'object',
+  nullable: true,
+  required: [
+    'id',
+    'versionNumber',
+    'status',
+    'graphSha256',
+    'publishedAt',
+    'createdAt',
+    'updatedAt',
+  ],
+  properties: {
+    id: uuid,
+    versionNumber: { type: 'integer', minimum: 1 },
+    status: { type: 'string', enum: [...JOURNEY_VERSION_STATUSES] },
+    graphSha256: sha256Hex,
+    publishedAt: nullableTimestamp,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  },
+  additionalProperties: false,
+} as const;
+
+@ApiSchema({ name: 'JourneyVersionSummary' })
+export class JourneyVersionSummarySchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty({ type: 'integer', minimum: 1 }) versionNumber!: number;
+  @ApiProperty({ enum: [...JOURNEY_VERSION_STATUSES] }) status!: string;
+  @ApiProperty({ ...sha256Hex, description: 'SHA-256 of the canonical JSON graph.' })
+  graphSha256!: string;
+  @ApiProperty(nullableTimestamp) publishedAt!: string | null;
+  @ApiProperty(timestamp) createdAt!: string;
+  @ApiProperty(timestamp) updatedAt!: string;
+}
+
+@ApiSchema({ name: 'JourneyVersion' })
+export class JourneyVersionSchema extends JourneyVersionSummarySchema {
+  @ApiProperty(uuid) journeyId!: string;
+  @ApiProperty(uuid) workspaceId!: string;
+  @ApiProperty({ type: 'integer', minimum: 1 }) graphSchemaVersion!: number;
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    description: 'The journey graph (`packages/contracts/src/journeys.ts`).',
+  })
+  graph!: Record<string, unknown>;
+  @ApiProperty(nullableUuid) createdBy!: string | null;
+  @ApiProperty({ ...nullableUuid, description: 'Null when an API key published the version.' })
+  publishedBy!: string | null;
+}
+
+@ApiSchema({ name: 'Journey' })
+export class JourneySchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty(uuid) orgId!: string;
+  @ApiProperty(uuid) workspaceId!: string;
+  @ApiProperty() name!: string;
+  @ApiProperty(nullableString) description!: string | null;
+  @ApiProperty({ enum: [...JOURNEY_STATUSES] }) status!: string;
+  @ApiProperty(nullableUuid) createdBy!: string | null;
+  @ApiProperty(timestamp) createdAt!: string;
+  @ApiProperty(timestamp) updatedAt!: string;
+  @ApiProperty(NULLABLE_VERSION_SUMMARY as never)
+  draftVersion!: Record<string, unknown> | null;
+  @ApiProperty(NULLABLE_VERSION_SUMMARY as never)
+  latestPublishedVersion!: Record<string, unknown> | null;
+}
+
+@ApiSchema({ name: 'JourneyGraphIssue' })
+export class JourneyGraphIssueSchema {
+  @ApiProperty({ enum: [...JOURNEY_GRAPH_ISSUE_CODES] }) code!: string;
+  @ApiProperty() message!: string;
+  @ApiProperty({ required: false }) nodeKey?: string;
+  @ApiProperty({ required: false }) path?: string;
+}
+
+@ApiSchema({ name: 'JourneyGraphValidationReport' })
+export class JourneyGraphValidationReportSchema {
+  @ApiProperty() valid!: boolean;
+  @ApiProperty({ type: [JourneyGraphIssueSchema] }) errors!: JourneyGraphIssueSchema[];
+  @ApiProperty({ type: [JourneyGraphIssueSchema], description: 'Never block publication.' })
+  warnings!: JourneyGraphIssueSchema[];
 }

@@ -304,6 +304,20 @@ export const ERROR_CODES = {
   CAMPAIGN_DISPATCH_DISABLED: 'CAMPAIGN_DISPATCH_DISABLED',
   CAMPAIGN_AUDIENCE_EMPTY: 'CAMPAIGN_AUDIENCE_EMPTY',
 
+  // --- Journeys (Phase 8C) ---------------------------------------------------
+  JOURNEY_NOT_FOUND: 'JOURNEY_NOT_FOUND',
+  JOURNEY_VERSION_NOT_FOUND: 'JOURNEY_VERSION_NOT_FOUND',
+  /** The version is published or retired: its graph can no longer change. */
+  JOURNEY_VERSION_IMMUTABLE: 'JOURNEY_VERSION_IMMUTABLE',
+  /** The draft graph changed since the caller read it (`expectedGraphSha256`). */
+  JOURNEY_GRAPH_CONFLICT: 'JOURNEY_GRAPH_CONFLICT',
+  /** Publication refused: the graph fails validation (`details.report`). */
+  JOURNEY_GRAPH_INVALID: 'JOURNEY_GRAPH_INVALID',
+  /** A journey has at most one draft version. */
+  JOURNEY_DRAFT_EXISTS: 'JOURNEY_DRAFT_EXISTS',
+  /** The journey's lifecycle state does not allow the operation (e.g. deleting an active journey). */
+  JOURNEY_LIFECYCLE_CONFLICT: 'JOURNEY_LIFECYCLE_CONFLICT',
+
   // --- Generic -------------------------------------------------------------
 
   // Phase 5.0 provider webhook ingress (design spec Rev 2 §E). The 401 code is the same for

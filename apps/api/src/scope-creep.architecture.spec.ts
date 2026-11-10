@@ -49,7 +49,7 @@ const CATEGORIES: Category[] = [
     key: 'outbox',
     forbids: 'the transactional outbox and event publication (ADR-013 PD-1)',
     exceptions:
-      'Pre-existing, not Phase 2: Phase 0/1 relay and Kafka configuration keys, the `acc_relay` database role, and outbox metrics that are defined but never incremented; `published` in the adapter registry is the published adapter-key list. No outbox table, relay loop, producer or publish call exists.',
+      'Pre-existing, not Phase 2: Phase 0/1 relay and Kafka configuration keys, the `acc_relay` database role, and outbox metrics that are defined but never incremented; `published` in the adapter registry is the published adapter-key list. No outbox table, relay loop, producer or publish call exists. Phase 8C PR 8C-1 (owner-authorised 10-Nov-2026): journey version *publication* — freezing a draft graph (`published`, `published_at`, `published_by`, the publish route and DTO, the `journey.version_published` audit action). Publication is a version-lifecycle state; nothing is published to any bus, outbox or relay.',
     pattern: /[\w-]*(?:outbox|relay|publish|kafka|producer|event_?bus)[\w-]*/gi,
     providerCodeOnly: false,
     pinned: {
@@ -79,6 +79,23 @@ const CATEGORIES: Category[] = [
         'OUTBOX_RELAY_MAX_ATTEMPTS',
         'OUTBOX_RELAY_POLL_INTERVAL_MS',
       ],
+      'apps/api/src/journeys/journeys.controller.ts': [
+        'Publish',
+        'PublishJourneyVersionDto',
+        'publish',
+        'published',
+      ],
+      'apps/api/src/journeys/journeys.dto.ts': ['PublishJourneyVersionDto'],
+      'apps/api/src/journeys/journeys.service.ts': [
+        'VERSION_PUBLISHED',
+        'latestPublishedVersion',
+        'publish',
+        'published',
+        'publishedAt',
+        'publishedBy',
+      ],
+      // Generated Swagger metadata for the 8C-1 publish route's DTO.
+      'apps/api/src/metadata.ts': ['PublishJourneyVersionDto', 'publish'],
       'apps/api/src/observability/metrics.service.ts': [
         'Outbox',
         'acc_events_published_total',
@@ -89,9 +106,32 @@ const CATEGORIES: Category[] = [
         'published',
       ],
       'apps/api/src/openapi/openapi-cli.ts': ['KAFKA_BROKERS'],
+      // The 8C-1 journey response schemas (version publication state).
+      'apps/api/src/openapi/openapi-schemas.ts': [
+        'latestPublishedVersion',
+        'published',
+        'publishedAt',
+        'publishedBy',
+      ],
       'apps/api/src/provider-adapters/adapter-registry.ts': ['published'],
+      'packages/contracts/src/journeys.ts': [
+        'VERSION_PUBLISHED',
+        'latestPublishedVersion',
+        'published',
+        'publishedAt',
+        'publishedBy',
+        'version_published',
+      ],
       'packages/db/src/cli/role-reconcile.ts': ['DATABASE_RELAY_PASSWORD', 'RELAY'],
       'packages/db/src/constants.ts': ['RELAY', 'acc_relay'],
+      'packages/db/src/schema/journeys.ts': [
+        'journey_versions_published_shape',
+        'published',
+        'publishedAt',
+        'publishedBy',
+        'published_at',
+        'published_by',
+      ],
     },
   },
   {
@@ -99,7 +139,7 @@ const CATEGORIES: Category[] = [
     forbids:
       'a worker/job harness or new messaging worker infrastructure (ADR-013 PD-1, ADR-004 D-5)',
     exceptions:
-      'Pre-existing: the hot-reload listener reconnect timer and an ioredis option. No queue, processor, cron, interval or job runner exists; `@nestjs/schedule` is a declared but unused dependency (pinned below). Phase 3.3: message_dispatch_queue table class and dispatcher worker (ADR-014 §9). B1 (first release, 20-Oct-2026): the in-process loop that runs that dispatcher (`DispatchWorker`, ADR-014 D18 — poll 1 s ±20 %, batch ≤ 10, lease 30 s) and its three configuration keys. It is a single setTimeout chain over the existing PostgreSQL queue: no queue library, job framework, cron or `@nestjs/schedule`. UI readiness (20-Oct-2026): the documentation-only `QueuedMessage` OpenAPI schema describing the existing `POST /messages` 202 body, and the `queued` value of the `GET /messages` `status` filter enum in the generated `metadata.ts`. Phase 7 PR 7-3 (owner approval 08-Nov-2026): the enqueue (`messageDispatchQueue`, the `queued` status) moved unchanged from `messages.service.ts` into the shared submission core (`messages/submission/`); no new queue, worker or behaviour.',
+      'Pre-existing: the hot-reload listener reconnect timer and an ioredis option. No queue, processor, cron, interval or job runner exists; `@nestjs/schedule` is a declared but unused dependency (pinned below). Phase 3.3: message_dispatch_queue table class and dispatcher worker (ADR-014 §9). B1 (first release, 20-Oct-2026): the in-process loop that runs that dispatcher (`DispatchWorker`, ADR-014 D18 — poll 1 s ±20 %, batch ≤ 10, lease 30 s) and its three configuration keys. It is a single setTimeout chain over the existing PostgreSQL queue: no queue library, job framework, cron or `@nestjs/schedule`. UI readiness (20-Oct-2026): the documentation-only `QueuedMessage` OpenAPI schema describing the existing `POST /messages` 202 body, and the `queued` value of the `GET /messages` `status` filter enum in the generated `metadata.ts`. Phase 7 PR 7-3 (owner approval 08-Nov-2026): the enqueue (`messageDispatchQueue`, the `queued` status) moved unchanged from `messages.service.ts` into the shared submission core (`messages/submission/`); no new queue, worker or behaviour. Phase 8C PR 8C-1 (owner-authorised 10-Nov-2026): the `schedule` entry-trigger kind of the journey graph contract and its validation. Vocabulary only: no scheduler, timer, poller or job exists in 8C-1; the journey runner is 8C-3, behind JOURNEY_RUNNER_ENABLED (default off).',
     pattern: /[\w-]*(?:worker|queue|bullmq|processor|cron|setInterval|schedul|job)[\w-]*/gi,
     providerCodeOnly: false,
     pinned: {
@@ -137,6 +177,7 @@ const CATEGORIES: Category[] = [
         'DISPATCH_WORKER_ENABLED',
         'DISPATCH_WORKER_POLL_INTERVAL_MS',
       ],
+      'apps/api/src/journeys/journeys.service.ts': ['schedule'],
       'apps/api/src/messages/dispatch/dispatch.worker.ts': [
         'DISPATCH_WORKER_ENABLED',
         'DispatchWorker',
@@ -184,6 +225,7 @@ const CATEGORIES: Category[] = [
         'scheduled',
         'scheduledAt',
       ],
+      'packages/contracts/src/journeys.ts': ['schedule', 'schedules'],
       'packages/contracts/src/messages.ts': ['QUEUED', 'QueuedMessageResponse', 'queued'],
       'packages/contracts/src/platform-support.ts': ['queue'],
       'packages/db/src/schema/campaigns.ts': [
@@ -1016,7 +1058,7 @@ const CATEGORIES: Category[] = [
     key: 'lifecycle',
     forbids: 'the message lifecycle \u2014 messages, attempts, delivery, webhooks (ADR-013 PD-3)',
     exceptions:
-      'Pre-existing: the `checkStatus`/`parseWebhook` interface members, which the simulator refuses (PD-6) and `GuardedProviderAdapter` declares abstract (ADR-015 R-13), a role description and a forbidden metric label name. Phase 3.3: message attempts table and lifecycle status (ADR-014 §4, §9.2). UI readiness (20-Oct-2026): the `MessageAttemptResponse` contract type and the documentation-only `MessageAttempt` OpenAPI schema, describing the attempts `GET /messages/:id` already returns. Phase 5.0 PR-A (owner authorisation 07-Nov-2026; design spec Rev 2 §B–§D, implementation plan T1–T5): the delivery axis (`message_delivery_status`, delivery columns, write-once `provider_message_id`), the `webhook_events` table and its outcome enum, the provider ingress-key hash columns and kill switch, the `acc_delivery` principal (role, session variables, reconcile entry, optional pool behind `DELIVERY_WEBHOOKS_ENABLED`, default off), the delivery contracts and capability validators, the ingress-administration audit actions and the M2 concurrent-index barrier and runner. Schema, contracts and safeguards only: no route, controller, ingestion service, timer or worker exists until PR-C, and ingress stays disabled until OD-19 is verified. Phase 5.0 PR-B (implementation plan T6–T7): the dispatcher settlement writes the provider message id and initial delivery status and applies held receipts under the message-then-attempt lock order; the shared delivery rules and writer (`messages/delivery/`), reused by the PR-C ingestion; the simulator `verifyWebhook`/`parseWebhook`, its receipt format and signed-request factory; the `delivery_receipts`/`simulator_delivery` capability validation; and forward-fix migration 0047 (acc_dispatch visibility of the receipts it settles). Still no route, controller, timer or worker. Phase 5.0 PR-C (implementation plan T8-T9): the provider webhook ingress (`webhooks/`: one public route, disabled unless DELIVERY_WEBHOOKS_ENABLED, raw-body capture on that path only, rate limits, adapter verification and parsing, per-event insert-or-count, ingestion as acc_delivery through the shared delivery writer, log and span redaction of the key) and the ingress-key administration endpoints and resolver facts (migration 0048). No outbound webhook, timer, worker or event publishing. Phase 5.0 PR-D (implementation plan T10): read-only exposure of the delivery axis: `deliveryStatus`/`deliveredAt`/`readAt` on the message and attempt responses, the optional `deliveryStatus` list filter, the additive usage `delivery` block and their OpenAPI schemas; and (owner decision 07-Nov-2026) the platform-support dispatch `deliveryStatus` filter with migration 0049, which recreates the definer `app_platform_support_dispatch_diagnostics` with one optional parameter and unchanged result shape, security and grants. No write path, route or provider reference (OD-9: platform-staff-only, not returned) is added. Phase 5.0 PR-E (implementation plan T11-T12; owner decisions 07-Nov-2026): the header form of the ingress route (the same pipeline; key in `X-Acc-Webhook-Ingress-Key`, redacted) and the operator simulator trigger (`POST /providers/:id/simulator/delivery-events`, simulator providers only, platform `providers.test_send`, posting signed simulator receipts through the ingress over loopback; the escalation-race fixture is test-only). No timer, worker, outbound client to any non-loopback destination, real adapter or migration. Phase 8A (07-Nov-2026): genuine contact activity timeline derives persisted message delivery outcomes (`message_delivered`, `deliveredAt`, `deliveryStatus`). Phase 7 PR 7-7a (owner-authorised 10-Nov-2026): `billing:reconcile` reads message attempts, their billing facts and the delivery status read-only, to check charges and provider costs; no write.',
+      'Pre-existing: the `checkStatus`/`parseWebhook` interface members, which the simulator refuses (PD-6) and `GuardedProviderAdapter` declares abstract (ADR-015 R-13), a role description and a forbidden metric label name. Phase 3.3: message attempts table and lifecycle status (ADR-014 §4, §9.2). UI readiness (20-Oct-2026): the `MessageAttemptResponse` contract type and the documentation-only `MessageAttempt` OpenAPI schema, describing the attempts `GET /messages/:id` already returns. Phase 5.0 PR-A (owner authorisation 07-Nov-2026; design spec Rev 2 §B–§D, implementation plan T1–T5): the delivery axis (`message_delivery_status`, delivery columns, write-once `provider_message_id`), the `webhook_events` table and its outcome enum, the provider ingress-key hash columns and kill switch, the `acc_delivery` principal (role, session variables, reconcile entry, optional pool behind `DELIVERY_WEBHOOKS_ENABLED`, default off), the delivery contracts and capability validators, the ingress-administration audit actions and the M2 concurrent-index barrier and runner. Schema, contracts and safeguards only: no route, controller, ingestion service, timer or worker exists until PR-C, and ingress stays disabled until OD-19 is verified. Phase 5.0 PR-B (implementation plan T6–T7): the dispatcher settlement writes the provider message id and initial delivery status and applies held receipts under the message-then-attempt lock order; the shared delivery rules and writer (`messages/delivery/`), reused by the PR-C ingestion; the simulator `verifyWebhook`/`parseWebhook`, its receipt format and signed-request factory; the `delivery_receipts`/`simulator_delivery` capability validation; and forward-fix migration 0047 (acc_dispatch visibility of the receipts it settles). Still no route, controller, timer or worker. Phase 5.0 PR-C (implementation plan T8-T9): the provider webhook ingress (`webhooks/`: one public route, disabled unless DELIVERY_WEBHOOKS_ENABLED, raw-body capture on that path only, rate limits, adapter verification and parsing, per-event insert-or-count, ingestion as acc_delivery through the shared delivery writer, log and span redaction of the key) and the ingress-key administration endpoints and resolver facts (migration 0048). No outbound webhook, timer, worker or event publishing. Phase 5.0 PR-D (implementation plan T10): read-only exposure of the delivery axis: `deliveryStatus`/`deliveredAt`/`readAt` on the message and attempt responses, the optional `deliveryStatus` list filter, the additive usage `delivery` block and their OpenAPI schemas; and (owner decision 07-Nov-2026) the platform-support dispatch `deliveryStatus` filter with migration 0049, which recreates the definer `app_platform_support_dispatch_diagnostics` with one optional parameter and unchanged result shape, security and grants. No write path, route or provider reference (OD-9: platform-staff-only, not returned) is added. Phase 5.0 PR-E (implementation plan T11-T12; owner decisions 07-Nov-2026): the header form of the ingress route (the same pipeline; key in `X-Acc-Webhook-Ingress-Key`, redacted) and the operator simulator trigger (`POST /providers/:id/simulator/delivery-events`, simulator providers only, platform `providers.test_send`, posting signed simulator receipts through the ingress over loopback; the escalation-race fixture is test-only). No timer, worker, outbound client to any non-loopback destination, real adapter or migration. Phase 8A (07-Nov-2026): genuine contact activity timeline derives persisted message delivery outcomes (`message_delivered`, `deliveredAt`, `deliveryStatus`). Phase 7 PR 7-7a (owner-authorised 10-Nov-2026): `billing:reconcile` reads message attempts, their billing facts and the delivery status read-only, to check charges and provider costs; no write. Phase 8C PR 8C-1 (owner-authorised 10-Nov-2026): the journey graph contract names the `message.delivered` trigger event and outcome, and the placeholder `webhook` action node (owner decision 3: placeholder only; no outbound HTTP). Vocabulary only: nothing reads or writes delivery state or calls out.',
     pattern:
       /[\w-]*(?:message_?attempt|webhook|deliver|dlr|checkStatus|parseWebhook|inbound_?message|conversation)[\w-]*/gi,
     providerCodeOnly: false,
@@ -1532,6 +1574,7 @@ const CATEGORIES: Category[] = [
         'WEBHOOK_PAYLOAD_TOO_LARGE',
         'WEBHOOK_UNSUPPORTED_MEDIA_TYPE',
       ],
+      'packages/contracts/src/journeys.ts': ['delivered', 'webhook'],
       'packages/db/src/maintenance/billing-reconcile.ts': [
         'delivered',
         'delivery_status',
@@ -1888,6 +1931,8 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       'health',
       'iam',
       'idempotency',
+      // Phase 8C PR 8C-1: journey definitions (create, version, validate, publish); no runner or send.
+      'journeys',
       'messages',
       'observability',
       'openapi',
@@ -1953,6 +1998,9 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       // Phase 7 PR 7-2 (0051): the pricing catalogue and the pricing evaluations.
       'customer_pricing_assignments',
       'idempotency_keys',
+      // Phase 8C PR 8C-1 (0062): journey definitions and their immutable published versions.
+      'journey_versions',
+      'journeys',
       // Phase 7 PR 7-5: the immutable reached-provider classification of settled attempts.
       'message_attempt_billing',
       'message_attempts',

@@ -23,3 +23,4 @@ export * from './platform-support';
 export * from './pricing';
 export * from './campaigns';
 export * from './segments';
+export * from './journeys';
