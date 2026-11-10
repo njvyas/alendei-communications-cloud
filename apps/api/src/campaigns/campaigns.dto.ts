@@ -18,10 +18,12 @@ import {
 import {
   ALL_CAMPAIGN_CHANNELS,
   ALL_CAMPAIGN_RECIPIENT_SOURCE_TYPES,
+  ALL_CAMPAIGN_RECIPIENT_STATUSES,
   ALL_CAMPAIGN_SCHEDULE_MODES,
   ALL_CAMPAIGN_STATUSES,
   type CampaignChannel,
   type CampaignRecipientSourceType,
+  type CampaignRecipientStatus,
   type CampaignScheduleMode,
   type CampaignStatus,
 } from '@acc/contracts';
@@ -169,4 +171,31 @@ export class UpdateCampaignDto {
   @ValidateNested()
   @Type(() => CampaignThrottlingDto)
   throttling?: CampaignThrottlingDto;
+}
+
+export class CampaignAudiencePreviewDto extends ListQueryDto {
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  tags?: string[];
+
+  @IsOptional()
+  @IsIn(['any', 'all'])
+  tagMatchMode?: 'any' | 'all';
+
+  @IsOptional()
+  @IsBoolean()
+  requireOptIn?: boolean;
+}
+
+export class ScheduleCampaignDto {
+  @IsOptional()
+  @IsISO8601()
+  scheduledAt?: string;
+}
+
+export class ListCampaignRecipientsDto extends ListQueryDto {
+  @IsOptional()
+  @IsIn(ALL_CAMPAIGN_RECIPIENT_STATUSES)
+  status?: CampaignRecipientStatus;
 }

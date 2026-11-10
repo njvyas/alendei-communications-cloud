@@ -2,17 +2,21 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   ERROR_CODES,
   PERMISSIONS,
+  renderTemplate,
   type AuthPrincipal,
+  type CampaignAudiencePreviewResponse,
   type CampaignChannel,
   type CampaignMetrics,
+  type CampaignRecipientRecord,
   type CampaignRecipientSource,
   type CampaignRecordResponse,
   type CampaignStatus,
   type CampaignThrottling,
+  type MaterializeAudienceResponse,
   type PageInfo,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
-import { and, eq, ilike, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, eq, ilike, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 
 import { actorFromPrincipal } from '../audit/audit-actor';
@@ -20,10 +24,17 @@ import { AuditWriter } from '../audit/audit-writer.service';
 import { AuthorizationService } from '../auth/authorization.service';
 import { AppException } from '../common/errors/app.exception';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
+import { ContactsService } from '../contacts/contacts.service';
 import { TenantDatabase } from '../database/tenant-database.service';
 import { IdempotencyService, type IdempotentOutcome } from '../idempotency/idempotency.service';
 import { requireOrganization } from '../workspaces/workspace-administration.service';
-import type { CreateCampaignDto, UpdateCampaignDto } from './campaigns.dto';
+import type {
+  CampaignAudiencePreviewDto,
+  CreateCampaignDto,
+  ListCampaignRecipientsDto,
+  ScheduleCampaignDto,
+  UpdateCampaignDto,
+} from './campaigns.dto';
 
 export interface ListCampaignsFilter extends ListQueryInput {
   readonly channel?: string;
@@ -114,6 +125,7 @@ export class CampaignsService {
     private readonly audit: AuditWriter,
     private readonly lists: ListQuery,
     private readonly idempotency: IdempotencyService,
+    private readonly contactsService: ContactsService,
   ) {}
 
   private readonly listSpec: ListQuerySpec = {
@@ -124,6 +136,33 @@ export class CampaignsService {
     defaultSort: 'name',
     tieBreaker: schema.campaigns.id,
   };
+
+  private readonly recipientListSpec: ListQuerySpec = {
+    sortable: {
+      createdAt: { column: schema.campaignRecipients.id, encode: (row) => String(row.id) },
+    },
+    defaultSort: 'createdAt',
+    tieBreaker: schema.campaignRecipients.id,
+  };
+
+  private materializationBatchLimit = 500;
+
+  /** @internal For testing concurrency and multi-batch behaviour */
+  setMaterializationBatchLimitForTesting(limit: number): void {
+    this.materializationBatchLimit = limit;
+  }
+
+  /** @internal Reset testing batch limit */
+  resetMaterializationBatchLimitForTesting(): void {
+    this.materializationBatchLimit = 500;
+  }
+
+  /** @internal Hook called synchronously after each materialisation batch is committed to test concurrent races */
+  public onMaterializationBatchInsertedForTesting?: (
+    batchIndex: number,
+    insertedCount: number,
+    campaignId: string,
+  ) => Promise<void> | void;
 
   /** Validates workspace existence within org and RLS, then authorizes permission. */
   async assertWorkspaceAccess(
@@ -491,8 +530,12 @@ export class CampaignsService {
 
       const campaign = existing.campaign;
 
-      // Cannot update if running or completed
-      if (campaign.status === 'running' || campaign.status === 'completed') {
+      // Cannot update if running, completed, or cancelled
+      if (
+        campaign.status === 'running' ||
+        campaign.status === 'completed' ||
+        campaign.status === 'cancelled'
+      ) {
         throw new AppException({
           status: HttpStatus.CONFLICT,
           code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
@@ -574,8 +617,26 @@ export class CampaignsService {
       const [updatedRow] = await tx
         .update(schema.campaigns)
         .set(updates)
-        .where(eq(schema.campaigns.id, campaignId))
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+            inArray(schema.campaigns.status, ['draft', 'scheduled']),
+          ),
+        )
         .returning();
+
+      if (!updatedRow) {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message:
+            'Cannot update campaign: campaign is in terminal state or was modified concurrently',
+          details: { campaignId },
+        });
+      }
 
       await this.audit.record(
         {
@@ -640,10 +701,28 @@ export class CampaignsService {
         });
       }
 
-      await tx
+      const [deletedRow] = await tx
         .update(schema.campaigns)
         .set({ deletedAt: sql`now()` })
-        .where(eq(schema.campaigns.id, campaignId));
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+            inArray(schema.campaigns.status, ['draft', 'scheduled', 'cancelled', 'completed']),
+          ),
+        )
+        .returning({ id: schema.campaigns.id });
+
+      if (!deletedRow) {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message: 'Cannot delete campaign: campaign is running or was already deleted',
+          details: { campaignId },
+        });
+      }
 
       await this.audit.record(
         {
@@ -702,5 +781,1019 @@ export class CampaignsService {
     });
 
     throw new Error('Unreachable');
+  }
+
+  async previewAudience(
+    principal: AuthPrincipal,
+    workspaceId: string,
+    campaignId: string,
+    dto: CampaignAudiencePreviewDto = {},
+  ): Promise<CampaignAudiencePreviewResponse> {
+    const orgId = requireOrganization(principal);
+
+    const campaign = await this.db.withRequestTenant(async (tx) => {
+      await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.CAMPAIGNS_READ);
+
+      const [row] = await tx
+        .select({
+          id: schema.campaigns.id,
+          channelId: schema.campaigns.channelId,
+          recipientSource: schema.campaigns.recipientSource,
+        })
+        .from(schema.campaigns)
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+          ),
+        )
+        .limit(1);
+
+      if (!row) throw campaignNotFound(campaignId);
+      return row;
+    });
+
+    const source = (campaign.recipientSource as Record<string, unknown>) ?? {};
+    const campaignTags = Array.isArray(source.tags)
+      ? (source.tags as string[])
+      : typeof source.tag === 'string'
+        ? [source.tag]
+        : undefined;
+
+    const effectiveTags = dto.tags ?? campaignTags;
+    const effectiveTagMatchMode =
+      dto.tagMatchMode ?? (source.tagMatchMode as 'any' | 'all' | undefined) ?? 'any';
+    const effectiveRequireOptIn =
+      dto.requireOptIn !== undefined ? dto.requireOptIn : Boolean(source.requireOptIn);
+
+    const resolution = await this.contactsService.resolveAudience(
+      principal,
+      {
+        channelId: campaign.channelId,
+        tags: effectiveTags,
+        tagMatchMode: effectiveTagMatchMode,
+        requireOptIn: effectiveRequireOptIn,
+        cursor: dto.cursor,
+        limit: dto.limit ?? 10,
+      },
+      workspaceId,
+    );
+
+    return {
+      data: resolution.data,
+      totalCount: resolution.totalCount,
+      page: resolution.page,
+    };
+  }
+
+  async materializeAudience(
+    principal: AuthPrincipal,
+    workspaceId: string,
+    campaignId: string,
+  ): Promise<MaterializeAudienceResponse> {
+    const orgId = requireOrganization(principal);
+
+    const campaign = await this.db.withRequestTenant(async (tx) => {
+      await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.CAMPAIGNS_MANAGE);
+
+      const [row] = await tx
+        .select()
+        .from(schema.campaigns)
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+          ),
+        )
+        .limit(1);
+
+      if (!row) throw campaignNotFound(campaignId);
+
+      if (row.status === 'completed' || row.status === 'cancelled') {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message: `Cannot materialize audience for campaign in '${row.status}' state`,
+          details: { currentStatus: row.status },
+        });
+      }
+
+      return row;
+    });
+
+    // Prevent materialisation from adding recipients after a campaign has transitioned to scheduled.
+    // Repeated materialisation remains idempotent: returns the authoritative materialized count.
+    if (campaign.status !== 'draft') {
+      const totalRecipients = await this.getMaterializedRecipientCount(
+        orgId,
+        workspaceId,
+        campaign.id,
+      );
+      return {
+        campaignId: campaign.id,
+        totalRecipients,
+        materialized: 0,
+      };
+    }
+
+    const { totalRecipients, materialized } = await this.performMaterialization(
+      principal,
+      workspaceId,
+      orgId,
+      campaign,
+    );
+
+    return {
+      campaignId: campaign.id,
+      totalRecipients,
+      materialized,
+    };
+  }
+
+  private async performMaterialization(
+    principal: AuthPrincipal,
+    workspaceId: string,
+    orgId: string,
+    campaign: typeof schema.campaigns.$inferSelect,
+  ): Promise<{ totalRecipients: number; materialized: number }> {
+    const source = (campaign.recipientSource as Record<string, unknown>) ?? {};
+    const tags = Array.isArray(source.tags)
+      ? (source.tags as string[])
+      : typeof source.tag === 'string'
+        ? [source.tag]
+        : undefined;
+    const tagMatchMode = (source.tagMatchMode as 'any' | 'all' | undefined) ?? 'any';
+    const requireOptIn = Boolean(source.requireOptIn);
+
+    let cursor: string | undefined = undefined;
+    let newlyMaterialized = 0;
+    const batchLimit = this.materializationBatchLimit;
+    let batchIndex = 0;
+
+    do {
+      const pageRes = await this.contactsService.resolveAudience(
+        principal,
+        {
+          channelId: campaign.channelId,
+          tags,
+          tagMatchMode,
+          requireOptIn,
+          cursor,
+          limit: batchLimit,
+        },
+        workspaceId,
+      );
+
+      if (pageRes.data.length > 0) {
+        const eligibleRows = pageRes.data
+          .map((member) => {
+            const matchingIdentity =
+              member.identities.find(
+                (id) =>
+                  id.channelId === campaign.channelId && id.isPrimary && id.status === 'active',
+              ) ??
+              member.identities.find(
+                (id) => id.channelId === campaign.channelId && id.status === 'active',
+              ) ??
+              member.identities.find((id) => id.channelId === campaign.channelId && id.isPrimary) ??
+              member.identities.find((id) => id.channelId === campaign.channelId);
+
+            if (!matchingIdentity) {
+              return null;
+            }
+
+            return {
+              id: uuidv7(),
+              campaignId: campaign.id,
+              orgId,
+              workspaceId,
+              contactId: member.contactId,
+              identityId: matchingIdentity.id,
+              status: 'pending' as const,
+            };
+          })
+          .filter((row): row is NonNullable<typeof row> => row !== null);
+
+        if (eligibleRows.length > 0) {
+          const batchResult = await this.db.withRequestTenant(async (tx) => {
+            await this.assertWorkspaceAccess(
+              tx,
+              principal,
+              workspaceId,
+              PERMISSIONS.CAMPAIGNS_MANAGE,
+            );
+
+            // Row-level lock campaign row to serialize with concurrent lifecycle transitions
+            const [lockedCampaign] = await tx
+              .select({
+                id: schema.campaigns.id,
+                status: schema.campaigns.status,
+              })
+              .from(schema.campaigns)
+              .where(
+                and(
+                  eq(schema.campaigns.id, campaign.id),
+                  eq(schema.campaigns.workspaceId, workspaceId),
+                  eq(schema.campaigns.orgId, orgId),
+                  isNull(schema.campaigns.deletedAt),
+                ),
+              )
+              .for('no key update')
+              .limit(1);
+
+            if (!lockedCampaign) {
+              throw campaignNotFound(campaign.id);
+            }
+
+            if (lockedCampaign.status !== 'draft') {
+              return {
+                aborted: true as const,
+                status: lockedCampaign.status,
+                insertedCount: 0,
+              };
+            }
+
+            const inserted = await tx
+              .insert(schema.campaignRecipients)
+              .values(eligibleRows)
+              .onConflictDoNothing({
+                target: [schema.campaignRecipients.campaignId, schema.campaignRecipients.contactId],
+              })
+              .returning({ id: schema.campaignRecipients.id });
+
+            return {
+              aborted: false as const,
+              status: lockedCampaign.status,
+              insertedCount: inserted.length,
+            };
+          });
+
+          if (batchResult.aborted) {
+            if (
+              batchResult.status === 'cancelled' ||
+              batchResult.status === 'completed' ||
+              batchResult.status === 'running' ||
+              batchResult.status === 'paused'
+            ) {
+              throw new AppException({
+                status: HttpStatus.CONFLICT,
+                code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+                message: `Cannot materialize audience for campaign in '${batchResult.status}' state`,
+                details: { currentStatus: batchResult.status },
+              });
+            }
+            // For 'scheduled', the campaign has transitioned to scheduled. Halt further materialization batches.
+            break;
+          }
+
+          newlyMaterialized += batchResult.insertedCount;
+          batchIndex++;
+
+          if (this.onMaterializationBatchInsertedForTesting) {
+            await this.onMaterializationBatchInsertedForTesting(
+              batchIndex,
+              batchResult.insertedCount,
+              campaign.id,
+            );
+          }
+        }
+      }
+
+      cursor =
+        pageRes.page.hasMore && pageRes.page.nextCursor ? pageRes.page.nextCursor : undefined;
+    } while (cursor);
+
+    const totalRecipients = await this.db.withRequestTenant(async (tx) => {
+      await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.CAMPAIGNS_MANAGE);
+
+      const [lockedCampaign] = await tx
+        .select({
+          id: schema.campaigns.id,
+          status: schema.campaigns.status,
+          metrics: schema.campaigns.metrics,
+        })
+        .from(schema.campaigns)
+        .where(
+          and(
+            eq(schema.campaigns.id, campaign.id),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+          ),
+        )
+        .for('no key update')
+        .limit(1);
+
+      if (!lockedCampaign) {
+        throw campaignNotFound(campaign.id);
+      }
+
+      if (lockedCampaign.status === 'cancelled' || lockedCampaign.status === 'completed') {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message: `Cannot materialize audience for campaign in '${lockedCampaign.status}' state`,
+          details: { currentStatus: lockedCampaign.status },
+        });
+      }
+
+      const [countRow] = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(schema.campaignRecipients)
+        .where(
+          and(
+            eq(schema.campaignRecipients.campaignId, campaign.id),
+            eq(schema.campaignRecipients.workspaceId, workspaceId),
+            eq(schema.campaignRecipients.orgId, orgId),
+          ),
+        );
+
+      const count = Number(countRow?.count ?? 0);
+
+      // Guard: only update campaign metrics if the campaign is still in 'draft' state.
+      // If a concurrent lifecycle transition (e.g. schedule, cancel) won, do not overwrite metrics.
+      if (lockedCampaign.status === 'draft') {
+        const currentMetrics = (lockedCampaign.metrics as Record<string, unknown>) ?? {};
+        const updatedMetrics = {
+          ...currentMetrics,
+          totalRecipients: count,
+        };
+
+        await tx
+          .update(schema.campaigns)
+          .set({
+            metrics: updatedMetrics,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(schema.campaigns.id, campaign.id),
+              eq(schema.campaigns.workspaceId, workspaceId),
+              eq(schema.campaigns.orgId, orgId),
+              eq(schema.campaigns.status, 'draft'),
+            ),
+          );
+
+        await this.audit.record(
+          {
+            scopeType: 'workspace',
+            scopeId: workspaceId,
+            ...actorFromPrincipal(principal),
+            action: 'campaign.audience_materialized',
+            resourceType: 'Campaign',
+            resourceId: campaign.id,
+            outcome: 'success',
+            before: null,
+            after: null,
+            metadata: {
+              totalRecipients: count,
+              newlyMaterialized,
+            },
+          },
+          tx,
+        );
+      }
+
+      return count;
+    });
+
+    return { totalRecipients, materialized: newlyMaterialized };
+  }
+
+  private async getMaterializedRecipientCount(
+    orgId: string,
+    workspaceId: string,
+    campaignId: string,
+  ): Promise<number> {
+    return this.db.withRequestTenant(async (tx) => {
+      const [countRow] = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(schema.campaignRecipients)
+        .where(
+          and(
+            eq(schema.campaignRecipients.campaignId, campaignId),
+            eq(schema.campaignRecipients.workspaceId, workspaceId),
+            eq(schema.campaignRecipients.orgId, orgId),
+          ),
+        );
+      return Number(countRow?.count ?? 0);
+    });
+  }
+
+  async schedule(
+    principal: AuthPrincipal,
+    workspaceId: string,
+    campaignId: string,
+    dto: ScheduleCampaignDto = {},
+  ): Promise<CampaignRecordResponse> {
+    const orgId = requireOrganization(principal);
+
+    const existing = await this.db.withRequestTenant(async (tx) => {
+      await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.CAMPAIGNS_MANAGE);
+
+      const [row] = await tx
+        .select({
+          campaign: schema.campaigns,
+          channelCode: sql<string>`app_channel_code(${schema.campaigns.channelId})`,
+          template: schema.templates,
+        })
+        .from(schema.campaigns)
+        .leftJoin(schema.templates, eq(schema.campaigns.templateId, schema.templates.id))
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+          ),
+        )
+        .limit(1);
+
+      if (!row) throw campaignNotFound(campaignId);
+      return row;
+    });
+
+    const campaign = existing.campaign;
+    const template = existing.template;
+
+    if (campaign.status !== 'draft' && campaign.status !== 'scheduled') {
+      throw new AppException({
+        status: HttpStatus.CONFLICT,
+        code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+        message: `Cannot schedule a campaign in '${campaign.status}' state`,
+        details: { currentStatus: campaign.status },
+      });
+    }
+
+    const effectiveScheduledAt =
+      dto.scheduledAt ?? (campaign.scheduledAt ? campaign.scheduledAt.toISOString() : null);
+    if (!effectiveScheduledAt) {
+      throw new AppException({
+        status: HttpStatus.BAD_REQUEST,
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: 'scheduledAt is required to schedule a campaign',
+      });
+    }
+
+    const scheduledAtDate = new Date(effectiveScheduledAt);
+    if (isNaN(scheduledAtDate.getTime()) || scheduledAtDate.getTime() < Date.now() + 60_000) {
+      throw new AppException({
+        status: HttpStatus.UNPROCESSABLE_ENTITY,
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: 'scheduledAt must be a valid future ISO date string at least 60 seconds from now',
+        logContext: { scheduledAt: effectiveScheduledAt },
+      });
+    }
+
+    if (!template || template.deletedAt !== null) {
+      throw templateNotFound(campaign.templateId);
+    }
+
+    if (template.orgId !== orgId) {
+      throw new AppException({
+        status: HttpStatus.UNPROCESSABLE_ENTITY,
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: 'Template does not belong to the active organization',
+      });
+    }
+
+    if (template.channelId !== campaign.channelId) {
+      throw new AppException({
+        status: HttpStatus.UNPROCESSABLE_ENTITY,
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: 'Template channel does not match campaign channel',
+        logContext: {
+          templateChannelId: template.channelId,
+          campaignChannelId: campaign.channelId,
+        },
+      });
+    }
+
+    if (template.approvalStatus !== 'approved') {
+      throw new AppException({
+        status: HttpStatus.UNPROCESSABLE_ENTITY,
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: `Template must be approved before scheduling campaign (current approval status: '${template.approvalStatus}')`,
+        details: { approvalStatus: template.approvalStatus },
+      });
+    }
+
+    const rendered = renderTemplate(
+      template.body,
+      (campaign.templateVariables as Record<string, unknown>) ?? {},
+    );
+    if (rendered.missingVariables.length > 0) {
+      throw new AppException({
+        status: HttpStatus.UNPROCESSABLE_ENTITY,
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: `Missing required template variables: ${rendered.missingVariables.join(', ')}`,
+        details: { missingVariables: rendered.missingVariables },
+      });
+    }
+
+    // Scheduling must use the authoritative materialised snapshot.
+    let totalRecipients = await this.getMaterializedRecipientCount(orgId, workspaceId, campaign.id);
+    if (totalRecipients === 0) {
+      const materialization = await this.performMaterialization(
+        principal,
+        workspaceId,
+        orgId,
+        campaign,
+      );
+      totalRecipients = materialization.totalRecipients;
+    }
+
+    if (totalRecipients === 0) {
+      throw new AppException({
+        status: HttpStatus.UNPROCESSABLE_ENTITY,
+        code: ERROR_CODES.CAMPAIGN_AUDIENCE_EMPTY,
+        message: 'Campaign audience is empty. Cannot schedule campaign without recipients.',
+        logContext: { campaignId },
+      });
+    }
+
+    return this.db.withRequestTenant(async (tx) => {
+      await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.CAMPAIGNS_MANAGE);
+
+      const [lockedCampaign] = await tx
+        .select({
+          id: schema.campaigns.id,
+          status: schema.campaigns.status,
+          metrics: schema.campaigns.metrics,
+        })
+        .from(schema.campaigns)
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+            inArray(schema.campaigns.status, ['draft', 'scheduled']),
+          ),
+        )
+        .for('no key update')
+        .limit(1);
+
+      if (!lockedCampaign) {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message:
+            'Campaign lifecycle transition conflict: campaign status was modified concurrently or is not in a valid state',
+          details: { campaignId },
+        });
+      }
+
+      const [countRow] = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(schema.campaignRecipients)
+        .where(
+          and(
+            eq(schema.campaignRecipients.campaignId, campaignId),
+            eq(schema.campaignRecipients.workspaceId, workspaceId),
+            eq(schema.campaignRecipients.orgId, orgId),
+          ),
+        );
+
+      const recipientCount = Number(countRow?.count ?? 0);
+      if (recipientCount === 0) {
+        throw new AppException({
+          status: HttpStatus.UNPROCESSABLE_ENTITY,
+          code: ERROR_CODES.CAMPAIGN_AUDIENCE_EMPTY,
+          message: 'Campaign audience is empty. Cannot schedule campaign without recipients.',
+          logContext: { campaignId },
+        });
+      }
+
+      const currentMetrics = (lockedCampaign.metrics as Record<string, unknown>) ?? {};
+      const updatedMetrics = {
+        ...currentMetrics,
+        totalRecipients: recipientCount,
+      };
+
+      const [updatedRow] = await tx
+        .update(schema.campaigns)
+        .set({
+          status: 'scheduled',
+          scheduleMode: 'scheduled',
+          scheduledAt: scheduledAtDate,
+          metrics: updatedMetrics,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.campaigns.id, campaignId))
+        .returning();
+
+      if (!updatedRow) {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message:
+            'Campaign lifecycle transition conflict: campaign status was modified concurrently or is not in a valid state',
+          details: { campaignId },
+        });
+      }
+
+      await this.audit.record(
+        {
+          scopeType: 'workspace',
+          scopeId: workspaceId,
+          ...actorFromPrincipal(principal),
+          action: 'campaign.scheduled',
+          resourceType: 'Campaign',
+          resourceId: campaignId,
+          outcome: 'success',
+          before: null,
+          after: null,
+          metadata: {
+            scheduledAt: scheduledAtDate.toISOString(),
+            totalRecipients: recipientCount,
+          },
+        },
+        tx,
+      );
+
+      const joinedRow: CampaignJoinedRow = {
+        ...updatedRow!,
+        channelCode: existing.channelCode,
+        templateName: template.name,
+        templateBody: template.body,
+      };
+
+      return campaignView(joinedRow);
+    });
+  }
+
+  async cancel(
+    principal: AuthPrincipal,
+    workspaceId: string,
+    campaignId: string,
+  ): Promise<CampaignRecordResponse> {
+    const orgId = requireOrganization(principal);
+
+    return this.db.withRequestTenant(async (tx) => {
+      await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.CAMPAIGNS_MANAGE);
+
+      // Lock campaign row first to serialize with concurrent operations
+      const [campaignRow] = await tx
+        .select()
+        .from(schema.campaigns)
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+          ),
+        )
+        .for('no key update')
+        .limit(1);
+
+      if (!campaignRow) throw campaignNotFound(campaignId);
+
+      if (campaignRow.status === 'completed' || campaignRow.status === 'cancelled') {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message: `Cannot cancel a campaign in '${campaignRow.status}' state`,
+          details: { currentStatus: campaignRow.status },
+        });
+      }
+
+      const [updatedRow] = await tx
+        .update(schema.campaigns)
+        .set({
+          status: 'cancelled',
+          completedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+            inArray(schema.campaigns.status, ['draft', 'scheduled', 'running', 'paused']),
+          ),
+        )
+        .returning();
+
+      if (!updatedRow) {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message: `Cannot cancel campaign: campaign is already in terminal state or was modified concurrently`,
+          details: { campaignId },
+        });
+      }
+
+      await this.audit.record(
+        {
+          scopeType: 'workspace',
+          scopeId: workspaceId,
+          ...actorFromPrincipal(principal),
+          action: 'campaign.cancelled',
+          resourceType: 'Campaign',
+          resourceId: campaignId,
+          outcome: 'success',
+          before: null,
+          after: null,
+          metadata: {
+            previousStatus: campaignRow.status,
+          },
+        },
+        tx,
+      );
+
+      const [template] = await tx
+        .select({
+          name: schema.templates.name,
+          body: schema.templates.body,
+        })
+        .from(schema.templates)
+        .where(eq(schema.templates.id, campaignRow.templateId))
+        .limit(1);
+
+      const channelResult = await tx.execute<{ code: string }>(
+        sql`SELECT app_channel_code(${campaignRow.channelId}) AS code`,
+      );
+
+      const joinedRow: CampaignJoinedRow = {
+        ...updatedRow!,
+        channelCode: channelResult.rows[0]?.code ?? 'unknown',
+        templateName: template?.name ?? null,
+        templateBody: template?.body ?? null,
+      };
+
+      return campaignView(joinedRow);
+    });
+  }
+
+  async pause(
+    principal: AuthPrincipal,
+    workspaceId: string,
+    campaignId: string,
+  ): Promise<CampaignRecordResponse> {
+    const orgId = requireOrganization(principal);
+
+    return this.db.withRequestTenant(async (tx) => {
+      await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.CAMPAIGNS_MANAGE);
+
+      const [existing] = await tx
+        .select({
+          campaign: schema.campaigns,
+          channelCode: sql<string>`app_channel_code(${schema.campaigns.channelId})`,
+          templateName: schema.templates.name,
+          templateBody: schema.templates.body,
+        })
+        .from(schema.campaigns)
+        .leftJoin(schema.templates, eq(schema.campaigns.templateId, schema.templates.id))
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+          ),
+        )
+        .limit(1);
+
+      if (!existing) throw campaignNotFound(campaignId);
+
+      const campaign = existing.campaign;
+      if (campaign.status !== 'running') {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message: `Cannot pause a campaign that is not running (current status: '${campaign.status}')`,
+          details: { currentStatus: campaign.status },
+        });
+      }
+
+      const [updatedRow] = await tx
+        .update(schema.campaigns)
+        .set({
+          status: 'paused',
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+            eq(schema.campaigns.status, 'running'),
+          ),
+        )
+        .returning();
+
+      if (!updatedRow) {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message: `Cannot pause campaign: campaign is not running or was modified concurrently`,
+          details: { campaignId },
+        });
+      }
+
+      await this.audit.record(
+        {
+          scopeType: 'workspace',
+          scopeId: workspaceId,
+          ...actorFromPrincipal(principal),
+          action: 'campaign.paused',
+          resourceType: 'Campaign',
+          resourceId: campaignId,
+          outcome: 'success',
+          before: null,
+          after: null,
+          metadata: {},
+        },
+        tx,
+      );
+
+      const joinedRow: CampaignJoinedRow = {
+        ...updatedRow!,
+        channelCode: existing.channelCode,
+        templateName: existing.templateName,
+        templateBody: existing.templateBody,
+      };
+
+      return campaignView(joinedRow);
+    });
+  }
+
+  async resume(
+    principal: AuthPrincipal,
+    workspaceId: string,
+    campaignId: string,
+  ): Promise<CampaignRecordResponse> {
+    const orgId = requireOrganization(principal);
+
+    return this.db.withRequestTenant(async (tx) => {
+      await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.CAMPAIGNS_MANAGE);
+
+      const [existing] = await tx
+        .select({
+          campaign: schema.campaigns,
+          channelCode: sql<string>`app_channel_code(${schema.campaigns.channelId})`,
+          templateName: schema.templates.name,
+          templateBody: schema.templates.body,
+        })
+        .from(schema.campaigns)
+        .leftJoin(schema.templates, eq(schema.campaigns.templateId, schema.templates.id))
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+          ),
+        )
+        .limit(1);
+
+      if (!existing) throw campaignNotFound(campaignId);
+
+      const campaign = existing.campaign;
+      if (campaign.status !== 'paused') {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message: `Cannot resume a campaign that is not paused (current status: '${campaign.status}')`,
+          details: { currentStatus: campaign.status },
+        });
+      }
+
+      const [updatedRow] = await tx
+        .update(schema.campaigns)
+        .set({
+          status: 'running',
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+            eq(schema.campaigns.status, 'paused'),
+          ),
+        )
+        .returning();
+
+      if (!updatedRow) {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message: `Cannot resume campaign: campaign is not paused or was modified concurrently`,
+          details: { campaignId },
+        });
+      }
+
+      await this.audit.record(
+        {
+          scopeType: 'workspace',
+          scopeId: workspaceId,
+          ...actorFromPrincipal(principal),
+          action: 'campaign.resumed',
+          resourceType: 'Campaign',
+          resourceId: campaignId,
+          outcome: 'success',
+          before: null,
+          after: null,
+          metadata: {},
+        },
+        tx,
+      );
+
+      const joinedRow: CampaignJoinedRow = {
+        ...updatedRow!,
+        channelCode: existing.channelCode,
+        templateName: existing.templateName,
+        templateBody: existing.templateBody,
+      };
+
+      return campaignView(joinedRow);
+    });
+  }
+
+  async listRecipients(
+    principal: AuthPrincipal,
+    workspaceId: string,
+    campaignId: string,
+    query: ListCampaignRecipientsDto = {},
+  ): Promise<{ items: readonly CampaignRecipientRecord[]; page: PageInfo }> {
+    const orgId = requireOrganization(principal);
+    const resolved = this.lists.resolve(query, this.recipientListSpec);
+
+    const rows = await this.db.withRequestTenant(async (tx) => {
+      await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.CAMPAIGNS_READ);
+
+      const [campaign] = await tx
+        .select({ id: schema.campaigns.id })
+        .from(schema.campaigns)
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.workspaceId, workspaceId),
+            eq(schema.campaigns.orgId, orgId),
+            isNull(schema.campaigns.deletedAt),
+          ),
+        )
+        .limit(1);
+
+      if (!campaign) throw campaignNotFound(campaignId);
+
+      const predicates: SQL[] = [
+        eq(schema.campaignRecipients.orgId, orgId),
+        eq(schema.campaignRecipients.workspaceId, workspaceId),
+        eq(schema.campaignRecipients.campaignId, campaignId),
+      ];
+
+      if (query.status) {
+        predicates.push(eq(schema.campaignRecipients.status, query.status));
+      }
+      if (resolved.after) {
+        predicates.push(resolved.after);
+      }
+
+      return tx
+        .select()
+        .from(schema.campaignRecipients)
+        .where(and(...predicates))
+        .orderBy(...resolved.orderBy)
+        .limit(this.lists.fetchSize(resolved));
+    });
+
+    const { items, page } = this.lists.paginate(
+      rows as unknown as Record<string, unknown>[],
+      resolved,
+      this.recipientListSpec,
+      (row) => String(row.id),
+    );
+
+    return {
+      items: items.map((r) => {
+        const row = r as typeof schema.campaignRecipients.$inferSelect;
+        return {
+          id: row.id,
+          campaignId: row.campaignId,
+          orgId: row.orgId,
+          workspaceId: row.workspaceId,
+          contactId: row.contactId,
+          identityId: row.identityId,
+          status: row.status,
+          messageId: row.messageId,
+          skipReason: row.skipReason,
+          errorCode: row.errorCode,
+          createdAt: row.createdAt.toISOString(),
+          updatedAt: row.updatedAt.toISOString(),
+        };
+      }),
+      page,
+    };
   }
 }

@@ -2,7 +2,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { CreateCampaignDto, UpdateCampaignDto } from './campaigns.dto';
+import {
+  CampaignAudiencePreviewDto,
+  CreateCampaignDto,
+  ListCampaignRecipientsDto,
+  ScheduleCampaignDto,
+  UpdateCampaignDto,
+} from './campaigns.dto';
 
 const codeOf = (file: string): string =>
   readFileSync(join(__dirname, file), 'utf8')
@@ -38,6 +44,27 @@ describe('Campaigns boundary and structural guarantees', () => {
     expect(serviceCode).toContain('Campaign dispatch remains disabled');
   });
 
+  it('reuses ContactsService.resolveAudience for audience queries', () => {
+    expect(serviceCode).toContain('this.contactsService.resolveAudience');
+  });
+
+  it('enforces database-level duplicate prevention for recipients', () => {
+    expect(serviceCode).toContain('.onConflictDoNothing(');
+  });
+
+  it('removes fallback to arbitrary channel identity (member.identities[0])', () => {
+    expect(serviceCode).not.toContain('member.identities[0]');
+  });
+
+  it('enforces atomic conditional lifecycle transitions with expected status predicates', () => {
+    expect(serviceCode).toContain("inArray(schema.campaigns.status, ['draft', 'scheduled'])");
+    expect(serviceCode).toContain(
+      "inArray(schema.campaigns.status, ['draft', 'scheduled', 'running', 'paused'])",
+    );
+    expect(serviceCode).toContain("eq(schema.campaigns.status, 'running')");
+    expect(serviceCode).toContain("eq(schema.campaigns.status, 'paused')");
+  });
+
   describe('DTO validation', () => {
     it('validates valid CreateCampaignDto', async () => {
       expect(
@@ -70,6 +97,51 @@ describe('Campaigns boundary and structural guarantees', () => {
           description: 'Updated description',
         }),
       ).toEqual([]);
+    });
+
+    it('validates CampaignAudiencePreviewDto', async () => {
+      expect(
+        await errorsFor(CampaignAudiencePreviewDto, {
+          tags: ['vip', 'promo'],
+          tagMatchMode: 'all',
+          requireOptIn: true,
+          limit: 20,
+        }),
+      ).toEqual([]);
+
+      const invalid = await errorsFor(CampaignAudiencePreviewDto, {
+        tagMatchMode: 'invalid_mode',
+        requireOptIn: 'not-a-boolean',
+      });
+      expect(invalid).toContain('tagMatchMode');
+      expect(invalid).toContain('requireOptIn');
+    });
+
+    it('validates ScheduleCampaignDto', async () => {
+      expect(
+        await errorsFor(ScheduleCampaignDto, {
+          scheduledAt: '2026-12-01T10:00:00.000Z',
+        }),
+      ).toEqual([]);
+
+      const invalid = await errorsFor(ScheduleCampaignDto, {
+        scheduledAt: 'not-an-iso-date',
+      });
+      expect(invalid).toContain('scheduledAt');
+    });
+
+    it('validates ListCampaignRecipientsDto', async () => {
+      expect(
+        await errorsFor(ListCampaignRecipientsDto, {
+          status: 'pending',
+          limit: 50,
+        }),
+      ).toEqual([]);
+
+      const invalid = await errorsFor(ListCampaignRecipientsDto, {
+        status: 'not_a_valid_status',
+      });
+      expect(invalid).toContain('status');
     });
   });
 });

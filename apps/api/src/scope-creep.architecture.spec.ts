@@ -103,18 +103,28 @@ const CATEGORIES: Category[] = [
     pattern: /[\w-]*(?:worker|queue|bullmq|processor|cron|setInterval|schedul|job)[\w-]*/gi,
     providerCodeOnly: false,
     pinned: {
+      'apps/api/src/campaigns/campaigns.controller.ts': [
+        'Schedule',
+        'ScheduleCampaignDto',
+        'schedule',
+      ],
       'apps/api/src/campaigns/campaigns.dto.ts': [
         'ALL_CAMPAIGN_SCHEDULE_MODES',
         'CampaignScheduleMode',
+        'ScheduleCampaignDto',
         'scheduleMode',
         'scheduledAt',
       ],
       'apps/api/src/campaigns/campaigns.service.ts': [
+        'ScheduleCampaignDto',
         'effectiveScheduleMode',
+        'effectiveScheduledAt',
+        'schedule',
         'scheduleMode',
         'scheduled',
         'scheduledAt',
         'scheduledAtDate',
+        'scheduling',
       ],
       'apps/api/src/config/app-config.service.ts': [
         'DISPATCH_WORKER_BATCH_SIZE',
@@ -150,7 +160,15 @@ const CATEGORIES: Category[] = [
         'queued',
       ],
       'apps/api/src/messages/submission/submission.types.ts': ['queued'],
-      'apps/api/src/metadata.ts': ['queued', 'scheduleMode', 'scheduled', 'scheduledAt'],
+      'apps/api/src/metadata.ts': [
+        'ScheduleCampaignDto',
+        'enqueued',
+        'queued',
+        'schedule',
+        'scheduleMode',
+        'scheduled',
+        'scheduledAt',
+      ],
       'apps/api/src/openapi/openapi-schemas.ts': ['QueuedMessage', 'QueuedMessageSchema', 'queued'],
       'apps/api/src/platform-support/platform-support-schemas.ts': ['queue'],
       'apps/api/src/platform-support/platform-support.controller.ts': ['queue'],
@@ -160,6 +178,7 @@ const CATEGORIES: Category[] = [
       'packages/contracts/src/campaigns.ts': [
         'ALL_CAMPAIGN_SCHEDULE_MODES',
         'CampaignScheduleMode',
+        'ScheduleCampaignRequest',
         'enqueued',
         'scheduleMode',
         'scheduled',
