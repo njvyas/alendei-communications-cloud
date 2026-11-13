@@ -772,6 +772,39 @@ export function useCanManageCampaigns(): boolean {
 }
 
 /**
+ * Evaluates whether the actor can view journeys in the active organization.
+ */
+export function canReadJourneys(): boolean {
+  return (
+    hasPermission('journeys.read') ||
+    hasPermission('journeys.manage') ||
+    hasPermission('messages.read') ||
+    hasPermission('messages.send')
+  );
+}
+
+export function useCanReadJourneys(): boolean {
+  const canReadJourneysPerm = useHasPermission('journeys.read');
+  const canManageJourneysPerm = useHasPermission('journeys.manage');
+  const canReadMessages = useHasPermission('messages.read');
+  const canSendMessages = useHasPermission('messages.send');
+  return canReadJourneysPerm || canManageJourneysPerm || canReadMessages || canSendMessages;
+}
+
+/**
+ * Evaluates whether the actor can create/manage journeys in the active organization.
+ */
+export function canManageJourneys(): boolean {
+  return hasPermission('journeys.manage') || hasPermission('messages.send');
+}
+
+export function useCanManageJourneys(): boolean {
+  const canManageJourneysPerm = useHasPermission('journeys.manage');
+  const canSendMessages = useHasPermission('messages.send');
+  return canManageJourneysPerm || canSendMessages;
+}
+
+/**
  * Initializes the session on application startup via silent refresh.
  * Transitions to 'unauthenticated' if no active session exists.
  */

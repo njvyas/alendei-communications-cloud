@@ -9,6 +9,7 @@ import {
   bootstrapSession,
   useCanAccessPlatformSupport,
   useCanReadCampaigns,
+  useCanReadJourneys,
   useCanReadOrganizations,
   useCanReadProviders,
   useCanReadResellers,
@@ -93,6 +94,7 @@ export function ConsoleClientLayout({
   const canReadAudit = useHasPermission('audit.read');
   const canReadTemplates = useHasPermission('templates.read');
   const canReadCampaigns = useCanReadCampaigns();
+  const canReadJourneys = useCanReadJourneys();
   const canReadContacts = useHasPermission('contacts.read');
   const canReadMessages = useHasPermission('messages.read');
   const canSendMessages = useHasPermission('messages.send');
@@ -127,6 +129,8 @@ export function ConsoleClientLayout({
         return canReadTemplates;
       case '/campaigns':
         return canReadCampaigns;
+      case '/journeys':
+        return canReadJourneys;
       case '/contacts':
         return canReadContacts;
       case '/suppressions':
@@ -212,6 +216,7 @@ export function ConsoleClientLayout({
     canSendMessages,
     canReadTemplates,
     canReadCampaigns,
+    canReadJourneys,
     canReadContacts,
     canReadSuppressions,
     canReadProviders,
