@@ -330,9 +330,9 @@ describe('three barriers (U14.1a 0042, U14.1b 0043, Phase 5.0 0045) — journal 
 
   // Pins the journal shape at the time of Phase 8B.1: 0042, 0043, then 0044 (the prefix of
   // the third barrier), the 0045 guard, 0046, the forward fix 0047, 0048 (resolver facts), 0049
-  // (support delivery filter), 0050 (ledger foundation), 0051 (pricing and rating), 0052 (campaign foundation), 0053 (funds reservation), 0054 (settlement), 0055 (tenant billing reads), 0056 (unknown-outcome register), 0057 (operator resolution), 0058 (Phase 8A.1 segments), 0059 (account provisioning), 0060 (wallet recharge), 0061 (contact import/export) and 0062 (journey foundation) as the newest.
+  // (support delivery filter), 0050 (ledger foundation), 0051 (pricing and rating), 0052 (campaign foundation), 0053 (funds reservation), 0054 (settlement), 0055 (tenant billing reads), 0056 (unknown-outcome register), 0057 (operator resolution), 0058 (Phase 8A.1 segments), 0059 (account provisioning), 0060 (wallet recharge), 0061 (contact import/export), 0062 (journey foundation) and 0063 (journey lifecycle and executions) as the newest.
   // Update when a later migration is added.
-  it('0043 follows 0042; the 0045 guard follows 0044; 0046 to 0062 are the newest', () => {
+  it('0043 follows 0042; the 0045 guard follows 0044; 0046 to 0063 are the newest', () => {
     expect(at43).toBe(guardAt + 1);
     expect(at45).toBe(at43 + 2);
     expect(expected[at45 - 1]?.tag).toBe('0044_phase5_0_delivery_foundation');
@@ -353,29 +353,30 @@ describe('three barriers (U14.1a 0042, U14.1b 0043, Phase 5.0 0045) — journal 
     expect(expected[at45 + 15]?.tag).toBe('0060_phase7_6d2_wallet_recharge');
     expect(expected[at45 + 16]?.tag).toBe('0061_phase8a_contact_import_export');
     expect(expected[at45 + 17]?.tag).toBe('0062_phase8c1_journey_foundation');
-    expect(expected).toHaveLength(at45 + 18);
+    expect(expected[at45 + 18]?.tag).toBe('0063_phase8c2_journey_lifecycle_executions');
+    expect(expected).toHaveLength(at45 + 19);
   });
 
   it.each<[string, Row[] | null, string[]]>([
     [
       'fresh database',
       null,
-      [`apply:${guardAt}`, 'barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:18'],
+      [`apply:${guardAt}`, 'barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:19'],
     ],
     [
       'database at 0041',
       rowsFor(guardAt),
-      ['barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:18'],
+      ['barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:19'],
     ],
     [
       'database at 0042 (U14.1a applied)',
       rowsFor(guardAt + 1),
-      ['verify:a', 'barrier:b', 'apply:2', 'barrier:c', 'apply:18'],
+      ['verify:a', 'barrier:b', 'apply:2', 'barrier:c', 'apply:19'],
     ],
     [
       'database at 0044 (Phase 5.0 M1 applied)',
       rowsFor(at45),
-      ['verify:a', 'verify:b', 'barrier:c', 'apply:18'],
+      ['verify:a', 'verify:b', 'barrier:c', 'apply:19'],
     ],
     ['up to date', rowsFor(expected.length), ['verify:a', 'verify:b', 'verify:c']],
   ])(

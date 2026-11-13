@@ -1,15 +1,26 @@
 import { ApiProperty } from '@nestjs/swagger';
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  ArrayUnique,
+  IsArray,
   IsIn,
   IsObject,
   IsOptional,
   IsString,
+  IsUUID,
   Matches,
   MaxLength,
   MinLength,
   ValidateIf,
 } from 'class-validator';
-import { JOURNEY_STATUSES, type JourneyStatus } from '@acc/contracts';
+import {
+  JOURNEY_ENROLMENT_LIMITS,
+  JOURNEY_EXECUTION_STATUSES,
+  JOURNEY_STATUSES,
+  type JourneyExecutionStatus,
+  type JourneyStatus,
+} from '@acc/contracts';
 
 import { ListQueryDto } from '../common/http/list-query.dto';
 
@@ -83,4 +94,48 @@ export class PublishJourneyVersionDto {
   @IsString()
   @Matches(/^[0-9a-f]{64}$/)
   expectedGraphSha256!: string;
+}
+
+// --- 8C-2 -----------------------------------------------------------------------------------
+
+/**
+ * `POST …/journeys/:journeyId/enrollments`: enrol contacts of the journey's workspace through
+ * its API trigger. `Idempotency-Key` required; each contact's entry reference derives from it.
+ */
+export class EnrolJourneyContactsDto {
+  @ApiProperty({
+    type: [String],
+    format: 'uuid',
+    minItems: 1,
+    maxItems: JOURNEY_ENROLMENT_LIMITS.maxContactsPerCall,
+    uniqueItems: true,
+  })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(JOURNEY_ENROLMENT_LIMITS.maxContactsPerCall)
+  @ArrayUnique()
+  @IsUUID('all', { each: true })
+  contactIds!: string[];
+}
+
+/** `GET …/journeys/:journeyId/executions`. */
+export class ListJourneyExecutionsDto extends ListQueryDto {
+  @IsOptional()
+  @IsIn(JOURNEY_EXECUTION_STATUSES)
+  status?: JourneyExecutionStatus;
+
+  @IsOptional()
+  @IsUUID('all')
+  contactId?: string;
+
+  @IsOptional()
+  @IsUUID('all')
+  versionId?: string;
+}
+
+/** `GET …/journeys/:journeyId/stats`. */
+export class JourneyStatsQueryDto {
+  @IsOptional()
+  @IsUUID('all')
+  versionId?: string;
 }

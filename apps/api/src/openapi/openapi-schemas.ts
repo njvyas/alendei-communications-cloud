@@ -27,8 +27,13 @@ import {
   PRICING_RATE_MAX_E4,
   PRICING_UNITS,
   PRICING_VERSION_STATUSES,
+  JOURNEY_ENROLMENT_OUTCOMES,
+  JOURNEY_EXECUTION_STATUSES,
   JOURNEY_GRAPH_ISSUE_CODES,
   JOURNEY_STATUSES,
+  JOURNEY_STEP_OUTCOMES,
+  JOURNEY_TRIGGER_KINDS,
+  JOURNEY_TRIGGER_STATUSES,
   JOURNEY_VERSION_STATUSES,
 } from '@acc/contracts';
 import { ApiProperty, ApiSchema } from '@nestjs/swagger';
@@ -1410,6 +1415,35 @@ export class JourneyVersionSchema extends JourneyVersionSummarySchema {
   publishedBy!: string | null;
 }
 
+/** 8C-2: the journey's live trigger, inline and nullable (as `NULLABLE_VERSION_SUMMARY`). */
+const NULLABLE_JOURNEY_TRIGGER = {
+  type: 'object',
+  nullable: true,
+  required: [
+    'id',
+    'journeyVersionId',
+    'kind',
+    'eventKind',
+    'eventTag',
+    'segmentId',
+    'nextFireAt',
+    'status',
+  ],
+  properties: {
+    id: uuid,
+    journeyVersionId: uuid,
+    kind: { type: 'string', enum: [...JOURNEY_TRIGGER_KINDS] },
+    eventKind: nullableString,
+    eventTag: nullableString,
+    segmentId: nullableUuid,
+    nextFireAt: nullableTimestamp,
+    status: { type: 'string', enum: [...JOURNEY_TRIGGER_STATUSES] },
+  },
+  additionalProperties: false,
+  description:
+    "Derived from the active version's entry node at activation. Nothing processes it until 8C-4.",
+} as const;
+
 @ApiSchema({ name: 'Journey' })
 export class JourneySchema {
   @ApiProperty(uuid) id!: string;
@@ -1425,6 +1459,16 @@ export class JourneySchema {
   draftVersion!: Record<string, unknown> | null;
   @ApiProperty(NULLABLE_VERSION_SUMMARY as never)
   latestPublishedVersion!: Record<string, unknown> | null;
+  @ApiProperty({
+    ...nullableUuid,
+    description: 'The published version new enrolments use; null until first activated.',
+  })
+  activeVersionId!: string | null;
+  @ApiProperty(nullableTimestamp) activatedAt!: string | null;
+  @ApiProperty({ ...nullableUuid, description: 'Null when an API key activated the journey.' })
+  activatedBy!: string | null;
+  @ApiProperty(NULLABLE_JOURNEY_TRIGGER as never)
+  trigger!: Record<string, unknown> | null;
 }
 
 @ApiSchema({ name: 'JourneyGraphIssue' })
@@ -1441,4 +1485,115 @@ export class JourneyGraphValidationReportSchema {
   @ApiProperty({ type: [JourneyGraphIssueSchema] }) errors!: JourneyGraphIssueSchema[];
   @ApiProperty({ type: [JourneyGraphIssueSchema], description: 'Never block publication.' })
   warnings!: JourneyGraphIssueSchema[];
+}
+
+// --- Phase 8C PR 8C-2: lifecycle, executions, statistics ----------------------------------
+
+@ApiSchema({ name: 'JourneyExecution' })
+export class JourneyExecutionSchema {
+  @ApiProperty(uuid) id!: string;
+  @ApiProperty(uuid) journeyId!: string;
+  @ApiProperty(uuid) journeyVersionId!: string;
+  @ApiProperty(uuid) workspaceId!: string;
+  @ApiProperty(uuid) contactId!: string;
+  @ApiProperty({ enum: [...JOURNEY_EXECUTION_STATUSES] }) status!: string;
+  @ApiProperty({ ...nullableString, description: 'The node the execution runs next.' })
+  currentNodeKey!: string | null;
+  @ApiProperty(nullableTimestamp) wakeAt!: string | null;
+  @ApiProperty({ type: 'integer', minimum: 0 }) stateVersion!: number;
+  @ApiProperty({ type: 'integer', minimum: 0 }) transitions!: number;
+  @ApiProperty({ enum: [...JOURNEY_TRIGGER_KINDS] }) entryKind!: string;
+  @ApiProperty({ ...nullableUuid, description: 'Null for an API key or an automated entry.' })
+  enrolledBy!: string | null;
+  @ApiProperty(timestamp) enteredAt!: string;
+  @ApiProperty(nullableTimestamp) endedAt!: string | null;
+  @ApiProperty(nullableString) endReason!: string | null;
+  @ApiProperty(timestamp) updatedAt!: string;
+}
+
+@ApiSchema({ name: 'JourneyExecutionStep' })
+export class JourneyExecutionStepSchema {
+  @ApiProperty({ type: 'integer', minimum: 1 }) seq!: number;
+  @ApiProperty() nodeKey!: string;
+  @ApiProperty() nodeType!: string;
+  @ApiProperty({ enum: [...JOURNEY_STEP_OUTCOMES] }) outcome!: string;
+  @ApiProperty({ type: 'integer', minimum: 1 }) attempt!: number;
+  @ApiProperty(nullableUuid) messageId!: string | null;
+  @ApiProperty(nullableString) errorCode!: string | null;
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    description: 'Bounded; never message content or addresses.',
+  })
+  details!: Record<string, unknown>;
+  @ApiProperty(timestamp) startedAt!: string;
+  @ApiProperty(timestamp) finishedAt!: string;
+}
+
+@ApiSchema({ name: 'JourneyExecutionDetail' })
+export class JourneyExecutionDetailSchema extends JourneyExecutionSchema {
+  @ApiProperty({ type: [JourneyExecutionStepSchema], description: 'Ordered by `seq`.' })
+  steps!: JourneyExecutionStepSchema[];
+}
+
+@ApiSchema({ name: 'JourneyEnrolmentOutcome' })
+export class JourneyEnrolmentOutcomeSchema {
+  @ApiProperty(uuid) contactId!: string;
+  @ApiProperty({ enum: [...JOURNEY_ENROLMENT_OUTCOMES] }) outcome!: string;
+  @ApiProperty({
+    ...nullableUuid,
+    description: "The new execution, or the contact's most recent one when already enrolled.",
+  })
+  executionId!: string | null;
+}
+
+@ApiSchema({ name: 'JourneyEnrolmentResult' })
+export class JourneyEnrolmentResultSchema {
+  @ApiProperty(uuid) journeyId!: string;
+  @ApiProperty(uuid) journeyVersionId!: string;
+  @ApiProperty({ type: 'integer', minimum: 0 }) enrolled!: number;
+  @ApiProperty({ type: 'integer', minimum: 0 }) alreadyEnrolled!: number;
+  @ApiProperty({ type: 'integer', minimum: 0 }) contactNotFound!: number;
+  @ApiProperty({ type: [JourneyEnrolmentOutcomeSchema], description: 'In request order.' })
+  results!: JourneyEnrolmentOutcomeSchema[];
+}
+
+const statCount = { type: 'integer', minimum: 0 } as const;
+
+@ApiSchema({ name: 'JourneyNodeStats' })
+export class JourneyNodeStatsSchema {
+  @ApiProperty() nodeKey!: string;
+  @ApiProperty() nodeType!: string;
+  @ApiProperty({ ...statCount, description: 'Live executions positioned at this node.' })
+  running!: number;
+  @ApiProperty(statCount) waiting!: number;
+  @ApiProperty({
+    type: 'object',
+    properties: Object.fromEntries(JOURNEY_STEP_OUTCOMES.map((o) => [o, statCount])),
+    additionalProperties: false,
+    description: 'History rows recorded at this node, by outcome (absent outcomes omitted).',
+  })
+  outcomes!: Record<string, number>;
+}
+
+@ApiSchema({ name: 'JourneyVersionStats' })
+export class JourneyVersionStatsSchema {
+  @ApiProperty(uuid) versionId!: string;
+  @ApiProperty({ type: 'integer', minimum: 1 }) versionNumber!: number;
+  @ApiProperty({
+    type: 'object',
+    required: [...JOURNEY_EXECUTION_STATUSES, 'total'],
+    properties: Object.fromEntries(
+      [...JOURNEY_EXECUTION_STATUSES, 'total'].map((s) => [s, statCount]),
+    ),
+    additionalProperties: false,
+  })
+  executions!: Record<string, number>;
+  @ApiProperty({ type: [JourneyNodeStatsSchema] }) nodes!: JourneyNodeStatsSchema[];
+}
+
+@ApiSchema({ name: 'JourneyStats' })
+export class JourneyStatsSchema {
+  @ApiProperty(uuid) journeyId!: string;
+  @ApiProperty({ type: [JourneyVersionStatsSchema] }) versions!: JourneyVersionStatsSchema[];
 }

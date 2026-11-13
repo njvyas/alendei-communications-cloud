@@ -3512,6 +3512,103 @@ Each is a draft, stopped for owner review. Billing enforcement stays disabled; n
   - API (+1): the same graphs saved as drafts validate with `200` and the expected finding, publication is `422 JOURNEY_GRAPH_INVALID`, and the version stays a draft.
 - **Against the pre-fix validator:** the contract tests fail (one with the `TypeError`), and the API test receives `500` instead of `200`.
 
+### 1zj.3 PR 8C-2 as built: lifecycle, triggers, executions (migration `0063`)
+**Baseline and migration number.** Built on `develop` `b72698a` (PR #104 merged 13-Nov-2026). `0063` was verified free on that baseline: the latest migration is `0062`, no open PR and no remote branch carries `0063`, and PR #65's `0041` is not reused.
+
+**Schema (`0063`, expand-only).**
+- **`journeys`** gains `active_version_id` (composite FK to `journey_versions(id, journey_id, org_id)`, through a new unique constraint on versions), `activated_at` and `activated_by`. A CHECK requires an active version and an activation time while `active` or `paused`.
+- **`trg_journeys_lifecycle_guard`:**
+  - the allowed transitions are `draft → active | archived`, `active ↔ paused` and `active | paused → archived`;
+  - `archived` is terminal;
+  - the active version is never cleared and may only name a `published` version.
+- **`journey_triggers`:**
+  - kind `api`, `event` or `schedule`, with a CHECK tying the columns to the kind;
+  - one trigger per version, and at most one non-retired trigger per journey;
+  - partial indexes for due schedules and active event kinds.
+- **`journey_executions`:**
+  - composite FKs to the journey, the version and the contact (same workspace);
+  - **at most one live execution per journey and contact** (partial unique index);
+  - unique `(journey_id, contact_id, entry_ref)`;
+  - end-shape and transition-bound CHECKs;
+  - `trg_journey_executions_guard`: identity never changes, an ended execution never changes, `state_version` never decreases, and nothing is deleted.
+- **`journey_execution_queue`:** content-free claim rows shaped like `message_dispatch_queue`. It is classed as a tenancy record because `acc_app` deletes a row when its execution ends.
+- **`journey_execution_steps`:**
+  - append-only (`trg_journey_execution_steps_guard`; INSERT and SELECT only);
+  - unique `(execution_id, seq)`, where `seq` equals the execution's `state_version`;
+  - partial unique `message_id`;
+  - `details` is a bounded object (≤ 4 KiB).
+- **Access:** Model B content policies on all four tables (the queue gets DELETE as well). Grants go to `acc_app` only. No runner, dispatch or delivery role has any access.
+
+**API (`/workspaces/:workspaceId/journeys/:journeyId/…`).**
+- **Lifecycle:** `activate`, `pause`, `resume`, `archive`.
+  - Each is conditional on the current status under a row lock, and a repeat is a no-op (`200`, nothing written or audited).
+  - Activation uses the highest published version and retires older published versions. It derives and stores the trigger, and computes `next_fire_at` for schedules (pure `nextJourneyScheduleFire`: IANA time zones, DST gaps run forward, overlaps at the first occurrence).
+  - Archive retires the trigger and ends every live execution as `cancelled` (`journey_archived`) in one set-based statement, with history rows, and removes their queue rows.
+- **Rules shared by activation, resume and promotion:**
+  - **`messages.send` at the workspace** (handover §11.4, previously [P]);
+  - **`400 JOURNEY_SEND_DISABLED`** for any version with a `send_message` node (owner decisions 1–2);
+  - full referential re-validation (`422 JOURNEY_GRAPH_INVALID`);
+  - activation and promotion refuse a one-off schedule already in the past (`SCHEDULE_ELAPSED`).
+- **Promotion:** publishing a version while the journey is `active` or `paused` makes it the active version, with a new trigger in the journey's state. In-flight executions keep their own version. The publish transaction now locks the journey row.
+- **`POST …/enrollments`** (`Idempotency-Key` required; 1–1,000 distinct contact ids):
+  - only for an `active` journey whose active trigger is `api` (`409 JOURNEY_LIFECYCLE_CONFLICT` / `JOURNEY_TRIGGER_NOT_API`);
+  - one set-based insert of executions positioned after the entry node (`state_version` 1, history row `entered`), each with an unclaimed queue row;
+  - entry policy **`once`**: a contact that ever entered the journey is `already_enrolled`; unknown or foreign ids are `contact_not_found`;
+  - `entry_ref` is `api:` plus the SHA-256 of the organisation, journey and key — never the key itself;
+  - the journey row is held `FOR SHARE`, so enrolment serialises with pause and archive.
+- **Reads:** `GET …/executions` (keyset, newest first; filters `status`, `contactId`, `versionId`), `GET …/executions/:executionId` (with history, ordered by `seq`), and `GET …/stats` (per published or retired version: totals by status; per node, live positions and history outcomes; nodes in breadth-first order from the entry).
+- **`POST …/executions/:executionId/cancel`:** under the row lock, conditional on `state_version`, which it advances (fencing any future runner claim). It removes the queue row and appends `cancelled`. A repeat is a no-op; an execution that ended otherwise is `409 JOURNEY_EXECUTION_ENDED`.
+- **Audit:** `journey.activated`, `journey.paused`, `journey.resumed`, `journey.archived` (with the number of cancelled executions), `journey.enrolled` (counts only, no contact ids), `journey.execution_cancelled`. Publication's audit records the promotion.
+- **`JourneyRecord`** gains `activeVersionId`, `activatedAt`, `activatedBy` and `trigger`. The change is additive on every 8C-1 journey response.
+- **New error codes:** `JOURNEY_NO_PUBLISHED_VERSION`, `JOURNEY_SEND_DISABLED`, `JOURNEY_TRIGGER_NOT_API`, `JOURNEY_EXECUTION_NOT_FOUND`, `JOURNEY_EXECUTION_ENDED`. New graph issue code: `SCHEDULE_ELAPSED`.
+
+**Not built (unchanged scope).** The runner, claiming, waits, conditions, `update_contact`, event capture or intake, scheduled processing, retention, sends, `messages` attribution, outbound HTTP and frontend files. **Nothing claims a queue row**, so every enrolled execution stays `running` at its first node. No message or dispatch-queue row is created.
+
+**Deviations from the handover.**
+1. **No `entry_policy` column.** The entry policy is fixed at `once`, the handover's default. `after_exit` and cooldown policies need a version column and are left for a later PR.
+2. **No `JOURNEY_SENDS_ENABLED` or `JOURNEY_RUNNER_ENABLED` flag yet.**
+   - The send refusal is unconditional in 8C-2, so no configuration can enable a send path that does not exist.
+   - The runner flag belongs to the runner (8C-3).
+   - `JOURNEY_SEND_DISABLED` is `400`, mirroring `CAMPAIGN_DISPATCH_DISABLED`.
+3. **The queue table is a tenancy record, not tenant content.** The content class forbids DELETE grants, and the queue row must go when its execution ends (`message_dispatch_queue` precedent). Its policies still use the full content predicate.
+4. **`journey_execution_steps.message_id` has no foreign key yet.** It is added in 8C-5 together with the `messages` attribution columns, so 8C-2 creates no reference into `messages`.
+5. **Paths.** Executions are nested under their journey (`…/journeys/:journeyId/executions/:executionId[/cancel]`). The response codes differ in two places: enrolment answers `200` (it can be a partial outcome), and the lifecycle routes answer `200`.
+6. **Resume re-checks the resuming caller,** not the original activator. The caller needs `messages.send`, and the graph is re-validated. Attribution of the activator is kept in `activated_by` and the audit log. Revocation and pause by an administrator remain requirements on the 8B-3 principal.
+7. **Refactor without behaviour change.** The access helpers, the referential report and the record mappers moved out of `JourneysService` into `JourneyAccess`, `JourneyValidation` and `journey-views.ts`, so the lifecycle and executions services share them.
+
+**Tests:**
+- contracts +10 (`test/journeys-lifecycle.test.ts`): the state-machine table, trigger derivation, send-node detection, and next fire for once, daily (Asia/Kolkata), weekly, and the New York and Sydney DST gaps and New York and London overlaps;
+- API unit +3: node order, and `apiEntryRef` stability and secrecy;
+- API integration +20 (`journeys-lifecycle.int-spec.ts`):
+  - lifecycle and promotion;
+  - J-S5 (activation and resume without `messages.send`);
+  - the send-node refusal at activation and at promotion;
+  - schedule derivation and the elapsed one-off schedule;
+  - referential re-validation;
+  - enrolment outcomes, positioning and nothing claimed or sent;
+  - J-C6 replay and mismatch;
+  - six concurrent enrolments of one contact giving one execution;
+  - J-V1 at the data level (an in-flight v1 execution keeps v1 after v2 is promoted);
+  - list, detail, paging and filters;
+  - J-S3 (cross-workspace, cross-organisation and wrong-journey `404`);
+  - concurrent cancel (one transition, one history row);
+  - archive cascade;
+  - statistics;
+  - database guards (steps append-only, execution identity, monotonic state, no deletes, live uniqueness, composite FKs, journey lifecycle guard, active version must be published).
+- **Updated pins:**
+  - scope-creep (outbox and worker vocabulary with this citation; the four new tables);
+  - credential absence (`claim_token` fencing in `0063`);
+  - message-key users (the journeys lifecycle check, handover §11.4);
+  - table classes, principal grants, content-policy count 40 → 52, migration count 64;
+  - OpenAPI operations 220 → 229, keyed POSTs 34 → 35, scoped routes 207 → 216 (deferred 182 → 191);
+  - OpenAPI success coverage of all nine operations with both a user session and an API key.
+- **Mutation checks, each caught** (diffs and logs in the evidence folder):
+  - dropping `uq_journey_executions_live_contact` fails the database-guard test. The six-way concurrent enrolment test alone did not catch it: the race window is narrow and the `NOT EXISTS` pre-check usually wins, so the index is the guarantee and the guard test is its proof;
+  - removing the send-node refusal fails J-S5 and the promotion test;
+  - removing the `messages.send` assertion fails J-S5 and the resume check;
+  - removing the `state_version` advance from cancel fails the cancel and archive tests.
+- **Verification (disposable clone of `acc_r015_base`, migrated to `0063`):** DB integration 546/546, API integration 634/634, security 1,860/1,860; contracts 55, API unit 1,131, db unit 275. `db:migrate` run twice (the second reports `Schema up to date (64 migrations verified).`). History proof `64|3c96eb485fa64e6e074083bca81e628d`; the first 63 entries are unchanged (`63|d7db54605d263fbc4598f2ceb91a35c3`, the 8C-1 proof).
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

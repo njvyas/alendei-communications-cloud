@@ -77,6 +77,8 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
   const resolutionMessages: string[] = [];
   /** Phase 7 PR 7-6d-1: organizations whose accounts and operations the owner removes in teardown. */
   const accountOrgs: string[] = [];
+  /** Phase 8C PR 8C-2: contacts planted for API enrolment, removed after their executions. */
+  const journeyContacts: string[] = [];
 
   // --- the request helper: every response is validated ----------------------------
 
@@ -326,7 +328,13 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
       // Phase 7 PR 7-6c: the planted unknown outcomes, their resolutions and ledger facts.
       // Phase 8C PR 8C-1: journey versions are never deleted in production (guard trigger, not
       // fired under replica); removed here before their journeys.
+      // Phase 8C PR 8C-2: execution history, queue rows, executions and triggers are likewise
+      // never deleted in production; removed before their versions and journeys.
       for (const table of [
+        'journey_execution_steps',
+        'journey_execution_queue',
+        'journey_executions',
+        'journey_triggers',
         'journey_versions',
         'journeys',
         'billing_unknown_resolutions',
@@ -335,6 +343,8 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
       ]) {
         await tx.execute(sql`DELETE FROM ${sql.identifier(table)} WHERE org_id = ${orgId}`);
       }
+      for (const id of journeyContacts)
+        await tx.execute(sql`DELETE FROM contacts WHERE id = ${id}`);
       if (resolutionMessages.length > 0) {
         const ids = sql.join(
           resolutionMessages.map((id) => sql`${id}`),
@@ -1076,6 +1086,62 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
       }
     });
 
+    it('journey lifecycle, enrolment, executions and statistics (Phase 8C PR 8C-2), with both credentials', async () => {
+      for (const credential of [as.session(admin), as.key()]) {
+        const keyed = () => ({ 'idempotency-key': `oa-8c2-${suffix()}-${suffix()}` });
+        const base = `workspaces/${workspaceId}/journeys`;
+        const created = await hit('POST', base, {
+          ...credential,
+          headers: keyed(),
+          body: { name: `OA lifecycle ${suffix()}` },
+        });
+        expectStatus(created, 201, 'create journey');
+        const id = created.body.data.id as string;
+        const v1 = created.body.data.draftVersion as { id: string; graphSha256: string };
+        expectStatus(
+          await hit('POST', `${base}/${id}/versions/${v1.id}/publish`, {
+            ...credential,
+            headers: keyed(),
+            body: { expectedGraphSha256: v1.graphSha256 },
+          }),
+          200,
+          'publish version',
+        );
+        expectStatus(await hit('POST', `${base}/${id}/activate`, credential), 200, 'activate');
+        expectStatus(await hit('POST', `${base}/${id}/pause`, credential), 200, 'pause');
+        expectStatus(await hit('POST', `${base}/${id}/resume`, credential), 200, 'resume');
+        const contact = uuidv7();
+        await db.execute(
+          sql`INSERT INTO contacts (id, org_id, workspace_id) VALUES (${contact}, ${orgId}, ${workspaceId})`,
+        );
+        journeyContacts.push(contact);
+        const enrolled = await hit('POST', `${base}/${id}/enrollments`, {
+          ...credential,
+          headers: keyed(),
+          body: { contactIds: [contact, uuidv7()] },
+        });
+        expectStatus(enrolled, 200, 'enrol');
+        const executionId = enrolled.body.data.results[0].executionId as string;
+        expectStatus(
+          await hit('GET', `${base}/${id}/executions`, credential),
+          200,
+          'list executions',
+        );
+        expectStatus(
+          await hit('GET', `${base}/${id}/executions/${executionId}`, credential),
+          200,
+          'get execution',
+        );
+        expectStatus(
+          await hit('POST', `${base}/${id}/executions/${executionId}/cancel`, credential),
+          200,
+          'cancel execution',
+        );
+        expectStatus(await hit('GET', `${base}/${id}/stats`, credential), 200, 'statistics');
+        expectStatus(await hit('POST', `${base}/${id}/archive`, credential), 200, 'archive');
+      }
+    });
+
     it('workspaces, teams and the deprecated tenancy aliases', async () => {
       for (const credential of [as.session(admin), as.key()]) {
         expectStatus(await hit('GET', 'workspaces', credential), 200, 'list workspaces');
@@ -1435,42 +1501,49 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
                                               ? { rules: [] }
                                               : template.endsWith('/journeys') && method === 'POST'
                                                 ? { name: `j-${suffix()}` }
-                                                : template.endsWith('/graph') && method === 'PUT'
-                                                  ? {
-                                                      graph: {},
-                                                      expectedGraphSha256: 'a'.repeat(64),
-                                                    }
-                                                  : template.endsWith('/publish') &&
-                                                      method === 'POST'
-                                                    ? { expectedGraphSha256: 'a'.repeat(64) }
-                                                    : template.endsWith('/campaigns') &&
+                                                : template.endsWith('/enrollments') &&
+                                                    method === 'POST'
+                                                  ? { contactIds: [uuidv7()] }
+                                                  : template.endsWith('/graph') && method === 'PUT'
+                                                    ? {
+                                                        graph: {},
+                                                        expectedGraphSha256: 'a'.repeat(64),
+                                                      }
+                                                    : template.endsWith('/publish') &&
                                                         method === 'POST'
-                                                      ? {
-                                                          name: `c-${suffix()}`,
-                                                          channel: 'sms',
-                                                          templateId: uuidv7(),
-                                                          recipientSource: { type: 'all_contacts' },
-                                                        }
-                                                      : template.endsWith('/segments') &&
+                                                      ? { expectedGraphSha256: 'a'.repeat(64) }
+                                                      : template.endsWith('/campaigns') &&
                                                           method === 'POST'
                                                         ? {
-                                                            name: `s-${suffix()}`,
+                                                            name: `c-${suffix()}`,
+                                                            channel: 'sms',
+                                                            templateId: uuidv7(),
+                                                            recipientSource: {
+                                                              type: 'all_contacts',
+                                                            },
                                                           }
-                                                        : method !== 'PATCH'
-                                                          ? {}
-                                                          : template.includes('/branding')
-                                                            ? { brandName: `Brand ${suffix()}` }
-                                                            : template.includes('/users/')
-                                                              ? { phone: '+15551234567' }
-                                                              : template.includes('/contacts/')
-                                                                ? { firstName: `x ${suffix()}` }
-                                                                : template.includes('/identities/')
-                                                                  ? { isPrimary: true }
+                                                        : template.endsWith('/segments') &&
+                                                            method === 'POST'
+                                                          ? {
+                                                              name: `s-${suffix()}`,
+                                                            }
+                                                          : method !== 'PATCH'
+                                                            ? {}
+                                                            : template.includes('/branding')
+                                                              ? { brandName: `Brand ${suffix()}` }
+                                                              : template.includes('/users/')
+                                                                ? { phone: '+15551234567' }
+                                                                : template.includes('/contacts/')
+                                                                  ? { firstName: `x ${suffix()}` }
                                                                   : template.includes(
-                                                                        '/provider-assignments/',
+                                                                        '/identities/',
                                                                       )
-                                                                    ? { priority: 2 }
-                                                                    : { name: `x ${suffix()}` },
+                                                                    ? { isPrimary: true }
+                                                                    : template.includes(
+                                                                          '/provider-assignments/',
+                                                                        )
+                                                                      ? { priority: 2 }
+                                                                      : { name: `x ${suffix()}` },
         });
         expect(`${method} ${template} → ${res.status}`).toMatch(/→ (404|403)$/);
       }

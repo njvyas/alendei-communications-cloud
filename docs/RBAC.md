@@ -581,6 +581,8 @@ A key is a **credential, not a user**. It has its own identity, a creator, and a
 
 **Journey permissions (Phase 8C PR 8C-1, `DECISIONS.md` §1zj.2).** `journeys.read` and `journeys.manage` are `tenant_content` keys allowed at organization and workspace scope. Following the `campaigns.*` precedent, only `org_admin` holds them; `campaign_editor` does not yet hold content keys of either domain.
 
+**Journey activation needs `messages.send` (Phase 8C PR 8C-2, `DECISIONS.md` §1zj.3).** Activating, resuming, or publishing a new version of an active or paused journey requires `journeys.manage` **and** `messages.send` at the journey's workspace (handover §11.4), so a journey never grants send rights its author lacks. Enrolment (API trigger) and operator cancel require `journeys.manage`; execution reads and statistics require `journeys.read`. No new permission key.
+
 ## 9. Related
 
 Full table definitions: `DATABASE.md` §"IAM & RBAC domain". Security controls (encryption, session hardening, audit): `SECURITY.md`.

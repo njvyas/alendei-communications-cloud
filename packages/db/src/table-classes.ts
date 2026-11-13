@@ -42,6 +42,9 @@ export const TENANCY_RECORD_TABLES = [
   'audit_logs',
   'organization_provider_assignments',
   'message_dispatch_queue',
+  // Phase 8C PR 8C-2 (0063): content-free claim rows, as message_dispatch_queue; acc_app deletes a
+  // row when its execution ends (operator cancel, archive), which the content class forbids.
+  'journey_execution_queue',
 ] as const;
 
 /**
@@ -53,6 +56,10 @@ export const CONTENT_TABLES = [
   'campaign_recipients',
   'journeys',
   'journey_versions',
+  // Phase 8C PR 8C-2 (0063).
+  'journey_triggers',
+  'journey_executions',
+  'journey_execution_steps',
   'contacts',
   'contact_identities',
   'consent_events',

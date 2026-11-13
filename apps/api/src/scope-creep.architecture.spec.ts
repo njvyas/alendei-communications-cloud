@@ -49,7 +49,7 @@ const CATEGORIES: Category[] = [
     key: 'outbox',
     forbids: 'the transactional outbox and event publication (ADR-013 PD-1)',
     exceptions:
-      'Pre-existing, not Phase 2: Phase 0/1 relay and Kafka configuration keys, the `acc_relay` database role, and outbox metrics that are defined but never incremented; `published` in the adapter registry is the published adapter-key list. No outbox table, relay loop, producer or publish call exists. Phase 8C PR 8C-1 (owner-authorised 10-Nov-2026): journey version *publication* — freezing a draft graph (`published`, `published_at`, `published_by`, the publish route and DTO, the `journey.version_published` audit action). Publication is a version-lifecycle state; nothing is published to any bus, outbox or relay.',
+      'Pre-existing, not Phase 2: Phase 0/1 relay and Kafka configuration keys, the `acc_relay` database role, and outbox metrics that are defined but never incremented; `published` in the adapter registry is the published adapter-key list. No outbox table, relay loop, producer or publish call exists. Phase 8C PR 8C-1 (owner-authorised 10-Nov-2026): journey version *publication* — freezing a draft graph (`published`, `published_at`, `published_by`, the publish route and DTO, the `journey.version_published` audit action). Publication is a version-lifecycle state; nothing is published to any bus, outbox or relay. Phase 8C PR 8C-2 (owner-authorised 10-Nov-2026): the same vocabulary in the lifecycle, view and executions modules — promotion of a newly published version of an active or paused journey (`promoteOnPublish`, retiring older published versions), `JOURNEY_NO_PUBLISHED_VERSION`, and statistics over published versions. Still no bus, outbox or relay.',
     pattern: /[\w-]*(?:outbox|relay|publish|kafka|producer|event_?bus)[\w-]*/gi,
     providerCodeOnly: false,
     pinned: {
@@ -79,6 +79,21 @@ const CATEGORIES: Category[] = [
         'OUTBOX_RELAY_MAX_ATTEMPTS',
         'OUTBOX_RELAY_POLL_INTERVAL_MS',
       ],
+      // 8C-2: the statistics route describes published (and retired) versions.
+      'apps/api/src/journeys/journey-executions.controller.ts': ['Published'],
+      'apps/api/src/journeys/journey-lifecycle.service.ts': [
+        'JOURNEY_NO_PUBLISHED_VERSION',
+        'promoteOnPublish',
+        'published',
+        'retireOtherPublished',
+      ],
+      // 8C-2: the version summaries moved here from journeys.service.ts.
+      'apps/api/src/journeys/journey-views.ts': [
+        'latestPublishedVersion',
+        'published',
+        'publishedAt',
+        'publishedBy',
+      ],
       'apps/api/src/journeys/journeys.controller.ts': [
         'Publish',
         'PublishJourneyVersionDto',
@@ -88,7 +103,7 @@ const CATEGORIES: Category[] = [
       'apps/api/src/journeys/journeys.dto.ts': ['PublishJourneyVersionDto'],
       'apps/api/src/journeys/journeys.service.ts': [
         'VERSION_PUBLISHED',
-        'latestPublishedVersion',
+        'promoteOnPublish',
         'publish',
         'published',
         'publishedAt',
@@ -114,6 +129,8 @@ const CATEGORIES: Category[] = [
         'publishedBy',
       ],
       'apps/api/src/provider-adapters/adapter-registry.ts': ['published'],
+      // 8C-2: activation without a published version.
+      'packages/contracts/src/errors.ts': ['JOURNEY_NO_PUBLISHED_VERSION'],
       'packages/contracts/src/journeys.ts': [
         'VERSION_PUBLISHED',
         'latestPublishedVersion',
@@ -139,7 +156,7 @@ const CATEGORIES: Category[] = [
     forbids:
       'a worker/job harness or new messaging worker infrastructure (ADR-013 PD-1, ADR-004 D-5)',
     exceptions:
-      'Pre-existing: the hot-reload listener reconnect timer and an ioredis option. No queue, processor, cron, interval or job runner exists; `@nestjs/schedule` is a declared but unused dependency (pinned below). Phase 3.3: message_dispatch_queue table class and dispatcher worker (ADR-014 §9). B1 (first release, 20-Oct-2026): the in-process loop that runs that dispatcher (`DispatchWorker`, ADR-014 D18 — poll 1 s ±20 %, batch ≤ 10, lease 30 s) and its three configuration keys. It is a single setTimeout chain over the existing PostgreSQL queue: no queue library, job framework, cron or `@nestjs/schedule`. UI readiness (20-Oct-2026): the documentation-only `QueuedMessage` OpenAPI schema describing the existing `POST /messages` 202 body, and the `queued` value of the `GET /messages` `status` filter enum in the generated `metadata.ts`. Phase 7 PR 7-3 (owner approval 08-Nov-2026): the enqueue (`messageDispatchQueue`, the `queued` status) moved unchanged from `messages.service.ts` into the shared submission core (`messages/submission/`); no new queue, worker or behaviour. Phase 8C PR 8C-1 (owner-authorised 10-Nov-2026): the `schedule` entry-trigger kind of the journey graph contract and its validation. Vocabulary only: no scheduler, timer, poller or job exists in 8C-1; the journey runner is 8C-3, behind JOURNEY_RUNNER_ENABLED (default off).',
+      'Pre-existing: the hot-reload listener reconnect timer and an ioredis option. No queue, processor, cron, interval or job runner exists; `@nestjs/schedule` is a declared but unused dependency (pinned below). Phase 3.3: message_dispatch_queue table class and dispatcher worker (ADR-014 §9). B1 (first release, 20-Oct-2026): the in-process loop that runs that dispatcher (`DispatchWorker`, ADR-014 D18 — poll 1 s ±20 %, batch ≤ 10, lease 30 s) and its three configuration keys. It is a single setTimeout chain over the existing PostgreSQL queue: no queue library, job framework, cron or `@nestjs/schedule`. UI readiness (20-Oct-2026): the documentation-only `QueuedMessage` OpenAPI schema describing the existing `POST /messages` 202 body, and the `queued` value of the `GET /messages` `status` filter enum in the generated `metadata.ts`. Phase 7 PR 7-3 (owner approval 08-Nov-2026): the enqueue (`messageDispatchQueue`, the `queued` status) moved unchanged from `messages.service.ts` into the shared submission core (`messages/submission/`); no new queue, worker or behaviour. Phase 8C PR 8C-1 (owner-authorised 10-Nov-2026): the `schedule` entry-trigger kind of the journey graph contract and its validation. Vocabulary only: no scheduler, timer, poller or job exists in 8C-1; the journey runner is 8C-3, behind JOURNEY_RUNNER_ENABLED (default off). Phase 8C PR 8C-2 (owner-authorised 10-Nov-2026): the `journey_execution_queue` table (content-free claim rows shaped like `message_dispatch_queue`), which API enrolment fills and operator cancel/archive empty — **nothing claims it**: no runner, poller, timer or role other than `acc_app` exists for it — and the pure `nextJourneyScheduleFire` computation that stores the `next_fire_at` of a schedule trigger at activation (plus `SCHEDULE_ELAPSED`). No scheduler processes it; trigger processing is 8C-4.',
     pattern: /[\w-]*(?:worker|queue|bullmq|processor|cron|setInterval|schedul|job)[\w-]*/gi,
     providerCodeOnly: false,
     pinned: {
@@ -177,7 +194,21 @@ const CATEGORIES: Category[] = [
         'DISPATCH_WORKER_ENABLED',
         'DISPATCH_WORKER_POLL_INTERVAL_MS',
       ],
-      'apps/api/src/journeys/journeys.service.ts': ['schedule'],
+      'apps/api/src/journeys/journey-executions.service.ts': [
+        'journeyExecutionQueue',
+        'journey_execution_queue',
+        'queue',
+        'schedule',
+      ],
+      'apps/api/src/journeys/journey-lifecycle.service.ts': [
+        'SCHEDULE_ELAPSED',
+        'journey_execution_queue',
+        'nextJourneyScheduleFire',
+        'schedule',
+        'scheduled',
+      ],
+      // 8C-2: the referential report moved here from journeys.service.ts (schedule segment check).
+      'apps/api/src/journeys/journey-validation.ts': ['schedule'],
       'apps/api/src/messages/dispatch/dispatch.worker.ts': [
         'DISPATCH_WORKER_ENABLED',
         'DispatchWorker',
@@ -225,7 +256,12 @@ const CATEGORIES: Category[] = [
         'scheduled',
         'scheduledAt',
       ],
-      'packages/contracts/src/journeys.ts': ['schedule', 'schedules'],
+      'packages/contracts/src/journeys.ts': [
+        'SCHEDULE_ELAPSED',
+        'nextJourneyScheduleFire',
+        'schedule',
+        'schedules',
+      ],
       'packages/contracts/src/messages.ts': ['QUEUED', 'QueuedMessageResponse', 'queued'],
       'packages/contracts/src/platform-support.ts': ['queue'],
       'packages/db/src/schema/campaigns.ts': [
@@ -239,6 +275,18 @@ const CATEGORIES: Category[] = [
         'scheduledAt',
         'scheduled_at',
       ],
+      // 8C-2 (0063): the journey execution claim queue (unclaimed until 8C-3) and the
+      // schedule trigger column.
+      'packages/db/src/schema/journeys.ts': [
+        'journeyExecutionQueue',
+        'journey_execution_queue',
+        'journey_execution_queue_claim_idx',
+        'journey_execution_queue_claim_shape',
+        'journey_execution_queue_epoch_nonnegative',
+        'journey_execution_queue_execution_org_fk',
+        'journey_execution_queue_org_id_idx',
+        'schedule',
+      ],
       'packages/db/src/schema/messages.ts': [
         'messageDispatchQueue',
         'message_dispatch_queue',
@@ -247,7 +295,8 @@ const CATEGORIES: Category[] = [
         'message_dispatch_queue_org_id_idx',
         'queued',
       ],
-      'packages/db/src/table-classes.ts': ['message_dispatch_queue'],
+      // 8C-2: the journey claim queue is a tenancy record, as message_dispatch_queue.
+      'packages/db/src/table-classes.ts': ['journey_execution_queue', 'message_dispatch_queue'],
     },
   },
   {
@@ -1998,6 +2047,12 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       // Phase 7 PR 7-2 (0051): the pricing catalogue and the pricing evaluations.
       'customer_pricing_assignments',
       'idempotency_keys',
+      // Phase 8C PR 8C-2 (0063): executions, their unclaimed claim queue, append-only step
+      // history and derived triggers. No runner, trigger intake or send exists.
+      'journey_execution_queue',
+      'journey_execution_steps',
+      'journey_executions',
+      'journey_triggers',
       // Phase 8C PR 8C-1 (0062): journey definitions and their immutable published versions.
       'journey_versions',
       'journeys',

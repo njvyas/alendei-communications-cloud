@@ -61,6 +61,11 @@ const TABLES = [
   // platform-scope claim) and the definer-only pricing evaluations.
   'customer_pricing_assignments',
   'idempotency_keys',
+  // Phase 8C PR 8C-2 (migration 0063): executions, their claim queue and step history, triggers.
+  'journey_execution_queue',
+  'journey_execution_steps',
+  'journey_executions',
+  'journey_triggers',
   // Phase 8C PR 8C-1 (migration 0062): journey definitions and versions.
   'journey_versions',
   'journeys',
@@ -136,6 +141,12 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
     // Phase 7 PR 7-2: append-only; platform scope only (RLS).
     customer_pricing_assignments: 'INSERT,SELECT',
     idempotency_keys: 'INSERT,SELECT',
+    // Phase 8C PR 8C-2 (0063): the queue row goes when its execution ends; history is
+    // append-only (no UPDATE; the guard trigger also refuses it).
+    journey_execution_queue: 'DELETE,INSERT,SELECT,UPDATE',
+    journey_execution_steps: 'INSERT,SELECT',
+    journey_executions: 'INSERT,SELECT,UPDATE',
+    journey_triggers: 'INSERT,SELECT,UPDATE',
     journey_versions: 'INSERT,SELECT,UPDATE',
     journeys: 'INSERT,SELECT,UPDATE',
     message_attempts: 'INSERT,SELECT,UPDATE',

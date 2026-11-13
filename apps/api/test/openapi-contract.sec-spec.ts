@@ -203,9 +203,10 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * Phase 7 PR 7-6d-2, 09-Nov-2026: the wallet recharge request (`POST /platform/billing/organizations/{orgId}/recharges`): 198 → 199.
      * Phase 8A.2, 10-Nov-2026: 3 contact import/export operations: 199 → 202.
      * Phase 8C PR 8C-1: 11 journey-definition operations: 209 → 220.
+     * Phase 8C PR 8C-2: 9 journey lifecycle, enrolment, execution and statistics operations: 220 → 229.
      * Phase 8B.2, 10-Nov-2026: 7 campaign lifecycle, audience & preview operations: 202 → 209.
      */
-    const APPLICATION_OPERATIONS = 220;
+    const APPLICATION_OPERATIONS = 229;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 
@@ -460,7 +461,8 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
         // Phase 7 PR 7-6d-1: 9 account-operation POSTs (7 requests, approve, reject): 21 -> 30.
         // Phase 7 PR 7-6d-2: the recharge POST: 30 -> 31.
         // Phase 8C PR 8C-1: journey create, new version and publish: 31 -> 34.
-      ).toBe(34);
+        // Phase 8C PR 8C-2: journey API enrolment: 34 -> 35.
+      ).toBe(35);
     });
   });
 

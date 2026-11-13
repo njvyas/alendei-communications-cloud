@@ -230,6 +230,8 @@ export const JOURNEY_GRAPH_ISSUE_CODES = Object.freeze([
   'TEMPLATE_VARIABLE_UNKNOWN',
   'SEGMENT_NOT_FOUND',
   'PLACEHOLDER_NODE',
+  /** 8C-2: activation refused — a one-off schedule's instant has already passed. */
+  'SCHEDULE_ELAPSED',
 ] as const);
 export type JourneyGraphIssueCode = (typeof JOURNEY_GRAPH_ISSUE_CODES)[number];
 
@@ -738,6 +740,13 @@ export interface JourneyRecord {
   readonly draftVersion: JourneyVersionSummary | null;
   /** The highest published version, if any. */
   readonly latestPublishedVersion: JourneyVersionSummary | null;
+  /** 8C-2: the published version new enrolments use; `null` until first activated. */
+  readonly activeVersionId: string | null;
+  readonly activatedAt: string | null;
+  /** The activating user; `null` for an API key (the audit log names the actor). */
+  readonly activatedBy: string | null;
+  /** 8C-2: the live (non-retired) trigger, once activated. */
+  readonly trigger: JourneyTriggerRecord | null;
 }
 
 /** Audit actions written by the journeys module. */
@@ -748,4 +757,312 @@ export const JOURNEY_AUDIT_ACTIONS = Object.freeze({
   VERSION_CREATED: 'journey.version_created',
   GRAPH_UPDATED: 'journey.graph_updated',
   VERSION_PUBLISHED: 'journey.version_published',
+  // 8C-2
+  ACTIVATED: 'journey.activated',
+  PAUSED: 'journey.paused',
+  RESUMED: 'journey.resumed',
+  ARCHIVED: 'journey.archived',
+  ENROLLED: 'journey.enrolled',
+  EXECUTION_CANCELLED: 'journey.execution_cancelled',
 });
+
+// --- 8C-2: lifecycle, triggers, executions ------------------------------------------------
+
+/** Lifecycle operations (handover §8.5). A repeat in the target state is a no-op. */
+export const JOURNEY_LIFECYCLE_ACTIONS = Object.freeze([
+  'activate',
+  'pause',
+  'resume',
+  'archive',
+] as const);
+export type JourneyLifecycleAction = (typeof JOURNEY_LIFECYCLE_ACTIONS)[number];
+
+/**
+ * The lifecycle state machine: `[from] → to` per action, or `null` when the action is refused
+ * from that state. `archived` is terminal. The database enforces the same transitions
+ * (`trg_journeys_lifecycle_guard`, migration `0063`).
+ */
+export const JOURNEY_LIFECYCLE_TRANSITIONS: Readonly<
+  Record<JourneyLifecycleAction, Readonly<Record<JourneyStatus, JourneyStatus | null>>>
+> = Object.freeze({
+  activate: { draft: 'active', active: 'active', paused: null, archived: null },
+  pause: { draft: null, active: 'paused', paused: 'paused', archived: null },
+  resume: { draft: null, active: 'active', paused: 'active', archived: null },
+  archive: { draft: 'archived', active: 'archived', paused: 'archived', archived: 'archived' },
+});
+
+/** The target status of `action` from `from`, or `null` when refused. Same-state is a no-op. */
+export function journeyLifecycleTarget(
+  action: JourneyLifecycleAction,
+  from: JourneyStatus,
+): JourneyStatus | null {
+  return JOURNEY_LIFECYCLE_TRANSITIONS[action][from];
+}
+
+export const JOURNEY_TRIGGER_KINDS = Object.freeze(['api', 'event', 'schedule'] as const);
+export type JourneyTriggerKind = (typeof JOURNEY_TRIGGER_KINDS)[number];
+export const JOURNEY_TRIGGER_STATUSES = Object.freeze(['active', 'paused', 'retired'] as const);
+export type JourneyTriggerStatus = (typeof JOURNEY_TRIGGER_STATUSES)[number];
+
+export const JOURNEY_EXECUTION_STATUSES = Object.freeze([
+  'running',
+  'waiting',
+  'completed',
+  'exited',
+  'failed',
+  'cancelled',
+] as const);
+export type JourneyExecutionStatus = (typeof JOURNEY_EXECUTION_STATUSES)[number];
+export const JOURNEY_LIVE_EXECUTION_STATUSES: readonly JourneyExecutionStatus[] = Object.freeze([
+  'running',
+  'waiting',
+]);
+
+export const JOURNEY_STEP_OUTCOMES = Object.freeze([
+  'entered',
+  'completed',
+  'waited',
+  'skipped',
+  'refused',
+  'failed',
+  'stubbed',
+  'exited',
+  'cancelled',
+] as const);
+export type JourneyStepOutcome = (typeof JOURNEY_STEP_OUTCOMES)[number];
+
+/** Stable `end_reason` values written by 8C-2. */
+export const JOURNEY_END_REASONS = Object.freeze({
+  OPERATOR_CANCELLED: 'operator_cancelled',
+  JOURNEY_ARCHIVED: 'journey_archived',
+});
+
+/** API enrolment limits (handover §7, proposed default). */
+export const JOURNEY_ENROLMENT_LIMITS = Object.freeze({ maxContactsPerCall: 1000 });
+
+/** The persisted shape of a version's trigger, derived from its entry node. */
+export interface DerivedJourneyTrigger {
+  readonly kind: JourneyTriggerKind;
+  readonly eventKind: JourneyTriggerEvent | null;
+  readonly eventTag: string | null;
+  readonly segmentId: string | null;
+  readonly schedule: Extract<JourneyTrigger, { kind: 'schedule' }>['schedule'] | null;
+}
+
+/**
+ * The trigger of a **valid** graph (its entry node's `trigger`), in the persisted shape. Throws
+ * on a graph whose entry is not an entry node: callers derive only from published versions,
+ * which passed validation.
+ */
+export function deriveJourneyTrigger(graph: JourneyGraph): DerivedJourneyTrigger {
+  const entry = own(graph.nodes, graph.entry) ? graph.nodes[graph.entry] : undefined;
+  if (!entry || entry.type !== 'entry') throw new Error('graph has no entry node');
+  const t = entry.trigger;
+  if (t.kind === 'api')
+    return { kind: 'api', eventKind: null, eventTag: null, segmentId: null, schedule: null };
+  if (t.kind === 'event')
+    return {
+      kind: 'event',
+      eventKind: t.event,
+      eventTag: t.tag ?? null,
+      segmentId: null,
+      schedule: null,
+    };
+  return {
+    kind: 'schedule',
+    eventKind: null,
+    eventTag: null,
+    segmentId: t.segmentId,
+    schedule: t.schedule,
+  };
+}
+
+/** True when the graph contains a `send_message` node (activation is refused while sends are disabled). */
+export function journeyGraphHasSendNode(graph: JourneyGraph): boolean {
+  return Object.values(graph.nodes ?? {}).some((n) => isObject(n) && n.type === 'send_message');
+}
+
+/** Local wall-clock parts of `instant` in `timeZone` (`Intl` only). */
+function zonedParts(instant: number, timeZone: string) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(new Date(instant));
+  const get = (type: string) => Number(parts.find((p) => p.type === type)!.value);
+  return {
+    year: get('year'),
+    month: get('month'),
+    day: get('day'),
+    hour: get('hour'),
+    minute: get('minute'),
+    second: get('second'),
+  };
+}
+
+/** `timeZone`'s offset from UTC at `instant`, in milliseconds (local − UTC). */
+function zoneOffset(instant: number, timeZone: string): number {
+  const p = zonedParts(instant, timeZone);
+  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  const wholeSecond = Math.floor(instant / 1000) * 1000;
+  return asUtc - wholeSecond;
+}
+
+/**
+ * The UTC instant of a local wall-clock time. A time skipped by a DST gap resolves forward to
+ * the first valid instant after the gap (02:30 on a spring-forward day runs at 03:30); a time
+ * repeated by a DST overlap resolves to its first occurrence.
+ */
+export function zonedWallTimeToInstant(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string,
+): number {
+  const wall = Date.UTC(year, month - 1, day, hour, minute);
+  const candidates = [
+    ...new Set([
+      wall - zoneOffset(wall - 86_400_000, timeZone),
+      wall - zoneOffset(wall + 86_400_000, timeZone),
+      wall - zoneOffset(wall, timeZone),
+    ]),
+  ].sort((a, b) => a - b);
+  const exact = candidates.filter((c) => {
+    const p = zonedParts(c, timeZone);
+    return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) === wall;
+  });
+  if (exact.length > 0) return exact[0]!;
+  // In a gap: the latest candidate is the wall time read with the post-transition offset.
+  return candidates[candidates.length - 1]!;
+}
+
+/**
+ * The first fire instant of a schedule strictly after `after`, or `null` when a one-off
+ * schedule has already passed. Recurring schedules fire at `time` in `timeZone` every day
+ * (`daily`) or on the listed ISO weekdays (`weekly`). Pure; the runner's use is 8C-4.
+ */
+export function nextJourneyScheduleFire(
+  schedule: Extract<JourneyTrigger, { kind: 'schedule' }>['schedule'],
+  after: Date,
+): Date | null {
+  const now = after.getTime();
+  if (schedule.type === 'once') {
+    const at = Date.parse(schedule.at);
+    return at > now ? new Date(at) : null;
+  }
+  const [hh, mm] = schedule.time.split(':').map(Number) as [number, number];
+  const start = zonedParts(now, schedule.timeZone);
+  for (let i = 0; i <= 8; i++) {
+    const d = new Date(Date.UTC(start.year, start.month - 1, start.day + i));
+    const isoDay = d.getUTCDay() === 0 ? 7 : d.getUTCDay();
+    if (schedule.frequency === 'weekly' && !(schedule.daysOfWeek ?? []).includes(isoDay)) continue;
+    const at = zonedWallTimeToInstant(
+      d.getUTCFullYear(),
+      d.getUTCMonth() + 1,
+      d.getUTCDate(),
+      hh,
+      mm,
+      schedule.timeZone,
+    );
+    if (at > now) return new Date(at);
+  }
+  return null;
+}
+
+export interface JourneyTriggerRecord {
+  readonly id: string;
+  readonly journeyVersionId: string;
+  readonly kind: JourneyTriggerKind;
+  readonly eventKind: string | null;
+  readonly eventTag: string | null;
+  readonly segmentId: string | null;
+  readonly nextFireAt: string | null;
+  readonly status: JourneyTriggerStatus;
+}
+
+export interface JourneyExecutionRecord {
+  readonly id: string;
+  readonly journeyId: string;
+  readonly journeyVersionId: string;
+  readonly workspaceId: string;
+  readonly contactId: string;
+  readonly status: JourneyExecutionStatus;
+  readonly currentNodeKey: string | null;
+  readonly wakeAt: string | null;
+  readonly stateVersion: number;
+  readonly transitions: number;
+  readonly entryKind: JourneyTriggerKind;
+  readonly enrolledBy: string | null;
+  readonly enteredAt: string;
+  readonly endedAt: string | null;
+  readonly endReason: string | null;
+  readonly updatedAt: string;
+}
+
+export interface JourneyExecutionStepRecord {
+  readonly seq: number;
+  readonly nodeKey: string;
+  readonly nodeType: string;
+  readonly outcome: JourneyStepOutcome;
+  readonly attempt: number;
+  readonly messageId: string | null;
+  readonly errorCode: string | null;
+  readonly details: Readonly<Record<string, unknown>>;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+}
+
+export interface JourneyExecutionDetailRecord extends JourneyExecutionRecord {
+  readonly steps: readonly JourneyExecutionStepRecord[];
+}
+
+export const JOURNEY_ENROLMENT_OUTCOMES = Object.freeze([
+  'enrolled',
+  'already_enrolled',
+  'contact_not_found',
+] as const);
+export type JourneyEnrolmentOutcome = (typeof JOURNEY_ENROLMENT_OUTCOMES)[number];
+
+export interface JourneyEnrolmentResult {
+  readonly journeyId: string;
+  readonly journeyVersionId: string;
+  readonly enrolled: number;
+  readonly alreadyEnrolled: number;
+  readonly contactNotFound: number;
+  readonly results: readonly {
+    readonly contactId: string;
+    readonly outcome: JourneyEnrolmentOutcome;
+    readonly executionId: string | null;
+  }[];
+}
+
+export interface JourneyNodeStats {
+  readonly nodeKey: string;
+  readonly nodeType: string;
+  /** Live executions positioned at this node (next to run). */
+  readonly running: number;
+  readonly waiting: number;
+  /** Step-history rows recorded for this node, by outcome. */
+  readonly outcomes: Readonly<Partial<Record<JourneyStepOutcome, number>>>;
+}
+
+export interface JourneyVersionStats {
+  readonly versionId: string;
+  readonly versionNumber: number;
+  readonly executions: Readonly<Record<JourneyExecutionStatus, number>> & {
+    readonly total: number;
+  };
+  readonly nodes: readonly JourneyNodeStats[];
+}
+
+export interface JourneyStatsRecord {
+  readonly journeyId: string;
+  readonly versions: readonly JourneyVersionStats[];
+}

@@ -474,7 +474,14 @@ describe('the message keys in Phase 3.3 are referenced only by the messages modu
     // Phase 7 PR 7-3 (owner approval 08-Nov-2026): the existing messages.send
     // check of POST /messages moved, unchanged, into the shared submission core's
     // authorization proof. No new permission key or check.
+    // Phase 8C PR 8C-2 (handover §11.4, owner approval 10-Nov-2026): activating, resuming or
+    // promoting a journey asserts the caller's messages.send at the journey's workspace, so a
+    // journey never grants send rights its author lacks. A check only; no new key, and
+    // nothing in the journeys module sends.
+    // The journeys controller names the rule in its OpenAPI descriptions only.
     expect(hits.sort()).toEqual([
+      'apps/api/src/journeys/journey-lifecycle.service.ts',
+      'apps/api/src/journeys/journeys.controller.ts',
       'apps/api/src/messages/messages.controller.ts',
       'apps/api/src/messages/messages.service.ts',
       'apps/api/src/messages/submission/submission-authorization.ts',
