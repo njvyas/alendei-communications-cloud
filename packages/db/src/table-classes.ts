@@ -51,6 +51,8 @@ export const TENANCY_RECORD_TABLES = [
 export const CONTENT_TABLES = [
   'campaigns',
   'campaign_recipients',
+  'journeys',
+  'journey_versions',
   'contacts',
   'contact_identities',
   'consent_events',

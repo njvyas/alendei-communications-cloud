@@ -94,6 +94,8 @@ describe('table classes — tenancy records, tenant content, exemptions', () => 
         'consent_events',
         'contact_identities',
         'contacts',
+        'journey_versions',
+        'journeys',
         'message_attempts',
         'message_events',
         'messages',

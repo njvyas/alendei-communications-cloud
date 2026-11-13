@@ -420,9 +420,9 @@ Mitigations, in order of preference:
 
 ## 9. Domain: Journeys
 
-**`journeys`** — `id, org_id FK, workspace_id FK, name, status ENUM(draft,active,paused,archived)`.
+**`journeys`** — `id, org_id FK, workspace_id FK, name, description, status ENUM(draft,active,paused,archived), created_by, deleted_at, created_at, updated_at`. Built by Phase 8C PR 8C-1 (migration `0062`); Model B RLS; unique `(id, workspace_id, org_id)` for composite foreign keys.
 
-**`journey_versions`** — `id, journey_id FK, version_number, graph JSONB (steps/branches/waits), activated_at NULL`.
+**`journey_versions`** — `id, org_id, workspace_id, journey_id, version_number, status ENUM(draft,published,retired), graph_schema_version, graph JSONB, graph_sha256, created_by, published_at, published_by, created_at, updated_at`. Built by 8C-1 (`0062`). Composite FK `(journey_id, workspace_id, org_id) → journeys`; unique `(journey_id, version_number)`; at most one draft per journey (partial unique index); a published version is immutable and only becomes `retired`, and no version is deleted (`trg_journey_versions_guard`). The graph contract is `packages/contracts/src/journeys.ts`. Activation (8C-2) selects a published version; there is no `activated_at` column on versions.
 
 **`journey_executions`** — `id, journey_version_id FK, contact_id FK, current_step_key, status ENUM(running,waiting,completed,exited,failed), started_at, updated_at`.
 

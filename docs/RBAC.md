@@ -579,6 +579,8 @@ A key is a **credential, not a user**. It has its own identity, a creator, and a
 
 **Disabling a creator does not revoke their keys** — it stops the keys conferring anything, which is checked at authentication (§5c, Phase 1B.6.1). The distinction is deliberate: the keys remain visible and individually revocable by an administrator, and the audit trail keeps naming them, while the authority they carried is gone from the next request onward.
 
+**Journey permissions (Phase 8C PR 8C-1, `DECISIONS.md` §1zj.2).** `journeys.read` and `journeys.manage` are `tenant_content` keys allowed at organization and workspace scope. Following the `campaigns.*` precedent, only `org_admin` holds them; `campaign_editor` does not yet hold content keys of either domain.
+
 ## 9. Related
 
 Full table definitions: `DATABASE.md` §"IAM & RBAC domain". Security controls (encryption, session hardening, audit): `SECURITY.md`.

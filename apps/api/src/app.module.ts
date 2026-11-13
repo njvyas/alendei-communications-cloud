@@ -31,6 +31,7 @@ import { TemplatesModule } from './templates/templates.module';
 import { SuppressionsModule } from './suppressions/suppressions.module';
 import { MessagesModule } from './messages/messages.module';
 import { CampaignsModule } from './campaigns/campaigns.module';
+import { JourneysModule } from './journeys/journeys.module';
 import { PlatformSupportModule } from './platform-support/platform-support.module';
 import { WebhookKeyMaterialModule } from './webhooks/webhook-key-material.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
@@ -73,6 +74,7 @@ import { OPENAPI_MODULES } from './openapi/openapi.module';
     SuppressionsModule,
     MessagesModule,
     CampaignsModule,
+    JourneysModule,
     PlatformSupportModule,
     // Phase 5.0 PR-C: provider webhook ingress — disabled unless DELIVERY_WEBHOOKS_ENABLED.
     WebhookKeyMaterialModule,
