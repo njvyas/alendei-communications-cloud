@@ -278,6 +278,14 @@ export function canonicalJourneyJson(value: unknown): string {
 
 // --- structural validation ---------------------------------------------------------------
 
+/**
+ * Own-property membership. Graph keys and node types come from untrusted JSON, so `in` (which
+ * follows the prototype chain) would accept `constructor`, `toString` or `__proto__` as known
+ * names. Every membership test in the validator uses this instead.
+ */
+const own = (o: object, key: unknown): key is string =>
+  typeof key === 'string' && Object.prototype.hasOwnProperty.call(o, key);
+
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 const isText = (v: unknown, max: number = JOURNEY_GRAPH_LIMITS.maxStringLength): v is string =>
@@ -557,11 +565,11 @@ export function validateJourneyGraph(graph: unknown): JourneyGraphValidationRepo
       errors.push({ code: 'NODE_INVALID', nodeKey: key, message: 'node must be an object' });
       continue;
     }
-    const type = node.type as JourneyNodeType;
-    if (!(type in JOURNEY_NODE_EDGES)) {
+    if (!own(JOURNEY_NODE_EDGES, node.type) || !own(JOURNEY_NODE_CATALOGUE, node.type)) {
       errors.push({ code: 'NODE_TYPE_UNKNOWN', nodeKey: key, message: `unknown node type` });
       continue;
     }
+    const type = node.type as JourneyNodeType;
     errors.push(...nodeFieldIssues(key, node));
     if (JOURNEY_NODE_CATALOGUE[type].placeholder)
       warnings.push({
@@ -571,7 +579,7 @@ export function validateJourneyGraph(graph: unknown): JourneyGraphValidationRepo
       });
     const targets: string[] = [];
     for (const field of JOURNEY_NODE_EDGES[type]) {
-      const target = node[field];
+      const target = own(node, field) ? node[field] : undefined;
       if (typeof target !== 'string' || target.length === 0) {
         errors.push({
           code: 'EDGE_MISSING',
@@ -579,7 +587,7 @@ export function validateJourneyGraph(graph: unknown): JourneyGraphValidationRepo
           path: field,
           message: `${field} is required`,
         });
-      } else if (!(target in nodes)) {
+      } else if (!own(nodes, target)) {
         errors.push({
           code: 'EDGE_TARGET_UNKNOWN',
           nodeKey: key,
@@ -598,7 +606,7 @@ export function validateJourneyGraph(graph: unknown): JourneyGraphValidationRepo
     (k) => isObject(nodes[k]) && (nodes[k] as Record<string, unknown>).type === 'entry',
   );
   if (
-    typeof entryKey !== 'string' ||
+    !own(nodes, entryKey) ||
     !isObject(nodes[entryKey]) ||
     (nodes[entryKey] as Record<string, unknown>).type !== 'entry'
   ) {
@@ -680,8 +688,9 @@ export function validateJourneyGraph(graph: unknown): JourneyGraphValidationRepo
             ? node.rule.sendNodeKey
             : undefined;
       if (ref === undefined) continue;
-      const target =
-        typeof ref === 'string' ? (nodes[ref] as Record<string, unknown> | undefined) : undefined;
+      const target = own(nodes, ref)
+        ? (nodes[ref] as Record<string, unknown> | undefined)
+        : undefined;
       if (!isObject(target) || target.type !== 'send_message' || !dom.get(key)?.has(ref as string))
         errors.push({
           code: 'SEND_REFERENCE_INVALID',

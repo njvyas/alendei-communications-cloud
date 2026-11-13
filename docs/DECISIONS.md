@@ -3502,6 +3502,16 @@ Each is a draft, stopped for owner review. Billing enforcement stays disabled; n
   - removing the dominance check from `validateJourneyGraph`: the "every path" contract test fails;
   - removing the draft-hash comparison: two API tests fail.
 
+**PR #104 review correction (13-Nov-2026): own-property membership in the graph validator.** Contract code only; the migration, API surface and scope are unchanged.
+- **Defect:** `validateJourneyGraph` tested membership with `in`, which follows the prototype chain. Two failures followed:
+  - a node type of `constructor` or `toString` passed the node-type check and then threw (`TypeError: JOURNEY_NODE_EDGES[type] is not iterable`), so `validate` and `publish` answered `500`;
+  - an edge to an inherited name such as `constructor` counted as a known node. A condition whose other branch reached an exit could therefore pass validation.
+- **Fix:** every membership test uses an own-property check (`Object.prototype.hasOwnProperty.call`). This covers node types against `JOURNEY_NODE_EDGES` and `JOURNEY_NODE_CATALOGUE`, edge targets, the entry key, `sendNodeKey` references, and reading a node's edge fields.
+- **Regression tests:**
+  - contracts (+3): `constructor`, `toString`, `valueOf`, `hasOwnProperty` and `__proto__` as node types give `NODE_TYPE_UNKNOWN` and never throw; a condition edge to `constructor`, `toString` or `__proto__`, with the other branch exiting, gives `EDGE_TARGET_UNKNOWN`; inherited names are neither an entry nor a send reference;
+  - API (+1): the same graphs saved as drafts validate with `200` and the expected finding, publication is `422 JOURNEY_GRAPH_INVALID`, and the version stays a draft.
+- **Against the pre-fix validator:** the contract tests fail (one with the `TypeError`), and the API test receives `500` instead of `200`.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

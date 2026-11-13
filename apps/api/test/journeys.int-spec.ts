@@ -361,6 +361,75 @@ describe('Phase 8C PR 8C-1: journey definitions', () => {
       expect(refused.body.error.details.report.valid).toBe(false);
     });
 
+    it('prototype-chain names (review of PR #104): unknown node types and edge targets are reported, never a 500, and never publish', async () => {
+      const j = await createJourney('Prototype names');
+      const v = j.draftVersion;
+      const validate = async () =>
+        asA(
+          http().post(
+            url(`/workspaces/${A.workspaceId}/journeys/${j.id}/versions/${v.id}/validate`),
+          ),
+        );
+      let sha = v.graphSha256;
+      for (const type of ['constructor', 'toString']) {
+        const graph = {
+          schemaVersion: 1,
+          entry: 'start',
+          nodes: {
+            start: { type: 'entry', trigger: { kind: 'api' }, next: 'odd' },
+            odd: { type, next: 'done' },
+            done: { type: 'exit' },
+          },
+        };
+        const saved = await putGraph(j.id, v.id, graph, sha);
+        expect(saved.status).toBe(200);
+        sha = saved.body.data.graphSha256;
+        const report = await validate();
+        expect(report.status).toBe(200);
+        expect(report.body.data.valid).toBe(false);
+        expect(report.body.data.errors).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ code: 'NODE_TYPE_UNKNOWN', nodeKey: 'odd' }),
+          ]),
+        );
+        const refused = await publish(j.id, v.id, sha);
+        expect(refused.status).toBe(422);
+        expect(refused.body.error.code).toBe(ERROR_CODES.JOURNEY_GRAPH_INVALID);
+      }
+      const inherited = {
+        schemaVersion: 1,
+        entry: 'start',
+        nodes: {
+          start: { type: 'entry', trigger: { kind: 'api' }, next: 'branch' },
+          branch: {
+            type: 'condition',
+            rule: { kind: 'tag', tag: 'vip', present: true },
+            onTrue: 'constructor',
+            onFalse: 'done',
+          },
+          done: { type: 'exit' },
+        },
+      };
+      const saved = await putGraph(j.id, v.id, inherited, sha);
+      expect(saved.status).toBe(200);
+      const report = await validate();
+      expect(report.status).toBe(200);
+      expect(
+        report.body.data.errors.map((e: { code: string; nodeKey: string; path: string }) => [
+          e.code,
+          e.nodeKey,
+          e.path,
+        ]),
+      ).toEqual([['EDGE_TARGET_UNKNOWN', 'branch', 'onTrue']]);
+      const refused = await publish(j.id, v.id, saved.body.data.graphSha256);
+      expect(refused.status).toBe(422);
+      expect(refused.body.error.details.report.errors[0].code).toBe('EDGE_TARGET_UNKNOWN');
+      const version = await asA(
+        http().get(url(`/workspaces/${A.workspaceId}/journeys/${j.id}/versions/${v.id}`)),
+      );
+      expect(version.body.data.status).toBe('draft');
+    });
+
     it('referential validation: templates (approval, channel, variables) and segments (this workspace)', async () => {
       const j = await createJourney('Referential');
       const v = j.draftVersion;

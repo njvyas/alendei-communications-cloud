@@ -325,6 +325,54 @@ describe('journey graph contract (8C-1)', () => {
     }
   });
 
+  it('prototype-chain names are never node types (review of PR #104): NODE_TYPE_UNKNOWN, no throw', () => {
+    for (const t of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
+      const g = mutate((x) => (x.nodes.done = { type: t }));
+      let r: ReturnType<typeof validateJourneyGraph> | undefined;
+      assert.doesNotThrow(() => (r = validateJourneyGraph(g)), t);
+      assert.equal(r!.valid, false, t);
+      assert.ok(
+        r!.errors.some((e) => e.code === 'NODE_TYPE_UNKNOWN' && e.nodeKey === 'done'),
+        `${t}: ${JSON.stringify(r!.errors)}`,
+      );
+    }
+  });
+
+  it('an edge to an inherited property is an unknown target, even when the other branch exits', () => {
+    for (const target of ['constructor', 'toString', '__proto__']) {
+      const g = {
+        schemaVersion: 1,
+        entry: 'start',
+        nodes: {
+          start: { type: 'entry', trigger: { kind: 'api' }, next: 'branch' },
+          branch: {
+            type: 'condition',
+            rule: { kind: 'tag', tag: 'vip', present: true },
+            onTrue: target,
+            onFalse: 'done',
+          },
+          done: { type: 'exit' },
+        },
+      };
+      const r = validateJourneyGraph(g);
+      assert.equal(r.valid, false, target);
+      assert.deepEqual(
+        r.errors.map((e) => [e.code, e.nodeKey, e.path]),
+        [['EDGE_TARGET_UNKNOWN', 'branch', 'onTrue']],
+        target,
+      );
+    }
+  });
+
+  it('inherited names are not an entry or a send reference either', () => {
+    assert.ok(codes(mutate((g) => (g.entry = 'constructor'))).includes('ENTRY_MISSING'));
+    assert.ok(
+      codes(mutate((g) => (g.nodes.wait.sendNodeKey = 'toString'))).includes(
+        'SEND_REFERENCE_INVALID',
+      ),
+    );
+  });
+
   it('canonical JSON ignores key order and undefined members', () => {
     assert.equal(
       canonicalJourneyJson({ b: 1, a: [{ d: 2, c: 3 }] }),
