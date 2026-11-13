@@ -26,7 +26,7 @@ All public and console APIs are served under `/api/v1`. Breaking changes ship as
 | `/contacts` | `contacts` | Contact CRUD, identities, consent, suppression |
 | `/campaigns` | `campaigns` | Campaign CRUD, launch, pause, progress |
 | `/templates` | `templates` | Template CRUD, provider mapping, approval status |
-| `/workspaces/{workspaceId}/journeys` | `journeys` | Journey CRUD, versioning, draft graphs, validation and publication (Phase 8C PR 8C-1). Activation, enrolment and execution status arrive with 8C-2 |
+| `/workspaces/{workspaceId}/journeys` | `journeys` | Journey CRUD, versioning, draft graphs, validation and publication (Phase 8C PR 8C-1). Lifecycle (`activate`, `pause`, `resume`, `archive`), API enrolment (`enrollments`, `Idempotency-Key` required), execution list/detail, operator cancel and per-node statistics (8C-2). Nothing runs or sends: the runner and trigger processing are 8C-3/8C-4 |
 | `/billing` | `billing` | Ledger read, invoices, GST detail |
 | `/wallets` | `billing` | Wallet balance, recharge, auto-recharge config |
 | `/resellers` | `resellers` | Reseller CRUD, markup config, branding |

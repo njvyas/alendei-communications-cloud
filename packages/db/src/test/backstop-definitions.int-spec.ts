@@ -396,11 +396,14 @@ describe('migration 0027 catalogue: app_content_context_valid()', () => {
   // Phase 7 PR 7-6a (0055) added the 3 tenant billing SELECT policies (wallets, credit_accounts,
   // usage_ledger), each requiring a valid content context: 28 → 31. Phase 8A.1 (0058) added the 3
   // content policies for segments (SELECT, INSERT, UPDATE): 31 → 34. Phase 8C PR 8C-1 (0062) added
-  // SELECT, INSERT and UPDATE policies on journeys and journey_versions: 34 → 40.
-  it('every Phase 3.1 and Phase 3.3 content table calls it, and the 7-6a billing reads: exactly the 40 content policies', async () => {
+  // SELECT, INSERT and UPDATE policies on journeys and journey_versions: 34 → 40. Phase 8C PR 8C-2
+  // (0063) added 12: SELECT, INSERT and UPDATE on journey_triggers and journey_executions; SELECT and
+  // INSERT on journey_execution_steps; SELECT, INSERT, UPDATE and DELETE on journey_execution_queue
+  // (40 → 52).
+  it('every Phase 3.1 and Phase 3.3 content table calls it, and the 7-6a billing reads: exactly the 52 content policies', async () => {
     const { rows } = await db.admin.execute<{ n: string }>(sql`
       SELECT count(*)::text AS n FROM pg_policies
       WHERE coalesce(qual, '') || coalesce(with_check, '') LIKE '%app_content_context_valid%'`);
-    expect(rows[0]!.n).toBe('40');
+    expect(rows[0]!.n).toBe('52');
   });
 });

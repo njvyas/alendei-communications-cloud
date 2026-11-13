@@ -8,12 +8,9 @@ import {
   PERMISSIONS,
   canonicalJourneyJson,
   defaultJourneyGraph,
-  renderTemplate,
   validateJourneyGraph,
   type AuthPrincipal,
-  type ErrorCode,
   type JourneyGraph,
-  type JourneyGraphIssue,
   type JourneyGraphValidationReport,
   type JourneyRecord,
   type JourneyStatus,
@@ -22,100 +19,52 @@ import {
   type PageInfo,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
-import { and, desc, eq, ilike, inArray, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, ilike, isNull, sql, type SQL } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 
-import { actorFromPrincipal } from '../audit/audit-actor';
-import { AuditWriter } from '../audit/audit-writer.service';
-import { AuthorizationService } from '../auth/authorization.service';
 import { AppException } from '../common/errors/app.exception';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
 import { TenantDatabase } from '../database/tenant-database.service';
 import { IdempotencyService, type IdempotentOutcome } from '../idempotency/idempotency.service';
 import { requireOrganization } from '../workspaces/workspace-administration.service';
+import { JourneyAccess, journeyNotFound, type JourneyRow, type VersionRow } from './journey-access';
+import { JourneyLifecycleService } from './journey-lifecycle.service';
+import { JourneyValidation, SAVE_BLOCKING } from './journey-validation';
+import {
+  journeyView,
+  liveTriggersOf,
+  loadJourneyView,
+  versionSummary as summary,
+  versionView,
+  versionsOf,
+} from './journey-views';
 import type { CreateJourneyDto, UpdateJourneyDto } from './journeys.dto';
 
 /**
  * Phase 8C PR 8C-1: journey definitions — create, version, edit drafts, validate and publish
- * (`docs/PHASE-8C-JOURNEYS-HANDOVER.md` §§5–7). **Nothing here executes a journey**: there is
- * no activation, enrolment, runner, trigger processing or send. Those are 8C-2 to 8C-4, and
- * sending (8C-5/8C-6) waits for the shared automation principal built in 8B-3 (owner
- * decisions 1–2, 10-Nov-2026).
+ * (`docs/PHASE-8C-JOURNEYS-HANDOVER.md` §§5–7). **Nothing here executes a journey.** 8C-2 adds
+ * the lifecycle (`JourneyLifecycleService`, which publication calls to promote a new version
+ * of an active or paused journey) and executions (`JourneyExecutionsService`); the runner and
+ * trigger processing are 8C-3/8C-4, and sending (8C-5/8C-6) waits for the shared automation
+ * principal built in 8B-3 (owner decisions 1–2, 10-Nov-2026).
  */
 export interface ListJourneysFilter extends ListQueryInput {
   readonly status?: JourneyStatus;
   readonly query?: string;
 }
 
-type JourneyRow = typeof schema.journeys.$inferSelect;
-type VersionRow = typeof schema.journeyVersions.$inferSelect;
-
-const notFound = (code: ErrorCode, message: string, ctx: Record<string, unknown>) =>
-  new AppException({ status: HttpStatus.NOT_FOUND, code, message, logContext: ctx });
-
 /** SHA-256 of the canonical JSON form, so key order never changes the hash. */
 export function journeyGraphSha256(graph: unknown): string {
   return createHash('sha256').update(canonicalJourneyJson(graph)).digest('hex');
 }
 
-function summary(v: VersionRow): JourneyVersionSummary {
-  return {
-    id: v.id,
-    versionNumber: v.versionNumber,
-    status: v.status,
-    graphSha256: v.graphSha256,
-    publishedAt: v.publishedAt ? v.publishedAt.toISOString() : null,
-    createdAt: v.createdAt.toISOString(),
-    updatedAt: v.updatedAt.toISOString(),
-  };
-}
-
-function versionView(v: VersionRow): JourneyVersionRecord {
-  return {
-    ...summary(v),
-    journeyId: v.journeyId,
-    workspaceId: v.workspaceId,
-    graphSchemaVersion: v.graphSchemaVersion,
-    graph: v.graph as JourneyGraph,
-    createdBy: v.createdBy,
-    publishedBy: v.publishedBy,
-  };
-}
-
-function journeyView(j: JourneyRow, versions: readonly VersionRow[]): JourneyRecord {
-  const own = versions.filter((v) => v.journeyId === j.id);
-  const draft = own.find((v) => v.status === 'draft') ?? null;
-  const published = own
-    .filter((v) => v.status !== 'draft')
-    .sort((a, b) => b.versionNumber - a.versionNumber)[0];
-  return {
-    id: j.id,
-    orgId: j.orgId,
-    workspaceId: j.workspaceId,
-    name: j.name,
-    description: j.description,
-    status: j.status,
-    createdBy: j.createdBy,
-    createdAt: j.createdAt.toISOString(),
-    updatedAt: j.updatedAt.toISOString(),
-    draftVersion: draft ? summary(draft) : null,
-    latestPublishedVersion: published ? summary(published) : null,
-  };
-}
-
-/** Graph checks that refuse even a draft save: the value must be a v1 graph object of bounded size. */
-const SAVE_BLOCKING: readonly string[] = [
-  'GRAPH_NOT_OBJECT',
-  'GRAPH_TOO_LARGE',
-  'SCHEMA_VERSION_UNSUPPORTED',
-];
-
 @Injectable()
 export class JourneysService {
   constructor(
     private readonly db: TenantDatabase,
-    private readonly authorization: AuthorizationService,
-    private readonly audit: AuditWriter,
+    private readonly access: JourneyAccess,
+    private readonly validation: JourneyValidation,
+    private readonly lifecycle: JourneyLifecycleService,
     private readonly lists: ListQuery,
     private readonly idempotency: IdempotencyService,
   ) {}
@@ -129,67 +78,27 @@ export class JourneysService {
     tieBreaker: schema.journeys.id,
   };
 
-  /** The workspace must exist in the caller's organization; then the permission is asserted on it. */
-  private async assertWorkspaceAccess(
+  private assertWorkspaceAccess(
     tx: Transaction,
     principal: AuthPrincipal,
     workspaceId: string,
     permission: string,
   ): Promise<string> {
-    const orgId = requireOrganization(principal);
-    const [workspace] = await tx
-      .select({ id: schema.workspaces.id })
-      .from(schema.workspaces)
-      .where(and(eq(schema.workspaces.id, workspaceId), eq(schema.workspaces.orgId, orgId)));
-    if (!workspace)
-      throw notFound(ERROR_CODES.RESOURCE_NOT_FOUND, 'Workspace not found', {
-        requestedWorkspaceId: workspaceId,
-      });
-    await this.authorization.assert(tx, {
-      principal,
-      permission,
-      target: { scopeType: 'workspace', scopeId: workspaceId },
-      resourceType: 'Workspace',
-    });
-    return orgId;
+    return this.access.assertWorkspaceAccess(tx, principal, workspaceId, permission);
   }
 
   private requireKey(key: string | null): string {
-    if (key === null) {
-      throw new AppException({
-        status: HttpStatus.BAD_REQUEST,
-        code: ERROR_CODES.IDEMPOTENCY_KEY_REQUIRED,
-        message: 'This operation requires an Idempotency-Key header',
-      });
-    }
-    return key;
+    return this.access.requireKey(key);
   }
 
-  private async loadJourney(
+  private loadJourney(
     tx: Transaction,
     orgId: string,
     workspaceId: string,
     journeyId: string,
     lock = false,
   ): Promise<JourneyRow> {
-    const q = tx
-      .select()
-      .from(schema.journeys)
-      .where(
-        and(
-          eq(schema.journeys.id, journeyId),
-          eq(schema.journeys.workspaceId, workspaceId),
-          eq(schema.journeys.orgId, orgId),
-          isNull(schema.journeys.deletedAt),
-        ),
-      )
-      .limit(1);
-    const [row] = lock ? await q.for('update') : await q;
-    if (!row)
-      throw notFound(ERROR_CODES.JOURNEY_NOT_FOUND, 'Journey not found', {
-        requestedJourneyId: journeyId,
-      });
-    return row;
+    return this.access.loadJourney(tx, orgId, workspaceId, journeyId, lock);
   }
 
   private async loadVersion(
@@ -211,21 +120,13 @@ export class JourneysService {
       .limit(1);
     const [row] = lock ? await q.for('update') : await q;
     if (!row)
-      throw notFound(ERROR_CODES.JOURNEY_VERSION_NOT_FOUND, 'Journey version not found', {
+      throw journeyNotFound(ERROR_CODES.JOURNEY_VERSION_NOT_FOUND, 'Journey version not found', {
         requestedVersionId: versionId,
       });
     return row;
   }
 
-  private async versionsOf(tx: Transaction, journeyIds: readonly string[]): Promise<VersionRow[]> {
-    if (journeyIds.length === 0) return [];
-    return tx
-      .select()
-      .from(schema.journeyVersions)
-      .where(inArray(schema.journeyVersions.journeyId, [...journeyIds]));
-  }
-
-  private async recordAudit(
+  private recordAudit(
     tx: Transaction,
     principal: AuthPrincipal,
     workspaceId: string,
@@ -233,21 +134,7 @@ export class JourneysService {
     resourceId: string,
     metadata: Record<string, unknown>,
   ): Promise<void> {
-    await this.audit.record(
-      {
-        scopeType: 'workspace',
-        scopeId: workspaceId,
-        ...actorFromPrincipal(principal),
-        action,
-        resourceType: 'Journey',
-        resourceId,
-        outcome: 'success',
-        before: null,
-        after: null,
-        metadata,
-      },
-      tx,
-    );
+    return this.access.recordAudit(tx, principal, workspaceId, action, resourceId, metadata);
   }
 
   // --- journeys ----------------------------------------------------------------------------
@@ -258,7 +145,7 @@ export class JourneysService {
     filter: ListJourneysFilter = {},
   ): Promise<{ items: readonly JourneyRecord[]; page: PageInfo }> {
     const resolved = this.lists.resolve(filter, this.listSpec);
-    const { rows, versions } = await this.db.withRequestTenant(async (tx) => {
+    const { rows, versions, triggers } = await this.db.withRequestTenant(async (tx) => {
       const orgId = await this.assertWorkspaceAccess(
         tx,
         principal,
@@ -282,13 +169,8 @@ export class JourneysService {
         .where(and(...predicates))
         .orderBy(...resolved.orderBy)
         .limit(this.lists.fetchSize(resolved));
-      return {
-        rows,
-        versions: await this.versionsOf(
-          tx,
-          rows.map((r) => r.id),
-        ),
-      };
+      const ids = rows.map((r) => r.id);
+      return { rows, versions: await versionsOf(tx, ids), triggers: await liveTriggersOf(tx, ids) };
     });
     const { items, page } = this.lists.paginate(
       rows as unknown as Record<string, unknown>[],
@@ -297,7 +179,7 @@ export class JourneysService {
       (row) => String(row.id),
     );
     return {
-      items: (items as unknown as JourneyRow[]).map((j) => journeyView(j, versions)),
+      items: (items as unknown as JourneyRow[]).map((j) => journeyView(j, versions, triggers)),
       page,
     };
   }
@@ -315,7 +197,7 @@ export class JourneysService {
         PERMISSIONS.JOURNEYS_READ,
       );
       const journey = await this.loadJourney(tx, orgId, workspaceId, journeyId);
-      return journeyView(journey, await this.versionsOf(tx, [journey.id]));
+      return loadJourneyView(tx, journey);
     });
   }
 
@@ -385,7 +267,7 @@ export class JourneysService {
             versionId: version!.id,
           },
         );
-        return { data: journeyView(journey!, [version!]) };
+        return { data: journeyView(journey!, [version!], []) };
       },
     });
   }
@@ -426,7 +308,7 @@ export class JourneysService {
           },
         );
       }
-      return journeyView(row, await this.versionsOf(tx, [journeyId]));
+      return loadJourneyView(tx, row);
     });
   }
 
@@ -680,7 +562,7 @@ export class JourneysService {
       );
       const journey = await this.loadJourney(tx, orgId, workspaceId, journeyId);
       const version = await this.loadVersion(tx, journey, versionId);
-      return this.fullReport(tx, orgId, workspaceId, version.graph);
+      return this.validation.fullReport(tx, orgId, workspaceId, version.graph);
     });
   }
 
@@ -718,10 +600,12 @@ export class JourneysService {
       authorize,
       work: async (tx) => {
         await authorize(tx);
-        const journey = await this.loadJourney(tx, orgId, workspaceId, journeyId);
+        // Locked: publishing an active or paused journey's version promotes it (8C-2), which
+        // must serialise with pause, resume and archive.
+        const journey = await this.loadJourney(tx, orgId, workspaceId, journeyId, true);
         const version = await this.loadVersion(tx, journey, versionId, true);
         this.assertEditableDraft(version, expectedGraphSha256);
-        const report = await this.fullReport(tx, orgId, workspaceId, version.graph);
+        const report = await this.validation.fullReport(tx, orgId, workspaceId, version.graph);
         if (!report.valid) {
           throw new AppException({
             status: HttpStatus.UNPROCESSABLE_ENTITY,
@@ -744,6 +628,10 @@ export class JourneysService {
           .update(schema.journeys)
           .set({ updatedAt: sql`now()` })
           .where(eq(schema.journeys.id, journey.id));
+        // 8C-2: an active or paused journey moves new enrolments to this version; executions in
+        // flight finish on their own version. Refused (and the publish rolled back) when the
+        // version could not run: a send node, or a caller without the send permission.
+        const promotion = await this.lifecycle.promoteOnPublish(tx, principal, journey, published!);
         await this.recordAudit(
           tx,
           principal,
@@ -755,137 +643,11 @@ export class JourneysService {
             versionNumber: version.versionNumber,
             graphSha256: version.graphSha256,
             warnings: report.warnings.length,
+            ...(promotion ?? {}),
           },
         );
         return { data: versionView(published!) };
       },
     });
-  }
-
-  /**
-   * Structural validation plus the organisation's data: templates (exist, approved, channel,
-   * every placeholder mapped) and segments (exist in this workspace). Read-only.
-   */
-  private async fullReport(
-    tx: Transaction,
-    orgId: string,
-    workspaceId: string,
-    graph: unknown,
-  ): Promise<JourneyGraphValidationReport> {
-    const base = validateJourneyGraph(graph);
-    if (base.errors.some((e) => SAVE_BLOCKING.includes(e.code) || e.code === 'NODE_INVALID'))
-      return base;
-    const errors: JourneyGraphIssue[] = [...base.errors];
-    const warnings: JourneyGraphIssue[] = [...base.warnings];
-    const nodes = Object.entries((graph as JourneyGraph).nodes ?? {});
-
-    const templateRefs = nodes.filter(
-      ([, n]) => n?.type === 'send_message' && typeof n.templateId === 'string',
-    ) as [string, Extract<JourneyGraph['nodes'][string], { type: 'send_message' }>][];
-    const segmentRefs: [string, string, string][] = [];
-    for (const [key, n] of nodes) {
-      if (n?.type === 'entry' && n.trigger?.kind === 'schedule')
-        segmentRefs.push([key, 'trigger.segmentId', n.trigger.segmentId]);
-      if (n?.type === 'condition' && n.rule?.kind === 'segment')
-        segmentRefs.push([key, 'rule.segmentId', n.rule.segmentId]);
-    }
-    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-    const templateIds = [...new Set(templateRefs.map(([, n]) => n.templateId))].filter((id) =>
-      uuid.test(id),
-    );
-    const templates =
-      templateIds.length === 0
-        ? []
-        : await tx
-            .select({
-              id: schema.templates.id,
-              body: schema.templates.body,
-              approvalStatus: schema.templates.approvalStatus,
-              channelCode: sql<string>`app_channel_code(${schema.templates.channelId})`,
-            })
-            .from(schema.templates)
-            .where(
-              and(
-                eq(schema.templates.orgId, orgId),
-                inArray(schema.templates.id, templateIds),
-                isNull(schema.templates.deletedAt),
-              ),
-            );
-    const byId = new Map(templates.map((t) => [t.id, t]));
-    for (const [key, n] of templateRefs) {
-      if (!uuid.test(n.templateId)) continue; // already a FIELD_INVALID
-      const t = byId.get(n.templateId);
-      if (!t) {
-        errors.push({
-          code: 'TEMPLATE_NOT_FOUND',
-          nodeKey: key,
-          path: 'templateId',
-          message: 'template not found',
-        });
-        continue;
-      }
-      if (t.approvalStatus !== 'approved')
-        errors.push({
-          code: 'TEMPLATE_NOT_APPROVED',
-          nodeKey: key,
-          path: 'templateId',
-          message: `template approval status is '${t.approvalStatus}'`,
-        });
-      if (t.channelCode !== n.channel)
-        errors.push({
-          code: 'TEMPLATE_CHANNEL_MISMATCH',
-          nodeKey: key,
-          path: 'channel',
-          message: `template channel is '${t.channelCode}'`,
-        });
-      const placeholders = [...new Set(renderTemplate(t.body, {}).missingVariables)];
-      const mapped = Object.keys(n.variables ?? {});
-      for (const p of placeholders)
-        if (!mapped.includes(p))
-          errors.push({
-            code: 'TEMPLATE_VARIABLE_UNMAPPED',
-            nodeKey: key,
-            path: `variables.${p}`,
-            message: `template variable '${p}' has no value`,
-          });
-      for (const m of mapped)
-        if (!placeholders.includes(m))
-          warnings.push({
-            code: 'TEMPLATE_VARIABLE_UNKNOWN',
-            nodeKey: key,
-            path: `variables.${m}`,
-            message: `the template has no variable '${m}'`,
-          });
-    }
-
-    const segmentIds = [...new Set(segmentRefs.map(([, , id]) => id))].filter(
-      (id) => typeof id === 'string' && uuid.test(id),
-    );
-    const segments =
-      segmentIds.length === 0
-        ? []
-        : await tx
-            .select({ id: schema.segments.id })
-            .from(schema.segments)
-            .where(
-              and(
-                eq(schema.segments.orgId, orgId),
-                eq(schema.segments.workspaceId, workspaceId),
-                inArray(schema.segments.id, segmentIds),
-                isNull(schema.segments.deletedAt),
-              ),
-            );
-    const found = new Set(segments.map((s) => s.id));
-    for (const [key, path, id] of segmentRefs)
-      if (typeof id === 'string' && uuid.test(id) && !found.has(id))
-        errors.push({
-          code: 'SEGMENT_NOT_FOUND',
-          nodeKey: key,
-          path,
-          message: 'segment not found in this workspace',
-        });
-
-    return { valid: errors.length === 0, errors, warnings };
   }
 }

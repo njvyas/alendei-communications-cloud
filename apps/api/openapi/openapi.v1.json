@@ -2784,6 +2784,25 @@
         ],
         "type": "object"
       },
+      "EnrolJourneyContactsDto": {
+        "additionalProperties": false,
+        "properties": {
+          "contactIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "contactIds"
+        ],
+        "type": "object"
+      },
       "ErrorBody": {
         "additionalProperties": false,
         "properties": {
@@ -2885,6 +2904,11 @@
               "JOURNEY_GRAPH_INVALID",
               "JOURNEY_DRAFT_EXISTS",
               "JOURNEY_LIFECYCLE_CONFLICT",
+              "JOURNEY_NO_PUBLISHED_VERSION",
+              "JOURNEY_SEND_DISABLED",
+              "JOURNEY_TRIGGER_NOT_API",
+              "JOURNEY_EXECUTION_NOT_FOUND",
+              "JOURNEY_EXECUTION_ENDED",
               "WEBHOOK_NOT_ACCEPTED",
               "WEBHOOK_PAYLOAD_INVALID",
               "WEBHOOK_PAYLOAD_TOO_LARGE",
@@ -3199,6 +3223,23 @@
       "Journey": {
         "additionalProperties": false,
         "properties": {
+          "activatedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "activatedBy": {
+            "description": "Null when an API key activated the journey.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "activeVersionId": {
+            "description": "The published version new enrolments use; null until first activated.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string"
@@ -3330,6 +3371,66 @@
             ],
             "type": "string"
           },
+          "trigger": {
+            "additionalProperties": false,
+            "description": "Derived from the active version's entry node at activation. Nothing processes it until 8C-4.",
+            "nullable": true,
+            "properties": {
+              "eventKind": {
+                "nullable": true,
+                "type": "string"
+              },
+              "eventTag": {
+                "nullable": true,
+                "type": "string"
+              },
+              "id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "journeyVersionId": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "api",
+                  "event",
+                  "schedule"
+                ],
+                "type": "string"
+              },
+              "nextFireAt": {
+                "format": "date-time",
+                "nullable": true,
+                "type": "string"
+              },
+              "segmentId": {
+                "format": "uuid",
+                "nullable": true,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "active",
+                  "paused",
+                  "retired"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "eventKind",
+              "eventTag",
+              "id",
+              "journeyVersionId",
+              "kind",
+              "nextFireAt",
+              "segmentId",
+              "status"
+            ],
+            "type": "object"
+          },
           "updatedAt": {
             "format": "date-time",
             "type": "string"
@@ -3340,6 +3441,9 @@
           }
         },
         "required": [
+          "activatedAt",
+          "activatedBy",
+          "activeVersionId",
           "createdAt",
           "createdBy",
           "description",
@@ -3349,6 +3453,360 @@
           "status",
           "updatedAt",
           "workspaceId"
+        ],
+        "type": "object"
+      },
+      "JourneyEnrolmentOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "contactId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "executionId": {
+            "description": "The new execution, or the contact's most recent one when already enrolled.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "enrolled",
+              "already_enrolled",
+              "contact_not_found"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "contactId",
+          "executionId",
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "JourneyEnrolmentResult": {
+        "additionalProperties": false,
+        "properties": {
+          "alreadyEnrolled": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "contactNotFound": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "enrolled": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "journeyId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "journeyVersionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "results": {
+            "description": "In request order.",
+            "items": {
+              "$ref": "#/components/schemas/JourneyEnrolmentOutcome"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "alreadyEnrolled",
+          "contactNotFound",
+          "enrolled",
+          "journeyId",
+          "journeyVersionId",
+          "results"
+        ],
+        "type": "object"
+      },
+      "JourneyExecution": {
+        "additionalProperties": false,
+        "properties": {
+          "contactId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "currentNodeKey": {
+            "description": "The node the execution runs next.",
+            "nullable": true,
+            "type": "string"
+          },
+          "endReason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "endedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "enrolledBy": {
+            "description": "Null for an API key or an automated entry.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "enteredAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "entryKind": {
+            "enum": [
+              "api",
+              "event",
+              "schedule"
+            ],
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "journeyId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "journeyVersionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "stateVersion": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "waiting",
+              "completed",
+              "exited",
+              "failed",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "transitions": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "wakeAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "workspaceId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contactId",
+          "currentNodeKey",
+          "endReason",
+          "endedAt",
+          "enrolledBy",
+          "enteredAt",
+          "entryKind",
+          "id",
+          "journeyId",
+          "journeyVersionId",
+          "stateVersion",
+          "status",
+          "transitions",
+          "updatedAt",
+          "wakeAt",
+          "workspaceId"
+        ],
+        "type": "object"
+      },
+      "JourneyExecutionDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "contactId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "currentNodeKey": {
+            "description": "The node the execution runs next.",
+            "nullable": true,
+            "type": "string"
+          },
+          "endReason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "endedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "enrolledBy": {
+            "description": "Null for an API key or an automated entry.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "enteredAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "entryKind": {
+            "enum": [
+              "api",
+              "event",
+              "schedule"
+            ],
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "journeyId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "journeyVersionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "stateVersion": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "waiting",
+              "completed",
+              "exited",
+              "failed",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "steps": {
+            "description": "Ordered by `seq`.",
+            "items": {
+              "$ref": "#/components/schemas/JourneyExecutionStep"
+            },
+            "type": "array"
+          },
+          "transitions": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "wakeAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "workspaceId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contactId",
+          "currentNodeKey",
+          "endReason",
+          "endedAt",
+          "enrolledBy",
+          "enteredAt",
+          "entryKind",
+          "id",
+          "journeyId",
+          "journeyVersionId",
+          "stateVersion",
+          "status",
+          "steps",
+          "transitions",
+          "updatedAt",
+          "wakeAt",
+          "workspaceId"
+        ],
+        "type": "object"
+      },
+      "JourneyExecutionStep": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "details": {
+            "additionalProperties": true,
+            "description": "Bounded; never message content or addresses.",
+            "type": "object"
+          },
+          "errorCode": {
+            "nullable": true,
+            "type": "string"
+          },
+          "finishedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "messageId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "nodeKey": {
+            "type": "string"
+          },
+          "nodeType": {
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "entered",
+              "completed",
+              "waited",
+              "skipped",
+              "refused",
+              "failed",
+              "stubbed",
+              "exited",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "seq": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt",
+          "details",
+          "errorCode",
+          "finishedAt",
+          "messageId",
+          "nodeKey",
+          "nodeType",
+          "outcome",
+          "seq",
+          "startedAt"
         ],
         "type": "object"
       },
@@ -3380,7 +3838,8 @@
               "TEMPLATE_VARIABLE_UNMAPPED",
               "TEMPLATE_VARIABLE_UNKNOWN",
               "SEGMENT_NOT_FOUND",
-              "PLACEHOLDER_NODE"
+              "PLACEHOLDER_NODE",
+              "SCHEDULE_ELAPSED"
             ],
             "type": "string"
           },
@@ -3424,6 +3883,97 @@
           "errors",
           "valid",
           "warnings"
+        ],
+        "type": "object"
+      },
+      "JourneyNodeStats": {
+        "additionalProperties": false,
+        "properties": {
+          "nodeKey": {
+            "type": "string"
+          },
+          "nodeType": {
+            "type": "string"
+          },
+          "outcomes": {
+            "additionalProperties": false,
+            "description": "History rows recorded at this node, by outcome (absent outcomes omitted).",
+            "properties": {
+              "cancelled": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "completed": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "entered": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "exited": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "failed": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "refused": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "skipped": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "stubbed": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "waited": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "running": {
+            "description": "Live executions positioned at this node.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "waiting": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "nodeKey",
+          "nodeType",
+          "outcomes",
+          "running",
+          "waiting"
+        ],
+        "type": "object"
+      },
+      "JourneyStats": {
+        "additionalProperties": false,
+        "properties": {
+          "journeyId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/JourneyVersionStats"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "journeyId",
+          "versions"
         ],
         "type": "object"
       },
@@ -3507,6 +4057,74 @@
           "updatedAt",
           "versionNumber",
           "workspaceId"
+        ],
+        "type": "object"
+      },
+      "JourneyVersionStats": {
+        "additionalProperties": false,
+        "properties": {
+          "executions": {
+            "additionalProperties": false,
+            "properties": {
+              "cancelled": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "completed": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "exited": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "failed": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "running": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "total": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "waiting": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "cancelled",
+              "completed",
+              "exited",
+              "failed",
+              "running",
+              "total",
+              "waiting"
+            ],
+            "type": "object"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/JourneyNodeStats"
+            },
+            "type": "array"
+          },
+          "versionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "versionNumber": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "nodes",
+          "versionId",
+          "versionNumber"
         ],
         "type": "object"
       },
@@ -47145,10 +47763,10 @@
               "enum": [
                 "draft",
                 "paused",
-                "completed",
-                "scheduled",
                 "running",
-                "cancelled"
+                "completed",
+                "cancelled",
+                "scheduled"
               ],
               "type": "string"
             }
@@ -54147,6 +54765,2269 @@
           }
         ],
         "summary": "Rename or describe a journey",
+        "tags": [
+          "journeys"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspaceId}/journeys/{journeyId}/activate": {
+      "post": {
+        "description": "draft → active. Derives and stores the version's trigger. Also requires `messages.send` at the workspace, refuses a version with a `send_message` node (`400 JOURNEY_SEND_DISABLED`) and re-validates the graph (`422 JOURNEY_GRAPH_INVALID`). Conditional on the current status; a repeat in the target state is a no-op (`200`, nothing written). Nothing runs: the journey runner and trigger processing are not built (8C-3/8C-4), and sends stay disabled.",
+        "operationId": "Journeys_activate",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
+            "$ref": "#/components/parameters/X-Causation-Id"
+          },
+          {
+            "$ref": "#/components/parameters/X-Correlation-Id"
+          },
+          {
+            "in": "path",
+            "name": "journeyId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Journey"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation failed (`VALIDATION_FAILED`, `details.issues`), or another request error named by `error.code`.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid credential (`AUTH_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authenticated, but not permitted here (`AUTHZ_*`, `TENANCY_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not found, or not visible to the caller — indistinguishable by design (`RESOURCE_NOT_FOUND`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflicts with the current state (named by `error.code`; lifecycle conflicts carry `details.status`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Well-formed but not admissible here (named by `error.code`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Rate limit exceeded (`RATE_LIMIT_EXCEEDED`); see `Retry-After`.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "userSession": []
+          }
+        ],
+        "summary": "Activate a journey on its highest published version",
+        "tags": [
+          "journeys"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspaceId}/journeys/{journeyId}/archive": {
+      "post": {
+        "description": "draft, active or paused → archived. Retires the trigger and ends every live execution as cancelled (journey_archived). Conditional on the current status; a repeat in the target state is a no-op (`200`, nothing written). Nothing runs: the journey runner and trigger processing are not built (8C-3/8C-4), and sends stay disabled.",
+        "operationId": "Journeys_archive",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
+            "$ref": "#/components/parameters/X-Causation-Id"
+          },
+          {
+            "$ref": "#/components/parameters/X-Correlation-Id"
+          },
+          {
+            "in": "path",
+            "name": "journeyId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Journey"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation failed (`VALIDATION_FAILED`, `details.issues`), or another request error named by `error.code`.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid credential (`AUTH_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authenticated, but not permitted here (`AUTHZ_*`, `TENANCY_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not found, or not visible to the caller — indistinguishable by design (`RESOURCE_NOT_FOUND`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflicts with the current state (named by `error.code`; lifecycle conflicts carry `details.status`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Rate limit exceeded (`RATE_LIMIT_EXCEEDED`); see `Retry-After`.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "userSession": []
+          }
+        ],
+        "summary": "Archive a journey (terminal)",
+        "tags": [
+          "journeys"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspaceId}/journeys/{journeyId}/enrollments": {
+      "post": {
+        "description": "The journey must be active and its active version entered by an `api` trigger (`409 JOURNEY_TRIGGER_NOT_API` otherwise). Up to 1,000 distinct contact ids of the workspace. Entry policy is once: a contact that ever entered the journey is `already_enrolled`; an unknown id is `contact_not_found`. Each new execution waits, unclaimed, for the journey runner, which is not built and stays disabled.",
+        "operationId": "JourneyExecutions_enrol",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
+            "$ref": "#/components/parameters/X-Causation-Id"
+          },
+          {
+            "$ref": "#/components/parameters/X-Correlation-Id"
+          },
+          {
+            "description": "Required: without it the request is refused with `400 IDEMPOTENCY_KEY_REQUIRED` and nothing runs. 16–255 characters of letters, digits, `-`, `_`, `.` or `:` (surrounding whitespace is trimmed; otherwise `400 IDEMPOTENCY_KEY_INVALID`). A repeat with the same key and payload replays the stored response; a different payload is `422 IDEMPOTENCY_KEY_PAYLOAD_MISMATCH`; a repeat while the first is still running is `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_.:-]{16,255}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "journeyId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrolJourneyContactsDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/JourneyEnrolmentResult"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation failed (`VALIDATION_FAILED`, `details.issues`), or another request error named by `error.code`.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid credential (`AUTH_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authenticated, but not permitted here (`AUTHZ_*`, `TENANCY_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not found, or not visible to the caller — indistinguishable by design (`RESOURCE_NOT_FOUND`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflicts with the current state (named by `error.code`; lifecycle conflicts carry `details.status`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Well-formed but not admissible here (named by `error.code`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Rate limit exceeded (`RATE_LIMIT_EXCEEDED`); see `Retry-After`.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "userSession": []
+          }
+        ],
+        "summary": "Enrol contacts through the API trigger",
+        "tags": [
+          "journeys"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspaceId}/journeys/{journeyId}/executions": {
+      "get": {
+        "operationId": "JourneyExecutions_list",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
+            "$ref": "#/components/parameters/X-Causation-Id"
+          },
+          {
+            "$ref": "#/components/parameters/X-Correlation-Id"
+          },
+          {
+            "in": "path",
+            "name": "journeyId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "contactId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 512,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "pattern": "^-?[a-zA-Z][a-zA-Z0-9]{0,40}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "enum": [
+                "failed",
+                "running",
+                "waiting",
+                "completed",
+                "exited",
+                "cancelled"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "versionId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "$ref": "#/components/schemas/JourneyExecution"
+                      },
+                      "type": "array"
+                    },
+                    "page": {
+                      "$ref": "#/components/schemas/PageInfo"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "page"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "One page of results.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation failed (`VALIDATION_FAILED`, `details.issues`), or another request error named by `error.code`.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid credential (`AUTH_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authenticated, but not permitted here (`AUTHZ_*`, `TENANCY_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not found, or not visible to the caller — indistinguishable by design (`RESOURCE_NOT_FOUND`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Rate limit exceeded (`RATE_LIMIT_EXCEEDED`); see `Retry-After`.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "userSession": []
+          }
+        ],
+        "summary": "List a journey's executions, newest first",
+        "tags": [
+          "journeys"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspaceId}/journeys/{journeyId}/executions/{executionId}": {
+      "get": {
+        "operationId": "JourneyExecutions_get",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
+            "$ref": "#/components/parameters/X-Causation-Id"
+          },
+          {
+            "$ref": "#/components/parameters/X-Correlation-Id"
+          },
+          {
+            "in": "path",
+            "name": "executionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "journeyId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/JourneyExecutionDetail"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation failed (`VALIDATION_FAILED`, `details.issues`), or another request error named by `error.code`.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid credential (`AUTH_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authenticated, but not permitted here (`AUTHZ_*`, `TENANCY_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not found, or not visible to the caller — indistinguishable by design (`RESOURCE_NOT_FOUND`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Rate limit exceeded (`RATE_LIMIT_EXCEEDED`); see `Retry-After`.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "userSession": []
+          }
+        ],
+        "summary": "Get one execution with its step history",
+        "tags": [
+          "journeys"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspaceId}/journeys/{journeyId}/executions/{executionId}/cancel": {
+      "post": {
+        "description": "Running or waiting → cancelled (operator_cancelled), fenced by state_version. A repeat is a no-op; an execution that ended otherwise is `409 JOURNEY_EXECUTION_ENDED`.",
+        "operationId": "JourneyExecutions_cancel",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
+            "$ref": "#/components/parameters/X-Causation-Id"
+          },
+          {
+            "$ref": "#/components/parameters/X-Correlation-Id"
+          },
+          {
+            "in": "path",
+            "name": "executionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "journeyId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/JourneyExecutionDetail"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation failed (`VALIDATION_FAILED`, `details.issues`), or another request error named by `error.code`.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid credential (`AUTH_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authenticated, but not permitted here (`AUTHZ_*`, `TENANCY_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not found, or not visible to the caller — indistinguishable by design (`RESOURCE_NOT_FOUND`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflicts with the current state (named by `error.code`; lifecycle conflicts carry `details.status`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Rate limit exceeded (`RATE_LIMIT_EXCEEDED`); see `Retry-After`.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "userSession": []
+          }
+        ],
+        "summary": "Cancel a live execution (operator)",
+        "tags": [
+          "journeys"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspaceId}/journeys/{journeyId}/pause": {
+      "post": {
+        "description": "active → paused. The trigger stops enrolling; executions keep their state. Conditional on the current status; a repeat in the target state is a no-op (`200`, nothing written). Nothing runs: the journey runner and trigger processing are not built (8C-3/8C-4), and sends stay disabled.",
+        "operationId": "Journeys_pause",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
+            "$ref": "#/components/parameters/X-Causation-Id"
+          },
+          {
+            "$ref": "#/components/parameters/X-Correlation-Id"
+          },
+          {
+            "in": "path",
+            "name": "journeyId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Journey"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation failed (`VALIDATION_FAILED`, `details.issues`), or another request error named by `error.code`.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid credential (`AUTH_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authenticated, but not permitted here (`AUTHZ_*`, `TENANCY_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not found, or not visible to the caller — indistinguishable by design (`RESOURCE_NOT_FOUND`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflicts with the current state (named by `error.code`; lifecycle conflicts carry `details.status`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Rate limit exceeded (`RATE_LIMIT_EXCEEDED`); see `Retry-After`.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "userSession": []
+          }
+        ],
+        "summary": "Pause an active journey",
+        "tags": [
+          "journeys"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspaceId}/journeys/{journeyId}/resume": {
+      "post": {
+        "description": "paused → active. Re-arms the trigger. Also requires `messages.send` at the workspace, refuses a version with a `send_message` node (`400 JOURNEY_SEND_DISABLED`) and re-validates the graph (`422 JOURNEY_GRAPH_INVALID`). Conditional on the current status; a repeat in the target state is a no-op (`200`, nothing written). Nothing runs: the journey runner and trigger processing are not built (8C-3/8C-4), and sends stay disabled.",
+        "operationId": "Journeys_resume",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
+            "$ref": "#/components/parameters/X-Causation-Id"
+          },
+          {
+            "$ref": "#/components/parameters/X-Correlation-Id"
+          },
+          {
+            "in": "path",
+            "name": "journeyId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Journey"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation failed (`VALIDATION_FAILED`, `details.issues`), or another request error named by `error.code`.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid credential (`AUTH_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authenticated, but not permitted here (`AUTHZ_*`, `TENANCY_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not found, or not visible to the caller — indistinguishable by design (`RESOURCE_NOT_FOUND`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflicts with the current state (named by `error.code`; lifecycle conflicts carry `details.status`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Well-formed but not admissible here (named by `error.code`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Rate limit exceeded (`RATE_LIMIT_EXCEEDED`); see `Retry-After`.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "userSession": []
+          }
+        ],
+        "summary": "Resume a paused journey",
+        "tags": [
+          "journeys"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspaceId}/journeys/{journeyId}/stats": {
+      "get": {
+        "description": "Published and retired versions only; `versionId` narrows to one. Per node: live executions positioned there, and history rows by outcome.",
+        "operationId": "JourneyExecutions_stats",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-Acc-Organization"
+          },
+          {
+            "$ref": "#/components/parameters/X-Causation-Id"
+          },
+          {
+            "$ref": "#/components/parameters/X-Correlation-Id"
+          },
+          {
+            "in": "path",
+            "name": "journeyId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "workspaceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "versionId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/JourneyStats"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation failed (`VALIDATION_FAILED`, `details.issues`), or another request error named by `error.code`.",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No valid credential (`AUTH_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authenticated, but not permitted here (`AUTHZ_*`, `TENANCY_*`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not found, or not visible to the caller — indistinguishable by design (`RESOURCE_NOT_FOUND`).",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Rate limit exceeded (`RATE_LIMIT_EXCEEDED`); see `Retry-After`.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              },
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "X-RateLimit-Limit": {
+                "$ref": "#/components/headers/X-RateLimit-Limit.general"
+              },
+              "X-RateLimit-Remaining": {
+                "$ref": "#/components/headers/X-RateLimit-Remaining.general"
+              },
+              "X-RateLimit-Reset": {
+                "$ref": "#/components/headers/X-RateLimit-Reset.general"
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "userSession": []
+          }
+        ],
+        "summary": "Per-version execution totals and per-node statistics",
         "tags": [
           "journeys"
         ]

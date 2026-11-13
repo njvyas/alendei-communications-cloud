@@ -317,6 +317,18 @@ export const ERROR_CODES = {
   JOURNEY_DRAFT_EXISTS: 'JOURNEY_DRAFT_EXISTS',
   /** The journey's lifecycle state does not allow the operation (e.g. deleting an active journey). */
   JOURNEY_LIFECYCLE_CONFLICT: 'JOURNEY_LIFECYCLE_CONFLICT',
+  /** 8C-2: activation needs a published version. */
+  JOURNEY_NO_PUBLISHED_VERSION: 'JOURNEY_NO_PUBLISHED_VERSION',
+  /**
+   * 8C-2: the version contains a `send_message` node. Journey sends stay disabled until the
+   * shared automation sending principal exists (owner decisions 1–2, 10-Nov-2026; 8C-5/8C-6).
+   */
+  JOURNEY_SEND_DISABLED: 'JOURNEY_SEND_DISABLED',
+  /** 8C-2: API enrolment is only for a journey whose active version has an `api` entry trigger. */
+  JOURNEY_TRIGGER_NOT_API: 'JOURNEY_TRIGGER_NOT_API',
+  JOURNEY_EXECUTION_NOT_FOUND: 'JOURNEY_EXECUTION_NOT_FOUND',
+  /** 8C-2: the execution has already ended (completed, exited or failed) and cannot be cancelled. */
+  JOURNEY_EXECUTION_ENDED: 'JOURNEY_EXECUTION_ENDED',
 
   // --- Generic -------------------------------------------------------------
 

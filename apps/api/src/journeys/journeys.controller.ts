@@ -13,7 +13,7 @@ import {
   Query,
   Res,
 } from '@nestjs/common';
-import { PERMISSIONS } from '@acc/contracts';
+import { PERMISSIONS, type JourneyLifecycleAction } from '@acc/contracts';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 
@@ -41,18 +41,28 @@ import {
   ReplaceJourneyGraphDto,
   UpdateJourneyDto,
 } from './journeys.dto';
+import { JourneyLifecycleService } from './journey-lifecycle.service';
 import { JourneysService } from './journeys.service';
 
 const AT_WORKSPACE = 'the target is the workspace resolved from path';
 
+const LIFECYCLE_NOTE =
+  'Conditional on the current status; a repeat in the target state is a no-op (`200`, nothing written). Nothing runs: the journey runner and trigger processing are not built (8C-3/8C-4), and sends stay disabled.';
+const RUNNABLE_NOTE =
+  'Also requires `messages.send` at the workspace, refuses a version with a `send_message` node (`400 JOURNEY_SEND_DISABLED`) and re-validates the graph (`422 JOURNEY_GRAPH_INVALID`).';
+
 /**
- * Phase 8C PR 8C-1: journey definitions (`docs/PHASE-8C-JOURNEYS-HANDOVER.md` §7). Workspace-
- * scoped, as campaigns are. No route here activates, enrols, runs or sends anything.
+ * Phase 8C PR 8C-1: journey definitions (`docs/PHASE-8C-JOURNEYS-HANDOVER.md` §7), and the
+ * 8C-2 lifecycle routes (activate, pause, resume, archive). Workspace-scoped, as campaigns
+ * are. No route here runs or sends anything.
  */
 @ApiTags('journeys')
 @Controller('workspaces/:workspaceId/journeys')
 export class JourneysController {
-  constructor(private readonly journeys: JourneysService) {}
+  constructor(
+    private readonly journeys: JourneysService,
+    private readonly lifecycle: JourneyLifecycleService,
+  ) {}
 
   @Get()
   @RequiresPermission(PERMISSIONS.JOURNEYS_READ, { target: 'deferred', because: AT_WORKSPACE })
@@ -276,5 +286,81 @@ export class JourneysController {
     );
     response.status(outcome.status);
     return outcome.body;
+  }
+
+  // --- 8C-2 lifecycle ------------------------------------------------------------------------
+
+  private lifecycleRoute(workspaceId: string, journeyId: string, action: JourneyLifecycleAction) {
+    return this.lifecycle
+      .transition(requestPrincipal(), workspaceId, journeyId, action)
+      .then((data) => ({ data }));
+  }
+
+  @Post(':journeyId/activate')
+  @RequiresPermission(PERMISSIONS.JOURNEYS_MANAGE, { target: 'deferred', because: AT_WORKSPACE })
+  @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({
+    summary: 'Activate a journey on its highest published version',
+    description: `draft → active. Derives and stores the version's trigger. ${RUNNABLE_NOTE} ${LIFECYCLE_NOTE}`,
+  })
+  @ApiData(JourneySchema)
+  @ApiErrors(400, 401, 403, 404, 409, 422, 429)
+  async activate(
+    @Param('workspaceId', new ParseUUIDPipe()) workspaceId: string,
+    @Param('journeyId', new ParseUUIDPipe()) journeyId: string,
+  ) {
+    return this.lifecycleRoute(workspaceId, journeyId, 'activate');
+  }
+
+  @Post(':journeyId/pause')
+  @RequiresPermission(PERMISSIONS.JOURNEYS_MANAGE, { target: 'deferred', because: AT_WORKSPACE })
+  @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({
+    summary: 'Pause an active journey',
+    description: `active → paused. The trigger stops enrolling; executions keep their state. ${LIFECYCLE_NOTE}`,
+  })
+  @ApiData(JourneySchema)
+  @ApiErrors(400, 401, 403, 404, 409, 429)
+  async pause(
+    @Param('workspaceId', new ParseUUIDPipe()) workspaceId: string,
+    @Param('journeyId', new ParseUUIDPipe()) journeyId: string,
+  ) {
+    return this.lifecycleRoute(workspaceId, journeyId, 'pause');
+  }
+
+  @Post(':journeyId/resume')
+  @RequiresPermission(PERMISSIONS.JOURNEYS_MANAGE, { target: 'deferred', because: AT_WORKSPACE })
+  @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({
+    summary: 'Resume a paused journey',
+    description: `paused → active. Re-arms the trigger. ${RUNNABLE_NOTE} ${LIFECYCLE_NOTE}`,
+  })
+  @ApiData(JourneySchema)
+  @ApiErrors(400, 401, 403, 404, 409, 422, 429)
+  async resume(
+    @Param('workspaceId', new ParseUUIDPipe()) workspaceId: string,
+    @Param('journeyId', new ParseUUIDPipe()) journeyId: string,
+  ) {
+    return this.lifecycleRoute(workspaceId, journeyId, 'resume');
+  }
+
+  @Post(':journeyId/archive')
+  @RequiresPermission(PERMISSIONS.JOURNEYS_MANAGE, { target: 'deferred', because: AT_WORKSPACE })
+  @HttpCode(HttpStatus.OK)
+  @AcceptedCredentials('userSession', 'apiKey')
+  @ApiOperation({
+    summary: 'Archive a journey (terminal)',
+    description: `draft, active or paused → archived. Retires the trigger and ends every live execution as cancelled (journey_archived). ${LIFECYCLE_NOTE}`,
+  })
+  @ApiData(JourneySchema)
+  @ApiErrors(400, 401, 403, 404, 409, 429)
+  async archive(
+    @Param('workspaceId', new ParseUUIDPipe()) workspaceId: string,
+    @Param('journeyId', new ParseUUIDPipe()) journeyId: string,
+  ) {
+    return this.lifecycleRoute(workspaceId, journeyId, 'archive');
   }
 }
