@@ -3802,6 +3802,81 @@ A failing event never blocks the inbox. A replay, or a second worker, enrols nob
   - removing the scheduled re-validation fails the three schedule tests;
   - removing the event lock-and-recheck fails the two event tests.
 
+### 1zj.6 PR 8C-5a as built: journey send attribution in the shared core (migration `0066`)
+**Authorisation and baseline.** Owner authorisation of 14-Nov-2026, for 8C-5a only, under handover Rev 2:
+- **OD-8C5-4:** Option B. The runner stays on `acc_journey`, and the global `app_content_context_valid()` is not modified.
+- **OD-8C5-5:** Claude owns the shared send-core files (`submission.types.ts`, `message-submission.core.ts`, `submission-authorization.ts`, the 7-3 structural test), with one open PR touching them at a time. Claude is also the assigned 8B-3 backend implementer.
+
+Built on `develop` `2010a47` (PR #109). There was no baseline drift: the journal's last entry is `0065`, and no open PR (#85, #65, #51, #50) or remote branch carries `0066`+.
+
+**Migration `0066` (schema only).**
+- **`messages`:** `journey_id` and `journey_execution_id` (nullable).
+  - CHECK `messages_journey_shape`: both or neither.
+  - Composite FK `messages_journey_execution_fk (journey_execution_id, journey_id, workspace_id, contact_id, org_id) → journey_executions`, `ON DELETE RESTRICT`.
+  - No new index: executions are never deleted.
+- **Write-once:** `trg_messages_tenant_key_immutable` (0033) is recreated under the same name and with the same generic invoker function, now covering both columns. Every principal, the owner included, is refused any change after insert, `NULL → value` included (`42501`, `messages_journey_id_immutable`).
+- **`journey_executions`:**
+  - `UNIQUE (id, journey_id, workspace_id, contact_id, org_id)`, the FK target;
+  - `wait_deadline_at`, with CHECK `journey_executions_wait_deadline_shape` (`NULL` unless `waiting`). This is the column and its invariant only; its lifecycle is 8C-5b, and no column grant includes it.
+- **`journey_execution_steps`:**
+  - FK `(message_id, org_id) → messages(id, org_id)`;
+  - CHECK `journey_execution_steps_message_shape` (a message only on a completed `send_message` step);
+  - `trg_journey_execution_steps_message_guard`, a `BEFORE INSERT` trigger on the trigger-only definer `app_journey_step_message_guard()` (no EXECUTE for any role or PUBLIC). It refuses a message attributed to another execution, or to none (`23514`, `journey_execution_steps_message_execution`). A message that does not exist in the step's organisation is left to the FK (`23503`).
+  - `UNIQUE (message_id)` already existed (0063).
+
+**Shared core contract.**
+- `SubmissionContext.origin?: SubmissionOrigin`. The union has the **journey** variant only (`{kind: 'journey', journeyId, executionId}`); the campaign variant is reserved for 8B-3 as a comment.
+- The core maps the origin to the columns in `originColumns()`, through an exhaustive `switch (kind)` with a `never` assignment. Adding a variant without handling it was verified to be a compile error (`TS2322`).
+- The `message.queued` payload is unchanged.
+- `SendMessageDto`, `MessagesService.sendMessage` and `POST /messages` are unchanged and pass no origin.
+- No production code constructs a `SubmissionOrigin`. The only caller is the **test-only** `apps/api/test/journey-origin-probe.controller.ts`, registered only through `startHarness({ controllers })`. It is not a journey execution path: it drives the core exactly as `POST /messages` does (the caller's authenticated `acc_app` transaction and a `messages.send` proof minted in it) and adds the origin.
+
+**Deviations from Rev 2.**
+1. **Constraints added validated, not `NOT VALID` then `VALIDATE`.** The migrator applies every pending migration in one transaction (`schema-migrate.ts`), so the split gives no lock benefit. 0052 (`messages.campaign_id`) set the precedent. The result is what Rev 2 requires: no `NOT VALID` constraint remains (pinned).
+2. **Only the three named shared files changed.** `submission-authorization.ts` did not need a change.
+3. **Not applicable yet:** the "journeys module imports only the port" structural check becomes "no journeys code reaches the submission core". The port is 8C-5b.
+
+**Tests:**
+- **DB integration +7** (`phase8c5-attribution.int-spec.ts`): exact column, constraint and trigger definitions; every constraint validated, with no `NOT VALID` anywhere; no index on `messages` for the attribution columns; the guard as a definer that nobody may execute; no new column grants.
+- **API integration +25** (`journeys-send-attribution.int-spec.ts`; the runner is off and the fixture executions stay unclaimed):
+  - **direct-API invariance:** a `POST /messages` row has `journey_id`, `journey_execution_id` and `campaign_id` `NULL`, and its `message.queued` payload is exactly `{channelCode, recipient}`;
+  - **journey origin:** both columns are set; every other column equals the direct submission's (ids, timestamps and the correlation id excepted); the payload and queue row are identical; the execution is untouched;
+  - the composite FK refuses another contact's execution, another journey, a recipient that resolves to another contact, and another organisation's execution, creating nothing; owner inserts also show it refusing another workspace, contact, journey or organisation;
+  - the shape CHECK, both ways;
+  - **write-once:** clearing, re-pointing, and `NULL → value` are each refused; other columns stay writable;
+  - **steps:** own message accepted; refused are an unattributed message, another execution's message, a missing or other-organisation message (FK), a wrong node type or outcome (CHECK), and a duplicate message (unique);
+  - **`wait_deadline_at`:** refused while not waiting, and refused when ending with the deadline still set.
+- **Structural +5** (the 7-3 spec):
+  - only `submission.types.ts` and the core name `SubmissionOrigin`;
+  - the direct path, controller and DTO have no origin;
+  - only the core writes the attribution columns;
+  - the switch is exhaustive;
+  - no journeys code reaches the core.
+- **Updated pins:**
+  - the migration count (67): `schema-migrate.spec.ts` (`apply:22`, `at45 + 22`), `u141b` and `phase5_0-index` (67), and `phase7_1-ledger` (`67 migrations verified`);
+  - the trigger-only SECURITY DEFINER list (+`app_journey_step_message_guard`).
+  - Unchanged: the principals, table-class, backstop content-policy count, scope-creep, credential-absence and `acc_journey` pins.
+- **Mutation checks, each caught:** each run on a fresh clone:
+  - **dropping the composite FK** fails the DB catalog spec and 6 API tests: four origin refusals and two owner-insert refusals;
+  - **dropping the write-once extension** fails the catalog spec and the 3 write-once tests;
+  - **dropping the step↔message trigger** fails the catalog spec and the 2 refusals of an unattributed or another execution's message;
+  - **`POST /messages` passing an origin** fails the structural test and 45 API tests (the direct path is refused by the FK);
+  - **removing origin population** fails the structural test and 10 API tests.
+- **Verification (disposable clone of `acc_r015_base`, migrated to `0066`, on code tree `cb34d34`):** 
+  - DB integration 558/558 (+7), API integration 696/696 (+25), security 1,860/1,860;
+  - API unit and structural tests pass; db unit 275/275;
+  - lint, typecheck and `prettier --check` are clean;
+  - `db:migrate` was run twice (`Schema up to date (67 migrations verified).`);
+  - history proof `67|b9d9559c545fc0d0ebc01c09776b1994`; the first 66 entries are unchanged (`66|6e0292d6a5b71190fd3f14c952c3694a`, the 8C-4 proof);
+  - `acc_journey` is NOLOGIN, and capture is off.
+
+**Not in 8C-5a:**
+- 8C-5b (send port, send node, outcome waits, the deadline lifecycle, the `acc_journey` read of attributed messages);
+- 8B-3 (capability tables, functions and policies; the campaign variant);
+- 8C-6 (enablement).
+
+Nothing is enabled: no flag, credential, provider, grant, policy or operational setting changed, and `acc_journey` is unchanged. No QA or production deployment.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.
