@@ -773,35 +773,30 @@ export function useCanManageCampaigns(): boolean {
 
 /**
  * Evaluates whether the actor can view journeys in the active organization.
+ * Strictly requires journeys.read or journeys.manage.
+ * Messaging permissions (messages.read / messages.send) do NOT substitute for journey permissions.
  */
 export function canReadJourneys(): boolean {
-  return (
-    hasPermission('journeys.read') ||
-    hasPermission('journeys.manage') ||
-    hasPermission('messages.read') ||
-    hasPermission('messages.send')
-  );
+  return hasPermission('journeys.read') || hasPermission('journeys.manage');
 }
 
 export function useCanReadJourneys(): boolean {
   const canReadJourneysPerm = useHasPermission('journeys.read');
   const canManageJourneysPerm = useHasPermission('journeys.manage');
-  const canReadMessages = useHasPermission('messages.read');
-  const canSendMessages = useHasPermission('messages.send');
-  return canReadJourneysPerm || canManageJourneysPerm || canReadMessages || canSendMessages;
+  return canReadJourneysPerm || canManageJourneysPerm;
 }
 
 /**
  * Evaluates whether the actor can create/manage journeys in the active organization.
+ * Strictly requires journeys.manage.
+ * Messaging permissions (messages.send) do NOT substitute for journey management.
  */
 export function canManageJourneys(): boolean {
-  return hasPermission('journeys.manage') || hasPermission('messages.send');
+  return hasPermission('journeys.manage');
 }
 
 export function useCanManageJourneys(): boolean {
-  const canManageJourneysPerm = useHasPermission('journeys.manage');
-  const canSendMessages = useHasPermission('messages.send');
-  return canManageJourneysPerm || canSendMessages;
+  return useHasPermission('journeys.manage');
 }
 
 /**

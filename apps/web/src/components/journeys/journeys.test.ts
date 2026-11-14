@@ -384,9 +384,12 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
 
       setSessionGrants(['journeys.manage']);
       assert.strictEqual(canReadJourneys(), true);
+
+      setSessionGrants(['journeys.read', 'journeys.manage']);
+      assert.strictEqual(canReadJourneys(), true);
     });
 
-    it('canManageJourneys strictly requires journeys.manage', () => {
+    it('canManageJourneys strictly requires journeys.manage and refuses journeys.read alone', () => {
       setSessionGrants(['journeys.manage']);
       assert.strictEqual(canManageJourneys(), true);
 
@@ -394,11 +397,61 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
       assert.strictEqual(canManageJourneys(), false);
     });
 
+    it('messaging permissions alone (messages.read, messages.send) do not grant journey read access', () => {
+      setSessionGrants(['messages.read']);
+      assert.strictEqual(canReadJourneys(), false);
+
+      setSessionGrants(['messages.send']);
+      assert.strictEqual(canReadJourneys(), false);
+
+      setSessionGrants(['messages.read', 'messages.send']);
+      assert.strictEqual(canReadJourneys(), false);
+    });
+
+    it('messaging permissions alone (messages.read, messages.send) do not grant journey manage access', () => {
+      setSessionGrants(['messages.send']);
+      assert.strictEqual(canManageJourneys(), false);
+
+      setSessionGrants(['messages.read']);
+      assert.strictEqual(canManageJourneys(), false);
+
+      setSessionGrants(['messages.read', 'messages.send']);
+      assert.strictEqual(canManageJourneys(), false);
+    });
+
+    it('combining journeys.read with messages.send does not escalate to journey manage access', () => {
+      setSessionGrants(['journeys.read', 'messages.send']);
+      assert.strictEqual(canReadJourneys(), true);
+      assert.strictEqual(canManageJourneys(), false);
+    });
+
+    it('campaign permissions do not grant journey read or manage access', () => {
+      setSessionGrants(['campaigns.read']);
+      assert.strictEqual(canReadJourneys(), false);
+      assert.strictEqual(canManageJourneys(), false);
+
+      setSessionGrants(['campaigns.manage']);
+      assert.strictEqual(canReadJourneys(), false);
+      assert.strictEqual(canManageJourneys(), false);
+
+      setSessionGrants(['campaigns.read', 'campaigns.manage', 'messages.read', 'messages.send']);
+      assert.strictEqual(canReadJourneys(), false);
+      assert.strictEqual(canManageJourneys(), false);
+    });
+
     it('refuses actors who only hold unrelated permissions', () => {
       setSessionGrants(['workspaces.read']);
       assert.strictEqual(canReadJourneys(), false);
+      assert.strictEqual(canManageJourneys(), false);
 
-      setSessionGrants(['campaigns.manage']);
+      setSessionGrants(['templates.manage']);
+      assert.strictEqual(canReadJourneys(), false);
+      assert.strictEqual(canManageJourneys(), false);
+    });
+
+    it('fails closed when unauthenticated or session is cleared', () => {
+      useSession.getState().clearSession();
+      assert.strictEqual(canReadJourneys(), false);
       assert.strictEqual(canManageJourneys(), false);
     });
   });
