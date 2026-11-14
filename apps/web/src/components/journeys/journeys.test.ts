@@ -325,10 +325,16 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
 
   describe('5. API Client Endpoint Contracts & Isolation', () => {
     const originalFetch = globalThis.fetch;
+    interface InterceptedPayload {
+      name?: string;
+      expectedGraphSha256?: string;
+      [key: string]: unknown;
+    }
+
     let interceptedUrl = '';
     let interceptedMethod = '';
     let interceptedHeaders: Record<string, string> = {};
-    let interceptedBody: Record<string, unknown> | null = null;
+    let interceptedBody: InterceptedPayload | null = null;
 
     beforeEach(() => {
       interceptedUrl = '';
@@ -342,9 +348,9 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
         interceptedHeaders = (init?.headers as Record<string, string>) ?? {};
         if (init?.body && typeof init.body === 'string') {
           try {
-            interceptedBody = JSON.parse(init.body);
+            interceptedBody = JSON.parse(init.body) as InterceptedPayload;
           } catch {
-            interceptedBody = init.body;
+            interceptedBody = { raw: init.body };
           }
         }
 
