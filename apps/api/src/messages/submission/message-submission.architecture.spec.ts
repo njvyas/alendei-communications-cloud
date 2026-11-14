@@ -172,6 +172,50 @@ describe('Phase 7-3: the shared message submission core', () => {
     });
   });
 
+  describe('2b. origin attribution (Phase 8C-5a)', () => {
+    const core = code(join(ROOT, CORE));
+
+    it('only the shared contract and the core name SubmissionOrigin (no constructor in 8C-5a)', () => {
+      expect(filesMatching(/\bSubmissionOrigin\b/)).toEqual([
+        CORE,
+        'apps/api/src/messages/submission/submission.types.ts',
+      ]);
+    });
+
+    it('the direct send path passes no origin, and no request field can produce one', () => {
+      for (const file of [
+        'messages/messages.service.ts',
+        'messages/messages.controller.ts',
+        'messages/dto/send-message.dto.ts',
+      ]) {
+        expect([
+          file,
+          /\borigin\b|journeyId|journeyExecutionId|executionId/.test(code(join(SRC, file))),
+        ]).toEqual([file, false]);
+      }
+    });
+
+    it('only the core writes the attribution columns', () => {
+      expect(filesMatching(/journeyExecutionId\s*:|journey_execution_id\s*=/)).toEqual([CORE]);
+    });
+
+    it('maps the origin through an exhaustive switch on its kind', () => {
+      expect(core).toMatch(/switch \(kind\) \{\s*case 'journey':/);
+      expect(core).toMatch(/const unhandled: never = kind;/);
+      expect(core).toMatch(/const attribution = originColumns\(ctx\.origin\);/);
+      expect(core).toMatch(
+        /journeyId: attribution\.journeyId,\s*journeyExecutionId: attribution\.journeyExecutionId,/,
+      );
+    });
+
+    it('no journeys code reaches the submission core in 8C-5a (the send port is 8C-5b)', () => {
+      const journeys = sources(join(SRC, 'journeys')).filter((path) =>
+        /MessageSubmissionCore|messages\/submission|authorizeSubmission/.test(code(path)),
+      );
+      expect(journeys).toEqual([]);
+    });
+  });
+
   describe('3. order', () => {
     it('runs the checks in the pre-7-3 order, then the inserts, then the reservation', () => {
       const raw = readFileSync(join(ROOT, CORE), 'utf8');

@@ -23,7 +23,30 @@ export interface SubmissionContext {
   readonly correlationId: string;
   /** Proof that the send permission was asserted in this transaction (`authorizeSubmission`). */
   readonly authorization: SubmissionAuthorization;
+  /**
+   * The automation that originates the message (Phase 8C-5a). Absent for a direct
+   * submission: `POST /messages` never passes one, and no request field can produce one.
+   */
+  readonly origin?: SubmissionOrigin;
 }
+
+/**
+ * Message attribution (Phase 8C-5a, handover Rev 2 §4). A discriminated union with one
+ * owner, the backend send-core owner; the core maps each variant to its columns through an
+ * exhaustive switch, so a variant added without handling is a compile error.
+ *
+ * - `journey`: sets `messages.journey_id` and `journey_execution_id`; the composite foreign
+ *   key `messages_journey_execution_fk` (0066) proves the execution is the message's own
+ *   journey, workspace, contact and organization.
+ *
+ * Reserved, not implemented: the campaign variant belongs to 8B-3, added in its own PR.
+ * Built only from server-side execution state, never from request input.
+ */
+export type SubmissionOrigin = {
+  readonly kind: 'journey';
+  readonly journeyId: string;
+  readonly executionId: string;
+};
 
 /** The message the core created, in plain values; the caller shapes any response. */
 export interface SubmissionResult {

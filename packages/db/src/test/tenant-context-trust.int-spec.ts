@@ -242,6 +242,9 @@ describe('tenant-context trust model — what acc_app can do with session variab
     // automation_events, only when the switch is on and an active journey listens.
     'app_journey_capture_contact',
     'app_journey_capture_message',
+    // Phase 8C PR 8C-5a (0066): the step <-> message guard. Definer so it reads the step's
+    // message whatever the inserting principal may read; it reads one row and writes nothing.
+    'app_journey_step_message_guard',
     'fn_organization_lifecycle_lock',
     'fn_organizations_guard_reseller_id',
     'fn_protect_system_role_permissions',
