@@ -10,6 +10,8 @@ import {
   type UserIdentity,
 } from './api-client';
 import {
+  canManageJourneys,
+  canReadJourneys,
   getActiveOrganizationGrants,
   getHeldOrganizationPermissions,
   hasPermission,
@@ -1001,6 +1003,110 @@ describe('Session Store & Organization Context', () => {
       assert.equal(useSession.getState().status, 'selecting_organization');
       assert.equal(useSession.getState().selectedOrganizationId, null);
       assert.equal(getSelectedOrganization(), null);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 17. Journey RBAC Permission Gating (PR #106 Strict Scope)
+  // ---------------------------------------------------------------------------
+  describe('17. Journey RBAC Permission Gating', () => {
+    const ORG = '01955b0a-7b3b-7411-9a4f-journeyorg1';
+
+    function setSessionWithPermissions(permissions: string[]) {
+      useSession.getState().setSession({
+        accessToken: 'valid-test-token',
+        user: createMockUser([ORG]),
+        authorization: {
+          actorType: 'user',
+          userId: 'user-uuid-1',
+          apiKeyId: null,
+          grants: [
+            {
+              roleId: 'role-journey-test',
+              roleKey: 'custom_operator',
+              scopeType: 'organization',
+              scopeId: ORG,
+              orgId: ORG,
+              permissions,
+            },
+          ],
+          organizationIds: [ORG],
+          isPlatformAdmin: false,
+        },
+        selectedOrgId: ORG,
+      });
+    }
+
+    it('canReadJourneys admits actors holding journeys.read or journeys.manage', () => {
+      setSessionWithPermissions(['journeys.read']);
+      assert.equal(canReadJourneys(), true);
+
+      setSessionWithPermissions(['journeys.manage']);
+      assert.equal(canReadJourneys(), true);
+
+      setSessionWithPermissions(['journeys.read', 'journeys.manage']);
+      assert.equal(canReadJourneys(), true);
+    });
+
+    it('canManageJourneys strictly requires journeys.manage and refuses journeys.read alone', () => {
+      setSessionWithPermissions(['journeys.manage']);
+      assert.equal(canManageJourneys(), true);
+
+      setSessionWithPermissions(['journeys.read']);
+      assert.equal(canManageJourneys(), false);
+    });
+
+    it('messaging permissions alone (messages.read, messages.send) do not grant journey read access', () => {
+      setSessionWithPermissions(['messages.read']);
+      assert.equal(canReadJourneys(), false);
+
+      setSessionWithPermissions(['messages.send']);
+      assert.equal(canReadJourneys(), false);
+
+      setSessionWithPermissions(['messages.read', 'messages.send']);
+      assert.equal(canReadJourneys(), false);
+    });
+
+    it('messaging permissions alone (messages.read, messages.send) do not grant journey manage access', () => {
+      setSessionWithPermissions(['messages.send']);
+      assert.equal(canManageJourneys(), false);
+
+      setSessionWithPermissions(['messages.read']);
+      assert.equal(canManageJourneys(), false);
+
+      setSessionWithPermissions(['messages.read', 'messages.send']);
+      assert.equal(canManageJourneys(), false);
+    });
+
+    it('combining journeys.read with messages.send does not escalate to journey manage access', () => {
+      setSessionWithPermissions(['journeys.read', 'messages.send']);
+      assert.equal(canReadJourneys(), true);
+      assert.equal(canManageJourneys(), false);
+    });
+
+    it('campaign permissions do not substitute for journey permissions', () => {
+      setSessionWithPermissions(['campaigns.read']);
+      assert.equal(canReadJourneys(), false);
+      assert.equal(canManageJourneys(), false);
+
+      setSessionWithPermissions(['campaigns.manage']);
+      assert.equal(canReadJourneys(), false);
+      assert.equal(canManageJourneys(), false);
+
+      setSessionWithPermissions([
+        'campaigns.read',
+        'campaigns.manage',
+        'messages.read',
+        'messages.send',
+      ]);
+      assert.equal(canReadJourneys(), false);
+      assert.equal(canManageJourneys(), false);
+    });
+
+    it('fails closed when session is unauthenticated or cleared', () => {
+      useSession.getState().clearSession();
+      assert.equal(canReadJourneys(), false);
+      assert.equal(canManageJourneys(), false);
     });
   });
 });

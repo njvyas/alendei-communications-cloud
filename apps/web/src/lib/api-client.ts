@@ -98,6 +98,17 @@ import {
   INITIAL_MOCK_CAMPAIGNS,
   filterCampaigns,
 } from './campaigns';
+import {
+  type JourneyRecord,
+  type JourneyVersionRecord,
+  type JourneyVersionSummary,
+  type JourneyGraph,
+  type JourneyGraphValidationReport,
+  type JourneyExecutionRecord,
+  type JourneyExecutionDetailRecord,
+  type JourneyStatsRecord,
+  type JourneyEnrolmentResult,
+} from './journeys';
 
 export type {
   AssignmentStatus,
@@ -3752,5 +3763,342 @@ export const campaignsApi = {
     const qs = search.toString();
     const path = `/workspaces/${encodeURIComponent(workspaceId)}/campaigns/${encodeURIComponent(id)}/recipients${qs ? `?${qs}` : ''}`;
     return apiFetch<ApiPagedResponse<CampaignRecipientRecord>>(path, { method: 'GET', signal });
+  },
+};
+
+export interface ListJourneysParams {
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: string;
+  readonly status?: string;
+  readonly query?: string;
+}
+
+export interface CreateJourneyParams {
+  readonly name: string;
+  readonly description?: string;
+  readonly graph?: JourneyGraph;
+}
+
+export interface UpdateJourneyParams {
+  readonly name?: string;
+  readonly description?: string;
+}
+
+export interface ReplaceJourneyGraphParams {
+  readonly graph: JourneyGraph;
+  readonly expectedGraphSha256: string;
+}
+
+export interface PublishJourneyVersionParams {
+  readonly expectedGraphSha256: string;
+}
+
+export const journeysApi = {
+  async list(
+    workspaceId: string,
+    params: ListJourneysParams = {},
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<JourneyRecord>> {
+    const search = new URLSearchParams();
+    if (params.cursor) search.set('cursor', params.cursor);
+    if (params.limit) search.set('limit', String(params.limit));
+    if (params.sort) search.set('sort', params.sort);
+    if (params.status) search.set('status', params.status);
+    if (params.query) search.set('query', params.query);
+    const qs = search.toString();
+    return apiFetch<ApiPagedResponse<JourneyRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys${qs ? `?${qs}` : ''}`,
+      { method: 'GET', signal },
+    );
+  },
+
+  async create(
+    workspaceId: string,
+    params: CreateJourneyParams,
+    idempotencyKey: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyRecord>> {
+    const headers: Record<string, string> = {
+      'Idempotency-Key': idempotencyKey,
+    };
+    return apiFetch<ApiDataResponse<JourneyRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys`,
+      {
+        method: 'POST',
+        headers,
+        body: params,
+        signal,
+      },
+    );
+  },
+
+  async get(
+    workspaceId: string,
+    journeyId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyRecord>> {
+    return apiFetch<ApiDataResponse<JourneyRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}`,
+      { method: 'GET', signal },
+    );
+  },
+
+  async update(
+    workspaceId: string,
+    journeyId: string,
+    params: UpdateJourneyParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyRecord>> {
+    return apiFetch<ApiDataResponse<JourneyRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}`,
+      {
+        method: 'PATCH',
+        body: params,
+        signal,
+      },
+    );
+  },
+
+  async delete(workspaceId: string, journeyId: string, signal?: AbortSignal): Promise<void> {
+    return apiFetch<void>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}`,
+      { method: 'DELETE', signal },
+    );
+  },
+
+  async listVersions(
+    workspaceId: string,
+    journeyId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<readonly JourneyVersionSummary[]>> {
+    return apiFetch<ApiDataResponse<readonly JourneyVersionSummary[]>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/versions`,
+      { method: 'GET', signal },
+    );
+  },
+
+  async createVersion(
+    workspaceId: string,
+    journeyId: string,
+    idempotencyKey: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyVersionRecord>> {
+    const headers: Record<string, string> = {
+      'Idempotency-Key': idempotencyKey,
+    };
+    return apiFetch<ApiDataResponse<JourneyVersionRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/versions`,
+      {
+        method: 'POST',
+        headers,
+        signal,
+      },
+    );
+  },
+
+  async getVersion(
+    workspaceId: string,
+    journeyId: string,
+    versionId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyVersionRecord>> {
+    return apiFetch<ApiDataResponse<JourneyVersionRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/versions/${encodeURIComponent(versionId)}`,
+      { method: 'GET', signal },
+    );
+  },
+
+  async replaceGraph(
+    workspaceId: string,
+    journeyId: string,
+    versionId: string,
+    params: ReplaceJourneyGraphParams,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyVersionRecord>> {
+    return apiFetch<ApiDataResponse<JourneyVersionRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/versions/${encodeURIComponent(versionId)}/graph`,
+      {
+        method: 'PUT',
+        body: params,
+        signal,
+      },
+    );
+  },
+
+  async validate(
+    workspaceId: string,
+    journeyId: string,
+    versionId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyGraphValidationReport>> {
+    return apiFetch<ApiDataResponse<JourneyGraphValidationReport>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/versions/${encodeURIComponent(versionId)}/validate`,
+      {
+        method: 'POST',
+        signal,
+      },
+    );
+  },
+
+  async publish(
+    workspaceId: string,
+    journeyId: string,
+    versionId: string,
+    params: PublishJourneyVersionParams,
+    idempotencyKey: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyVersionRecord>> {
+    const headers: Record<string, string> = {
+      'Idempotency-Key': idempotencyKey,
+    };
+    return apiFetch<ApiDataResponse<JourneyVersionRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/versions/${encodeURIComponent(versionId)}/publish`,
+      {
+        method: 'POST',
+        headers,
+        body: params,
+        signal,
+      },
+    );
+  },
+
+  // 8C-2 Coordinated lifecycle controls & execution explorer
+  async activate(
+    workspaceId: string,
+    journeyId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyRecord>> {
+    return apiFetch<ApiDataResponse<JourneyRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/activate`,
+      { method: 'POST', signal },
+    );
+  },
+
+  async pause(
+    workspaceId: string,
+    journeyId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyRecord>> {
+    return apiFetch<ApiDataResponse<JourneyRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/pause`,
+      { method: 'POST', signal },
+    );
+  },
+
+  async resume(
+    workspaceId: string,
+    journeyId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyRecord>> {
+    return apiFetch<ApiDataResponse<JourneyRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/resume`,
+      { method: 'POST', signal },
+    );
+  },
+
+  async archive(
+    workspaceId: string,
+    journeyId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyRecord>> {
+    return apiFetch<ApiDataResponse<JourneyRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/archive`,
+      { method: 'POST', signal },
+    );
+  },
+
+  async listExecutions(
+    workspaceId: string,
+    journeyId: string,
+    params: {
+      status?: string;
+      cursor?: string;
+      limit?: number;
+      sort?: string;
+      contactId?: string;
+      versionId?: string;
+    } = {},
+    signal?: AbortSignal,
+  ): Promise<ApiPagedResponse<JourneyExecutionRecord>> {
+    const search = new URLSearchParams();
+    if (params.status) search.set('status', params.status);
+    if (params.cursor) search.set('cursor', params.cursor);
+    if (params.limit) search.set('limit', String(params.limit));
+    if (params.sort) search.set('sort', params.sort);
+    if (params.contactId) search.set('contactId', params.contactId);
+    if (params.versionId) search.set('versionId', params.versionId);
+    const qs = search.toString();
+    return apiFetch<ApiPagedResponse<JourneyExecutionRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/executions${qs ? `?${qs}` : ''}`,
+      { method: 'GET', signal },
+    );
+  },
+
+  async getExecution(
+    workspaceId: string,
+    journeyId: string,
+    executionId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyExecutionDetailRecord>> {
+    return apiFetch<ApiDataResponse<JourneyExecutionDetailRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/executions/${encodeURIComponent(executionId)}`,
+      { method: 'GET', signal },
+    );
+  },
+
+  async cancelExecution(
+    workspaceId: string,
+    journeyId: string,
+    executionId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyExecutionDetailRecord>> {
+    return apiFetch<ApiDataResponse<JourneyExecutionDetailRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/executions/${encodeURIComponent(executionId)}/cancel`,
+      { method: 'POST', signal },
+    );
+  },
+
+  async enrolContacts(
+    workspaceId: string,
+    journeyId: string,
+    params: { contactIds: string[] },
+    idempotencyKey: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyEnrolmentResult>> {
+    const headers: Record<string, string> = {
+      'Idempotency-Key': idempotencyKey,
+    };
+    return apiFetch<ApiDataResponse<JourneyEnrolmentResult>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/enrollments`,
+      {
+        method: 'POST',
+        headers,
+        body: params,
+        signal,
+      },
+    );
+  },
+
+  async getStats(
+    workspaceId: string,
+    journeyId: string,
+    versionId?: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyStatsRecord>> {
+    const qs = versionId ? `?versionId=${encodeURIComponent(versionId)}` : '';
+    return apiFetch<ApiDataResponse<JourneyStatsRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/stats${qs}`,
+      { method: 'GET', signal },
+    );
+  },
+
+  async getNodeStatistics(
+    workspaceId: string,
+    journeyId: string,
+    versionId?: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyStatsRecord>> {
+    return this.getStats(workspaceId, journeyId, versionId, signal);
   },
 };

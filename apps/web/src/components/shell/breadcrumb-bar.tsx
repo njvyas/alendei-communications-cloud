@@ -19,6 +19,7 @@ const ROUTE_LABELS: Record<string, string> = {
   '/whatsapp': 'WhatsApp',
   '/templates': 'Templates',
   '/campaigns': 'Campaigns',
+  '/journeys': 'Journeys',
   '/contacts': 'Contacts',
   '/suppressions': 'Suppressions',
   '/channels': 'Channels',

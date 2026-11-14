@@ -4,6 +4,7 @@ import {
   IconApiKeys,
   IconAudit,
   IconCampaigns,
+  IconJourneys,
   IconChannels,
   IconContacts,
   IconDomains,
@@ -79,6 +80,13 @@ export const NAV_ITEMS: readonly NavItemConfig[] = [
     group: 'operations',
     groupLabel: 'Operations',
     icon: IconCampaigns,
+  },
+  {
+    href: '/journeys',
+    label: 'Journeys',
+    group: 'operations',
+    groupLabel: 'Operations',
+    icon: IconJourneys,
   },
 
   // 2. Audience
@@ -194,6 +202,7 @@ export interface NavVisibilityContext {
   readonly canSendMessages: boolean;
   readonly canReadTemplates: boolean;
   readonly canReadCampaigns: boolean;
+  readonly canReadJourneys?: boolean;
   readonly canReadContacts: boolean;
   readonly canReadSuppressions: boolean;
   readonly canReadProviders: boolean;
@@ -240,6 +249,8 @@ export function isNavItemVisible(href: string, ctx: NavVisibilityContext): boole
       return ctx.canReadTemplates;
     case '/campaigns':
       return ctx.canReadCampaigns;
+    case '/journeys':
+      return ctx.canReadJourneys ?? ctx.canReadCampaigns;
     case '/contacts':
       return ctx.canReadContacts;
     case '/suppressions':

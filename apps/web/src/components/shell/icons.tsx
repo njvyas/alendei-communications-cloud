@@ -481,3 +481,25 @@ export function IconCampaigns(props: IconProps) {
     </svg>
   );
 }
+
+export function IconJourneys(props: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      aria-hidden="true"
+      {...props}
+    >
+      <circle cx="4.5" cy="10" r="2" />
+      <circle cx="15.5" cy="5.5" r="2" />
+      <circle cx="15.5" cy="14.5" r="2" />
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M6.5 10h3c1.5 0 2.5-.75 3.5-2.5l.5-1M9.5 10c1 0 2 .75 3 2.5l1 1M13 6.5h.5M13.5 13.5h.5"
+      />
+    </svg>
+  );
+}
