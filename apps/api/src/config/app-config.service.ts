@@ -185,6 +185,8 @@ export class AppConfigService {
       batchSize: this.get('JOURNEY_RUNNER_BATCH_SIZE'),
       perOrgLimit: this.get('JOURNEY_RUNNER_PER_ORG_LIMIT'),
       leaseSeconds: this.get('JOURNEY_RUNNER_LEASE_SECONDS'),
+      eventIntakeEnabled: this.get('JOURNEY_EVENT_INTAKE_ENABLED'),
+      schedulerEnabled: this.get('JOURNEY_SCHEDULER_ENABLED'),
     } as const;
   }
 

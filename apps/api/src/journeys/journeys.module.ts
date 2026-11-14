@@ -9,6 +9,7 @@ import { JourneysController } from './journeys.controller';
 import { JourneysService } from './journeys.service';
 import { JourneyRunnerService } from './runner/journey-runner.service';
 import { JourneyRunner } from './runner/journey-runner.worker';
+import { JourneyTriggerProcessingService } from './runner/journey-trigger-processing.service';
 
 /**
  * Phase 8C: journey definitions (8C-1), lifecycle, API enrolment, execution reads, operator
@@ -25,8 +26,10 @@ import { JourneyRunner } from './runner/journey-runner.worker';
     JourneyExecutionsService,
     // 8C-3: off unless JOURNEY_RUNNER_ENABLED (refused outside tests).
     JourneyRunnerService,
+    // 8C-4: event intake and scheduled firing, run only by the (disabled) runner loop.
+    JourneyTriggerProcessingService,
     JourneyRunner,
   ],
-  exports: [JourneyRunnerService, JourneyRunner],
+  exports: [JourneyRunnerService, JourneyTriggerProcessingService, JourneyRunner],
 })
 export class JourneysModule {}

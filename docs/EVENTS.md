@@ -106,6 +106,13 @@ Re-attempting delivery of an **existing** `webhook_deliveries` row — same `eve
 
 Delivery-based fallback requires "wait N minutes, then act if no confirmation arrived." **Resolved (Phase-1-blocker decision, `DECISIONS.md`)**: the authoritative mechanism is a PostgreSQL `deadline_at` column on `message_attempts` polled with `FOR UPDATE SKIP LOCKED` (`FALLBACK_ENGINE.md` §4, `DATABASE.md` §13), not a Kafka delayed-topic or a Redis-only scheduler. A Redis sorted-set index MAY sit in front of the poller purely to avoid full-table scans at scale, but it is a derived, rebuildable cache — the poll query against Postgres is always correct on its own, just potentially slower without the accelerator. The contract this satisfies: a scheduled check only ever triggers `alendei.messages.fallback_triggered.v1` after successfully committing the conditional transaction in `FALLBACK_ENGINE.md` §4 against **current** database state, never against a stale in-memory or Redis-only assumption — this is what prevents the race against a delivery webhook arriving just before the timer fires.
 
+## 6a. Journey automation events (Phase 8C PR 8C-4) — an inbox table, not a bus
+Journey triggers consume the approved catalogue only (`JOURNEY_TRIGGER_EVENTS`): `contact.created`, `contact.updated`, `contact.tag_added`, `message.delivered`, `message.read` and `message.failed`. Inbound-message, reply and commerce events are out of scope (8D, 8G).
+- **Capture.** Events are captured into `automation_events` by database triggers, in the producer's own transaction. Capture runs only when the platform switch is on (off by default) and an active journey listens for the event.
+- **Processing.** They are processed by the (disabled) journey runner. Idempotency rests on the event's `dedupe_key` and on the `event:<id>` entry reference.
+- **Records.** Journey progress is recorded as step history (`journey_execution_steps`), not published.
+- **No broker.** Nothing is sent to Kafka or any outbox.
+
 ## 7. Related
 
 Full state machine and race-condition handling: `ARCHITECTURE.md` §§6a, 9. Fallback timer/transition mechanics: `FALLBACK_ENGINE.md` §4. Outbound webhook durable model: `DATABASE.md` §12, `API.md` §6.

@@ -170,6 +170,17 @@ export const envSchema = z.object({
   /** Lease of one claim, seconds (handover §8.2: 30 s). */
   JOURNEY_RUNNER_LEASE_SECONDS: positiveInt.min(5).max(600).default(30),
   /**
+   * Phase 8C PR 8C-4: event intake (enrolment from `automation_events`) inside the runner loop.
+   * **Off by default, refused outside tests**, and only meaningful with JOURNEY_RUNNER_ENABLED.
+   * Event *capture* is a separate, database-level switch (`journey_event_capture`, created off).
+   */
+  JOURNEY_EVENT_INTAKE_ENABLED: booleanFromEnv.default(false),
+  /**
+   * Phase 8C PR 8C-4: scheduled-trigger firing inside the runner loop. **Off by default, refused
+   * outside tests**, and only meaningful with JOURNEY_RUNNER_ENABLED.
+   */
+  JOURNEY_SCHEDULER_ENABLED: booleanFromEnv.default(false),
+  /**
    * Phase 7 PR 7-6c (`DECISIONS.md` §1zi.9 D-76-3, §1zi.12 O-2): the dual-control
    * threshold for operator resolution of unknown outcomes, in integer paise. Phase 7 PR
    * 7-6d-1 (§1zi.13 D-76d-1): also for credit-limit increases, measured on the increase. **Unset
@@ -409,6 +420,28 @@ function journeyRunnerProblems(env: Env): string[] {
   return problems;
 }
 
+/**
+ * Phase 8C PR 8C-4: event intake and scheduled-trigger firing run inside the runner loop. Each
+ * is refused outside tests, and each requires the runner to be enabled (which is itself refused
+ * outside tests).
+ */
+function journeyTriggerProcessingProblems(env: Env): string[] {
+  const problems: string[] = [];
+  for (const flag of ['JOURNEY_EVENT_INTAKE_ENABLED', 'JOURNEY_SCHEDULER_ENABLED'] as const) {
+    if (!env[flag]) continue;
+    if (!(env.NODE_ENV === 'test' && env.APP_ENV === 'test')) {
+      problems.push(
+        `${flag}=true is refused (NODE_ENV=${env.NODE_ENV}, APP_ENV=${env.APP_ENV}): automatic journey ` +
+          'processing is not authorised. Enabling it requires an explicit owner decision.',
+      );
+    }
+    if (!env.JOURNEY_RUNNER_ENABLED) {
+      problems.push(`${flag}=true requires JOURNEY_RUNNER_ENABLED=true`);
+    }
+  }
+  return problems;
+}
+
 function productionHardening(env: Env): string[] {
   if (env.APP_ENV !== 'production') return [];
   const problems: string[] = [];
@@ -461,6 +494,7 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     ...deliveryCredentialProblems(parsed.data),
     ...billingEnforcementProblems(parsed.data),
     ...journeyRunnerProblems(parsed.data),
+    ...journeyTriggerProcessingProblems(parsed.data),
   ];
   // Checked against the raw input, because after parsing a default is
   // indistinguishable from a choice: production must *state* how many proxy

@@ -11,14 +11,14 @@ import {
   type JourneyValueSource,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 
 import {
   FORBIDDEN_CUSTOM_FIELDS,
-  audienceContactPredicates,
   contactTagsFromMetadata,
 } from '../../contacts/audience-predicates';
 import { JourneyNodeFailure } from './runner-errors';
+import { resolveChannelId, segmentPredicates } from './segment-criteria';
 
 /**
  * Phase 8C PR 8C-3: what one node does, given the claimed execution's current state
@@ -191,16 +191,6 @@ function fieldValue(contact: ContactRow, field: string): string | null {
   return typeof v === 'string' ? v : JSON.stringify(v);
 }
 
-async function resolveChannelId(tx: Transaction, code: string): Promise<string> {
-  const { rows } = await tx.execute<{ id: string }>(
-    sql`SELECT id FROM app_channel_resolve(${code}::text)`,
-  );
-  const id = rows[0]?.id;
-  if (!id)
-    throw new JourneyNodeFailure(JOURNEY_RUNNER_ERROR_CODES.CHANNEL_NOT_FOUND, 'channel not found');
-  return id;
-}
-
 export async function evaluateCondition(
   tx: Transaction,
   rule: JourneyConditionRule,
@@ -223,48 +213,11 @@ export async function evaluateCondition(
       return tags.includes(rule.tag.trim().toLowerCase()) === rule.present;
     }
     case 'segment': {
-      const [segment] = await tx
-        .select({ criteria: schema.segments.criteria })
-        .from(schema.segments)
-        .where(
-          and(
-            eq(schema.segments.id, rule.segmentId),
-            eq(schema.segments.orgId, execution.orgId),
-            eq(schema.segments.workspaceId, execution.workspaceId),
-            isNull(schema.segments.deletedAt),
-          ),
-        );
-      if (!segment)
-        throw new JourneyNodeFailure(
-          JOURNEY_RUNNER_ERROR_CODES.SEGMENT_NOT_FOUND,
-          'segment not found',
-        );
-      const criteria = (segment.criteria ?? {}) as {
-        tags?: string[];
-        tagMatchMode?: 'any' | 'all';
-        channel?: string;
-        channelId?: string;
-        consentType?: string;
-        requireOptIn?: boolean;
-        customFieldFilters?: { field: string; operator: string; value?: unknown }[];
-      };
-      const channelId = criteria.channelId
-        ? criteria.channelId
-        : criteria.channel
-          ? await resolveChannelId(tx, criteria.channel)
-          : undefined;
-      // Without a channel, consent filters are refused exactly as resolveAudience refuses them.
-      if ((criteria.requireOptIn === true || criteria.consentType !== undefined) && !channelId)
-        throw new JourneyNodeFailure(
-          'VALIDATION_FAILED',
-          'segment consent criteria need a channel',
-        );
-      let predicates;
-      try {
-        predicates = audienceContactPredicates(criteria, channelId ? { id: channelId } : undefined);
-      } catch {
-        throw new JourneyNodeFailure('VALIDATION_FAILED', 'segment criteria are invalid');
-      }
+      const predicates = await segmentPredicates(tx, {
+        id: rule.segmentId,
+        orgId: execution.orgId,
+        workspaceId: execution.workspaceId,
+      });
       const { rows } = await tx.execute<{ member: boolean }>(sql`
         SELECT EXISTS (
           SELECT 1 FROM ${schema.contacts}

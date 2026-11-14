@@ -436,6 +436,24 @@ Mitigations, in order of preference:
 
 **Journey runner principal `acc_journey`** (8C-3, `0064`). Created NOLOGIN, with no credential: the runner is off and refused at startup outside tests until its enablement is separately authorised. Every `acc_journey` policy is bound to **one claimed execution** named by the session (`app.journey_execution_id`, `app.journey_claim_token`, `app.current_org_id`), and requires that claim to be live: token matches and lease not expired (`app_journey_claim_valid()`, definer). The bound covers the execution and its history, its journey and version, its contact (and the contact's identities, consent events and the suppressions naming its addresses), the workspace's segments, and an `audit_logs` insert limited to `contact.updated` by the system actor `journey_runner` for that contact. The exception is the queue's SELECT, which names the session's execution without requiring the live claim: the rows are content-free, and a release clears the token. Discovery and claiming go only through `app_journey_claim(worker, limit, lease_seconds, per_org)` (definer): due rows of live executions of **active** journeys, SKIP LOCKED, a fresh token, `epoch + 1`, a lease, `attempts + 1`, and at most `per_org` per organisation. `acc_journey` has no privilege on messages, attempts, the dispatch queue, billing, pricing or credentials. `journey_execution_queue` gains `attempts` (claims since the last committed transition; the retry and poison bound) and `last_error_code` (a SQLSTATE or stable runner code).
 
+**Journey event intake and scheduled triggers** (8C-4, `0065`).
+
+- **Event capture switch.** `journey_event_capture` is a singleton row, created with `enabled = false`. While it is false, nothing is captured. Only the owner changes it (`RUNBOOK.md` §5.x). The table has no grants and RLS on.
+- **`automation_events`** (the event inbox). Columns: `id, org_id, workspace_id, kind, contact_id, subject_id, tag, occurred_at, dedupe_key, created_at, processed_at, outcome ENUM-like (enrolled, no_match, failed), enrolled, error_code`.
+  - `kind` is limited to the approved catalogue (`JOURNEY_TRIGGER_EVENTS`).
+  - Unique `(org_id, kind, dedupe_key)`; partial index on unprocessed rows; retention is 30 days.
+  - It is org-id-exempt: no application role holds any privilege on it, RLS is on, and there is no policy.
+- **Capture.** `AFTER` triggers on `contacts` (insert and update) and on `messages` (update of `status`, `delivery_status` or `read_at`) call the definer `app_journey_capture_event`. It writes only when the switch is on **and** the organisation has an active journey whose active trigger listens for that event in that workspace (and that tag). It never aborts the producer's write.
+  - The events: `contact.created` (deduplicated by contact id), `contact.updated` (contact and transaction), `contact.tag_added` (contact, lower-cased tag and transaction), and `message.delivered`/`read`/`failed` (message id).
+- **Intake.** The definer `app_journey_process_events(limit)` processes events with `SKIP LOCKED`, each event in its own subtransaction.
+  - It enrols into matching active journeys activated no later than the event's `occurred_at`, with `entry_ref` `event:<id>`, through the shared definer `app_journey_enrol_contacts` (entry policy `once`, `ON CONFLICT DO NOTHING`).
+  - It marks each event `enrolled`, `no_match` or `failed` (with the SQLSTATE).
+- **`journey_triggers` firing state.** New columns: `claim_token, claimed_until, claimed_by, epoch, firing_at` (the frozen fire instant), `fire_cursor` (keyset), `fire_enrolled, last_fired_at, attempts, last_error_code, not_before` (retry backoff). The firing functions are definers executable by `acc_journey` only:
+  - `app_journey_claim_schedule` claims one due trigger with `SKIP LOCKED`;
+  - `app_journey_enrol_scheduled` enrols one batch under `entry_ref` `schedule:<trigger>:<instant>`;
+  - `app_journey_finish_schedule` completes (with the next fire), retries or abandons the firing, and writes the `journey.schedule_fired` audit row.
+- **`acc_journey` reads during a claimed firing:** the trigger's workspace contacts, identities and consent events; the organisation's suppressions; and the trigger's segment. `acc_journey` still has no INSERT on executions: enrolment happens only inside the definers.
+
 ## 10. Domain: Billing (see `BILLING.md` for the full financial model)
 
 > **As built, Phase 7 PR 7-1 (migration `0050`, `DECISIONS.md` §1zi.3–§1zi.4).** This takes precedence over the conceptual columns below where they differ.

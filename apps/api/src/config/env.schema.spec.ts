@@ -310,6 +310,62 @@ describe('validateEnv', () => {
     });
   });
 
+  describe('JOURNEY_EVENT_INTAKE_ENABLED / JOURNEY_SCHEDULER_ENABLED (Phase 8C PR 8C-4)', () => {
+    const problemsOf = (raw: Record<string, unknown>): string[] => {
+      try {
+        validateEnv(raw);
+        return [];
+      } catch (error) {
+        return (error as ConfigurationError).problems as string[];
+      }
+    };
+    const runner = {
+      JOURNEY_RUNNER_ENABLED: 'true',
+      DATABASE_JOURNEY_URL: 'postgres://acc_journey:not-a-dev-secret@db.internal:5432/acc',
+    };
+
+    it('are off by default', () => {
+      const env = validateEnv(MINIMAL_ENV);
+      expect([env.JOURNEY_EVENT_INTAKE_ENABLED, env.JOURNEY_SCHEDULER_ENABLED]).toEqual([
+        false,
+        false,
+      ]);
+    });
+
+    it.each(['JOURNEY_EVENT_INTAKE_ENABLED', 'JOURNEY_SCHEDULER_ENABLED'])(
+      '%s is permitted only in tests, and only with the runner enabled',
+      (flag) => {
+        const env = validateEnv({
+          ...MINIMAL_ENV,
+          NODE_ENV: 'test',
+          APP_ENV: 'test',
+          ...runner,
+          [flag]: 'true',
+        });
+        expect(env[flag as 'JOURNEY_SCHEDULER_ENABLED']).toBe(true);
+        expect(
+          problemsOf({ ...MINIMAL_ENV, NODE_ENV: 'test', APP_ENV: 'test', [flag]: 'true' }),
+        ).toContain(`${flag}=true requires JOURNEY_RUNNER_ENABLED=true`);
+        for (const [nodeEnv, appEnv] of [
+          ['development', 'development'],
+          ['production', 'staging'],
+          ['production', 'production'],
+          ['test', 'development'],
+        ]) {
+          const problems = problemsOf({
+            ...MINIMAL_ENV,
+            NODE_ENV: nodeEnv,
+            APP_ENV: appEnv,
+            ...runner,
+            [flag]: 'true',
+            DATABASE_DISPATCH_PASSWORD: 'a-non-development-dispatch-credential',
+          });
+          expect(problems.some((p) => p.startsWith(`${flag}=true is refused`))).toBe(true);
+        }
+      },
+    );
+  });
+
   describe('BILLING_DUAL_CONTROL_THRESHOLD_PAISE (Phase 7 PR 7-6c, O-2)', () => {
     it('is unset by default, and an empty value means unset', () => {
       expect(validateEnv(MINIMAL_ENV).BILLING_DUAL_CONTROL_THRESHOLD_PAISE).toBeUndefined();

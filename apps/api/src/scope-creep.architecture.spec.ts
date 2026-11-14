@@ -156,7 +156,7 @@ const CATEGORIES: Category[] = [
     forbids:
       'a worker/job harness or new messaging worker infrastructure (ADR-013 PD-1, ADR-004 D-5)',
     exceptions:
-      'Pre-existing: the hot-reload listener reconnect timer and an ioredis option. No queue, processor, cron, interval or job runner exists; `@nestjs/schedule` is a declared but unused dependency (pinned below). Phase 3.3: message_dispatch_queue table class and dispatcher worker (ADR-014 §9). B1 (first release, 20-Oct-2026): the in-process loop that runs that dispatcher (`DispatchWorker`, ADR-014 D18 — poll 1 s ±20 %, batch ≤ 10, lease 30 s) and its three configuration keys. It is a single setTimeout chain over the existing PostgreSQL queue: no queue library, job framework, cron or `@nestjs/schedule`. UI readiness (20-Oct-2026): the documentation-only `QueuedMessage` OpenAPI schema describing the existing `POST /messages` 202 body, and the `queued` value of the `GET /messages` `status` filter enum in the generated `metadata.ts`. Phase 7 PR 7-3 (owner approval 08-Nov-2026): the enqueue (`messageDispatchQueue`, the `queued` status) moved unchanged from `messages.service.ts` into the shared submission core (`messages/submission/`); no new queue, worker or behaviour. Phase 8C PR 8C-1 (owner-authorised 10-Nov-2026): the `schedule` entry-trigger kind of the journey graph contract and its validation. Vocabulary only: no scheduler, timer, poller or job exists in 8C-1; the journey runner is 8C-3, behind JOURNEY_RUNNER_ENABLED (default off). Phase 8C PR 8C-2 (owner-authorised 10-Nov-2026): the `journey_execution_queue` table (content-free claim rows shaped like `message_dispatch_queue`), which API enrolment fills and operator cancel/archive empty — **nothing claims it**: no runner, poller, timer or role other than `acc_app` exists for it — and the pure `nextJourneyScheduleFire` computation that stores the `next_fire_at` of a schedule trigger at activation (plus `SCHEDULE_ELAPSED`). No scheduler processes it; trigger processing is 8C-4. Phase 8C PR 8C-3 (owner-authorised 10-Nov-2026; 8C-3 started 14-Nov-2026): the journey runner (`JourneyRunner`, a single setTimeout chain with `scheduleNext`, as `DispatchWorker`; `JourneyRunnerService` claiming `journey_execution_queue` rows through `app_journey_claim`, its `workerId` and queue-row release/delete). **Off by default and refused at startup outside tests** (`JOURNEY_RUNNER_ENABLED`, `journeyRunnerProblems`); no queue library, cron or `@nestjs/schedule`; it processes waits, conditions, `update_contact`, exits and placeholders only, and never sends.',
+      'Pre-existing: the hot-reload listener reconnect timer and an ioredis option. No queue, processor, cron, interval or job runner exists; `@nestjs/schedule` is a declared but unused dependency (pinned below). Phase 3.3: message_dispatch_queue table class and dispatcher worker (ADR-014 §9). B1 (first release, 20-Oct-2026): the in-process loop that runs that dispatcher (`DispatchWorker`, ADR-014 D18 — poll 1 s ±20 %, batch ≤ 10, lease 30 s) and its three configuration keys. It is a single setTimeout chain over the existing PostgreSQL queue: no queue library, job framework, cron or `@nestjs/schedule`. UI readiness (20-Oct-2026): the documentation-only `QueuedMessage` OpenAPI schema describing the existing `POST /messages` 202 body, and the `queued` value of the `GET /messages` `status` filter enum in the generated `metadata.ts`. Phase 7 PR 7-3 (owner approval 08-Nov-2026): the enqueue (`messageDispatchQueue`, the `queued` status) moved unchanged from `messages.service.ts` into the shared submission core (`messages/submission/`); no new queue, worker or behaviour. Phase 8C PR 8C-1 (owner-authorised 10-Nov-2026): the `schedule` entry-trigger kind of the journey graph contract and its validation. Vocabulary only: no scheduler, timer, poller or job exists in 8C-1; the journey runner is 8C-3, behind JOURNEY_RUNNER_ENABLED (default off). Phase 8C PR 8C-2 (owner-authorised 10-Nov-2026): the `journey_execution_queue` table (content-free claim rows shaped like `message_dispatch_queue`), which API enrolment fills and operator cancel/archive empty — **nothing claims it**: no runner, poller, timer or role other than `acc_app` exists for it — and the pure `nextJourneyScheduleFire` computation that stores the `next_fire_at` of a schedule trigger at activation (plus `SCHEDULE_ELAPSED`). No scheduler processes it; trigger processing is 8C-4. Phase 8C PR 8C-3 (owner-authorised 10-Nov-2026; 8C-3 started 14-Nov-2026): the journey runner (`JourneyRunner`, a single setTimeout chain with `scheduleNext`, as `DispatchWorker`; `JourneyRunnerService` claiming `journey_execution_queue` rows through `app_journey_claim`, its `workerId` and queue-row release/delete). **Off by default and refused at startup outside tests** (`JOURNEY_RUNNER_ENABLED`, `journeyRunnerProblems`); no queue library, cron or `@nestjs/schedule`; it processes waits, conditions, `update_contact`, exits and placeholders only, and never sends. Phase 8C PR 8C-4 (owner-authorised 10-Nov-2026; 8C-4 started 14-Nov-2026): scheduled-trigger firing (`JourneyTriggerProcessingService`: `claimSchedule`, `fireDueSchedules`, the definer `app_journey_claim_schedule`/`app_journey_enrol_scheduled`/`app_journey_finish_schedule`, the batch bounds and `JOURNEY_SCHEDULE_ERROR_CODES`) and its flag `JOURNEY_SCHEDULER_ENABLED`, run only inside the same disabled runner loop. **Off by default and refused at startup outside tests**; it enrols segment audiences into journeys and never sends.',
     pattern: /[\w-]*(?:worker|queue|bullmq|processor|cron|setInterval|schedul|job)[\w-]*/gi,
     providerCodeOnly: false,
     pinned: {
@@ -187,12 +187,15 @@ const CATEGORIES: Category[] = [
         'DISPATCH_WORKER_BATCH_SIZE',
         'DISPATCH_WORKER_ENABLED',
         'DISPATCH_WORKER_POLL_INTERVAL_MS',
+        'JOURNEY_SCHEDULER_ENABLED',
+        'schedulerEnabled',
         'workerEnabled',
       ],
       'apps/api/src/config/env.schema.ts': [
         'DISPATCH_WORKER_BATCH_SIZE',
         'DISPATCH_WORKER_ENABLED',
         'DISPATCH_WORKER_POLL_INTERVAL_MS',
+        'JOURNEY_SCHEDULER_ENABLED',
       ],
       'apps/api/src/journeys/journey-executions.service.ts': [
         'journeyExecutionQueue',
@@ -218,7 +221,29 @@ const CATEGORIES: Category[] = [
         'queue',
         'workerId',
       ],
-      'apps/api/src/journeys/runner/journey-runner.worker.ts': ['scheduleNext'],
+      'apps/api/src/journeys/runner/journey-runner.worker.ts': [
+        'fireDueSchedules',
+        'schedule',
+        'scheduleNext',
+        'schedulerEnabled',
+      ],
+      // 8C-4: scheduled-trigger firing (disabled; refused outside tests).
+      'apps/api/src/journeys/runner/journey-trigger-processing.service.ts': [
+        'JOURNEY_SCHEDULE_ERROR_CODES',
+        'Schedule',
+        'ScheduleClaim',
+        'app_journey_claim_schedule',
+        'app_journey_enrol_scheduled',
+        'app_journey_finish_schedule',
+        'claimSchedule',
+        'fireDueSchedules',
+        'journey-scheduler-',
+        'nextJourneyScheduleFire',
+        'schedule',
+        'scheduleBatch',
+        'scheduleBatchesPerClaim',
+        'workerId',
+      ],
       'apps/api/src/messages/dispatch/dispatch.worker.ts': [
         'DISPATCH_WORKER_ENABLED',
         'DispatchWorker',
@@ -267,9 +292,12 @@ const CATEGORIES: Category[] = [
         'scheduledAt',
       ],
       'packages/contracts/src/journeys.ts': [
+        'JOURNEY_SCHEDULE_ERROR_CODES',
         'SCHEDULE_ELAPSED',
         'nextJourneyScheduleFire',
         'schedule',
+        'scheduleBatch',
+        'scheduleBatchesPerClaim',
         'schedules',
       ],
       'packages/contracts/src/messages.ts': ['QUEUED', 'QueuedMessageResponse', 'queued'],
@@ -2045,6 +2073,9 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
     expect([...created].sort()).toEqual([
       'api_keys',
       'audit_logs',
+      // Phase 8C PR 8C-4 (0065): the journey event inbox (definer-only; written by capture
+      // triggers, read only by the disabled runner's intake).
+      'automation_events',
       // Phase 7 PR 7-6d-1 (0059): billing-account operations (definer-only).
       'billing_account_operations',
       // Phase 7 PR 7-6c (0057): operator resolutions of unknown outcomes (definer-only).
@@ -2061,6 +2092,8 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       // Phase 7 PR 7-2 (0051): the pricing catalogue and the pricing evaluations.
       'customer_pricing_assignments',
       'idempotency_keys',
+      // Phase 8C PR 8C-4 (0065): the platform journey event-capture switch (created off).
+      'journey_event_capture',
       // Phase 8C PR 8C-2 (0063): executions, their unclaimed claim queue, append-only step
       // history and derived triggers. No runner, trigger intake or send exists.
       'journey_execution_queue',

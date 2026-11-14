@@ -108,6 +108,18 @@ These are Phase 0 procedural placeholders describing the *shape* of each runbook
 - **A crashed worker:** its lease (30 s) lapses and the next claim takes over with a new token and `epoch + 1`. The old worker can neither read nor write anything once its lease has expired.
 - **Pause a journey** (`POST …/pause`) to stop claiming its executions without losing state. **Cancel** an execution (`POST …/executions/:id/cancel`) to end it; the runner never touches an ended execution.
 
+### 5.y Journey event intake and scheduled triggers (Phase 8C PR 8C-4)
+- **Capture is off.** `journey_event_capture.enabled` is `false`. Turning it on (`UPDATE journey_event_capture SET enabled = true`, run as the owner) is an owner decision. Even when it is on, events are recorded only for organisations with an active journey that listens for them. Capture never fails a contact or message write: a capture problem is logged as a PostgreSQL WARNING (`journey event capture skipped`).
+- **Processing is off.** `JOURNEY_EVENT_INTAKE_ENABLED` and `JOURNEY_SCHEDULER_ENABLED` both default to `false`, are refused at startup outside tests, and run only inside the runner loop (`JOURNEY_RUNNER_ENABLED`).
+- **Inbox health:**
+  - `SELECT outcome, count(*) FROM automation_events GROUP BY 1` shows the outcome mix;
+  - a `failed` event carries its SQLSTATE in `error_code` and does not block the inbox;
+  - events older than 30 days are purged.
+- **Schedule health:** `journey_triggers` with `firing_at` set are firing or resumable.
+  - `last_error_code` and `not_before` show a backed-off retry.
+  - A firing abandoned for a missing segment, a missing channel, invalid criteria or poison (more than 5 claims) skips that fire, schedules the next one, and is audited as `journey.schedule_fired` with outcome `failure`.
+  - Missed fires (runner down) are **not** replayed: one fire runs, then the next fire is computed from now.
+
 ## 6. Disaster recovery runbooks (see `DR.md` for objectives/backup detail)
 
 **Database restore (point-in-time):**
