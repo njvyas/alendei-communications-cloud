@@ -16,6 +16,7 @@ import {
 
 import { primaryId, timestamps, tstz } from './_shared';
 import { contacts } from './contacts';
+import { messages } from './messages';
 import { users } from './iam';
 import { organizations, workspaces } from './tenancy';
 
@@ -257,6 +258,8 @@ export const journeyExecutions = pgTable(
       .default(sql`now()`),
     endedAt: tstz('ended_at'),
     endReason: text('end_reason'),
+    /** Phase 8C-5a (0066): column and invariant only; its lifecycle is 8C-5b. */
+    waitDeadlineAt: tstz('wait_deadline_at'),
     ...timestamps(),
   },
   (table) => [
@@ -277,6 +280,14 @@ export const journeyExecutions = pgTable(
     }).onDelete('restrict'),
     unique('uq_journey_executions_id_workspace_org').on(table.id, table.workspaceId, table.orgId),
     unique('uq_journey_executions_id_org').on(table.id, table.orgId),
+    // Phase 8C-5a (0066): target of messages_journey_execution_fk.
+    unique('uq_journey_executions_attribution').on(
+      table.id,
+      table.journeyId,
+      table.workspaceId,
+      table.contactId,
+      table.orgId,
+    ),
     uniqueIndex('uq_journey_executions_live_contact')
       .on(table.journeyId, table.contactId)
       .where(sql`${table.status} IN ('running', 'waiting')`),
@@ -293,6 +304,10 @@ export const journeyExecutions = pgTable(
     check(
       'journey_executions_end_shape',
       sql`(${table.status} IN ('running', 'waiting')) = (${table.endedAt} IS NULL) AND (${table.endedAt} IS NULL) = (${table.endReason} IS NULL)`,
+    ),
+    check(
+      'journey_executions_wait_deadline_shape',
+      sql`${table.waitDeadlineAt} IS NULL OR ${table.status} = 'waiting'`,
     ),
     check(
       'journey_executions_end_reason_length',
@@ -352,8 +367,9 @@ export const journeyExecutionQueue = pgTable(
 
 /**
  * Append-only step history (`trg_journey_execution_steps_guard`). `seq` equals the
- * execution's `state_version` after the step. `messageId` is reserved for the send node
- * (8C-5), which adds its foreign key.
+ * execution's `state_version` after the step. `messageId` (8C-5a, 0066) names the message a
+ * completed `send_message` step submitted: FK to messages (id, org_id), and
+ * `trg_journey_execution_steps_message_guard` refuses a message attributed to another execution.
  */
 export const journeyExecutionSteps = pgTable(
   'journey_execution_steps',
@@ -391,6 +407,15 @@ export const journeyExecutionSteps = pgTable(
         journeyExecutions.orgId,
       ],
     }).onDelete('restrict'),
+    foreignKey({
+      name: 'journey_execution_steps_message_fk',
+      columns: [table.messageId, table.orgId],
+      foreignColumns: [messages.id, messages.orgId],
+    }).onDelete('restrict'),
+    check(
+      'journey_execution_steps_message_shape',
+      sql`${table.messageId} IS NULL OR (${table.nodeType} = 'send_message' AND ${table.outcome} = 'completed')`,
+    ),
     uniqueIndex('uq_journey_execution_steps_seq').on(table.executionId, table.seq),
     uniqueIndex('uq_journey_execution_steps_message')
       .on(table.messageId)

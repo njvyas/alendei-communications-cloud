@@ -22,6 +22,7 @@ import { contacts } from './contacts';
 import { templates } from './templates';
 import { campaigns } from './campaigns';
 import { organizationProviderAssignments } from './assignments';
+import { journeyExecutions } from './journeys';
 
 /** Message lifecycle status (Phase 3.3, ADR-014 §7, P3-D10). */
 export const messageStatus = pgEnum('message_status', [
@@ -103,6 +104,10 @@ export const messages = pgTable(
     billingEnforced: boolean('billing_enforced').notNull().default(false),
     billingModeSnapshot: billingMode('billing_mode_snapshot'),
     billingPolicySnapshot: billingPolicy('billing_policy_snapshot'),
+    // Phase 8C-5a (0066): journey attribution, set only by the submission core for a journey
+    // origin; both or neither (messages_journey_shape), write-once (trg_messages_tenant_key_immutable).
+    journeyId: uuid('journey_id'),
+    journeyExecutionId: uuid('journey_execution_id'),
     ...timestamps(),
   },
   (table) => [
@@ -116,6 +121,29 @@ export const messages = pgTable(
       columns: [table.contactId, table.workspaceId, table.orgId],
       foreignColumns: [contacts.id, contacts.workspaceId, contacts.orgId],
     }).onDelete('restrict'),
+    // Phase 8C-5a (0066): the message's journey, workspace, contact and organisation are the
+    // execution's own. No child index: executions are never deleted.
+    foreignKey({
+      name: 'messages_journey_execution_fk',
+      columns: [
+        table.journeyExecutionId,
+        table.journeyId,
+        table.workspaceId,
+        table.contactId,
+        table.orgId,
+      ],
+      foreignColumns: [
+        journeyExecutions.id,
+        journeyExecutions.journeyId,
+        journeyExecutions.workspaceId,
+        journeyExecutions.contactId,
+        journeyExecutions.orgId,
+      ],
+    }).onDelete('restrict'),
+    check(
+      'messages_journey_shape',
+      sql`(${table.journeyId} IS NULL) = (${table.journeyExecutionId} IS NULL)`,
+    ),
     unique('uq_messages_id_org_id').on(table.id, table.orgId),
     index('messages_org_id_idx').on(table.orgId),
     // U14.1a: built CONCURRENTLY by db:migrate (barrier before migration 0042); 0042 only verifies it.

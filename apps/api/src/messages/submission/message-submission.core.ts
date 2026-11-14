@@ -21,7 +21,12 @@ import { AppException } from '../../common/errors/app.exception';
 import { AppConfigService } from '../../config/app-config.service';
 import { normalizeAddress } from '../../contacts/contacts.normalization';
 import { assertSubmissionAuthorized } from './submission-authorization';
-import type { SubmissionContext, SubmissionRequest, SubmissionResult } from './submission.types';
+import type {
+  SubmissionContext,
+  SubmissionOrigin,
+  SubmissionRequest,
+  SubmissionResult,
+} from './submission.types';
 
 type BillingMode = (typeof schema.organizations.$inferSelect)['billingMode'];
 type BillingPolicy = (typeof schema.organizations.$inferSelect)['billingPolicy'];
@@ -573,6 +578,7 @@ export class MessageSubmissionCore {
     // 8. Insert into messages
     const messageId = uuidv7();
     const correlationId = ctx.correlationId;
+    const attribution = originColumns(ctx.origin);
     const [message] = await tx
       .insert(schema.messages)
       .values({
@@ -592,6 +598,8 @@ export class MessageSubmissionCore {
         billingEnforced: billing !== null,
         billingModeSnapshot: billing?.mode ?? null,
         billingPolicySnapshot: billing?.policy ?? null,
+        journeyId: attribution.journeyId,
+        journeyExecutionId: attribution.journeyExecutionId,
       })
       .returning();
 
@@ -627,5 +635,25 @@ export class MessageSubmissionCore {
       channelId: channel.id,
       channelCode: channel.code,
     };
+  }
+}
+
+/**
+ * The attribution columns of an origin (Phase 8C-5a). No origin (a direct submission) sets
+ * none of them. Exhaustive: an unhandled variant fails to compile at the `never` assignment.
+ */
+function originColumns(origin: SubmissionOrigin | undefined): {
+  journeyId: string | null;
+  journeyExecutionId: string | null;
+} {
+  if (origin === undefined) return { journeyId: null, journeyExecutionId: null };
+  const kind = origin.kind;
+  switch (kind) {
+    case 'journey':
+      return { journeyId: origin.journeyId, journeyExecutionId: origin.executionId };
+    default: {
+      const unhandled: never = kind;
+      throw new Error(`message submission: unhandled origin '${JSON.stringify(unhandled)}'`);
+    }
   }
 }
