@@ -470,6 +470,13 @@
       "when": 1795219200000,
       "tag": "0066_phase8c5_journey_send_attribution",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1795305600000,
+      "tag": "0067_phase8c5b_journey_send_node",
+      "breakpoints": true
     }
   ]
 }

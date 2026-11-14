@@ -3,6 +3,7 @@ import {
   JOURNEY_END_REASONS,
   JOURNEY_NODE_CATALOGUE,
   JOURNEY_RUNNER_ERROR_CODES,
+  journeySendRefusedCode,
   nextJourneyWindowStart,
   type JourneyConditionRule,
   type JourneyContactUpdate,
@@ -11,13 +12,21 @@ import {
   type JourneyValueSource,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, sql } from 'drizzle-orm';
 
 import {
   FORBIDDEN_CUSTOM_FIELDS,
   contactTagsFromMetadata,
 } from '../../contacts/audience-predicates';
-import { JourneyNodeFailure } from './runner-errors';
+import {
+  messageOutcomeReached,
+  nextOutcomeRecheck,
+  sendRefusalDisposition,
+  type JourneySendPort,
+  type JourneySendResult,
+  type SentMessageState,
+} from './journey-send.port';
+import { JourneyNodeFailure, JourneySendRetry } from './runner-errors';
 import { resolveChannelId, segmentPredicates } from './segment-criteria';
 
 /**
@@ -29,7 +38,9 @@ import { resolveChannelId, segmentPredicates } from './segment-criteria';
  * - `update_contact` writes the contact (the runner audits it);
  * - `exit` ends the execution `completed`;
  * - placeholders (webhook, CRM, human and AI handoff) record `stubbed` and do nothing;
- * - every send-related node fails closed: journey sends are disabled (owner decisions 1–2).
+ * - 8C-5b: `send_message` goes through the `JourneySendPort` (unavailable in production until
+ *   8C-6, so the execution fails `SEND_UNAVAILABLE`); `wait_for_outcome` and the
+ *   `send_outcome` condition read the claimed execution's attributed message (0067).
  */
 export type NodeResult =
   | {
@@ -39,27 +50,45 @@ export type NodeResult =
       readonly details: Record<string, unknown>;
       /** Set when the node wrote the contact (the runner audits it). */
       readonly contactUpdate?: { readonly operations: readonly Record<string, unknown>[] };
+      /** 8C-5b: the message a completed send created (the step's `message_id`). */
+      readonly messageId?: string;
+      readonly errorCode?: string;
     }
   | {
       readonly kind: 'wait';
       readonly until: Date;
       readonly details: Record<string, unknown>;
+      /** 8C-5b: set only by `wait_for_outcome` when it arms (`wait_deadline_at`). */
+      readonly deadline?: Date;
+    }
+  | {
+      /** 8C-5b: a `wait_for_outcome` re-check without an outcome: a new `wake_at`, no history. */
+      readonly kind: 'rearm';
+      readonly until: Date;
     }
   | {
       readonly kind: 'end';
-      readonly status: 'completed';
+      readonly status: 'completed' | 'exited';
       readonly endReason: string;
       readonly outcome: JourneyStepOutcome;
       readonly details: Record<string, unknown>;
+      readonly errorCode?: string;
     };
 
 export interface ExecutionState {
   readonly id: string;
   readonly orgId: string;
   readonly workspaceId: string;
+  readonly journeyId: string;
   readonly contactId: string;
   readonly status: 'running' | 'waiting';
   readonly wakeAt: Date | null;
+  /** 8C-5b: set only while waiting at a `wait_for_outcome` node. */
+  readonly waitDeadlineAt: Date | null;
+}
+
+export interface NodeDependencies {
+  readonly sendPort: JourneySendPort;
 }
 
 type ContactRow = typeof schema.contacts.$inferSelect;
@@ -69,6 +98,8 @@ export async function evaluateNode(
   node: JourneyNode,
   execution: ExecutionState,
   now: Date,
+  deps: NodeDependencies,
+  nodeKey: string,
 ): Promise<NodeResult> {
   switch (node.type) {
     case 'entry':
@@ -123,11 +154,9 @@ export async function evaluateNode(
         details: { placeholder: node.type },
       };
     case 'send_message':
+      return evaluateSend(tx, node, execution, deps.sendPort, nodeKey);
     case 'wait_for_outcome':
-      throw new JourneyNodeFailure(
-        JOURNEY_RUNNER_ERROR_CODES.SEND_DISABLED,
-        `${node.type} is not available: journey sends are disabled`,
-      );
+      return evaluateWaitForOutcome(tx, node, execution, now);
     default: {
       const type = (node as { type?: unknown }).type;
       if (
@@ -246,12 +275,225 @@ export async function evaluateCondition(
                 AND NOT EXISTS (SELECT 1 FROM latest WHERE event = 'revoke')) AS granted`);
       return Boolean(rows[0]?.granted) === rule.granted;
     }
-    case 'send_outcome':
-      throw new JourneyNodeFailure(
-        JOURNEY_RUNNER_ERROR_CODES.SEND_DISABLED,
-        'send outcomes are not available: journey sends are disabled',
-      );
+    case 'send_outcome': {
+      // No message (the send was skipped, refused or never reached): false.
+      const message = await sentMessage(tx, execution, rule.sendNodeKey);
+      return message !== null && messageOutcomeReached(message, rule.outcome);
+    }
   }
+}
+
+// --- send_message (8C-5b) --------------------------------------------------------------------
+
+type SendNode = Extract<JourneyNode, { type: 'send_message' }>;
+type WaitForOutcomeNode = Extract<JourneyNode, { type: 'wait_for_outcome' }>;
+
+/** A non-`sent` port result, raised inside the port's savepoint so it rolls back. */
+class PortDeclined extends Error {
+  constructor(readonly result: Exclude<JourneySendResult, { kind: 'sent' }>) {
+    super('journey send port declined');
+  }
+}
+
+/**
+ * The send node (handover Rev 2 §7.2). The identity and variables are read under the claim;
+ * the port runs in its own savepoint, so a refusal leaves none of its partial writes; a sent
+ * message is recorded on the step (`message_id`), where the 0066 FK, CHECK and the step <->
+ * message guard prove it belongs to this execution.
+ */
+async function evaluateSend(
+  tx: Transaction,
+  node: SendNode,
+  execution: ExecutionState,
+  port: JourneySendPort,
+  nodeKey: string,
+): Promise<NodeResult> {
+  const channelId = await resolveChannelId(tx, node.channel);
+  const [identity] = await tx
+    .select({ address: schema.contactIdentities.normalizedAddress })
+    .from(schema.contactIdentities)
+    .where(
+      and(
+        eq(schema.contactIdentities.contactId, execution.contactId),
+        eq(schema.contactIdentities.orgId, execution.orgId),
+        eq(schema.contactIdentities.channelId, channelId),
+        eq(schema.contactIdentities.status, 'active'),
+      ),
+    )
+    .orderBy(
+      desc(schema.contactIdentities.isPrimary),
+      asc(schema.contactIdentities.createdAt),
+      asc(schema.contactIdentities.id),
+    )
+    .limit(1);
+  if (!identity) return sendEdge(node, 'skipped', JOURNEY_RUNNER_ERROR_CODES.NO_IDENTITY);
+
+  const contact = await loadContact(tx, execution);
+  const variables: Record<string, string | null> = {};
+  for (const [name, source] of Object.entries(node.variables))
+    variables[name] = sourceValue(contact, source);
+
+  let result: JourneySendResult;
+  try {
+    result = await tx.transaction(async (savepoint) => {
+      const r = await port.send(savepoint, {
+        orgId: execution.orgId,
+        workspaceId: execution.workspaceId,
+        journeyId: execution.journeyId,
+        executionId: execution.id,
+        contactId: execution.contactId,
+        nodeKey,
+        channel: node.channel,
+        templateId: node.templateId,
+        recipient: identity.address,
+        variables,
+      });
+      if (r.kind !== 'sent') throw new PortDeclined(r);
+      return r;
+    });
+  } catch (error) {
+    if (!(error instanceof PortDeclined)) throw error;
+    result = error.result;
+  }
+
+  switch (result.kind) {
+    case 'sent':
+      return {
+        kind: 'advance',
+        next: node.next,
+        outcome: 'completed',
+        details: { channel: node.channel },
+        messageId: result.messageId,
+      };
+    case 'unavailable':
+      throw new JourneyNodeFailure(
+        JOURNEY_RUNNER_ERROR_CODES.SEND_UNAVAILABLE,
+        'journey sending is not available',
+      );
+    case 'refused': {
+      const code = journeySendRefusedCode(result.code);
+      switch (sendRefusalDisposition(result.code)) {
+        case 'skip':
+          return sendEdge(node, 'skipped', code);
+        case 'refuse':
+          return sendEdge(node, 'refused', code);
+        case 'fail':
+          throw new JourneyNodeFailure(code, 'the send was refused');
+        case 'transient':
+          throw new JourneySendRetry(result.code);
+        case 'poison':
+          throw new JourneySendRetry(code);
+      }
+    }
+  }
+}
+
+/** A skipped or refused send: the node's `onSuppressed` / `onRefused` edge. */
+function sendEdge(node: SendNode, outcome: 'skipped' | 'refused', errorCode: string): NodeResult {
+  const edge = outcome === 'skipped' ? node.onSuppressed : node.onRefused;
+  if (edge === 'exit')
+    return {
+      kind: 'end',
+      status: 'exited',
+      endReason:
+        outcome === 'skipped'
+          ? JOURNEY_END_REASONS.SEND_SUPPRESSED
+          : JOURNEY_END_REASONS.SEND_REFUSED,
+      outcome,
+      details: { channel: node.channel },
+      errorCode,
+    };
+  return {
+    kind: 'advance',
+    next: node.next,
+    outcome,
+    details: { channel: node.channel },
+    errorCode,
+  };
+}
+
+/**
+ * The message the execution's `sendNodeKey` step created, read through `messages_runner_select`
+ * (0067: the claimed execution's messages only, outcome columns only). `null` when that step
+ * recorded no message. A recorded message the runner cannot read fails closed.
+ */
+async function sentMessage(
+  tx: Transaction,
+  execution: ExecutionState,
+  sendNodeKey: string,
+): Promise<SentMessageState | null> {
+  const [step] = await tx
+    .select({ messageId: schema.journeyExecutionSteps.messageId })
+    .from(schema.journeyExecutionSteps)
+    .where(
+      and(
+        eq(schema.journeyExecutionSteps.executionId, execution.id),
+        eq(schema.journeyExecutionSteps.orgId, execution.orgId),
+        eq(schema.journeyExecutionSteps.nodeKey, sendNodeKey),
+        isNotNull(schema.journeyExecutionSteps.messageId),
+      ),
+    )
+    .orderBy(desc(schema.journeyExecutionSteps.seq))
+    .limit(1);
+  if (!step?.messageId) return null;
+  const msg = schema.messages;
+  const [message] = await tx
+    .select({ status: msg.status, deliveryStatus: msg.deliveryStatus, readAt: msg.readAt })
+    .from(msg)
+    .where(and(eq(msg.id, step.messageId), eq(msg.orgId, execution.orgId)));
+  if (!message)
+    throw new JourneyNodeFailure(
+      JOURNEY_RUNNER_ERROR_CODES.SEND_UNAVAILABLE,
+      'the recorded message is not readable',
+    );
+  return message;
+}
+
+/**
+ * `wait_for_outcome` (handover Rev 2 §6): arm a persisted deadline on the first visit; on each
+ * wake take `onOutcome` once the outcome is reached, `onTimeout` at or after the deadline, and
+ * otherwise re-arm silently (no history row, no transition). At most two history rows per wait.
+ *
+ * - No message from the send node: `onTimeout` at once.
+ * - A failed message can never reach `delivered`/`read`: `onTimeout` at once (`{failed: true}`).
+ * - An unknown outcome is never treated as a failure: it waits for the deadline.
+ */
+async function evaluateWaitForOutcome(
+  tx: Transaction,
+  node: WaitForOutcomeNode,
+  execution: ExecutionState,
+  now: Date,
+): Promise<NodeResult> {
+  const timeout = (details: Record<string, unknown>): NodeResult => ({
+    kind: 'advance',
+    next: node.onTimeout,
+    outcome: 'completed',
+    details: { timedOut: true, ...details },
+  });
+  const message = await sentMessage(tx, execution, node.sendNodeKey);
+  if (!message) return timeout({ message: false });
+  if (messageOutcomeReached(message, node.outcome))
+    return {
+      kind: 'advance',
+      next: node.onOutcome,
+      outcome: 'completed',
+      details: { outcome: node.outcome },
+    };
+  if (messageOutcomeReached(message, 'failed')) return timeout({ failed: true });
+
+  if (execution.status !== 'waiting') {
+    const deadline = new Date(now.getTime() + node.timeoutSeconds * 1000);
+    return {
+      kind: 'wait',
+      until: nextOutcomeRecheck(now, deadline, now),
+      deadline,
+      details: { deadline: deadline.toISOString() },
+    };
+  }
+  const deadline = execution.waitDeadlineAt;
+  if (!deadline || now.getTime() >= deadline.getTime()) return timeout({});
+  const armedAt = new Date(deadline.getTime() - node.timeoutSeconds * 1000);
+  return { kind: 'rearm', until: nextOutcomeRecheck(armedAt, deadline, now) };
 }
 
 // --- update_contact --------------------------------------------------------------------------

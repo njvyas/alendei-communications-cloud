@@ -68,8 +68,9 @@ describe('Phase 8C PR 8C-3: acc_journey (migration 0064)', () => {
       contacts: 'first_name,last_name,metadata,updated_at',
       journey_execution_queue:
         'attempts,available_at,claim_token,claimed_by,claimed_until,last_error_code',
+      // 8C-5b (0067): + wait_deadline_at (the wait_for_outcome deadline lifecycle).
       journey_executions:
-        'current_node_key,end_reason,ended_at,state_version,status,transitions,updated_at,wake_at',
+        'current_node_key,end_reason,ended_at,state_version,status,transitions,updated_at,wait_deadline_at,wake_at',
     });
   });
 
@@ -97,6 +98,8 @@ describe('Phase 8C PR 8C-3: acc_journey (migration 0064)', () => {
       'journey_executions.journey_executions_runner_update:UPDATE',
       'journey_versions.journey_versions_runner_select:SELECT',
       'journeys.journeys_runner_select:SELECT',
+      // Phase 8C PR 8C-5b (0067): the claimed execution's attributed messages, outcome columns only.
+      'messages.messages_runner_select:SELECT',
       'segments.segments_runner_select:SELECT',
       'segments.segments_scheduler_select:SELECT',
       'suppressions.suppressions_runner_select:SELECT',

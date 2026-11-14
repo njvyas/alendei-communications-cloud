@@ -10,12 +10,17 @@ import {
   type JourneyStepOutcome,
 } from '@acc/contracts';
 import { schema, type Database, type Transaction } from '@acc/db';
-import { and, eq, gt, inArray, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNotNull, sql } from 'drizzle-orm';
 
 import { AuditWriter } from '../../audit/audit-writer.service';
 import { AppConfigService } from '../../config/app-config.service';
 import { JOURNEY_DB } from '../../database/database.tokens';
 import { evaluateNode, type ExecutionState, type NodeResult } from './journey-node-evaluator';
+import {
+  JOURNEY_SEND_PORT,
+  UnavailableJourneySendPort,
+  type JourneySendPort,
+} from './journey-send.port';
 import {
   JourneyFenced,
   JourneyNodeFailure,
@@ -64,6 +69,8 @@ type Step = {
   readonly outcome: JourneyStepOutcome;
   readonly errorCode?: string | null;
   readonly details: Record<string, unknown>;
+  /** 8C-5b: the message a completed send created. */
+  readonly messageId?: string | null;
 };
 
 const RUNNER_ACTOR_LABEL = 'journey_runner';
@@ -86,19 +93,26 @@ const RUNNER_ACTOR_LABEL = 'journey_runner';
  * 3. Up to `maxTransitionsPerClaim` transitions, then the claim is released.
  * 4. A failure rolls back; it is recorded with backoff, and bounded (handover §9).
  *
- * Nothing here sends, dispatches, calls out or reads a provider: send-related nodes fail closed.
+ * 8C-5b: `send_message` goes through the injected `JourneySendPort`, whose production binding
+ * (`UnavailableJourneySendPort`) never sends; `wait_for_outcome` keeps a persisted deadline
+ * (`wait_deadline_at`), set only while waiting there and cleared by every path that leaves it.
+ * Nothing here dispatches, calls out or reads a provider.
  */
 @Injectable()
 export class JourneyRunnerService {
   private readonly logger = new Logger(JourneyRunnerService.name);
   readonly options: JourneyRunnerOptions;
+  private readonly sendPort: JourneySendPort;
 
   constructor(
     @Optional() @Inject(JOURNEY_DB) private readonly db: Database | null,
     private readonly audit: AuditWriter,
     @Optional() config?: AppConfigService,
     @Optional() @Inject('JOURNEY_RUNNER_OPTIONS') options?: Partial<JourneyRunnerOptions>,
+    @Optional() @Inject(JOURNEY_SEND_PORT) sendPort?: JourneySendPort,
   ) {
+    // Fail closed: without a binding, sends are unavailable.
+    this.sendPort = sendPort ?? new UnavailableJourneySendPort();
     const fromConfig = config?.journeys;
     this.options = {
       batchSize: options?.batchSize ?? fromConfig?.batchSize ?? 10,
@@ -261,9 +275,11 @@ export class JourneyRunnerService {
         id: execution.id,
         orgId: execution.orgId,
         workspaceId: execution.workspaceId,
+        journeyId: execution.journeyId,
         contactId: execution.contactId,
         status: execution.status,
         wakeAt: execution.wakeAt,
+        waitDeadlineAt: execution.waitDeadlineAt,
       };
 
       let result: NodeResult;
@@ -277,7 +293,9 @@ export class JourneyRunnerService {
           );
         // A savepoint, so a deterministic node failure can be recorded in this same
         // transaction without any partial effect of the node.
-        result = await tx.transaction(async (sp) => evaluateNode(sp, node, state, now));
+        result = await tx.transaction(async (sp) =>
+          evaluateNode(sp, node, state, now, { sendPort: this.sendPort }, nodeKey),
+        );
       } catch (error) {
         if (!(error instanceof JourneyNodeFailure)) throw error;
         await this.endExecution(tx, execution, {
@@ -295,11 +313,33 @@ export class JourneyRunnerService {
         return { outcome: 'ended', committed: true };
       }
 
+      if (result.kind === 'rearm') {
+        // A wait_for_outcome re-check without an outcome: only the next wake moves. No history
+        // row and no transition, conditional on the state and the deadline read (handover §6).
+        const rearmed = await tx
+          .update(schema.journeyExecutions)
+          .set({ wakeAt: result.until, updatedAt: sql`now()` })
+          .where(
+            and(
+              eq(schema.journeyExecutions.id, execution.id),
+              eq(schema.journeyExecutions.stateVersion, execution.stateVersion),
+              eq(schema.journeyExecutions.status, 'waiting'),
+              isNotNull(schema.journeyExecutions.waitDeadlineAt),
+              eq(schema.journeyExecutions.waitDeadlineAt, execution.waitDeadlineAt!),
+            ),
+          )
+          .returning({ id: schema.journeyExecutions.id });
+        if (rearmed.length !== 1) throw new JourneyFenced('state_version changed');
+        await this.releaseInTx(tx, { availableAt: result.until, attemptsDelta: 'reset' });
+        return { outcome: 'waiting', committed: false };
+      }
       const step: Step = {
         nodeKey,
         nodeType: node!.type,
         outcome: result.kind === 'wait' ? 'waited' : result.outcome,
         details: result.details,
+        errorCode: result.kind === 'wait' ? null : (result.errorCode ?? null),
+        messageId: result.kind === 'advance' ? (result.messageId ?? null) : null,
       };
       if (result.kind === 'end') {
         await this.endExecution(tx, execution, {
@@ -315,6 +355,7 @@ export class JourneyRunnerService {
           status: 'waiting',
           currentNodeKey: nodeKey,
           wakeAt: result.until,
+          waitDeadlineAt: result.deadline ?? null,
         });
         await this.releaseInTx(tx, { availableAt: result.until, attemptsDelta: 'reset' });
         return { outcome: 'waiting', committed: true };
@@ -323,6 +364,7 @@ export class JourneyRunnerService {
         status: 'running',
         currentNodeKey: result.next,
         wakeAt: null,
+        waitDeadlineAt: null,
       });
       if (result.contactUpdate) {
         await this.audit.record(
@@ -367,7 +409,13 @@ export class JourneyRunnerService {
     tx: Transaction,
     execution: typeof schema.journeyExecutions.$inferSelect,
     step: Step,
-    next: { status: 'running' | 'waiting'; currentNodeKey: string; wakeAt: Date | null },
+    next: {
+      status: 'running' | 'waiting';
+      currentNodeKey: string;
+      wakeAt: Date | null;
+      /** Non-null only when a wait_for_outcome arms (the CHECK of 0066 forbids it otherwise). */
+      waitDeadlineAt: Date | null;
+    },
   ): Promise<void> {
     const seq = execution.stateVersion + 1;
     const updated = await tx
@@ -376,6 +424,7 @@ export class JourneyRunnerService {
         status: next.status,
         currentNodeKey: next.currentNodeKey,
         wakeAt: next.wakeAt,
+        waitDeadlineAt: next.waitDeadlineAt,
         stateVersion: seq,
         transitions: execution.transitions + 1,
         updatedAt: sql`now()`,
@@ -395,7 +444,7 @@ export class JourneyRunnerService {
   private async endExecution(
     tx: Transaction,
     execution: typeof schema.journeyExecutions.$inferSelect,
-    end: { status: 'completed' | 'failed'; endReason: string; step: Step },
+    end: { status: 'completed' | 'exited' | 'failed'; endReason: string; step: Step },
   ): Promise<void> {
     const seq = execution.stateVersion + 1;
     const updated = await tx
@@ -405,6 +454,8 @@ export class JourneyRunnerService {
         endedAt: sql`now()`,
         endReason: end.endReason,
         wakeAt: null,
+        // Every end clears the deadline in the same update (handover §6; 0066 CHECK).
+        waitDeadlineAt: null,
         stateVersion: seq,
         transitions: Math.min(execution.transitions + 1, JOURNEY_RUNNER_LIMITS.maxTransitions),
         updatedAt: sql`now()`,
@@ -436,6 +487,7 @@ export class JourneyRunnerService {
       nodeType: step.nodeType,
       outcome: step.outcome,
       errorCode: step.errorCode ?? null,
+      messageId: step.messageId ?? null,
       details: step.details,
       finishedAt: sql`clock_timestamp()`,
     });
