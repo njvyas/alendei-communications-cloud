@@ -828,4 +828,179 @@ describe('Phase 8C PR 8C-4: journey event intake and scheduled triggers', () => 
       );
     });
   });
+
+  describe('lifecycle races (PR #108 review correction)', () => {
+    let wsR: string;
+    let segR: string;
+    let audienceR: string[];
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const counts = async (journeyId: string) => {
+      const [row] = (
+        await h.admin.execute<{ executions: string; queue: string }>(sql`
+          SELECT (SELECT count(*) FROM journey_executions WHERE journey_id = ${journeyId})::text AS executions,
+                 (SELECT count(*) FROM journey_execution_queue q JOIN journey_executions e ON e.id = q.execution_id
+                   WHERE e.journey_id = ${journeyId})::text AS queue`)
+      ).rows;
+      return { executions: Number(row!.executions), queue: Number(row!.queue) };
+    };
+    /**
+     * Applies a pause or archive exactly as JourneyLifecycleService orders it (the journey row
+     * FOR UPDATE, then its trigger, then the journey), and commits only after `during` has
+     * started and is blocked on the journey lock — the race window under test.
+     */
+    const transitionWhile = async <T>(
+      journeyId: string,
+      to: 'paused' | 'archived',
+      during: () => Promise<T>,
+    ): Promise<T> => {
+      const holder = await lockPool.connect();
+      try {
+        await holder.query('BEGIN');
+        await holder.query('SELECT id FROM journeys WHERE id = $1 FOR UPDATE', [journeyId]);
+        await holder.query(
+          `UPDATE journey_triggers SET status = $2 WHERE journey_id = $1 AND status <> 'retired'`,
+          [journeyId, to === 'paused' ? 'paused' : 'retired'],
+        );
+        await holder.query('UPDATE journeys SET status = $2 WHERE id = $1', [journeyId, to]);
+        const work = during();
+        await sleep(300); // `work` has selected its target and now waits on the journey lock
+        await holder.query('COMMIT');
+        return await work;
+      } catch (error) {
+        await holder.query('ROLLBACK').catch(() => undefined);
+        throw error;
+      } finally {
+        holder.release();
+      }
+    };
+
+    beforeAll(async () => {
+      wsR = (
+        await h.admin
+          .insert(schema.workspaces)
+          .values({ orgId: A.orgId, name: 'Races', slug: `j4-race-${uuidv7().slice(-6)}` })
+          .returning({ id: schema.workspaces.id })
+      )[0]!.id;
+      segR = (
+        await h.admin
+          .insert(schema.segments)
+          .values({
+            orgId: A.orgId,
+            workspaceId: wsR,
+            name: `race-${uuidv7()}`,
+            criteria: { tags: ['race'] },
+          })
+          .returning({ id: schema.segments.id })
+      )[0]!.id;
+      audienceR = [];
+      for (let i = 0; i < 5; i++)
+        audienceR.push(await contact(A, wsR, `r${i}`, { tags: ['race'] }));
+      audienceR.sort();
+    });
+    const raceSchedule = () =>
+      triggerGraph({
+        kind: 'schedule',
+        segmentId: segR,
+        schedule: {
+          type: 'recurring',
+          frequency: 'daily',
+          time: '09:00',
+          timeZone: 'Asia/Kolkata',
+        },
+      });
+
+    it('schedule claimed, then journey paused before the next batch: nothing more is enrolled; resume continues the same firing without duplicates', async () => {
+      const j = await activeJourney('Race pause', raceSchedule(), { ws: wsR });
+      await makeDue(j.triggerId);
+      const p = processor({ scheduleBatch: 2, lockTimeoutMs: 5_000 });
+      const claim = (await p.claimSchedule())!;
+      expect(claim.triggerId).toBe(j.triggerId);
+      const first = await p.runBatch(claim, null);
+      expect(first).toMatchObject({ count: 2, size: 2 });
+      expect(await counts(j.id)).toEqual({ executions: 2, queue: 2 });
+
+      expect((await as(http().post(url(`${base(wsR)}/${j.id}/pause`)))).status).toBe(200);
+      const after = await counts(j.id);
+      expect(await p.runBatch(claim, (first as { last: string }).last)).toBe('inactive');
+      expect(await p.fire(claim)).toMatchObject({ result: 'inactive', enrolled: 0 });
+      expect(await counts(j.id)).toEqual(after);
+      const held = await triggerRow(j.triggerId);
+      expect(held).toMatchObject({ claim_token: null, attempts: 0, fire_cursor: audienceR[1] });
+      expect(held.firing_at).not.toBeNull();
+      expect(await processor().claimSchedule()).toBeNull(); // paused
+
+      expect((await as(http().post(url(`${base(wsR)}/${j.id}/resume`)))).status).toBe(200);
+      const [resumed] = await processor().fireDueSchedules(1);
+      expect(resumed).toMatchObject({ triggerId: j.triggerId, result: 'completed', enrolled: 3 });
+      const ex = await executionsOf(j.id);
+      expect(ex.map((e) => e.contact_id).sort()).toEqual(audienceR);
+      expect(new Set(ex.map((e) => e.entry_ref)).size).toBe(1); // one frozen fire instant
+      expect((await triggerRow(j.triggerId)).firing_at).toBeNull();
+    });
+
+    it('schedule claimed, then journey archived before the next batch: nothing more is enrolled, and the firing is never resumed', async () => {
+      const j = await activeJourney('Race archive', raceSchedule(), { ws: wsR });
+      await makeDue(j.triggerId);
+      const p = processor({ scheduleBatch: 2, lockTimeoutMs: 5_000 });
+      const claim = (await p.claimSchedule())!;
+      expect(claim.triggerId).toBe(j.triggerId);
+      const first = await p.runBatch(claim, null);
+      expect(first).toMatchObject({ count: 2 });
+      expect((await as(http().post(url(`${base(wsR)}/${j.id}/archive`)))).status).toBe(200);
+      const after = await counts(j.id);
+      expect(after).toEqual({ executions: 2, queue: 0 }); // archive cancelled the two
+      expect(await p.runBatch(claim, (first as { last: string }).last)).toBe('inactive');
+      expect(await p.fire(claim)).toMatchObject({ result: 'inactive', enrolled: 0 });
+      expect(await counts(j.id)).toEqual(after);
+      expect(await processor().fireDueSchedules()).toEqual([]);
+      expect(await counts(j.id)).toEqual(after);
+    });
+
+    it('race: a pause committing while a schedule batch waits on the journey lock leaves the batch with nothing', async () => {
+      const j = await activeJourney('Race pause in flight', raceSchedule(), { ws: wsR });
+      await makeDue(j.triggerId);
+      const p = processor({ lockTimeoutMs: 5_000 });
+      const claim = (await p.claimSchedule())!;
+      expect(claim.triggerId).toBe(j.triggerId);
+      const result = await transitionWhile(j.id, 'paused', () => p.runBatch(claim, null));
+      expect(result).toBe('inactive');
+      expect(await counts(j.id)).toEqual({ executions: 0, queue: 0 });
+    });
+
+    it('race: event selected, then journey paused before enrolment — no execution, no queue row', async () => {
+      await capture(true);
+      try {
+        const j = await activeJourney(
+          'Race event pause',
+          triggerGraph({ kind: 'event', event: 'contact.created' }),
+          { ws: wsR },
+        );
+        const c = await contact(A, wsR, 'race-event-pause');
+        expect((await events(c)).map((e) => e.kind)).toEqual(['contact.created']);
+        await transitionWhile(j.id, 'paused', () => processor().processEvents());
+        expect((await events(c))[0]).toMatchObject({ outcome: 'no_match', enrolled: 0 });
+        expect(await counts(j.id)).toEqual({ executions: 0, queue: 0 });
+      } finally {
+        await capture(false);
+      }
+    });
+
+    it('race: event selected, then journey archived before enrolment — no execution, no queue row', async () => {
+      await capture(true);
+      try {
+        const j = await activeJourney(
+          'Race event archive',
+          triggerGraph({ kind: 'event', event: 'contact.created' }),
+          { ws: wsR },
+        );
+        const c = await contact(A, wsR, 'race-event-archive');
+        expect((await events(c)).map((e) => e.kind)).toEqual(['contact.created']);
+        await transitionWhile(j.id, 'archived', () => processor().processEvents());
+        expect((await events(c))[0]).toMatchObject({ outcome: 'no_match', enrolled: 0 });
+        expect(await counts(j.id)).toEqual({ executions: 0, queue: 0 });
+      } finally {
+        await capture(false);
+      }
+    });
+  });
 });

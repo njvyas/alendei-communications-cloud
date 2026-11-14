@@ -41,7 +41,11 @@ export interface ScheduleClaim {
 
 export interface FiringResult {
   readonly triggerId: string;
-  readonly result: 'completed' | 'abandoned' | 'retry' | 'paused' | 'fenced';
+  /**
+   * `paused`: released at the per-claim batch bound (the firing resumes). `inactive`: the
+   * journey was paused or archived mid-firing; released, nothing enrolled since.
+   */
+  readonly result: 'completed' | 'abandoned' | 'retry' | 'paused' | 'inactive' | 'fenced';
   readonly enrolled: number;
   readonly batches: number;
   readonly nextFireAt?: string | null;
@@ -209,6 +213,46 @@ export class JourneyTriggerProcessingService {
     return next;
   }
 
+  /**
+   * One audience batch of a claimed firing, in one transaction: reads the next keyset batch of
+   * the segment and enrols it through `app_journey_enrol_scheduled`, which locks the journey,
+   * then the trigger, and re-checks both (and the claim) immediately before creating any
+   * execution. `'inactive'` when the journey or trigger is no longer active: nothing was
+   * created and the cursor did not move.
+   */
+  async runBatch(
+    claim: ScheduleClaim,
+    cursor: string | null,
+  ): Promise<{ count: number; size: number; last: string | null } | 'inactive'> {
+    return this.withTrigger(claim, async (tx) => {
+      const predicates = await segmentPredicates(tx, {
+        id: claim.segmentId,
+        orgId: claim.orgId,
+        workspaceId: claim.workspaceId,
+      });
+      const where: SQL[] = [
+        eq(schema.contacts.orgId, claim.orgId),
+        eq(schema.contacts.workspaceId, claim.workspaceId),
+        ...predicates,
+      ];
+      if (cursor) where.push(gt(schema.contacts.id, cursor));
+      const rows = await tx
+        .select({ id: schema.contacts.id })
+        .from(schema.contacts)
+        .where(and(...where))
+        .orderBy(asc(schema.contacts.id))
+        .limit(this.options.scheduleBatch);
+      const ids = rows.map((r) => r.id);
+      const last = ids.length > 0 ? ids[ids.length - 1]! : cursor;
+      const enrolledRows = await tx.execute<{ n: number }>(
+        sql`SELECT app_journey_enrol_scheduled(${`{${ids.join(',')}}`}::uuid[], ${last}::uuid) AS n`,
+      );
+      const count = Number(enrolledRows.rows[0]?.n ?? 0);
+      if (count < 0) return 'inactive' as const;
+      return { count, size: ids.length, last };
+    });
+  }
+
   /** Runs one claimed firing: batches until the audience is exhausted or the per-claim bound. */
   async fire(claim: ScheduleClaim): Promise<FiringResult> {
     const correlation = randomUUID();
@@ -227,31 +271,17 @@ export class JourneyTriggerProcessingService {
     }
     try {
       for (;;) {
-        const step = await this.withTrigger(claim, async (tx) => {
-          const predicates = await segmentPredicates(tx, {
-            id: claim.segmentId,
-            orgId: claim.orgId,
-            workspaceId: claim.workspaceId,
-          });
-          const where: SQL[] = [
-            eq(schema.contacts.orgId, claim.orgId),
-            eq(schema.contacts.workspaceId, claim.workspaceId),
-            ...predicates,
-          ];
-          if (cursor) where.push(gt(schema.contacts.id, cursor));
-          const rows = await tx
-            .select({ id: schema.contacts.id })
-            .from(schema.contacts)
-            .where(and(...where))
-            .orderBy(asc(schema.contacts.id))
-            .limit(this.options.scheduleBatch);
-          const ids = rows.map((r) => r.id);
-          const last = ids.length > 0 ? ids[ids.length - 1]! : cursor;
-          const enrolledRows = await tx.execute<{ n: number }>(
-            sql`SELECT app_journey_enrol_scheduled(${`{${ids.join(',')}}`}::uuid[], ${last}::uuid) AS n`,
+        const step = await this.runBatch(claim, cursor);
+        if (step === 'inactive') {
+          // Paused or archived since the claim (or the previous batch): nothing was enrolled
+          // in this batch. Release the claim and keep the firing for a resume.
+          await this.withTrigger(claim, (tx) =>
+            tx.execute(
+              sql`SELECT app_journey_finish_schedule('release', NULL, NULL, NULL, ${correlation}::uuid)`,
+            ),
           );
-          return { count: Number(enrolledRows.rows[0]?.n ?? 0), size: ids.length, last };
-        });
+          return { triggerId: claim.triggerId, result: 'inactive', enrolled, batches };
+        }
         batches++;
         enrolled += step.count;
         cursor = step.last;

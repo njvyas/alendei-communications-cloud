@@ -274,7 +274,7 @@ BEGIN
     v_total := 0;
     BEGIN
     FOR tr IN
-      SELECT t.journey_id, t.journey_version_id
+      SELECT t.id AS trigger_id, t.journey_id, t.journey_version_id
         FROM journey_triggers t
         JOIN journeys j ON j.id = t.journey_id AND j.org_id = t.org_id
        WHERE t.org_id = ev.org_id AND t.workspace_id = ev.workspace_id
@@ -285,6 +285,21 @@ BEGIN
          AND j.activated_at <= ev.occurred_at
        ORDER BY t.journey_id
     LOOP
+      -- Serialise with the journey lifecycle (8C-4 correction): lock the journey row FOR SHARE
+      -- first and then the trigger — the order JourneyLifecycleService uses (journeys FOR
+      -- UPDATE, then journey_triggers) — and re-check both under the locks, in a fresh
+      -- snapshot. A pause or archive either waits for this enrolment to commit, or committed
+      -- first and is seen here, so a paused or archived journey never receives an execution.
+      PERFORM 1 FROM journeys j WHERE j.id = tr.journey_id AND j.org_id = ev.org_id FOR SHARE;
+      PERFORM 1 FROM journey_triggers t WHERE t.id = tr.trigger_id FOR SHARE;
+      CONTINUE WHEN NOT EXISTS (
+        SELECT 1 FROM journey_triggers t
+          JOIN journeys j ON j.id = t.journey_id AND j.org_id = t.org_id
+         WHERE t.id = tr.trigger_id AND t.status = 'active'
+           AND t.journey_version_id = tr.journey_version_id
+           AND j.status = 'active' AND j.deleted_at IS NULL
+           AND j.active_version_id = t.journey_version_id
+           AND j.activated_at <= ev.occurred_at);
       v_total := v_total + app_journey_enrol_contacts(ev.org_id, ev.workspace_id, tr.journey_id,
         tr.journey_version_id, ARRAY[ev.contact_id], 'event', 'event:' || ev.id::text,
         jsonb_build_object('entryKind', 'event', 'eventKind', ev.kind));
@@ -413,6 +428,37 @@ $$;--> statement-breakpoint
 REVOKE ALL ON FUNCTION app_journey_claim_schedule(text, integer) FROM PUBLIC;--> statement-breakpoint
 GRANT EXECUTE ON FUNCTION app_journey_claim_schedule(text, integer) TO acc_journey;--> statement-breakpoint
 
+-- Locks the session's claimed firing in the lifecycle lock order — the journey row FOR SHARE,
+-- then the trigger row FOR UPDATE (JourneyLifecycleService takes journeys FOR UPDATE first,
+-- then updates journey_triggers) — and returns the trigger only while the claim is live: its
+-- token, an unexpired lease and a firing in progress. Raises insufficient_privilege otherwise,
+-- so an expired, superseded or invalidated claim can never write. Internal (no grant).
+CREATE FUNCTION app_journey_lock_claimed_trigger() RETURNS journey_triggers
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  v_journey uuid;
+  t journey_triggers%ROWTYPE;
+BEGIN
+  SELECT tr.journey_id INTO v_journey FROM journey_triggers tr
+   WHERE tr.id = app_journey_trigger_id() AND tr.org_id = app_current_org_id();
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'journey schedule claim lost' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  PERFORM 1 FROM journeys j WHERE j.id = v_journey AND j.org_id = app_current_org_id() FOR SHARE;
+  SELECT * INTO t FROM journey_triggers
+   WHERE id = app_journey_trigger_id() AND org_id = app_current_org_id()
+     AND claim_token = app_journey_trigger_claim_token() AND claimed_until > now()
+     AND firing_at IS NOT NULL
+     FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'journey schedule claim lost' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN t;
+END
+$$;--> statement-breakpoint
+REVOKE ALL ON FUNCTION app_journey_lock_claimed_trigger() FROM PUBLIC;--> statement-breakpoint
+
 -- Enrols one audience batch for the session's claimed firing and advances its cursor. The
 -- contacts must be in the trigger's workspace; the entry reference is derived here from the
 -- frozen fire instant, never from the caller.
@@ -423,13 +469,17 @@ DECLARE
   t journey_triggers%ROWTYPE;
   v_count integer;
 BEGIN
-  SELECT * INTO t FROM journey_triggers
-   WHERE id = app_journey_trigger_id() AND org_id = app_current_org_id()
-     AND claim_token = app_journey_trigger_claim_token() AND claimed_until > now()
-     AND firing_at IS NOT NULL
-     FOR UPDATE;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'journey schedule claim lost' USING ERRCODE = 'insufficient_privilege';
+  t := app_journey_lock_claimed_trigger();
+  -- Re-validated under the locks, immediately before any execution is created (8C-4
+  -- correction): the trigger is still active, and its journey is still active on this version.
+  -- A journey paused or archived since the claim (or the previous batch) receives nothing:
+  -- -1 tells the caller to release the claim, keeping the frozen instant and the cursor so a
+  -- resumed journey continues the same firing without duplicates.
+  IF t.status <> 'active' OR NOT EXISTS (
+       SELECT 1 FROM journeys j
+        WHERE j.id = t.journey_id AND j.org_id = t.org_id AND j.status = 'active'
+          AND j.deleted_at IS NULL AND j.active_version_id = t.journey_version_id) THEN
+    RETURN -1;
   END IF;
   IF p_contacts IS NULL OR cardinality(p_contacts) > 1000 THEN
     RAISE EXCEPTION 'app_journey_enrol_scheduled: invalid batch' USING ERRCODE = 'invalid_parameter_value';
@@ -456,7 +506,10 @@ GRANT EXECUTE ON FUNCTION app_journey_enrol_scheduled(uuid[], uuid) TO acc_journ
 --   'abandoned' — a deterministic failure or poison: the fire is skipped (no further
 --                 enrolment for it), the next fire is scheduled, the error recorded and audited;
 --   'retry'     — a transient failure: the claim is released, the firing (and cursor) kept, and
---                 the trigger is not claimable again before p_retry_at.
+--                 the trigger is not claimable again before p_retry_at;
+--   'release'   — the journey was paused or archived mid-firing: the claim is released, the
+--                 firing (frozen instant and cursor) kept for a resume.
+-- Every result first locks the journey, then the trigger (app_journey_lock_claimed_trigger).
 CREATE FUNCTION app_journey_finish_schedule(p_result text, p_next_fire_at timestamptz,
   p_error_code text, p_retry_at timestamptz, p_correlation uuid) RETURNS void
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public
@@ -464,13 +517,16 @@ AS $$
 DECLARE
   t journey_triggers%ROWTYPE;
 BEGIN
-  SELECT * INTO t FROM journey_triggers
-   WHERE id = app_journey_trigger_id() AND org_id = app_current_org_id()
-     AND claim_token = app_journey_trigger_claim_token() AND claimed_until > now()
-     AND firing_at IS NOT NULL
-     FOR UPDATE;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'journey schedule claim lost' USING ERRCODE = 'insufficient_privilege';
+  t := app_journey_lock_claimed_trigger();
+  IF p_result = 'release' THEN
+    -- The journey was paused or archived mid-firing: release the claim (it did not count),
+    -- keep the frozen instant and the cursor. A resumed journey continues this firing; an
+    -- archived one never is claimed again (its trigger is retired).
+    UPDATE journey_triggers
+       SET claim_token = NULL, claimed_until = NULL, claimed_by = NULL,
+           attempts = greatest(attempts - 1, 0), updated_at = now()
+     WHERE id = t.id;
+    RETURN;
   END IF;
   IF p_result = 'retry' THEN
     IF p_retry_at IS NULL THEN

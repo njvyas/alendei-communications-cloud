@@ -3781,6 +3781,27 @@ A failing event never blocks the inbox. A replay, or a second worker, enrols nob
   - history proof `66|9c68d006e1274a550bedf7a2e5b58b8f`; the first 65 entries are unchanged (`65|4a9c5dcf7ca0fe8617665c967d5a5ebb`, the 8C-3 proof);
   - `acc_journey` is NOLOGIN, and capture is off.
 
+**PR #108 review correction (14-Nov-2026): lifecycle serialisation of trigger enrolment.** The owner's review found a race. Scheduled and event enrolment checked the journey and trigger status when they selected their target, but not when they created the execution. A pause or archive committing in between could therefore still let new executions through. Corrected in `0065` itself, which is not yet merged or deployed anywhere, so the history proof changes.
+- **One lock order everywhere: the journey row, then the trigger.** This is the order `JourneyLifecycleService` uses (`journeys … FOR UPDATE`, then `journey_triggers`). API enrolment already took the journey `FOR SHARE`.
+- **Scheduled enrolment.** `app_journey_enrol_scheduled` and `app_journey_finish_schedule` now go through `app_journey_lock_claimed_trigger()` (definer, internal, no grant). It locks the journey `FOR SHARE`, then the trigger `FOR UPDATE`, and only while the claim is live (token, unexpired lease, firing in progress); otherwise it raises `insufficient_privilege`, so an expired or invalidated claim cannot write.
+  - Immediately before creating executions, enrolment re-checks under those locks that the trigger is active and that its journey is active on the trigger's version.
+  - If either check fails, it returns `-1` and creates nothing. The runner then releases the claim with the new result `release`, which keeps the frozen instant and the cursor and does not count the claim.
+  - A resumed journey continues the same firing from its cursor, with no duplicates. An archived journey's retired trigger is never claimed again.
+  - `JourneyTriggerProcessingService.runBatch` exposes one locked batch, and a firing interrupted this way reports `inactive`.
+- **Event enrolment.** For each matched trigger, `app_journey_process_events` now locks the journey `FOR SHARE`, then the trigger `FOR SHARE`, and re-checks (in a fresh snapshot) the trigger and journey status, the active version and the activation time before enrolling. Otherwise the event is `no_match` for that journey.
+- **The effect:** a pause or archive either waits for an in-flight enrolment to commit (which its archive then cancels), or commits first and is seen by the re-check. **No execution or queue row is created after the transition has taken effect.** There is no lock cycle: neither the claim function nor the lifecycle path takes these rows in the reverse order.
+- **Regression tests (+5, API integration):**
+  - schedule claimed → batch → **pause** → next batch and `fire` are `inactive`, with execution and queue counts unchanged; then **resume** completes the same firing (5 contacts, one entry reference, no duplicates);
+  - schedule claimed → batch → **archive** → `inactive`, with counts unchanged and the firing never resumed;
+  - a pause committing while a schedule batch waits on the journey lock;
+  - an event selected, then the journey **paused** before enrolment;
+  - an event selected, then the journey **archived** before enrolment.
+
+  Each race test holds the journey row exactly as the lifecycle service does and commits only once the enrolment is blocked on it. All earlier fencing and concurrent-worker tests still pass.
+- **Mutation checks, each caught:**
+  - removing the scheduled re-validation fails the three schedule tests;
+  - removing the event lock-and-recheck fails the two event tests.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.
