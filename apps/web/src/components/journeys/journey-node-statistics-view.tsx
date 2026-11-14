@@ -1,12 +1,17 @@
 'use client';
 
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { journeysApi } from '@/lib/api-client';
 import {
   getNodeDisplayLabel,
   getNodeTypeLabel,
+  getStepOutcomeLabel,
   type JourneyGraph,
-  type JourneyNodeStatistics,
+  type JourneyNodeStats,
+  type JourneyStatsRecord,
+  type JourneyStepOutcome,
+  type JourneyVersionStats,
 } from '@/lib/journeys';
 import { JourneyNodeIcon, getNodeTypeColorClass } from './journey-node-icon';
 
@@ -14,50 +19,56 @@ export interface JourneyNodeStatisticsViewProps {
   readonly workspaceId: string;
   readonly journeyId: string;
   readonly graph: JourneyGraph;
+  readonly defaultVersionId?: string;
 }
 
 export function JourneyNodeStatisticsView({
   workspaceId,
   journeyId,
   graph,
+  defaultVersionId,
 }: JourneyNodeStatisticsViewProps) {
+  const [selectedVersionId, setSelectedVersionId] = useState<string | undefined>(defaultVersionId);
+
   const { data: statsData, isLoading } = useQuery({
-    queryKey: ['journeys', workspaceId, journeyId, 'statistics'],
+    queryKey: ['journeys', workspaceId, journeyId, 'stats', selectedVersionId],
     queryFn: async ({ signal }) => {
       try {
-        return await journeysApi.getNodeStatistics(workspaceId, journeyId, undefined, signal);
+        const res = await journeysApi.getStats(workspaceId, journeyId, selectedVersionId, signal);
+        return res.data;
       } catch {
-        return { data: [] };
+        return null;
       }
     },
     refetchInterval: 15000,
   });
 
-  const statsList: readonly JourneyNodeStatistics[] = statsData?.data ?? [];
-  const statsMap = new Map<string, JourneyNodeStatistics>(statsList.map((s) => [s.nodeKey, s]));
+  const statsRecord: JourneyStatsRecord | null = statsData ?? null;
+  const versions: readonly JourneyVersionStats[] = statsRecord?.versions ?? [];
 
-  // Aggregate totals
-  const totalEntered = statsMap.get(graph.entry)?.enteredCount ?? 0;
-  let totalCompleted = 0;
-  let totalWaiting = 0;
-  let totalFailed = 0;
+  // Current active version stats
+  const activeVersionStats: JourneyVersionStats | null =
+    (selectedVersionId ? versions.find((v) => v.versionId === selectedVersionId) : versions[0]) ??
+    null;
 
-  for (const s of statsList) {
-    totalWaiting += s.waitingCount;
-    totalFailed += s.failedCount;
-    // Check if exit node
-    if (graph.nodes[s.nodeKey]?.type === 'exit') {
-      totalCompleted += s.completedCount;
-    }
-  }
+  const executions = activeVersionStats?.executions;
+  const totalExecutions = executions?.total ?? 0;
+  const completedExecutions = executions?.completed ?? 0;
+  const runningExecutions = executions?.running ?? 0;
+  const waitingExecutions = executions?.waiting ?? 0;
+  const failedExecutions = executions?.failed ?? 0;
+
+  const nodeStatsMap = new Map<string, JourneyNodeStats>(
+    (activeVersionStats?.nodes ?? []).map((n) => [n.nodeKey, n]),
+  );
 
   const overallCompletionRate =
-    totalEntered > 0 ? Math.round((totalCompleted / totalEntered) * 100) : 0;
+    totalExecutions > 0 ? Math.round((completedExecutions / totalExecutions) * 100) : 0;
 
   return (
     <div className="space-y-6">
       {/* 8C-2 Telemetry Info Banner */}
-      <div className="flex items-center justify-between rounded-lg border border-indigo-500/30 bg-indigo-500/10 p-3 text-xs text-indigo-300">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-indigo-500/30 bg-indigo-500/10 p-3 text-xs text-indigo-300">
         <div className="flex items-center gap-2">
           <svg className="h-4 w-4 shrink-0" fill="currentColor" viewBox="0 0 20 20">
             <path
@@ -67,26 +78,46 @@ export function JourneyNodeStatisticsView({
             />
           </svg>
           <span>
-            <strong>Per-Node Statistics & Telemetry:</strong> Real-time event counts and branch
-            funnels aggregated across all execution runs.
+            <strong>Phase 8C-2 Statistics & Funnel:</strong> Execution totals and per-node step
+            outcomes aggregated across published journey versions.
           </span>
         </div>
+
+        {versions.length > 1 && (
+          <div className="flex items-center gap-2">
+            <label htmlFor="stats-version-select" className="text-acc-text-secondary font-medium">
+              Version:
+            </label>
+            <select
+              id="stats-version-select"
+              value={activeVersionStats?.versionId || ''}
+              onChange={(e) => setSelectedVersionId(e.target.value)}
+              className="rounded-md border border-acc-border bg-acc-surface px-2.5 py-1 text-xs text-acc-text-primary focus:border-acc-accent focus:outline-hidden"
+            >
+              {versions.map((v) => (
+                <option key={v.versionId} value={v.versionId}>
+                  v{v.versionNumber} ({v.executions.total} executions)
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {/* Aggregate KPI Tiles */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <div className="rounded-xl border border-acc-border bg-acc-surface p-4">
-          <p className="text-xs text-acc-text-secondary">Total Entries</p>
+          <p className="text-xs text-acc-text-secondary">Total Executions</p>
           <p className="mt-1 font-mono text-2xl font-bold text-acc-text-primary">
-            {totalEntered.toLocaleString()}
+            {totalExecutions.toLocaleString()}
           </p>
-          <p className="mt-1 text-[11px] text-acc-text-tertiary">Contacts initiated</p>
+          <p className="mt-1 text-[11px] text-acc-text-tertiary">Contacts enrolled</p>
         </div>
 
         <div className="rounded-xl border border-acc-border bg-acc-surface p-4">
           <p className="text-xs text-acc-text-secondary">Completed Flow</p>
           <p className="mt-1 font-mono text-2xl font-bold text-emerald-400">
-            {totalCompleted.toLocaleString()}
+            {completedExecutions.toLocaleString()}
           </p>
           <p className="mt-1 text-[11px] text-acc-text-tertiary">
             {overallCompletionRate}% completion rate
@@ -94,19 +125,21 @@ export function JourneyNodeStatisticsView({
         </div>
 
         <div className="rounded-xl border border-acc-border bg-acc-surface p-4">
-          <p className="text-xs text-acc-text-secondary">Currently In Delays</p>
+          <p className="text-xs text-acc-text-secondary">In Flight (Running/Waiting)</p>
           <p className="mt-1 font-mono text-2xl font-bold text-amber-400">
-            {totalWaiting.toLocaleString()}
+            {(runningExecutions + waitingExecutions).toLocaleString()}
           </p>
-          <p className="mt-1 text-[11px] text-acc-text-tertiary">Awaiting timers / windows</p>
+          <p className="mt-1 text-[11px] text-acc-text-tertiary">
+            {runningExecutions} running · {waitingExecutions} in delay
+          </p>
         </div>
 
         <div className="rounded-xl border border-acc-border bg-acc-surface p-4">
-          <p className="text-xs text-acc-text-secondary">Errors / Drop-offs</p>
+          <p className="text-xs text-acc-text-secondary">Failed Executions</p>
           <p className="mt-1 font-mono text-2xl font-bold text-red-400">
-            {totalFailed.toLocaleString()}
+            {failedExecutions.toLocaleString()}
           </p>
-          <p className="mt-1 text-[11px] text-acc-text-tertiary">Failed step transitions</p>
+          <p className="mt-1 text-[11px] text-acc-text-tertiary">Terminal error state</p>
         </div>
       </div>
 
@@ -114,7 +147,7 @@ export function JourneyNodeStatisticsView({
       <div className="rounded-xl border border-acc-border bg-acc-surface p-5">
         <h3 className="text-sm font-semibold text-acc-text-primary">Node Funnel & Throughput</h3>
         <p className="text-xs text-acc-text-secondary mt-0.5">
-          Step-by-step conversion and branch distributions along the journey graph.
+          Live executions positioned at each step and historical step outcome distributions.
         </p>
 
         {isLoading ? (
@@ -124,16 +157,27 @@ export function JourneyNodeStatisticsView({
           >
             Loading metrics…
           </p>
+        ) : !activeVersionStats ? (
+          <p className="py-8 text-center text-xs text-acc-text-secondary italic">
+            No statistics recorded for this version yet.
+          </p>
         ) : (
           <div className="mt-4 space-y-4">
             {Object.keys(graph.nodes).map((nodeKey) => {
               const node = graph.nodes[nodeKey]!;
-              const stats = statsMap.get(nodeKey);
-              const entered = stats?.enteredCount ?? 0;
-              const completed = stats?.completedCount ?? 0;
-              const waiting = stats?.waitingCount ?? 0;
-              const failed = stats?.failedCount ?? 0;
-              const rate = entered > 0 ? Math.round((completed / entered) * 100) : 0;
+              const stats = nodeStatsMap.get(nodeKey);
+              const running = stats?.running ?? 0;
+              const waiting = stats?.waiting ?? 0;
+              const outcomes = stats?.outcomes ?? {};
+              const completedOutcomes = outcomes.completed ?? 0;
+              const enteredOutcomes = outcomes.entered ?? 0;
+              const failedOutcomes = outcomes.failed ?? 0;
+              const exitedOutcomes = outcomes.exited ?? 0;
+
+              const totalProcessed =
+                completedOutcomes + exitedOutcomes + failedOutcomes + enteredOutcomes;
+              const rate =
+                totalExecutions > 0 ? Math.round((totalProcessed / totalExecutions) * 100) : 0;
 
               return (
                 <div
@@ -162,25 +206,39 @@ export function JourneyNodeStatisticsView({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-4 font-mono text-xs">
-                      <div>
-                        <span className="text-acc-text-secondary">Entered: </span>
-                        <span className="font-semibold text-acc-text-primary">{entered}</span>
-                      </div>
-                      <div>
-                        <span className="text-acc-text-secondary">Completed: </span>
-                        <span className="font-semibold text-emerald-400">{completed}</span>
-                      </div>
+                    <div className="flex flex-wrap items-center gap-4 font-mono text-xs">
+                      {running > 0 && (
+                        <div>
+                          <span className="text-acc-text-secondary">Running: </span>
+                          <span className="font-semibold text-sky-400">{running}</span>
+                        </div>
+                      )}
                       {waiting > 0 && (
                         <div>
                           <span className="text-acc-text-secondary">Waiting: </span>
                           <span className="font-semibold text-amber-400">{waiting}</span>
                         </div>
                       )}
-                      {failed > 0 && (
+                      {completedOutcomes > 0 && (
+                        <div>
+                          <span className="text-acc-text-secondary">Completed: </span>
+                          <span className="font-semibold text-emerald-400">
+                            {completedOutcomes}
+                          </span>
+                        </div>
+                      )}
+                      {failedOutcomes > 0 && (
                         <div>
                           <span className="text-acc-text-secondary">Failed: </span>
-                          <span className="font-semibold text-red-400">{failed}</span>
+                          <span className="font-semibold text-red-400">{failedOutcomes}</span>
+                        </div>
+                      )}
+                      {exitedOutcomes > 0 && (
+                        <div>
+                          <span className="text-acc-text-secondary">Exited: </span>
+                          <span className="font-semibold text-acc-text-tertiary">
+                            {exitedOutcomes}
+                          </span>
                         </div>
                       )}
                       <div className="rounded bg-acc-surface px-2 py-0.5 text-acc-text-primary border border-acc-border">
@@ -197,29 +255,17 @@ export function JourneyNodeStatisticsView({
                     />
                   </div>
 
-                  {/* Branch Breakdown (if condition or outcome) */}
-                  {stats?.branchedCounts && (
-                    <div className="flex flex-wrap gap-4 border-t border-acc-border/40 pt-2 text-[11px] font-mono">
-                      {stats.branchedCounts.onTrue !== undefined && (
-                        <span className="text-emerald-400">
-                          Match (True): {stats.branchedCounts.onTrue}
+                  {/* Outcome Breakdown Tags */}
+                  {Object.keys(outcomes).length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {Object.entries(outcomes).map(([outcomeKey, count]) => (
+                        <span
+                          key={outcomeKey}
+                          className="rounded border border-acc-border bg-acc-surface px-2 py-0.5 font-mono text-[10px] text-acc-text-secondary"
+                        >
+                          {getStepOutcomeLabel(outcomeKey as JourneyStepOutcome)}: {count}
                         </span>
-                      )}
-                      {stats.branchedCounts.onFalse !== undefined && (
-                        <span className="text-rose-400">
-                          No Match (False): {stats.branchedCounts.onFalse}
-                        </span>
-                      )}
-                      {stats.branchedCounts.onOutcome !== undefined && (
-                        <span className="text-indigo-400">
-                          Outcome Met: {stats.branchedCounts.onOutcome}
-                        </span>
-                      )}
-                      {stats.branchedCounts.onTimeout !== undefined && (
-                        <span className="text-amber-400">
-                          Timeout: {stats.branchedCounts.onTimeout}
-                        </span>
-                      )}
+                      ))}
                     </div>
                   )}
                 </div>

@@ -105,8 +105,9 @@ import {
   type JourneyGraph,
   type JourneyGraphValidationReport,
   type JourneyExecutionRecord,
-  type JourneyExecutionStepRecord,
-  type JourneyNodeStatistics,
+  type JourneyExecutionDetailRecord,
+  type JourneyStatsRecord,
+  type JourneyEnrolmentResult,
 } from './journeys';
 
 export type {
@@ -4007,13 +4008,23 @@ export const journeysApi = {
   async listExecutions(
     workspaceId: string,
     journeyId: string,
-    params: { status?: string; cursor?: string; limit?: number } = {},
+    params: {
+      status?: string;
+      cursor?: string;
+      limit?: number;
+      sort?: string;
+      contactId?: string;
+      versionId?: string;
+    } = {},
     signal?: AbortSignal,
   ): Promise<ApiPagedResponse<JourneyExecutionRecord>> {
     const search = new URLSearchParams();
     if (params.status) search.set('status', params.status);
     if (params.cursor) search.set('cursor', params.cursor);
     if (params.limit) search.set('limit', String(params.limit));
+    if (params.sort) search.set('sort', params.sort);
+    if (params.contactId) search.set('contactId', params.contactId);
+    if (params.versionId) search.set('versionId', params.versionId);
     const qs = search.toString();
     return apiFetch<ApiPagedResponse<JourneyExecutionRecord>>(
       `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/executions${qs ? `?${qs}` : ''}`,
@@ -4026,14 +4037,54 @@ export const journeysApi = {
     journeyId: string,
     executionId: string,
     signal?: AbortSignal,
-  ): Promise<
-    ApiDataResponse<{
-      execution: JourneyExecutionRecord;
-      steps: readonly JourneyExecutionStepRecord[];
-    }>
-  > {
-    return apiFetch(
+  ): Promise<ApiDataResponse<JourneyExecutionDetailRecord>> {
+    return apiFetch<ApiDataResponse<JourneyExecutionDetailRecord>>(
       `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/executions/${encodeURIComponent(executionId)}`,
+      { method: 'GET', signal },
+    );
+  },
+
+  async cancelExecution(
+    workspaceId: string,
+    journeyId: string,
+    executionId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyExecutionDetailRecord>> {
+    return apiFetch<ApiDataResponse<JourneyExecutionDetailRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/executions/${encodeURIComponent(executionId)}/cancel`,
+      { method: 'POST', signal },
+    );
+  },
+
+  async enrolContacts(
+    workspaceId: string,
+    journeyId: string,
+    params: { contactIds: string[] },
+    idempotencyKey?: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyEnrolmentResult>> {
+    const headers: Record<string, string> = {};
+    if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+    return apiFetch<ApiDataResponse<JourneyEnrolmentResult>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/enrollments`,
+      {
+        method: 'POST',
+        headers,
+        body: params,
+        signal,
+      },
+    );
+  },
+
+  async getStats(
+    workspaceId: string,
+    journeyId: string,
+    versionId?: string,
+    signal?: AbortSignal,
+  ): Promise<ApiDataResponse<JourneyStatsRecord>> {
+    const qs = versionId ? `?versionId=${encodeURIComponent(versionId)}` : '';
+    return apiFetch<ApiDataResponse<JourneyStatsRecord>>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/stats${qs}`,
       { method: 'GET', signal },
     );
   },
@@ -4043,11 +4094,7 @@ export const journeysApi = {
     journeyId: string,
     versionId?: string,
     signal?: AbortSignal,
-  ): Promise<ApiDataResponse<readonly JourneyNodeStatistics[]>> {
-    const qs = versionId ? `?versionId=${encodeURIComponent(versionId)}` : '';
-    return apiFetch<ApiDataResponse<readonly JourneyNodeStatistics[]>>(
-      `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/statistics${qs}`,
-      { method: 'GET', signal },
-    );
+  ): Promise<ApiDataResponse<JourneyStatsRecord>> {
+    return this.getStats(workspaceId, journeyId, versionId, signal);
   },
 };

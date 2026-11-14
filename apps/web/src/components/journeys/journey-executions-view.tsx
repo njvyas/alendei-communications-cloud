@@ -1,16 +1,20 @@
 'use client';
 
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { journeysApi } from '@/lib/api-client';
 import {
   ALL_JOURNEY_EXECUTION_STATUSES,
   getNodeTypeLabel,
+  getStepOutcomeLabel,
   type JourneyExecutionRecord,
   type JourneyExecutionStepRecord,
+  type JourneyNodeType,
 } from '@/lib/journeys';
 import { JourneyExecutionStatusBadge } from './journey-status-badge';
 import { Drawer } from '@/components/ui/drawer';
+import { useCanManageJourneys } from '@/lib/session-store';
+import { toast } from '@/lib/toast';
 
 export interface JourneyExecutionsViewProps {
   readonly workspaceId: string;
@@ -18,8 +22,11 @@ export interface JourneyExecutionsViewProps {
 }
 
 export function JourneyExecutionsView({ workspaceId, journeyId }: JourneyExecutionsViewProps) {
+  const queryClient = useQueryClient();
+  const canManage = useCanManageJourneys();
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [selectedExecution, setSelectedExecution] = useState<JourneyExecutionRecord | null>(null);
+  const [isCancellingId, setIsCancellingId] = useState<string | null>(null);
 
   const { data: executionsData, isLoading } = useQuery({
     queryKey: ['journeys', workspaceId, journeyId, 'executions', { status: selectedStatus }],
@@ -58,6 +65,35 @@ export function JourneyExecutionsView({ workspaceId, journeyId }: JourneyExecuti
   });
 
   const steps: readonly JourneyExecutionStepRecord[] = stepsData ?? [];
+
+  const handleCancelExecution = async (executionId: string) => {
+    if (!canManage || isCancellingId) return;
+    setIsCancellingId(executionId);
+    try {
+      await journeysApi.cancelExecution(workspaceId, journeyId, executionId);
+      toast.success('Execution cancelled by operator.');
+      await queryClient.invalidateQueries({
+        queryKey: ['journeys', workspaceId, journeyId, 'executions'],
+      });
+      if (selectedExecution?.id === executionId) {
+        setSelectedExecution((prev) =>
+          prev
+            ? {
+                ...prev,
+                status: 'cancelled',
+                endReason: 'operator_cancelled',
+                endedAt: new Date().toISOString(),
+              }
+            : null,
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to cancel execution.';
+      toast.error(msg);
+    } finally {
+      setIsCancellingId(null);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -171,9 +207,9 @@ export function JourneyExecutionsView({ workspaceId, journeyId }: JourneyExecuti
               {executions.map((exec) => (
                 <tr key={exec.id} className="hover:bg-acc-surface-raised/40 transition-colors">
                   <td className="px-4 py-3 font-medium text-acc-text-primary">
-                    <p>{exec.contactName || exec.contactAddress || exec.contactId.slice(0, 8)}</p>
+                    <p className="font-mono text-xs">{exec.contactId}</p>
                     <p className="font-mono text-[10px] text-acc-text-secondary">
-                      {exec.contactId}
+                      Trigger: {exec.entryKind}
                     </p>
                   </td>
                   <td className="px-4 py-3">
@@ -182,19 +218,33 @@ export function JourneyExecutionsView({ workspaceId, journeyId }: JourneyExecuti
                   <td className="px-4 py-3 font-mono text-[11px] text-acc-text-secondary">
                     {exec.currentNodeKey ? exec.currentNodeKey : '(Completed / Exited)'}
                   </td>
-                  <td className="px-4 py-3 font-mono text-[11px]">v{exec.versionNumber}</td>
+                  <td className="px-4 py-3 font-mono text-[11px]" title={exec.journeyVersionId}>
+                    v{exec.journeyVersionId.slice(0, 8)}
+                  </td>
                   <td className="px-4 py-3 text-acc-text-secondary">
                     {new Date(exec.enteredAt).toLocaleString()}
                   </td>
                   <td className="px-4 py-3 font-mono">{exec.transitions}</td>
                   <td className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedExecution(exec)}
-                      className="rounded-md border border-acc-border px-2.5 py-1 text-[11px] font-medium text-acc-accent hover:bg-acc-surface-raised"
-                    >
-                      View Steps
-                    </button>
+                    <div className="flex items-center justify-end gap-1.5">
+                      {canManage && (exec.status === 'running' || exec.status === 'waiting') && (
+                        <button
+                          type="button"
+                          onClick={() => handleCancelExecution(exec.id)}
+                          disabled={isCancellingId === exec.id}
+                          className="rounded-md border border-red-500/40 bg-red-500/10 px-2 py-1 text-[11px] font-medium text-red-400 hover:bg-red-500/20 disabled:opacity-50"
+                        >
+                          {isCancellingId === exec.id ? 'Cancelling…' : 'Cancel'}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedExecution(exec)}
+                        className="rounded-md border border-acc-border px-2.5 py-1 text-[11px] font-medium text-acc-accent hover:bg-acc-surface-raised"
+                      >
+                        View Steps
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -240,31 +290,64 @@ export function JourneyExecutionsView({ workspaceId, journeyId }: JourneyExecuti
             </div>
 
             {/* Execution Metadata */}
-            <div className="my-4 grid grid-cols-2 gap-3 rounded-lg border border-acc-border bg-acc-surface-raised/40 p-3 text-xs">
-              <div>
-                <span className="text-acc-text-secondary">Status:</span>
-                <div className="mt-1">
-                  <JourneyExecutionStatusBadge status={selectedExecution.status} />
+            <div className="my-4 space-y-3 rounded-lg border border-acc-border bg-acc-surface-raised/40 p-3 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <span className="text-acc-text-secondary">Status:</span>
+                  <div className="mt-1">
+                    <JourneyExecutionStatusBadge status={selectedExecution.status} />
+                  </div>
+                </div>
+                <div>
+                  <span className="text-acc-text-secondary">Version:</span>
+                  <p
+                    className="mt-1 font-mono font-semibold"
+                    title={selectedExecution.journeyVersionId}
+                  >
+                    v{selectedExecution.journeyVersionId.slice(0, 8)}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-acc-text-secondary">Entered:</span>
+                  <p className="mt-1 text-[11px] text-acc-text-primary">
+                    {new Date(selectedExecution.enteredAt).toLocaleString()}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-acc-text-secondary">Ended:</span>
+                  <p className="mt-1 text-[11px] text-acc-text-primary">
+                    {selectedExecution.endedAt
+                      ? new Date(selectedExecution.endedAt).toLocaleString()
+                      : 'Still In Flight'}
+                  </p>
                 </div>
               </div>
-              <div>
-                <span className="text-acc-text-secondary">Version:</span>
-                <p className="mt-1 font-mono font-semibold">v{selectedExecution.versionNumber}</p>
-              </div>
-              <div>
-                <span className="text-acc-text-secondary">Entered:</span>
-                <p className="mt-1 text-[11px] text-acc-text-primary">
-                  {new Date(selectedExecution.enteredAt).toLocaleString()}
-                </p>
-              </div>
-              <div>
-                <span className="text-acc-text-secondary">Ended:</span>
-                <p className="mt-1 text-[11px] text-acc-text-primary">
-                  {selectedExecution.endedAt
-                    ? new Date(selectedExecution.endedAt).toLocaleString()
-                    : 'Still In Flight'}
-                </p>
-              </div>
+
+              {selectedExecution.endReason && (
+                <div className="border-t border-acc-border/60 pt-2 text-[11px]">
+                  <span className="text-acc-text-secondary">End Reason: </span>
+                  <span className="font-mono text-acc-text-primary">
+                    {selectedExecution.endReason}
+                  </span>
+                </div>
+              )}
+
+              {canManage &&
+                (selectedExecution.status === 'running' ||
+                  selectedExecution.status === 'waiting') && (
+                  <div className="border-t border-acc-border/60 pt-2 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => handleCancelExecution(selectedExecution.id)}
+                      disabled={isCancellingId === selectedExecution.id}
+                      className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-400 hover:bg-red-500/20 disabled:opacity-50"
+                    >
+                      {isCancellingId === selectedExecution.id
+                        ? 'Cancelling Execution…'
+                        : 'Cancel Execution (Operator)'}
+                    </button>
+                  </div>
+                )}
             </div>
 
             {/* Steps Timeline List */}
@@ -284,7 +367,7 @@ export function JourneyExecutionsView({ workspaceId, journeyId }: JourneyExecuti
               ) : (
                 <div className="relative border-l border-acc-border/80 pl-4 space-y-4 ml-2">
                   {steps.map((st) => (
-                    <div key={st.id} className="relative group">
+                    <div key={`${st.seq}-${st.nodeKey}`} className="relative group">
                       <span className="absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full border border-acc-accent bg-acc-surface" />
                       <div className="rounded-lg border border-acc-border bg-acc-surface-raised/40 p-3 text-xs space-y-1.5">
                         <div className="flex items-center justify-between">
@@ -293,18 +376,18 @@ export function JourneyExecutionsView({ workspaceId, journeyId }: JourneyExecuti
                           </span>
                           <span
                             className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase font-semibold ${
-                              st.outcome === 'success' || st.outcome === 'branch_true'
+                              st.outcome === 'completed'
                                 ? 'bg-emerald-500/10 text-emerald-400'
                                 : st.outcome === 'failed'
                                   ? 'bg-red-500/10 text-red-400'
                                   : 'bg-amber-500/10 text-amber-400'
                             }`}
                           >
-                            {st.outcome}
+                            {getStepOutcomeLabel(st.outcome)}
                           </span>
                         </div>
                         <p className="text-[11px] text-acc-text-secondary">
-                          {getNodeTypeLabel(st.nodeType)} · Attempt #{st.attempt}
+                          {getNodeTypeLabel(st.nodeType as JourneyNodeType)} · Attempt #{st.attempt}
                         </p>
                         {st.messageId && (
                           <p className="font-mono text-[10px] text-sky-400">
@@ -315,6 +398,16 @@ export function JourneyExecutionsView({ workspaceId, journeyId }: JourneyExecuti
                           <p className="font-mono text-[10px] text-red-400">
                             Error: {st.errorCode}
                           </p>
+                        )}
+                        {st.details && Object.keys(st.details).length > 0 && (
+                          <details className="mt-1">
+                            <summary className="text-[10px] text-acc-text-tertiary cursor-pointer hover:text-acc-text-secondary">
+                              Step Details
+                            </summary>
+                            <pre className="mt-1 max-h-24 overflow-auto rounded bg-acc-surface p-1.5 font-mono text-[10px] text-acc-text-secondary">
+                              {JSON.stringify(st.details, null, 2)}
+                            </pre>
+                          </details>
                         )}
                         <p className="text-[10px] text-acc-text-secondary">
                           {new Date(st.startedAt).toLocaleTimeString()}

@@ -6,7 +6,10 @@ import { useQuery } from '@tanstack/react-query';
 import { journeysApi, workspacesApi } from '@/lib/api-client';
 import { useCanManageJourneys, useCanReadJourneys, useSession } from '@/lib/session-store';
 import { calculateJourneyKPIs, JOURNEY_STATUSES, type JourneyRecord } from '@/lib/journeys';
-import { JourneyStatusBadge } from '@/components/journeys/journey-status-badge';
+import {
+  JourneyStatusBadge,
+  JourneyTriggerBadge,
+} from '@/components/journeys/journey-status-badge';
 import { JourneyCreateDialog } from '@/components/journeys/journey-create-dialog';
 import { StatCard } from '@/components/ui/stat-card';
 
@@ -268,6 +271,9 @@ export default function JourneysDirectoryPage() {
                   Status
                 </th>
                 <th scope="col" className="px-4 py-3.5">
+                  Trigger
+                </th>
+                <th scope="col" className="px-4 py-3.5">
                   Workspace
                 </th>
                 <th scope="col" className="px-4 py-3.5">
@@ -300,15 +306,33 @@ export default function JourneysDirectoryPage() {
                   <td className="px-4 py-3.5">
                     <JourneyStatusBadge status={j.status} />
                   </td>
+                  <td className="px-4 py-3.5">
+                    <JourneyTriggerBadge trigger={j.trigger} />
+                  </td>
                   <td className="px-4 py-3.5 text-acc-text-secondary">
                     {workspaceMap.get(j.workspaceId) || j.workspaceId.slice(0, 8)}
                   </td>
                   <td className="px-4 py-3.5 font-mono text-[11px] text-acc-text-secondary">
-                    {j.latestPublishedVersion
-                      ? `v${j.latestPublishedVersion.versionNumber}`
-                      : j.draftVersion
-                        ? `v${j.draftVersion.versionNumber} (Draft)`
-                        : 'Draft'}
+                    {j.activeVersionId ? (
+                      <div className="flex flex-col">
+                        <span className="font-semibold text-emerald-400">
+                          {j.latestPublishedVersion?.id === j.activeVersionId
+                            ? `v${j.latestPublishedVersion.versionNumber} (Active)`
+                            : 'Active'}
+                        </span>
+                        {j.activatedAt && (
+                          <span className="text-[10px] text-acc-text-tertiary">
+                            {new Date(j.activatedAt).toLocaleDateString()}
+                          </span>
+                        )}
+                      </div>
+                    ) : j.latestPublishedVersion ? (
+                      `v${j.latestPublishedVersion.versionNumber}`
+                    ) : j.draftVersion ? (
+                      `v${j.draftVersion.versionNumber} (Draft)`
+                    ) : (
+                      'Draft'
+                    )}
                   </td>
                   <td className="px-4 py-3.5 text-acc-text-secondary">
                     {new Date(j.updatedAt).toLocaleDateString()}

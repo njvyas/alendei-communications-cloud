@@ -16,6 +16,8 @@ import {
   parseWaitSeconds,
   getNodeEdgeTargets,
   updateNodeEdgeTarget,
+  formatTriggerSummary,
+  journeyLifecycleTarget,
   type JourneyRecord,
   type JourneyGraph,
   type JourneyNode,
@@ -24,6 +26,7 @@ import {
   JourneyStatusBadge,
   JourneyVersionStatusBadge,
   JourneyExecutionStatusBadge,
+  JourneyTriggerBadge,
   getJourneyStatusTone,
   getJourneyVersionStatusTone,
   getJourneyExecutionStatusTone,
@@ -225,9 +228,70 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
       assert.strictEqual(getJourneyExecutionStatusTone('waiting'), 'warning');
       assert.strictEqual(getJourneyExecutionStatusTone('failed'), 'error');
     });
+
+    it('formats trigger summaries correctly', () => {
+      assert.strictEqual(formatTriggerSummary(null), 'No active trigger');
+      assert.strictEqual(
+        formatTriggerSummary({
+          id: 't1',
+          journeyVersionId: 'v1',
+          kind: 'api',
+          eventKind: null,
+          eventTag: null,
+          segmentId: null,
+          nextFireAt: null,
+          status: 'active',
+        }),
+        'API Enrolment (POST /enrollments)',
+      );
+      assert.strictEqual(
+        formatTriggerSummary({
+          id: 't2',
+          journeyVersionId: 'v1',
+          kind: 'event',
+          eventKind: 'contact.created',
+          eventTag: null,
+          segmentId: null,
+          nextFireAt: null,
+          status: 'active',
+        }),
+        'Event: contact.created',
+      );
+    });
+
+    it('validates lifecycle transition targets', () => {
+      assert.strictEqual(journeyLifecycleTarget('activate', 'draft'), 'active');
+      assert.strictEqual(journeyLifecycleTarget('pause', 'active'), 'paused');
+      assert.strictEqual(journeyLifecycleTarget('resume', 'paused'), 'active');
+      assert.strictEqual(journeyLifecycleTarget('archive', 'active'), 'archived');
+      assert.strictEqual(journeyLifecycleTarget('activate', 'paused'), null);
+      assert.strictEqual(journeyLifecycleTarget('pause', 'draft'), null);
+    });
   });
 
   describe('3. Component Static Markup & Accessibility', () => {
+    it('JourneyTriggerBadge renders trigger kind and armed status', () => {
+      const activeMarkup = renderToStaticMarkup(
+        React.createElement(JourneyTriggerBadge, {
+          trigger: {
+            id: 'trig_1',
+            journeyVersionId: 'ver_1',
+            kind: 'api',
+            eventKind: null,
+            eventTag: null,
+            segmentId: null,
+            nextFireAt: null,
+            status: 'active',
+          },
+        }),
+      );
+      assert.ok(activeMarkup.includes('API Enrolment'));
+
+      const nullMarkup = renderToStaticMarkup(
+        React.createElement(JourneyTriggerBadge, { trigger: null }),
+      );
+      assert.ok(nullMarkup.includes('No trigger'));
+    });
     it('JourneyStatusBadge renders tone, label and screen-reader prefix', () => {
       const markup = renderToStaticMarkup(
         React.createElement(JourneyStatusBadge, { status: 'active' }),
@@ -344,6 +408,7 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
     interface InterceptedPayload {
       name?: string;
       expectedGraphSha256?: string;
+      contactIds?: string[];
       [key: string]: unknown;
     }
 
@@ -449,9 +514,32 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
       );
       assert.strictEqual(interceptedMethod, 'GET');
 
-      await journeysApi.getNodeStatistics('ws_test', 'j_test');
-      assert.ok(interceptedUrl.includes('/workspaces/ws_test/journeys/j_test/statistics'));
+      await journeysApi.getStats('ws_test', 'j_test', 'ver_99');
+      assert.ok(
+        interceptedUrl.includes('/workspaces/ws_test/journeys/j_test/stats?versionId=ver_99'),
+      );
       assert.strictEqual(interceptedMethod, 'GET');
+    });
+
+    it('journeysApi.cancelExecution dispatches POST to operator cancel route', async () => {
+      await journeysApi.cancelExecution('ws_test', 'j_test', 'exec_123');
+      assert.ok(
+        interceptedUrl.includes('/workspaces/ws_test/journeys/j_test/executions/exec_123/cancel'),
+      );
+      assert.strictEqual(interceptedMethod, 'POST');
+    });
+
+    it('journeysApi.enrolContacts dispatches POST to enrollments route with Idempotency-Key', async () => {
+      await journeysApi.enrolContacts(
+        'ws_test',
+        'j_test',
+        { contactIds: ['c_1', 'c_2'] },
+        'idemp-enrol-1',
+      );
+      assert.ok(interceptedUrl.includes('/workspaces/ws_test/journeys/j_test/enrollments'));
+      assert.strictEqual(interceptedMethod, 'POST');
+      assert.strictEqual(interceptedHeaders['Idempotency-Key'], 'idemp-enrol-1');
+      assert.deepStrictEqual(interceptedBody?.contactIds, ['c_1', 'c_2']);
     });
   });
 });

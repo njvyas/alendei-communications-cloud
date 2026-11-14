@@ -525,16 +525,16 @@ export function JourneyGraphEditor({
                       {stats && (
                         <div className="flex items-center gap-2 font-mono text-[11px]">
                           <span className="rounded bg-emerald-500/10 px-2 py-0.5 text-emerald-400">
-                            ✓ {stats.completedCount}
+                            ✓ {(stats.outcomes.completed ?? 0) + (stats.outcomes.exited ?? 0)}
                           </span>
-                          {stats.waitingCount > 0 && (
+                          {(stats.waiting > 0 || (stats.outcomes.waited ?? 0) > 0) && (
                             <span className="rounded bg-amber-500/10 px-2 py-0.5 text-amber-400">
-                              ⏳ {stats.waitingCount}
+                              ⏳ {stats.waiting + (stats.outcomes.waited ?? 0)}
                             </span>
                           )}
-                          {stats.failedCount > 0 && (
+                          {(stats.outcomes.failed ?? 0) > 0 && (
                             <span className="rounded bg-red-500/10 px-2 py-0.5 text-red-400">
-                              ✗ {stats.failedCount}
+                              ✗ {stats.outcomes.failed}
                             </span>
                           )}
                         </div>

@@ -11,6 +11,7 @@ import { toast } from '@/lib/toast';
 export interface JourneyVersionsViewProps {
   readonly workspaceId: string;
   readonly journeyId: string;
+  readonly activeVersionId?: string | null;
   readonly canManage?: boolean;
   readonly onSelectVersion?: (version: JourneyVersionRecord) => void;
 }
@@ -18,6 +19,7 @@ export interface JourneyVersionsViewProps {
 export function JourneyVersionsView({
   workspaceId,
   journeyId,
+  activeVersionId,
   canManage = true,
   onSelectVersion,
 }: JourneyVersionsViewProps) {
@@ -122,7 +124,14 @@ export function JourneyVersionsView({
               {versions.map((ver) => (
                 <tr key={ver.id} className="hover:bg-acc-surface-raised/40 transition-colors">
                   <td className="px-4 py-3 font-mono font-semibold text-acc-text-primary">
-                    v{ver.versionNumber}
+                    <div className="flex items-center gap-1.5">
+                      <span>v{ver.versionNumber}</span>
+                      {ver.id === activeVersionId && (
+                        <span className="rounded-full bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 text-[10px] font-sans font-medium text-emerald-400">
+                          Active
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <JourneyVersionStatusBadge status={ver.status} />
