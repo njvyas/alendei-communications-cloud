@@ -17,8 +17,10 @@ import {
   getNodeEdgeTargets,
   updateNodeEdgeTarget,
   formatTriggerSummary,
-  formatEntryRef,
+  formatTriggerNextFire,
   formatStepDetails,
+  isJourneyUuid,
+  JOURNEY_UUID_PATTERN,
   isJourneyTimeZone,
   nextJourneyScheduleFire,
   journeyLifecycleTarget,
@@ -849,17 +851,29 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
     });
 
     describe('8.2 Traceability & Formatting Helpers', () => {
-      it('formatEntryRef humanizes event, schedule, and api provenance references', () => {
-        assert.strictEqual(formatEntryRef(null), 'Direct / Manual');
-        assert.strictEqual(formatEntryRef(undefined), 'Direct / Manual');
-        assert.strictEqual(
-          formatEntryRef('event:01955b0a-7b3b-7411-9a4f-9e67d4f91111'),
-          'Event (01955b0a…)',
-        );
-        assert.ok(
-          formatEntryRef('schedule:trig-123:2026-11-14T10:00:00.000Z').includes('Schedule ('),
-        );
-        assert.strictEqual(formatEntryRef('usr-idemp-1234567890'), 'Ref: usr-idemp-12…');
+      it('isJourneyUuid accepts UUIDv4, UUIDv7, and authoritative contract UUID shapes, rejecting malformed strings', () => {
+        // UUIDv4
+        assert.strictEqual(isJourneyUuid('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'), true);
+        // UUIDv7 (version 7 nibble)
+        assert.strictEqual(isJourneyUuid('019326d8-1c4b-7000-8000-000000000000'), true);
+        // Nil UUID
+        assert.strictEqual(isJourneyUuid('00000000-0000-0000-0000-000000000000'), true);
+        // Pattern test
+        assert.ok(JOURNEY_UUID_PATTERN.test('019326d8-1c4b-7000-8000-000000000000'));
+        // Invalid shapes
+        assert.strictEqual(isJourneyUuid('not-a-uuid'), false);
+        assert.strictEqual(isJourneyUuid(''), false);
+        assert.strictEqual(isJourneyUuid('019326d8-1c4b-7000-8000'), false);
+        assert.strictEqual(isJourneyUuid('019326d8-1c4b-7000-8000-0000000000001'), false);
+      });
+
+      it('formatTriggerNextFire formats ISO instant with timezone indicator or returns null', () => {
+        assert.strictEqual(formatTriggerNextFire(null), null);
+        assert.strictEqual(formatTriggerNextFire(undefined), null);
+        assert.strictEqual(formatTriggerNextFire('invalid-date'), null);
+        const formatted = formatTriggerNextFire('2026-11-15T09:00:00Z');
+        assert.ok(formatted !== null);
+        assert.ok(typeof formatted === 'string' && formatted.length > 0);
       });
 
       it('formatStepDetails parses initial entry step metadata', () => {
@@ -888,7 +902,7 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
         );
       });
 
-      it('formatTriggerSummary renders detailed metadata for event and schedule triggers', () => {
+      it('formatTriggerSummary renders detailed metadata for event and schedule triggers with timezone indicator', () => {
         assert.strictEqual(
           formatTriggerSummary({
             id: 't-evt',
@@ -994,6 +1008,204 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
         assert.ok(markup.includes('Time Zone (IANA)'));
         assert.ok(markup.includes('Next Firing Preview:'));
         assert.ok(markup.includes('aria-pressed="true"'), 'Selected days must expose aria-pressed');
+      });
+
+      it('JourneyNodeInspector validates segment UUID, accepting UUIDv7 and rejecting malformed IDs', () => {
+        const v7SegmentGraph: JourneyGraph = {
+          schemaVersion: 1,
+          entry: 'start',
+          nodes: {
+            start: {
+              type: 'entry',
+              trigger: {
+                kind: 'schedule',
+                segmentId: '019326d8-1c4b-7000-8000-000000000000', // UUIDv7
+                schedule: {
+                  type: 'recurring',
+                  frequency: 'daily',
+                  time: '09:00',
+                  timeZone: 'UTC',
+                },
+              },
+              next: 'finish',
+            },
+            finish: { type: 'exit' },
+          },
+        };
+
+        const v7Markup = renderToStaticMarkup(
+          React.createElement(JourneyNodeInspector, {
+            nodeKey: 'start',
+            node: v7SegmentGraph.nodes.start!,
+            graph: v7SegmentGraph,
+            onChange: () => {},
+            onClose: () => {},
+          }),
+        );
+        assert.ok(!v7Markup.includes('Segment ID must be a valid UUID'));
+        assert.ok(!v7Markup.includes('Audience segment selection or UUID is required'));
+
+        const invalidSegmentGraph: JourneyGraph = {
+          schemaVersion: 1,
+          entry: 'start',
+          nodes: {
+            start: {
+              type: 'entry',
+              trigger: {
+                kind: 'schedule',
+                segmentId: 'not-a-valid-uuid',
+                schedule: {
+                  type: 'recurring',
+                  frequency: 'daily',
+                  time: '09:00',
+                  timeZone: 'UTC',
+                },
+              },
+              next: 'finish',
+            },
+            finish: { type: 'exit' },
+          },
+        };
+
+        const invalidMarkup = renderToStaticMarkup(
+          React.createElement(JourneyNodeInspector, {
+            nodeKey: 'start',
+            node: invalidSegmentGraph.nodes.start!,
+            graph: invalidSegmentGraph,
+            onChange: () => {},
+            onClose: () => {},
+          }),
+        );
+        assert.ok(invalidMarkup.includes('Segment ID must be a valid UUID'));
+      });
+
+      it('JourneyNodeInspector enforces RBAC fallback with unsupressed validation and empty segment requirements', () => {
+        // Without contacts.read permission (default cleared session), RBAC note is shown
+        // AND missing segment validation error is ALSO shown
+        const emptySegmentGraph: JourneyGraph = {
+          schemaVersion: 1,
+          entry: 'start',
+          nodes: {
+            start: {
+              type: 'entry',
+              trigger: {
+                kind: 'schedule',
+                segmentId: '',
+                schedule: {
+                  type: 'recurring',
+                  frequency: 'daily',
+                  time: '09:00',
+                  timeZone: 'UTC',
+                },
+              },
+              next: 'finish',
+            },
+            finish: { type: 'exit' },
+          },
+        };
+
+        const emptyMarkup = renderToStaticMarkup(
+          React.createElement(JourneyNodeInspector, {
+            nodeKey: 'start',
+            node: emptySegmentGraph.nodes.start!,
+            graph: emptySegmentGraph,
+            onChange: () => {},
+            onClose: () => {},
+          }),
+        );
+
+        // RBAC informational note must be present
+        assert.ok(emptyMarkup.includes('contacts.read'));
+        // Validation error must NOT be suppressed by the RBAC note
+        assert.ok(
+          emptyMarkup.includes('Audience segment selection or UUID is required'),
+          'Missing segment ID error must display even when operator lacks contacts.read',
+        );
+
+        // Authoritative graph validation must reject empty segmentId, blocking publish
+        const graphReport = validateJourneyGraph(emptySegmentGraph);
+        assert.strictEqual(graphReport.valid, false);
+        assert.ok(
+          graphReport.errors.some(
+            (e) => e.path === 'trigger.segmentId' && e.message.includes('UUID'),
+          ),
+        );
+      });
+
+      it('JourneyNodeInspector correctly formats timezone previews and explicit browser local time interpretation', () => {
+        // 1. One-time schedule
+        const futureDate = new Date(Date.now() + 86400000).toISOString();
+        const onceGraph: JourneyGraph = {
+          schemaVersion: 1,
+          entry: 'start',
+          nodes: {
+            start: {
+              type: 'entry',
+              trigger: {
+                kind: 'schedule',
+                segmentId: '019326d8-1c4b-7000-8000-000000000000',
+                schedule: {
+                  type: 'once',
+                  at: futureDate,
+                },
+              },
+              next: 'finish',
+            },
+            finish: { type: 'exit' },
+          },
+        };
+
+        const onceMarkup = renderToStaticMarkup(
+          React.createElement(JourneyNodeInspector, {
+            nodeKey: 'start',
+            node: onceGraph.nodes.start!,
+            graph: onceGraph,
+            onChange: () => {},
+            onClose: () => {},
+          }),
+        );
+
+        assert.ok(
+          onceMarkup.includes('Execution Date') && onceMarkup.includes('Browser Local Time'),
+        );
+        assert.ok(onceMarkup.includes('Interpreted in your') && onceMarkup.includes('local time'));
+        assert.ok(onceMarkup.includes('UTC:'));
+
+        // 2. Recurring schedule with specific IANA timezone (America/New_York)
+        const recurringGraph: JourneyGraph = {
+          schemaVersion: 1,
+          entry: 'start',
+          nodes: {
+            start: {
+              type: 'entry',
+              trigger: {
+                kind: 'schedule',
+                segmentId: '019326d8-1c4b-7000-8000-000000000000',
+                schedule: {
+                  type: 'recurring',
+                  frequency: 'daily',
+                  time: '14:30',
+                  timeZone: 'America/New_York',
+                },
+              },
+              next: 'finish',
+            },
+            finish: { type: 'exit' },
+          },
+        };
+
+        const recurringMarkup = renderToStaticMarkup(
+          React.createElement(JourneyNodeInspector, {
+            nodeKey: 'start',
+            node: recurringGraph.nodes.start!,
+            graph: recurringGraph,
+            onChange: () => {},
+            onClose: () => {},
+          }),
+        );
+
+        assert.ok(recurringMarkup.includes('America/New_York'));
+        assert.ok(recurringMarkup.includes('Next Firing Preview:'));
       });
 
       it('JourneyNodeInspector renders event trigger controls with tag input for contact.tag_added', () => {

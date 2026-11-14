@@ -156,6 +156,13 @@ export {
 export const ALL_JOURNEY_EXECUTION_STATUSES: readonly JourneyExecutionStatus[] =
   JOURNEY_EXECUTION_STATUSES;
 
+export const JOURNEY_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isJourneyUuid(val: string): boolean {
+  return JOURNEY_UUID_PATTERN.test(val);
+}
+
 export type JourneySchedule = Extract<JourneyTrigger, { kind: 'schedule' }>['schedule'];
 
 export type JourneyNodeStatistics = JourneyNodeStats;
@@ -268,6 +275,17 @@ export function getStepOutcomeLabel(outcome: JourneyStepOutcome): string {
   }
 }
 
+export function formatTriggerNextFire(nextFireAt: string | null | undefined): string | null {
+  if (!nextFireAt) return null;
+  try {
+    const d = new Date(nextFireAt);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toLocaleString(undefined, { timeZoneName: 'short' });
+  } catch {
+    return null;
+  }
+}
+
 export function formatTriggerSummary(trigger: JourneyTriggerRecord | null): string {
   if (!trigger) return 'No active trigger';
   if (trigger.kind === 'api') {
@@ -282,35 +300,15 @@ export function formatTriggerSummary(trigger: JourneyTriggerRecord | null): stri
   }
   if (trigger.kind === 'schedule') {
     const segmentText = trigger.segmentId ? ` · Segment ${trigger.segmentId.slice(0, 8)}…` : '';
-    const nextText = trigger.nextFireAt
-      ? ` (Next: ${new Date(trigger.nextFireAt).toLocaleString()})`
+    const formattedNext = formatTriggerNextFire(trigger.nextFireAt);
+    const nextText = formattedNext
+      ? ` (Next: ${formattedNext})`
       : trigger.status === 'paused'
         ? ' (Paused)'
         : '';
     return `Schedule${segmentText}${nextText}`;
   }
   return trigger.kind;
-}
-
-export function formatEntryRef(ref: string | null | undefined): string {
-  if (!ref) return 'Direct / Manual';
-  if (ref.startsWith('event:')) {
-    const eventId = ref.slice(6);
-    return `Event (${eventId.slice(0, 8)}…)`;
-  }
-  if (ref.startsWith('schedule:')) {
-    const parts = ref.slice(9).split(':');
-    // Format is schedule:<triggerId>:<fireInstant>
-    if (parts.length >= 2) {
-      const instant = parts.slice(1).join(':');
-      const parsed = Date.parse(instant);
-      if (!Number.isNaN(parsed)) {
-        return `Schedule (${new Date(parsed).toLocaleString()})`;
-      }
-    }
-    return 'Scheduled Fire';
-  }
-  return `Ref: ${ref.length > 16 ? `${ref.slice(0, 12)}…` : ref}`;
 }
 
 export function formatStepDetails(
@@ -325,7 +323,12 @@ export function formatStepDetails(
   if (details.entryKind === 'schedule') {
     const firedAt =
       typeof details.firedAt === 'string'
-        ? new Date(details.firedAt).toLocaleString()
+        ? (() => {
+            const d = new Date(details.firedAt);
+            return Number.isNaN(d.getTime())
+              ? 'Scheduled firing'
+              : d.toLocaleString(undefined, { timeZoneName: 'short' });
+          })()
         : 'Scheduled firing';
     return `Triggered by schedule fired at ${firedAt}`;
   }

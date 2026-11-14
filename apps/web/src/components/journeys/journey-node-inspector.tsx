@@ -11,6 +11,7 @@ import {
   getNodeDisplayLabel,
   getNodeTypeLabel,
   isJourneyTimeZone,
+  isJourneyUuid,
   nextJourneyScheduleFire,
   type JourneyChannel,
   type JourneyGraph,
@@ -56,7 +57,6 @@ const DAYS_OF_WEEK_LABELS = [
   { day: 7, label: 'Sun' },
 ];
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const HHMM_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 function toDatetimeLocal(isoString: string): string {
@@ -257,7 +257,7 @@ export function JourneyNodeInspector({
                       ...node,
                       trigger: {
                         kind: 'schedule',
-                        segmentId: '00000000-0000-0000-0000-000000000001',
+                        segmentId: '',
                         schedule: {
                           type: 'recurring',
                           frequency: 'daily',
@@ -429,12 +429,18 @@ export function JourneyNodeInspector({
                     />
                   )}
 
-                  {!canReadContacts ? (
+                  {!canReadContacts && (
                     <p className="mt-1 text-[10px] text-acc-text-tertiary">
                       Note: Segment list requires <code>contacts.read</code> permission. Enter the
                       Segment UUID manually.
                     </p>
-                  ) : node.trigger.segmentId && !UUID_REGEX.test(node.trigger.segmentId) ? (
+                  )}
+
+                  {!node.trigger.segmentId ? (
+                    <p className="mt-1 text-[11px] text-red-400">
+                      Audience segment selection or UUID is required.
+                    </p>
+                  ) : !isJourneyUuid(node.trigger.segmentId) ? (
                     <p className="mt-1 text-[11px] text-red-400">
                       Segment ID must be a valid UUID.
                     </p>
@@ -495,7 +501,7 @@ export function JourneyNodeInspector({
                       htmlFor="trigger-schedule-at"
                       className="block text-acc-text-secondary font-medium"
                     >
-                      Execution Date & Time (ISO Instant)
+                      Execution Date & Time (Browser Local Time)
                     </label>
                     <input
                       id="trigger-schedule-at"
@@ -525,7 +531,8 @@ export function JourneyNodeInspector({
                       </p>
                     ) : (
                       <p className="text-[10px] text-acc-text-tertiary">
-                        Target ISO: {node.trigger.schedule.at}
+                        Interpreted in your browser's local time ({defaultTz}) and saved as UTC
+                        instant: {node.trigger.schedule.at}
                       </p>
                     )}
                   </div>
@@ -782,11 +789,24 @@ export function JourneyNodeInspector({
                   </div>
                   {nextFire ? (
                     <p className="font-mono text-emerald-400 font-semibold pl-5">
-                      {nextFire.toLocaleString()} (
-                      {node.trigger.schedule.type === 'recurring'
-                        ? node.trigger.schedule.timeZone
-                        : 'UTC'}
-                      )
+                      {node.trigger.schedule.type === 'recurring' ? (
+                        <>
+                          {nextFire.toLocaleString(undefined, {
+                            timeZone: isJourneyTimeZone(node.trigger.schedule.timeZone)
+                              ? node.trigger.schedule.timeZone
+                              : 'UTC',
+                            timeZoneName: 'short',
+                          })}{' '}
+                          ({node.trigger.schedule.timeZone})
+                        </>
+                      ) : (
+                        <>
+                          {nextFire.toLocaleString(undefined, {
+                            timeZoneName: 'short',
+                          })}{' '}
+                          (UTC: {nextFire.toISOString()})
+                        </>
+                      )}
                     </p>
                   ) : (
                     <p className="text-amber-400 italic pl-5">
