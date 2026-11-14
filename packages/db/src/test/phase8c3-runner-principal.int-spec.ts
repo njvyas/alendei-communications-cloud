@@ -73,7 +73,7 @@ describe('Phase 8C PR 8C-3: acc_journey (migration 0064)', () => {
     });
   });
 
-  it('every acc_journey policy is bound to the session’s claimed execution', async () => {
+  it('every acc_journey policy is bound to the session’s claimed execution (8C-3) or claimed schedule firing (8C-4)', async () => {
     const policies = await q(
       `SELECT tablename, policyname, cmd, coalesce(qual, '') || ' ' || coalesce(with_check, '') AS expr
          FROM pg_policies WHERE 'acc_journey' = ANY(roles) ORDER BY tablename, policyname`,
@@ -81,9 +81,13 @@ describe('Phase 8C PR 8C-3: acc_journey (migration 0064)', () => {
     expect(policies.map((p) => `${p.tablename}.${p.policyname}:${p.cmd}`)).toEqual([
       'audit_logs.audit_logs_journey_runner_insert:INSERT',
       'consent_events.consent_events_runner_select:SELECT',
+      // Phase 8C PR 8C-4 (0065): a claimed schedule firing reads its trigger's audience.
+      'consent_events.consent_events_scheduler_select:SELECT',
       'contact_identities.contact_identities_runner_select:SELECT',
+      'contact_identities.contact_identities_scheduler_select:SELECT',
       'contacts.contacts_runner_select:SELECT',
       'contacts.contacts_runner_update:UPDATE',
+      'contacts.contacts_scheduler_select:SELECT',
       'journey_execution_queue.journey_execution_queue_runner_delete:DELETE',
       'journey_execution_queue.journey_execution_queue_runner_select:SELECT',
       'journey_execution_queue.journey_execution_queue_runner_update:UPDATE',
@@ -94,13 +98,15 @@ describe('Phase 8C PR 8C-3: acc_journey (migration 0064)', () => {
       'journey_versions.journey_versions_runner_select:SELECT',
       'journeys.journeys_runner_select:SELECT',
       'segments.segments_runner_select:SELECT',
+      'segments.segments_scheduler_select:SELECT',
       'suppressions.suppressions_runner_select:SELECT',
+      'suppressions.suppressions_scheduler_select:SELECT',
     ]);
     for (const p of policies) {
       expect([p.policyname, /app_current_org_id\(\)/.test(p.expr)]).toEqual([p.policyname, true]);
       expect([
         p.policyname,
-        /app_journey_execution_id\(\)|app_journey_claimed_execution\(\)|app_journey_claim_valid\(\)/.test(
+        /app_journey_execution_id\(\)|app_journey_claimed_execution\(\)|app_journey_claim_valid\(\)|app_journey_claimed_trigger\(\)/.test(
           p.expr,
         ),
       ]).toEqual([p.policyname, true]);

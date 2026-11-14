@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  boolean,
   check,
   foreignKey,
   index,
@@ -173,6 +174,18 @@ export const journeyTriggers = pgTable(
     schedule: jsonb('schedule'),
     nextFireAt: tstz('next_fire_at'),
     status: journeyTriggerStatus('status').notNull().default('active'),
+    // 8C-4 (`0065`): schedule firing state (claim, lease, frozen fire instant, keyset cursor).
+    claimToken: uuid('claim_token'),
+    claimedUntil: tstz('claimed_until'),
+    claimedBy: text('claimed_by'),
+    epoch: integer('epoch').notNull().default(0),
+    firingAt: tstz('firing_at'),
+    fireCursor: uuid('fire_cursor'),
+    fireEnrolled: integer('fire_enrolled').notNull().default(0),
+    lastFiredAt: tstz('last_fired_at'),
+    attempts: integer('attempts').notNull().default(0),
+    lastErrorCode: text('last_error_code'),
+    notBefore: tstz('not_before'),
     ...timestamps(),
   },
   (table) => [
@@ -193,6 +206,25 @@ export const journeyTriggers = pgTable(
     index('journey_triggers_due_idx')
       .on(table.nextFireAt)
       .where(sql`${table.status} = 'active'`),
+    index('journey_triggers_firing_idx')
+      .on(table.claimedUntil)
+      .where(sql`${table.firingAt} IS NOT NULL`),
+    check(
+      'journey_triggers_claim_shape',
+      sql`(${table.claimToken} IS NULL) = (${table.claimedUntil} IS NULL)`,
+    ),
+    check(
+      'journey_triggers_firing_shape',
+      sql`(${table.firingAt} IS NULL AND ${table.fireCursor} IS NULL AND ${table.fireEnrolled} = 0) OR (${table.kind} = 'schedule' AND ${table.firingAt} IS NOT NULL)`,
+    ),
+    check(
+      'journey_triggers_counters_nonnegative',
+      sql`${table.epoch} >= 0 AND ${table.attempts} >= 0 AND ${table.fireEnrolled} >= 0`,
+    ),
+    check(
+      'journey_triggers_error_code_length',
+      sql`${table.lastErrorCode} IS NULL OR char_length(${table.lastErrorCode}) BETWEEN 1 AND 100`,
+    ),
     index('journey_triggers_org_event_idx')
       .on(table.orgId, table.eventKind)
       .where(sql`${table.status} = 'active' AND ${table.kind} = 'event'`),
@@ -375,6 +407,60 @@ export const journeyExecutionSteps = pgTable(
     ),
     check('journey_execution_steps_time_order', sql`${table.finishedAt} >= ${table.startedAt}`),
   ],
+);
+
+/**
+ * 8C-4 (`0065`): the event inbox. Written only by the capture triggers on `contacts` and
+ * `messages` (definer), read only by `app_journey_process_events` (definer). No application
+ * role holds any privilege on it; RLS is on with no policy.
+ */
+export const automationEvents = pgTable(
+  'automation_events',
+  {
+    id: primaryId(),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'restrict' }),
+    workspaceId: uuid('workspace_id').notNull(),
+    kind: text('kind').notNull(),
+    contactId: uuid('contact_id').notNull(),
+    subjectId: uuid('subject_id'),
+    tag: text('tag'),
+    occurredAt: tstz('occurred_at').notNull(),
+    dedupeKey: text('dedupe_key').notNull(),
+    createdAt: tstz('created_at')
+      .notNull()
+      .default(sql`now()`),
+    processedAt: tstz('processed_at'),
+    outcome: text('outcome'),
+    enrolled: integer('enrolled').notNull().default(0),
+    errorCode: text('error_code'),
+  },
+  (table) => [
+    foreignKey({
+      name: 'automation_events_contact_fk',
+      columns: [table.contactId, table.workspaceId, table.orgId],
+      foreignColumns: [contacts.id, contacts.workspaceId, contacts.orgId],
+    }).onDelete('restrict'),
+    uniqueIndex('uq_automation_events_dedupe').on(table.orgId, table.kind, table.dedupeKey),
+    index('automation_events_unprocessed_idx')
+      .on(table.createdAt, table.id)
+      .where(sql`${table.processedAt} IS NULL`),
+    index('automation_events_created_at_idx').on(table.createdAt),
+  ],
+);
+
+/** 8C-4 (`0065`): the platform event-capture switch (singleton row, created OFF). */
+export const journeyEventCapture = pgTable(
+  'journey_event_capture',
+  {
+    singleton: boolean('singleton').primaryKey().default(true),
+    enabled: boolean('enabled').notNull().default(false),
+    updatedAt: tstz('updated_at')
+      .notNull()
+      .default(sql`now()`),
+  },
+  (table) => [check('journey_event_capture_singleton', sql`${table.singleton}`)],
 );
 
 export type JourneyTriggerRow = typeof journeyTriggers.$inferSelect;

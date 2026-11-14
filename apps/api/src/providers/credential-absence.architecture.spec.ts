@@ -266,6 +266,15 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
     ]);
     const phase8c3Runner = migrations.find((m) => m.n.startsWith('0064_'));
     expect(phase8c3Runner).toBeDefined();
+    // Phase 8C PR 8C-4 (migration 0065): the schedule claim's fencing column, session setting
+    // and accessor. No credential.
+    const JOURNEY_SCHEDULE_FENCING_0065 = new Set([
+      'claim_token',
+      'journey_trigger_claim_token',
+      'app_journey_trigger_claim_token',
+    ]);
+    const phase8c4Triggers = migrations.find((m) => m.n.startsWith('0065_'));
+    expect(phase8c4Triggers).toBeDefined();
     expect(
       phase2.flatMap((m) =>
         [...m.sql.matchAll(/\w*(?:credential|secret|passw|api_?key|token)\w*/gi)]
@@ -282,6 +291,7 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
           .filter((x) => !(m === phase75Settlement && DISPATCH_FENCING_0054.has(x[0])))
           .filter((x) => !(m === phase8c2Executions && JOURNEY_QUEUE_FENCING_0063.has(x[0])))
           .filter((x) => !(m === phase8c3Runner && JOURNEY_RUNNER_FENCING_0064.has(x[0])))
+          .filter((x) => !(m === phase8c4Triggers && JOURNEY_SCHEDULE_FENCING_0065.has(x[0])))
           .map((x) => `${m.n}: ${x[0]}`),
       ),
     ).toEqual([]);

@@ -88,6 +88,11 @@ export const CONTENT_TABLES = [
  * partition carries the parent's protections (`app_ledger_partition_report`).
  */
 export const ORG_ID_EXEMPT_TABLES: readonly string[] = [
+  // Phase 8C PR 8C-4 (migration 0065): the journey event inbox. No application role holds any
+  // privilege on it: the SECURITY DEFINER capture triggers write it in the producer's
+  // transaction, and only the definer intake (`app_journey_process_events`, executable by
+  // acc_journey) reads it. RLS is on with no policy.
+  'automation_events',
   'usage_ledger',
   'wallets',
   'credit_accounts',

@@ -237,6 +237,11 @@ describe('tenant-context trust model — what acc_app can do with session variab
    * last-organization-administrator guards since migration 0028 (ADR-015 R-11).
    */
   const TRIGGER_ONLY = [
+    // Phase 8C PR 8C-4 (0065): journey event capture on contacts and messages. Definer so the
+    // capture switch and the inbox stay unreadable to every application role; they write only
+    // automation_events, only when the switch is on and an active journey listens.
+    'app_journey_capture_contact',
+    'app_journey_capture_message',
     'fn_organization_lifecycle_lock',
     'fn_organizations_guard_reseller_id',
     'fn_protect_system_role_permissions',

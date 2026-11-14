@@ -7,6 +7,7 @@ import {
 
 import { AppConfigService } from '../../config/app-config.service';
 import { JourneyRunnerService } from './journey-runner.service';
+import { JourneyTriggerProcessingService } from './journey-trigger-processing.service';
 
 /** ±20 % around the poll interval (handover §8.2), so instances started together drift apart. */
 export const JOURNEY_POLL_JITTER = 0.2;
@@ -30,6 +31,7 @@ export class JourneyRunner implements OnApplicationBootstrap, OnModuleDestroy {
   constructor(
     private readonly config: AppConfigService,
     private readonly runner: JourneyRunnerService,
+    private readonly triggers: JourneyTriggerProcessingService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -55,6 +57,30 @@ export class JourneyRunner implements OnApplicationBootstrap, OnModuleDestroy {
   }
 
   private async runCycle(): Promise<void> {
+    const { eventIntakeEnabled, schedulerEnabled } = this.config.journeys;
+    // 8C-4: event intake and scheduled firing, each behind its own flag (off; refused outside
+    // tests). A failure in one part never stops the others.
+    if (eventIntakeEnabled && this.triggers.available) {
+      try {
+        await this.triggers.processEvents();
+        await this.triggers.purgeEvents();
+      } catch (error) {
+        this.logger.error({
+          msg: 'journey event intake failed; retrying at the next poll',
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    if (schedulerEnabled && this.triggers.available) {
+      try {
+        await this.triggers.fireDueSchedules();
+      } catch (error) {
+        this.logger.error({
+          msg: 'journey schedule firing failed; retrying at the next poll',
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     try {
       await this.runner.tick();
     } catch (error) {

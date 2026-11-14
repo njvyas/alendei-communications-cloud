@@ -38,6 +38,8 @@ import {
 const TABLES = [
   'api_keys',
   'audit_logs',
+  // Phase 8C PR 8C-4 (migration 0065): the journey event inbox; definer-only, no grant, RLS on.
+  'automation_events',
   // Phase 7 PR 7-6d-1 (migration 0059): definer-only billing-account operations; no grant, RLS on.
   'billing_account_operations',
   // Phase 7 PR 7-6c (migration 0057): definer-only operator resolutions; no grant, RLS on.
@@ -61,6 +63,9 @@ const TABLES = [
   // platform-scope claim) and the definer-only pricing evaluations.
   'customer_pricing_assignments',
   'idempotency_keys',
+  // Phase 8C PR 8C-4 (migration 0065): the platform event-capture switch (singleton, created
+  // off); no grant, RLS on — only the definer capture functions and the owner read it.
+  'journey_event_capture',
   // Phase 8C PR 8C-2 (migration 0063): executions, their claim queue and step history, triggers.
   'journey_execution_queue',
   'journey_execution_steps',

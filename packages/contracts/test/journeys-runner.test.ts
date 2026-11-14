@@ -75,3 +75,20 @@ describe('runner bounds (handover §§8.2, 9)', () => {
     );
   });
 });
+
+describe('trigger processing bounds (8C-4)', () => {
+  it('are the handover defaults', async () => {
+    const { JOURNEY_TRIGGER_PROCESSING_LIMITS } = await import('../src/journeys');
+    assert.deepEqual(
+      { ...JOURNEY_TRIGGER_PROCESSING_LIMITS },
+      {
+        eventBatch: 100,
+        eventRetentionDays: 30,
+        purgeBatch: 1000,
+        scheduleBatch: 500,
+        scheduleBatchesPerClaim: 20,
+        firingsPerCycle: 5,
+      },
+    );
+  });
+});

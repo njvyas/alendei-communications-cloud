@@ -3704,6 +3704,83 @@ Each is a draft, stopped for owner review. Billing enforcement stays disabled; n
   - `db:migrate` run twice (`Schema up to date (65 migrations verified).`);
   - history proof `65|4a9c5dcf7ca0fe8617665c967d5a5ebb`; the first 64 entries are unchanged (`64|3c96eb485fa64e6e074083bca81e628d`, the 8C-2 proof).
 
+### 1zj.5 PR 8C-4 as built: event intake and scheduled triggers (migration `0065`), disabled
+**Baseline and migration number.** Built on `develop` `66b2fbe` (PR #107 merged 14-Nov-2026; its tree is identical to the reviewed head `019f157`). `0065` was verified free: the latest migration is `0064`, and neither an open PR (including Gemini's #106) nor a remote branch carries `0065`+.
+
+**The approved catalogue only.** The catalogue is `JOURNEY_TRIGGER_EVENTS`, unchanged: `contact.created`, `contact.updated`, `contact.tag_added`, `message.delivered`, `message.read`, `message.failed`. `automation_events.kind` is limited to it by a CHECK.
+
+**Off by default — two independent layers.**
+1. **Capture** (the safe, non-executing intake path the handover requires in the producer's transaction).
+   - `AFTER` triggers on `contacts` (insert and update) and on `messages` (update of `status`, `delivery_status` or `read_at`) call the definer `app_journey_capture_event`.
+   - It writes only when the platform switch `journey_event_capture.enabled` is on (created **off**) **and** the organisation has an active journey whose active trigger listens for that event in that workspace (and that tag).
+   - It records only; it never aborts the producer's write (failures become a WARNING); and it never creates a message.
+2. **Processing.** `JOURNEY_EVENT_INTAKE_ENABLED` and `JOURNEY_SCHEDULER_ENABLED` default to `false`, are refused at startup outside `NODE_ENV=test`/`APP_ENV=test`, and require `JOURNEY_RUNNER_ENABLED` (itself refused outside tests). Both run only inside the runner loop as `acc_journey`, which has no credential.
+
+**Event intake.** `app_journey_process_events` (definer, executable by `acc_journey` only):
+- takes unprocessed events oldest first, with `FOR UPDATE SKIP LOCKED`;
+- processes each event in its own subtransaction;
+- enrols the event's contact into every active journey of its workspace whose active version's trigger listens — **never a journey activated after the event occurred** (late events);
+- uses `entry_ref` `event:<id>`, through the shared definer `app_journey_enrol_contacts` (positioned after the entry node, history `entered` with `{entryKind, eventKind}`, an unclaimed queue row, entry policy `once`, `ON CONFLICT DO NOTHING`);
+- marks the event `enrolled`, `no_match` or `failed` (SQLSTATE) in the same transaction.
+
+A failing event never blocks the inbox. A replay, or a second worker, enrols nobody twice. Retention: `app_journey_purge_events` removes events older than 30 days, in bounded batches.
+
+**Scheduled triggers.** Three definer functions, executable by `acc_journey` only:
+- `app_journey_claim_schedule` claims one due trigger: kind `schedule`, trigger and journey active, the active version's trigger, not backed off; `SKIP LOCKED`, a lease, a fresh token, `epoch + 1`, `attempts + 1`. It **freezes the fire instant** in `firing_at`.
+- The audience is enrolled in keyset batches. `acc_journey` reads the trigger's workspace audience under claim-bound policies, using **the same segment predicates as `resolveAudience`** (`segment-criteria.ts`, now shared with the 8C-3 condition). Each batch goes through `app_journey_enrol_scheduled`, whose `entry_ref` `schedule:<trigger>:<instant>` is derived in the database, never by the caller.
+- A firing can be released mid-way and resumed from its cursor. An overlapping or resumed worker can never enrol a contact twice for one fire, and a stale claim is fenced.
+- `app_journey_finish_schedule` completes the firing, sets the next fire, clears the state and audits `journey.schedule_fired` (system actor `journey_runner`, with the counts). It can also retry with backoff (`not_before`, keeping the firing), or abandon the fire (a missing segment or channel, invalid criteria, or poison after more than 5 claims), which skips that fire, schedules the next one and is audited with outcome `failure`.
+
+**Time.**
+- The next fire is computed strictly after the frozen instant and from no earlier than now: **missed fires are not replayed in a burst**.
+- It uses the existing DST-correct `nextJourneyScheduleFire`. A spring-forward gap runs at the first valid instant; a fall-back repeated hour fires once (its first occurrence).
+- A one-off schedule never recurs.
+
+**Deviations from the handover.**
+1. **Contact events are captured by a database trigger, not by contacts-service writes.** It sits in the same producer transaction, and it covers every writer uniformly: the API, import, and the 8C-3 runner's `update_contact`. Re-entry loops are bounded by the entry policy `once`.
+2. **A platform capture switch, created off.** The handover had capture always on. The owner's instruction (automated intake off by default) is met at the database level, because database triggers cannot read application configuration.
+3. **Retention covers all events older than 30 days,** processed or not. A stale unprocessed event would otherwise be enrolled long after it happened; together with the activation rule, this bounds late events.
+4. **`automation_events` has no tenant read surface.** It is definer-only and org-id-exempt, and its `outcome` is a CHECKed text, not an enum.
+5. **Event intake writes no per-event audit row.** The event row records its outcome and the step history records each enrolment. Each schedule firing **is** audited.
+6. **Duplicate-enrolment protection is layered:** the entry policy `once`, the unique `(journey, contact, entry_ref)`, and the live-execution partial unique index. The mutation checks remove the claim, lock and switch guards one at a time; each idempotency layer alone already prevents duplicates.
+
+**Tests:**
+- contracts +1 (the trigger-processing bounds pinned);
+- API unit +8: both flags off by default, refused in four non-test environment pairs and requiring the runner; the next fire strictly after the instant, no burst, a one-off never recurring, and DST fall-back; disabled without a database;
+- API integration +16 (`journeys-triggers.int-spec.ts`; processing as `acc_journey`):
+  - **capture**: off by default (nothing recorded for an active listener); gated by workspace, organisation and tag; `contact.updated` only on a real change; message delivered/read/failed once each, with no message or dispatch row created; a capture failure does not abort the producer;
+  - **intake**: **J-C4** (two workers at once: each event taken once, one enrolment per journey; a replay enrols nobody), positioning and history details; **late events** (occurred before activation; reached a paused journey); per-event failure isolation (`failed`, `23514`; the batch continues); retention;
+  - **schedules**:
+    - a due fire enrols the segment audience once, schedules 09:00 IST, and is audited;
+    - not-due, paused, and journey-paused-with-trigger-active are not claimed;
+    - **J-C5**: overlapping schedulers give one firing; an expired-lease takeover completes and the stale claim is fenced;
+    - resumable batches under one frozen instant, and a forced re-fire of the same instant enrols nobody;
+    - no burst for missed fires; a one-off fires once;
+    - **DST**: New York fall-back 01:30 → the next fire is the following day at 06:30Z, and spring-forward 02:30 → 03:30 EDT;
+    - a missing segment is abandoned and audited as a failure; a transient `55P03` is retried with backoff, keeping the firing, then completes; poison is abandoned;
+    - claim-scoped reads only (no other workspace, nothing without the token, no INSERT on executions or SELECT on `automation_events`).
+- **Updated pins:**
+  - scope-creep (worker vocabulary with this citation; the two new tables);
+  - credential absence (`0065` claim fencing);
+  - table classes (`automation_events` org-id-exempt);
+  - the principals table list;
+  - the `acc_journey` policy list (+5 scheduler policies);
+  - the SECURITY DEFINER trigger-function list (+2 capture triggers);
+  - the migration count (66).
+- **Mutation checks, each caught:**
+  - capture ignoring the switch;
+  - intake ignoring the activation time;
+  - intake without `SKIP LOCKED`;
+  - the schedule claim ignoring the journey status (caught by the journey-paused-with-trigger-active check, added for it);
+  - a one-off schedule recurring;
+  - scheduler contact reads not bound to the workspace.
+- **Verification (disposable clone of `acc_r015_base`, migrated to `0065`, on tree `f1c6ed4`):**
+  - DB integration 551/551, API integration 666/666, security 1,860/1,860;
+  - contracts 61, API unit 1,154, db unit 275;
+  - `db:migrate` run twice (`Schema up to date (66 migrations verified).`);
+  - history proof `66|9c68d006e1274a550bedf7a2e5b58b8f`; the first 65 entries are unchanged (`65|4a9c5dcf7ca0fe8617665c967d5a5ebb`, the 8C-3 proof);
+  - `acc_journey` is NOLOGIN, and capture is off.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

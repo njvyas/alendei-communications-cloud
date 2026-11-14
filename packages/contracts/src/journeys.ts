@@ -861,6 +861,29 @@ export const JOURNEY_RUNNER_ERROR_CODES = Object.freeze({
   UNEXPECTED: 'RUNNER_UNEXPECTED_ERROR',
 });
 
+/** 8C-4: event intake and scheduled-trigger bounds (handover §§5, 8.1; proposed defaults). */
+export const JOURNEY_TRIGGER_PROCESSING_LIMITS = Object.freeze({
+  /** Events processed per intake call. */
+  eventBatch: 100,
+  /** `automation_events` retention (handover §5: 30 days). */
+  eventRetentionDays: 30,
+  purgeBatch: 1_000,
+  /** Contacts enrolled per scheduled batch (one transaction each). */
+  scheduleBatch: 500,
+  /** Batches one schedule claim may run before it is released (the firing resumes later). */
+  scheduleBatchesPerClaim: 20,
+  /** Schedule firings per runner cycle. */
+  firingsPerCycle: 5,
+});
+
+/** 8C-4: stable codes recorded when a schedule firing is abandoned or retried. */
+export const JOURNEY_SCHEDULE_ERROR_CODES = Object.freeze({
+  SEGMENT_NOT_FOUND: 'SEGMENT_NOT_FOUND',
+  CHANNEL_NOT_FOUND: 'CHANNEL_NOT_FOUND',
+  CRITERIA_INVALID: 'SEGMENT_CRITERIA_INVALID',
+  POISONED: 'RUNNER_POISONED',
+});
+
 /** 8C-3 runner bounds (handover §§6, 8.2, 9; proposed defaults). */
 export const JOURNEY_RUNNER_LIMITS = Object.freeze({
   /** A transient failure (serialisation, deadlock, lock or statement timeout, connection) is retried this many times in all. */

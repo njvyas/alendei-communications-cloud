@@ -642,7 +642,7 @@ describe('Phase 7 PR 7-1 — ledger and billing-account foundation (migration 00
           env: process.env,
           timeout: 300_000,
         });
-        expect(stdout).toContain('Schema up to date (65 migrations verified).');
+        expect(stdout).toContain('Schema up to date (66 migrations verified).');
         expect(stdout).toContain('Ledger partitions: created 0 partition(s).');
         expect(stdout).toMatch(
           /usage_ledger partitions ok: headroom 24 month\(s\); 25 partition\(s\); no gaps; all protected; no orphans/,
