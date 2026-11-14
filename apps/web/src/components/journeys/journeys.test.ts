@@ -867,13 +867,13 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
         assert.strictEqual(isJourneyUuid('019326d8-1c4b-7000-8000-0000000000001'), false);
       });
 
-      it('formatTriggerNextFire formats ISO instant with timezone indicator or returns null', () => {
+      it('formatTriggerNextFire formats ISO instant with timezone indicator and explicit Browser local time label or returns null', () => {
         assert.strictEqual(formatTriggerNextFire(null), null);
         assert.strictEqual(formatTriggerNextFire(undefined), null);
         assert.strictEqual(formatTriggerNextFire('invalid-date'), null);
         const formatted = formatTriggerNextFire('2026-11-15T09:00:00Z');
         assert.ok(formatted !== null);
-        assert.ok(typeof formatted === 'string' && formatted.length > 0);
+        assert.ok(typeof formatted === 'string' && formatted.includes('Browser local time'));
       });
 
       it('formatStepDetails parses initial entry step metadata', () => {
@@ -930,6 +930,7 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
         assert.ok(scheduleSummary.includes('Schedule'));
         assert.ok(scheduleSummary.includes('Segment 00000000…'));
         assert.ok(scheduleSummary.includes('Next:'));
+        assert.ok(scheduleSummary.includes('Browser local time'));
 
         const pausedSummary = formatTriggerSummary({
           id: 't-paused',

@@ -280,7 +280,7 @@ export function formatTriggerNextFire(nextFireAt: string | null | undefined): st
   try {
     const d = new Date(nextFireAt);
     if (Number.isNaN(d.getTime())) return null;
-    return d.toLocaleString(undefined, { timeZoneName: 'short' });
+    return `${d.toLocaleString(undefined, { timeZoneName: 'short' })} (Browser local time)`;
   } catch {
     return null;
   }
