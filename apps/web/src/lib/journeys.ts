@@ -31,6 +31,9 @@ import {
   validateJourneyGraph,
   canonicalJourneyJson,
   isJourneyTimeZone,
+  nextJourneyScheduleFire,
+  JOURNEY_TRIGGER_PROCESSING_LIMITS,
+  JOURNEY_SCHEDULE_ERROR_CODES,
   type JourneyStatus,
   type JourneyVersionStatus,
   type JourneyChannel,
@@ -99,6 +102,9 @@ export {
   validateJourneyGraph,
   canonicalJourneyJson,
   isJourneyTimeZone,
+  nextJourneyScheduleFire,
+  JOURNEY_TRIGGER_PROCESSING_LIMITS,
+  JOURNEY_SCHEDULE_ERROR_CODES,
   JOURNEY_AUDIT_ACTIONS,
   JOURNEY_LIFECYCLE_ACTIONS,
   JOURNEY_LIFECYCLE_TRANSITIONS,
@@ -149,6 +155,8 @@ export {
 
 export const ALL_JOURNEY_EXECUTION_STATUSES: readonly JourneyExecutionStatus[] =
   JOURNEY_EXECUTION_STATUSES;
+
+export type JourneySchedule = Extract<JourneyTrigger, { kind: 'schedule' }>['schedule'];
 
 export type JourneyNodeStatistics = JourneyNodeStats;
 
@@ -266,16 +274,66 @@ export function formatTriggerSummary(trigger: JourneyTriggerRecord | null): stri
     return 'API Enrolment (POST /enrollments)';
   }
   if (trigger.kind === 'event') {
+    if (trigger.eventKind === 'contact.tag_added' && trigger.eventTag) {
+      return `Event: contact.tag_added ("${trigger.eventTag}")`;
+    }
     const detail = trigger.eventKind ?? trigger.eventTag ?? 'domain event';
     return `Event: ${detail}`;
   }
   if (trigger.kind === 'schedule') {
+    const segmentText = trigger.segmentId ? ` · Segment ${trigger.segmentId.slice(0, 8)}…` : '';
     const nextText = trigger.nextFireAt
       ? ` (Next: ${new Date(trigger.nextFireAt).toLocaleString()})`
-      : '';
-    return `Schedule${nextText}`;
+      : trigger.status === 'paused'
+        ? ' (Paused)'
+        : '';
+    return `Schedule${segmentText}${nextText}`;
   }
   return trigger.kind;
+}
+
+export function formatEntryRef(ref: string | null | undefined): string {
+  if (!ref) return 'Direct / Manual';
+  if (ref.startsWith('event:')) {
+    const eventId = ref.slice(6);
+    return `Event (${eventId.slice(0, 8)}…)`;
+  }
+  if (ref.startsWith('schedule:')) {
+    const parts = ref.slice(9).split(':');
+    // Format is schedule:<triggerId>:<fireInstant>
+    if (parts.length >= 2) {
+      const instant = parts.slice(1).join(':');
+      const parsed = Date.parse(instant);
+      if (!Number.isNaN(parsed)) {
+        return `Schedule (${new Date(parsed).toLocaleString()})`;
+      }
+    }
+    return 'Scheduled Fire';
+  }
+  return `Ref: ${ref.length > 16 ? `${ref.slice(0, 12)}…` : ref}`;
+}
+
+export function formatStepDetails(
+  details: Record<string, unknown> | null | undefined,
+): string | null {
+  if (!details || typeof details !== 'object') return null;
+  if (details.entryKind === 'event') {
+    const kind = typeof details.eventKind === 'string' ? details.eventKind : 'Platform Event';
+    const tag = typeof details.eventTag === 'string' ? ` (Tag: ${details.eventTag})` : '';
+    return `Triggered by platform event: ${kind}${tag}`;
+  }
+  if (details.entryKind === 'schedule') {
+    const firedAt =
+      typeof details.firedAt === 'string'
+        ? new Date(details.firedAt).toLocaleString()
+        : 'Scheduled firing';
+    return `Triggered by schedule fired at ${firedAt}`;
+  }
+  if (details.entryKind === 'api') {
+    const enrolledBy = typeof details.enrolledBy === 'string' ? ` (by ${details.enrolledBy})` : '';
+    return `Enrolled via Inbound API${enrolledBy}`;
+  }
+  return null;
 }
 
 const NODE_TYPE_LABELS: Record<JourneyNodeType, string> = {
