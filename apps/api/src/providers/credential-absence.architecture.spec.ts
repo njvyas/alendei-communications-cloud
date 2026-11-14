@@ -255,6 +255,17 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
     const JOURNEY_QUEUE_FENCING_0063 = new Set(['claim_token']);
     const phase8c2Executions = migrations.find((m) => m.n.startsWith('0063_'));
     expect(phase8c2Executions).toBeDefined();
+    // Phase 8C PR 8C-3 (migration 0064): the journey runner's claim fencing — the claim column,
+    // its session accessor and setting — and the audit policy's requirement that the runner's
+    // audit rows name no API key. No credential: acc_journey is created NOLOGIN.
+    const JOURNEY_RUNNER_FENCING_0064 = new Set([
+      'claim_token',
+      'journey_claim_token',
+      'app_journey_claim_token',
+      'actor_api_key_id',
+    ]);
+    const phase8c3Runner = migrations.find((m) => m.n.startsWith('0064_'));
+    expect(phase8c3Runner).toBeDefined();
     expect(
       phase2.flatMap((m) =>
         [...m.sql.matchAll(/\w*(?:credential|secret|passw|api_?key|token)\w*/gi)]
@@ -270,6 +281,7 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
           .filter((x) => !(m === phase72Pricing && IDEMPOTENCY_PLATFORM_0051.has(x[0])))
           .filter((x) => !(m === phase75Settlement && DISPATCH_FENCING_0054.has(x[0])))
           .filter((x) => !(m === phase8c2Executions && JOURNEY_QUEUE_FENCING_0063.has(x[0])))
+          .filter((x) => !(m === phase8c3Runner && JOURNEY_RUNNER_FENCING_0064.has(x[0])))
           .map((x) => `${m.n}: ${x[0]}`),
       ),
     ).toEqual([]);

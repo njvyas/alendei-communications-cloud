@@ -670,6 +670,9 @@ describe('Phase 2.2 provider adapter test-send', () => {
       expect(rows.map((r) => r.policyname)).toEqual([
         'audit_logs_auth_insert',
         'audit_logs_insert',
+        // Phase 8C PR 8C-3 (migration 0064): the journey runner's contact.updated audit (acc_journey
+        // only, system actor `journey_runner`, the claimed contact), pinned in phase8c3-runner-principal.
+        'audit_logs_journey_runner_insert',
         // Phase 3.2 (migration 0032): assignment audit policy
         'audit_logs_organization_provider_insert',
         'audit_logs_platform_self_denial_insert',

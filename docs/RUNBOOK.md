@@ -99,6 +99,15 @@ These are Phase 0 procedural placeholders describing the *shape* of each runbook
 2. Distinguish "waiting on a legitimate long delay step" (not stuck, working as designed) from "waiting on an event that will never arrive due to a bug" — check the journey version's graph definition for the step in question.
 3. A genuinely stuck execution can be manually advanced or exited by an admin action, which is itself audit-logged the same as any other manual state override.
 
+### 5.x Journey runner (Phase 8C PR 8C-3)
+- **Off by default, and refused at startup outside tests.** `JOURNEY_RUNNER_ENABLED=false` is the kill switch. With it off, no `acc_journey` connection is opened, and enrolled executions wait unclaimed in `journey_execution_queue`. Enabling it needs an owner decision, a provisioned `acc_journey` credential (`DATABASE_JOURNEY_URL`) and a reviewed change to `journeyRunnerProblems`. It is not authorised in any environment.
+- **A stuck execution:** inspect `journey_execution_queue` (`attempts`, `last_error_code`, `claimed_until`) and the execution's `journey_execution_steps`.
+  - A transient error (SQLSTATE `40001`, `40P01`, `55P03`, `57014` or `08xxx`) is retried with backoff (1 s doubling, capped at 60 s). After 3 attempts the execution ends `failed`, with `runner_retry_exhausted`.
+  - Any execution claimed more than 5 times without a committed transition ends `failed`, with `runner_poisoned`. This includes executions whose worker crashed.
+  - A node that cannot run (a send-related node, a reserved contact field, a missing segment or channel) ends `failed`, with `node_failed` and the step's `error_code`, without retry.
+- **A crashed worker:** its lease (30 s) lapses and the next claim takes over with a new token and `epoch + 1`. The old worker can neither read nor write anything once its lease has expired.
+- **Pause a journey** (`POST …/pause`) to stop claiming its executions without losing state. **Cancel** an execution (`POST …/executions/:id/cancel`) to end it; the runner never touches an ended execution.
+
 ## 6. Disaster recovery runbooks (see `DR.md` for objectives/backup detail)
 
 **Database restore (point-in-time):**

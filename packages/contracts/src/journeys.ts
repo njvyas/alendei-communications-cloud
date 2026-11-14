@@ -835,7 +835,88 @@ export type JourneyStepOutcome = (typeof JOURNEY_STEP_OUTCOMES)[number];
 export const JOURNEY_END_REASONS = Object.freeze({
   OPERATOR_CANCELLED: 'operator_cancelled',
   JOURNEY_ARCHIVED: 'journey_archived',
+  // 8C-3 (runner)
+  /** Reached an `exit` node without a `reason` (the node's reason is used when it has one). */
+  EXIT_NODE: 'exit_node',
+  /** A node failed deterministically (see the step's `error_code`). */
+  NODE_FAILED: 'node_failed',
+  RETRY_EXHAUSTED: 'runner_retry_exhausted',
+  POISONED: 'runner_poisoned',
 });
+
+/**
+ * 8C-3: stable `error_code` values the runner writes to step history and the queue row
+ * (`last_error_code`). Database errors are recorded by SQLSTATE (e.g. `55P03`).
+ */
+export const JOURNEY_RUNNER_ERROR_CODES = Object.freeze({
+  /** A send-related node (send_message, wait_for_outcome, send_outcome condition): sends are disabled. */
+  SEND_DISABLED: 'JOURNEY_SEND_DISABLED',
+  NODE_MISSING: 'GRAPH_NODE_MISSING',
+  TRANSITION_LIMIT: 'TRANSITION_LIMIT',
+  CONTACT_FIELD_RESERVED: 'CONTACT_FIELD_RESERVED',
+  CHANNEL_NOT_FOUND: 'CHANNEL_NOT_FOUND',
+  SEGMENT_NOT_FOUND: 'SEGMENT_NOT_FOUND',
+  RETRY_EXHAUSTED: 'RUNNER_RETRY_EXHAUSTED',
+  POISONED: 'RUNNER_POISONED',
+  UNEXPECTED: 'RUNNER_UNEXPECTED_ERROR',
+});
+
+/** 8C-3 runner bounds (handover §§6, 8.2, 9; proposed defaults). */
+export const JOURNEY_RUNNER_LIMITS = Object.freeze({
+  /** A transient failure (serialisation, deadlock, lock or statement timeout, connection) is retried this many times in all. */
+  transientMaxAttempts: 3,
+  /** Claims without a committed transition before the execution is failed as poison. */
+  poisonClaims: 5,
+  /** Transitions one claim may commit before it is released (fairness). */
+  maxTransitionsPerClaim: 25,
+  /** Backoff after a failed attempt: base × 2^(attempt−1), capped, with ±20 % jitter. */
+  backoffBaseMs: 1_000,
+  backoffMaxMs: 60_000,
+  /** Transitions per execution (defence in depth; the DAG already bounds it). */
+  maxTransitions: 1_000,
+});
+
+/**
+ * The instant a `wait_window` opens next, or `null` when `now` is already inside an open
+ * window. Times are local to `timeZone`; a window whose end is not after its start crosses
+ * midnight (it belongs to the day it opens on, which `daysOfWeek` — ISO 1–7 — restricts).
+ */
+export function nextJourneyWindowStart(
+  window: {
+    readonly startTime: string;
+    readonly endTime: string;
+    readonly daysOfWeek?: readonly number[];
+    readonly timeZone: string;
+  },
+  now: Date,
+): Date | null {
+  const t = now.getTime();
+  const [sh, sm] = window.startTime.split(':').map(Number) as [number, number];
+  const [eh, em] = window.endTime.split(':').map(Number) as [number, number];
+  const crosses = eh * 60 + em <= sh * 60 + sm;
+  const today = zonedParts(t, window.timeZone);
+  for (let i = -1; i <= 8; i++) {
+    const d = new Date(Date.UTC(today.year, today.month - 1, today.day + i));
+    const isoDay = d.getUTCDay() === 0 ? 7 : d.getUTCDay();
+    if (window.daysOfWeek && !window.daysOfWeek.includes(isoDay)) continue;
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth() + 1;
+    const day = d.getUTCDate();
+    const start = zonedWallTimeToInstant(y, m, day, sh, sm, window.timeZone);
+    const endDay = new Date(Date.UTC(y, m - 1, day + (crosses ? 1 : 0)));
+    const end = zonedWallTimeToInstant(
+      endDay.getUTCFullYear(),
+      endDay.getUTCMonth() + 1,
+      endDay.getUTCDate(),
+      eh,
+      em,
+      window.timeZone,
+    );
+    if (t >= start && t < end) return null;
+    if (start > t) return new Date(start);
+  }
+  return null;
+}
 
 /** API enrolment limits (handover §7, proposed default). */
 export const JOURNEY_ENROLMENT_LIMITS = Object.freeze({ maxContactsPerCall: 1000 });

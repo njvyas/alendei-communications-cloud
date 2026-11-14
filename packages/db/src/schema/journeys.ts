@@ -288,6 +288,10 @@ export const journeyExecutionQueue = pgTable(
     claimToken: uuid('claim_token'),
     claimedUntil: tstz('claimed_until'),
     claimedBy: text('claimed_by'),
+    /** 8C-3 (`0064`): claims since the last committed transition (retry and poison bound). */
+    attempts: integer('attempts').notNull().default(0),
+    /** 8C-3: the last failure's stable code or SQLSTATE; no message text. */
+    lastErrorCode: text('last_error_code'),
   },
   (table) => [
     foreignKey({
@@ -302,6 +306,11 @@ export const journeyExecutionQueue = pgTable(
     ),
     index('journey_execution_queue_org_id_idx').on(table.orgId),
     check('journey_execution_queue_epoch_nonnegative', sql`${table.epoch} >= 0`),
+    check('journey_execution_queue_attempts_nonnegative', sql`${table.attempts} >= 0`),
+    check(
+      'journey_execution_queue_error_code_length',
+      sql`${table.lastErrorCode} IS NULL OR char_length(${table.lastErrorCode}) BETWEEN 1 AND 100`,
+    ),
     check(
       'journey_execution_queue_claim_shape',
       sql`(${table.claimToken} IS NULL) = (${table.claimedUntil} IS NULL)`,
