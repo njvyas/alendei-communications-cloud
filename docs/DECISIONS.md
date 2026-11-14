@@ -3877,6 +3877,113 @@ Built on `develop` `2010a47` (PR #109). There was no baseline drift: the journal
 
 Nothing is enabled: no flag, credential, provider, grant, policy or operational setting changed, and `acc_journey` is unchanged. No QA or production deployment.
 
+### 1zj.7 PR 8C-5b as built: send node behind an unavailable port, outcome waits, deadline lifecycle (migration `0067`)
+**Authorisation and baseline.**
+- Owner authorisation of 14-Nov-2026, after PR #110 (8C-5a) merged as `8cf5a5f`: 8C-5b, including the N1 hardening from the independent review of #110.
+- Built on `develop` `8cf5a5f`. The journal ended at `0066`, and no open PR (#85, #65, #51, #50) or remote branch carries `0067`+.
+- Claude is the send-core owner (OD-8C5-5). **No shared send-core file changed:** `submission.types.ts`, `message-submission.core.ts`, `submission-authorization.ts` and the 7-3 structural spec are untouched.
+
+**Migration `0067`.**
+- **N1 (fail closed).** `app_journey_step_message_guard` now refuses a step whose message lookup finds no row (`23503`, constraint `journey_execution_steps_message_fk`), so the guarantee no longer depends on the function owner seeing every row. A message attributed to another execution, or to none, is still `23514`. A genuinely missing message reports as before.
+- **`messages_runner_select`** (§3.1D): `acc_journey` reads `messages` only where `journey_execution_id` is its claimed execution, in its organisation, with a live claim.
+  - Column `SELECT` covers only `id, org_id, journey_execution_id, status, delivery_status, delivered_at, read_at`.
+  - It has no INSERT, UPDATE or DELETE on `messages`, the dispatch queue or message events.
+- `GRANT UPDATE (wait_deadline_at) ON journey_executions TO acc_journey`.
+
+**Runner.**
+- **`JourneySendPort`** (`journey-send.port.ts`). Its only production binding is `UnavailableJourneySendPort`, which never sends; the runner also falls back to it when no binding is injected. Nothing in the journeys module reaches the submission core or names a `SubmissionOrigin` (structural tests).
+- **`send_message`:**
+  - the contact's active identity for the channel (primary first, then the oldest); with none, step `skipped` `NO_IDENTITY`, then `onSuppressed`;
+  - variables are resolved from contact fields;
+  - the port runs in its own savepoint, and any non-`sent` result rolls the savepoint back;
+  - `sent`: step `completed` with `message_id`;
+  - `unavailable`: step `failed` `SEND_UNAVAILABLE` (`node_failed`).
+- **Refusal mapping** (§7.3; step `error_code` `SEND_REFUSED_<code>`):
+  - suppression or consent: `skipped`, then `onSuppressed`;
+  - billing or no provider assignment: `refused`, then `onRefused`;
+  - template, validation, resource, channel or `SMS_*` problems: `failed`;
+  - `BILLING_BUSY` and transient SQLSTATEs: retried, nothing recorded;
+  - anything else: retried to the poison bound.
+
+  An `exit` edge ends the execution `exited`, with `send_suppressed` or `send_refused`.
+- **`wait_for_outcome`** (§6):
+  - first visit: arm (`wait_deadline_at` = now + timeout; `wake_at` = the first re-check), with one `waited` row;
+  - on wake: `onOutcome` once reached, `onTimeout` at or after the deadline, otherwise a **silent re-arm**. Only `wake_at` moves, with no history row and no transition, conditional on `state_version` and the unchanged deadline;
+  - re-checks run every 5 minutes for the first hour, then hourly, never past the deadline.
+- **`send_outcome` condition:** read over the attributed message; with no message it is false. Outcome semantics are those of §7.4. An unknown outcome is never a failure.
+- **Every end path clears the deadline** in the same update: runner end, node failure, retry exhaustion, poison, operator cancel (8C-2) and archive (8C-2).
+
+**Deviations and [P] choices (for review).**
+1. **A failed message at `wait_for_outcome` takes `onTimeout` at once**, with details `{timedOut: true, failed: true}`.
+   - The §8 checklist line reads "delivered, read and failed take onOutcome". The node's `outcome` is only `delivered` or `read` (contract), so routing a failed message down `onOutcome` would treat it as delivered.
+   - `send_outcome` with `outcome: 'failed'` is where failure is a positive branch.
+   - An unknown outcome still waits for the deadline.
+2. **`exit` edges of `onSuppressed`/`onRefused` end the execution `exited`,** with new end reasons `send_suppressed` and `send_refused`. An `exit` node still ends `completed`.
+3. **The N1 refusal reuses the foreign key's SQLSTATE and name,** so callers and the existing tests see one code for "no such message in this organisation".
+4. **Changed existing tests (intended behaviour changes):**
+   - the 8C-3 planted send-node test now gives the contact an identity and expects `SEND_UNAVAILABLE`, where it previously expected `JOURNEY_SEND_DISABLED`;
+   - the 8C-3 privilege probe now asserts that message **content** columns and INSERT are refused, since `SELECT 1 FROM messages` is allowed under the claim-bound policy;
+   - the 8C-5a column-grant pin now lists exactly the two 0067 grants.
+5. **Two test-only techniques, on disposable clones only:**
+   - **resume after pause by owner SQL,** because the resume API re-validates activation, which still refuses send-node versions;
+   - **a transient fault for retry exhaustion via a temporary per-execution trigger,** because a table lock on `messages` also blocks the failure path's FK check.
+6. A step that recorded a message the runner cannot read fails closed (`SEND_UNAVAILABLE`), instead of being treated as "no message".
+
+**Tests:**
+- **API integration +48:**
+  - `journeys-send.int-spec.ts` (47):
+    - the production binding (`SEND_UNAVAILABLE`, 0 messages);
+    - sent, with port input asserted;
+    - a foreign message refused by the step guard;
+    - 7 refusal mappings;
+    - transient and poison;
+    - `NO_IDENTITY` on both edges;
+    - J-B2 (arm, delivered and read, failed, four not-yet outcomes with silent re-arms then timeout, already reached, no message);
+    - `send_outcome` (10);
+    - the deadline cleared on cancel, archive, node failure, retry exhaustion and poison;
+    - pause/resume;
+    - lease expiry fenced, with the reclaim reading the persisted deadline;
+    - `messages_runner_select` (own messages only; nothing without a live claim, with a wrong token or under another organisation);
+    - content columns, INSERT and UPDATE refused (J-S4);
+    - the orphan check = 0.
+  - The N1 regression in `journeys-send-attribution.int-spec.ts` (+1): with the guard's owner unable to read messages while the FK still can, both the step's own message and another execution's are refused.
+- **DB integration +4** (`phase8c5b-send-node.int-spec.ts`): the policy text, the column grants and no write privileges, the deadline grant, and the fail-closed guard body.
+- **Unit:**
+  - the port spec (mapping, outcome semantics, the re-check schedule including about 8,800 re-arms for 366 days, and structure: a single binding, no core reach, message reads only by the evaluator through granted columns, the port in a savepoint);
+  - contracts +1.
+- **Pins:**
+  - migration count 68;
+  - `acc_journey` policies (+`messages_runner_select`) and column UPDATE (+`wait_deadline_at`);
+  - scope-creep (billing refusal codes and delivery vocabulary in the runner, with citation).
+- **Mutation checks, each on a fresh clone, all caught:**
+
+  | Mutation | Caught by |
+  |---|---|
+  | Revert N1 | DB 1, API 1 |
+  | Drop the step↔message trigger | DB 1, API 3 |
+  | Drop the composite FK | DB 1, API 6 |
+  | Remove the claim bound on `messages_runner_select` | DB 1, API 1 |
+  | Map `CONSENT_REVOKED` to completed | API 2 |
+  | Treat `outcome_unknown` as failed | unit 1, API 2 |
+  | Write a history row on re-arm | API 5 |
+  | Stop clearing the deadline on cancel | API 1 |
+  | Stop clearing it on archive | API 1 |
+  | Stop clearing it on runner end | API 3 |
+  | `POST /messages` passes an origin | structural 1, API 32 |
+  | The production port returns a result other than `unavailable` | unit 1, API 1 |
+- **Verification (disposable clone of `acc_r015_base`, code tree `6e39ba9`):**
+  - DB integration 562/562, API integration 744/744, security 1,860/1,860;
+  - contracts 62, db unit 275, API unit 1,198;
+  - lint, typecheck and prettier are clean;
+  - `db:migrate` run twice (`Schema up to date (68 migrations verified).`);
+  - history proof `68|881b228373c0727abf31fee5e8bc18cd`; the first 67 entries are unchanged (`67|b9d9559c545fc0d0ebc01c09776b1994`, the 8C-5a proof);
+  - `acc_journey` is NOLOGIN, and capture is off.
+
+**Not in 8C-5b:**
+- 8B-3 (the automation capability and identity, the campaign variant);
+- 8C-6 (the real port, `JOURNEY_SENDS_ENABLED`, lifting the activation refusal, J-C2, J-S1/J-S2, J-P1/J-P2, reconcile);
+- any enablement, flag, credential, provider call, QA or production change.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.
