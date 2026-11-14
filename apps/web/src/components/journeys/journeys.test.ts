@@ -144,6 +144,10 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
           updatedAt: new Date().toISOString(),
           draftVersion: null,
           latestPublishedVersion: null,
+          activeVersionId: 'ver_1',
+          activatedAt: new Date().toISOString(),
+          activatedBy: 'user_1',
+          trigger: null,
         },
         {
           id: 'j2',
@@ -157,6 +161,10 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
           updatedAt: new Date().toISOString(),
           draftVersion: null,
           latestPublishedVersion: null,
+          activeVersionId: null,
+          activatedAt: null,
+          activatedBy: null,
+          trigger: null,
         },
         {
           id: 'j3',
@@ -170,6 +178,10 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
           updatedAt: new Date().toISOString(),
           draftVersion: null,
           latestPublishedVersion: null,
+          activeVersionId: 'ver_1',
+          activatedAt: new Date().toISOString(),
+          activatedBy: 'user_1',
+          trigger: null,
         },
         {
           id: 'j4',
@@ -183,6 +195,10 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
           updatedAt: new Date().toISOString(),
           draftVersion: null,
           latestPublishedVersion: null,
+          activeVersionId: null,
+          activatedAt: null,
+          activatedBy: null,
+          trigger: null,
         },
       ];
 
