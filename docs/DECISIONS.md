@@ -3609,6 +3609,101 @@ Each is a draft, stopped for owner review. Billing enforcement stays disabled; n
   - removing the `state_version` advance from cancel fails the cancel and archive tests.
 - **Verification (disposable clone of `acc_r015_base`, migrated to `0063`):** DB integration 546/546, API integration 634/634, security 1,860/1,860; contracts 55, API unit 1,131, db unit 275. `db:migrate` run twice (the second reports `Schema up to date (64 migrations verified).`). History proof `64|3c96eb485fa64e6e074083bca81e628d`; the first 63 entries are unchanged (`63|d7db54605d263fbc4598f2ceb91a35c3`, the 8C-1 proof).
 
+### 1zj.4 PR 8C-3 as built: the journey runner (migration `0064`), disabled
+**Baseline and migration number.**
+- Built on `develop` `45651d7` (PR #105 merged 13-Nov-2026; its tree is identical to the reviewed head `0dc8c10`).
+- `0064` was verified free: the latest migration was `0063`; neither open PRs (including Gemini's #106, which touches `apps/web` only) nor any remote branch carries `0064`+.
+
+**Off by default, and refused.**
+- `JOURNEY_RUNNER_ENABLED` defaults to `false`. Configuration refuses `true` unless `NODE_ENV=test` **and** `APP_ENV=test`, and even then requires an explicit `DATABASE_JOURNEY_URL` (`journeyRunnerProblems`). No derived or development URL exists.
+- With the flag off, no `acc_journey` pool is opened (`JOURNEY_POOL` is `null`), `JourneyRunner` logs that it is disabled and never schedules, and `JourneyRunnerService` has no database. On, the process refuses to start unless the pool logs in as an RLS-bound `acc_journey`.
+- The runner is enabled in no environment. Enabling it needs an owner decision, an `acc_journey` credential (not provisioned: the role is NOLOGIN and `db:roles:reconcile` does not know it) and a reviewed change to the refusal.
+
+**The runner principal `acc_journey` (`0064`, expand-only).**
+- Created NOLOGIN, as `acc_delivery` was in `0044`. Like any role, it is cluster-wide.
+- Its policies are bound to **one claimed execution** named by the session, with a **live** claim (token matches and lease unexpired: `app_journey_claim_valid()`). The bound covers:
+  - the execution, its history, journey and version;
+  - its contact, and the contact's identities, consent events and the suppressions naming its addresses;
+  - its workspace's segments;
+  - an `audit_logs` insert restricted to `contact.updated` by the system actor `journey_runner` for that contact.
+- No privilege on messages, attempts, the dispatch queue, billing, pricing, API keys or any credential.
+- Discovery and claiming happen only through `app_journey_claim()` (definer). It takes due, unclaimed or lease-expired rows of live executions of **active** journeys:
+  - `FOR UPDATE SKIP LOCKED`;
+  - a fresh token, `epoch + 1`, a lease, `attempts + 1`;
+  - a per-organisation share and an argument range check.
+- `journey_execution_queue` gains `attempts` and `last_error_code`.
+
+**Protocol (handover §§8.2, 8.3, 9).**
+- **One transaction per transition.** It:
+  - locks the queue row through the claim's token, lease and epoch (the fence);
+  - re-checks that the journey is active;
+  - runs the node in a savepoint;
+  - performs a conditional update on `state_version` (and status live) plus one history row (`seq` = the new `state_version`);
+  - writes any contact update and its audit row in the same transaction.
+- A lost claim, an expired lease or a changed `state_version` writes nothing (`fenced`).
+- **Per claim:** up to 25 transitions, then release; a wait releases the claim with `available_at` set to the timer.
+- **Nodes:**
+  - `wait_duration`, `wait_until` and `wait_window` (the time zone, days and midnight-crossing windows; `nextJourneyWindowStart`) arm the timer on the first visit and complete when due;
+  - conditions read live state: `attribute` (case-insensitive equality, as the segment `equals`), `tag`, `segment` (the **same predicates** as `resolveAudience`, extracted unchanged to `contacts/audience-predicates.ts`) and `consent` (the latest event per channel and type);
+  - `update_contact` sets tags, `firstName`/`lastName` and `custom.*` under a row lock; reserved custom fields are refused;
+  - `exit` ends the execution `completed` (`end_reason` = the node's reason, or `exit_node`);
+  - placeholders record `stubbed` and do nothing.
+- **Fail closed:** `send_message`, `wait_for_outcome` and `send_outcome` conditions end the execution `failed` with `JOURNEY_SEND_DISABLED`. No message is ever created.
+- **Failures:**
+  - a deterministic node failure ends `failed` (`node_failed`, with the step's `error_code`), and the savepoint undoes the node's partial writes;
+  - a transient failure (serialisation, deadlock, lock or statement timeout, connection) rolls back and retries with backoff (1 s × 2^(n−1), ≤ 60 s, ±20 % jitter). The third attempt ends `failed` (`runner_retry_exhausted`);
+  - more than 5 claims without a committed transition (crashes, lost leases, repeated errors) ends `failed` (`runner_poisoned`).
+
+**Deviations from the handover.**
+1. **The runner identity is a dedicated claim-bound principal, not the 8B-3 automation principal.** That principal (owner decision 1) is a *sending* identity and is not built. The runner never sends, so a non-sending principal bound to one claim at a time (the `acc_dispatch` precedent) gives least privilege now. 8C-6 will route sends through the shared principal.
+2. **`acc_journey` has no credential, and `db:roles:reconcile` does not manage it yet.** Provisioning belongs to the authorised enablement. The tests run the runner as `acc_journey` through `SET ROLE` on the disposable clone, so its policies are exercised exactly.
+3. **The journey row is not locked in a transition** (`acc_journey` has no UPDATE on `journeys`, which locking requires). A pause that commits during an in-flight transition takes effect at the next transition; the claim function also filters on the status.
+4. **The queue's `acc_journey` SELECT policy does not require the live claim.** It names the session's execution only. PostgreSQL checks an updated row against SELECT policies, so a release that clears the token would otherwise be refused. The fence read checks token, lease and epoch explicitly, and UPDATE and DELETE require the live claim. The visible rows are content-free.
+5. **No runner metrics yet.** The `OBSERVABILITY.md` additions wait for enablement; logs carry the execution id and SQLSTATE only.
+6. **`J-C2`/`J-C5` (sends, scheduled triggers) and the parity suite are not in this PR**, by scope: they belong to 8C-4 to 8C-6.
+
+**Tests:**
+- contracts +5 (`test/journeys-runner.test.ts`): the window inside, before and after, days of week, midnight crossing and a DST gap; the runner bounds pinned;
+- API unit +15:
+  - `JOURNEY_RUNNER_ENABLED` off by default, refused in six non-test environment pairs, and the URL required;
+  - failure classification and backoff;
+  - `JourneyRunner` idle when disabled or without a connection;
+- DB integration +5 (`phase8c3-runner-principal.int-spec.ts`): the role attributes (NOLOGIN, no BYPASSRLS), the exact table and column privileges, the 16 policies each bound to the claim, the definer functions executable by `acc_journey` only, and the claim-argument range check;
+- API integration +16 (`journeys-runner.int-spec.ts`; runner as `acc_journey`):
+  - disabled by default (no worker, no pool, enrolments unclaimed, the role NOLOGIN);
+  - a full path with `update_contact`, a tag condition, placeholders and an exit, audited as `journey_runner` with no values;
+  - **J-B1**, every condition kind true and false, including segment and consent;
+  - waits;
+  - send-node and reserved-field fail-closed, with the savepoint rollback;
+  - **J-C1** (two runners): each transition once;
+  - per-organisation fairness;
+  - duplicate processing of one claim;
+  - **J-C3** (lease expiry, stale worker, takeover with `epoch + 1`);
+  - a `state_version` changed underneath → fenced;
+  - a paused journey not claimed, and paused after the claim → released untouched;
+  - **J-V1** (an in-flight v1 execution finishes on v1 after v2 is promoted);
+  - transient retry → `RUNNER_RETRY_EXHAUSTED` with nothing from the rolled-back attempts;
+  - poison;
+  - operator cancel racing the runner;
+  - `acc_journey` isolation (only the claimed rows; nothing without the token, for another execution or organisation, or after lease expiry; `permission denied` on messages, the dispatch queue, history UPDATE, execution DELETE, the ledger and API keys).
+- **Updated pins:**
+  - scope-creep (worker and lifecycle vocabulary with this citation);
+  - credential absence (`0064` claim fencing);
+  - the `audit_logs` INSERT policy list;
+  - the migration count (65).
+- **Mutation checks, each caught:**
+  - the advance without its `state_version` predicate;
+  - the claim ignoring the journey status;
+  - the lease-expiry checks removed;
+  - the transient retry bound removed;
+  - the contacts policy not bound to the claimed contact;
+  - a send node not refused.
+- **Verification (disposable clone of `acc_r015_base`, migrated to `0064`):**
+  - DB integration 551/551, API integration 650/650, security 1,860/1,860;
+  - contracts 60, API unit 1,146, db unit 275;
+  - `db:migrate` run twice (`Schema up to date (65 migrations verified).`);
+  - history proof `65|4a9c5dcf7ca0fe8617665c967d5a5ebb`; the first 64 entries are unchanged (`64|3c96eb485fa64e6e074083bca81e628d`, the 8C-2 proof).
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

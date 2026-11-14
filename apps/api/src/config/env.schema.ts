@@ -147,6 +147,28 @@ export const envSchema = z.object({
    * readiness report and explicit owner approval.
    */
   BILLING_ENFORCEMENT_ENABLED: booleanFromEnv.default(false),
+
+  // --- Journey runner (Phase 8C PR 8C-3) -------------------------------------
+  /**
+   * The journey runner (`JourneyRunner`). **Off by default, and refused at startup outside
+   * tests** (`journeyRunnerProblems`): no automatic journey processing runs anywhere until its
+   * enablement is separately authorised by the owner. Off, no `acc_journey` connection is
+   * opened at all.
+   */
+  JOURNEY_RUNNER_ENABLED: booleanFromEnv.default(false),
+  /**
+   * The runner principal (`acc_journey`, migration 0064), as a full connection string. There is
+   * no derived or development fallback: the role is created NOLOGIN and receives a credential
+   * only in the enablement step. Required when `JOURNEY_RUNNER_ENABLED` is true.
+   */
+  DATABASE_JOURNEY_URL: postgresUrl.optional(),
+  JOURNEY_RUNNER_POLL_INTERVAL_MS: positiveInt.min(50).max(60_000).default(1_000),
+  /** Claims per cycle (handover §8.2: batch ≤ 10). */
+  JOURNEY_RUNNER_BATCH_SIZE: positiveInt.max(10).default(10),
+  /** Claims per organisation per cycle (handover §8.2 fairness: ≤ 5). */
+  JOURNEY_RUNNER_PER_ORG_LIMIT: positiveInt.max(10).default(5),
+  /** Lease of one claim, seconds (handover §8.2: 30 s). */
+  JOURNEY_RUNNER_LEASE_SECONDS: positiveInt.min(5).max(600).default(30),
   /**
    * Phase 7 PR 7-6c (`DECISIONS.md` §1zi.9 D-76-3, §1zi.12 O-2): the dual-control
    * threshold for operator resolution of unknown outcomes, in integer paise. Phase 7 PR
@@ -265,6 +287,8 @@ export function allowsDevelopmentDispatchPassword(appEnv: AppEnvironment): boole
 
 /** The delivery-receipt principal every delivery credential must log in as (Phase 5.0). */
 export const DELIVERY_ROLE = 'acc_delivery';
+/** Phase 8C PR 8C-3: the journey runner principal (migration 0064). */
+export const JOURNEY_ROLE = 'acc_journey';
 
 /** The well-known local password of `acc_delivery`; development and test only. */
 export const DEVELOPMENT_DELIVERY_PASSWORD = 'acc_delivery_dev_password';
@@ -364,6 +388,27 @@ function billingEnforcementProblems(env: Env): string[] {
   ];
 }
 
+/**
+ * Phase 8C PR 8C-3: the journey runner must not process anything until its enablement is
+ * separately authorised (owner instruction, 14-Nov-2026). Enabling it is refused outside tests
+ * (NODE_ENV=test and APP_ENV=test), and even there it needs an explicit `DATABASE_JOURNEY_URL`.
+ */
+function journeyRunnerProblems(env: Env): string[] {
+  if (!env.JOURNEY_RUNNER_ENABLED) return [];
+  const problems: string[] = [];
+  if (!(env.NODE_ENV === 'test' && env.APP_ENV === 'test')) {
+    problems.push(
+      `JOURNEY_RUNNER_ENABLED=true is refused (NODE_ENV=${env.NODE_ENV}, APP_ENV=${env.APP_ENV}): ` +
+        'automatic journey processing is not authorised. Enabling the runner requires an explicit ' +
+        'owner decision, a provisioned acc_journey credential and a reviewed enablement change.',
+    );
+  }
+  if (!env.DATABASE_JOURNEY_URL) {
+    problems.push('DATABASE_JOURNEY_URL must be set when JOURNEY_RUNNER_ENABLED=true');
+  }
+  return problems;
+}
+
 function productionHardening(env: Env): string[] {
   if (env.APP_ENV !== 'production') return [];
   const problems: string[] = [];
@@ -415,6 +460,7 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     ...dispatchCredentialProblems(parsed.data),
     ...deliveryCredentialProblems(parsed.data),
     ...billingEnforcementProblems(parsed.data),
+    ...journeyRunnerProblems(parsed.data),
   ];
   // Checked against the raw input, because after parsing a default is
   // indistinguishable from a choice: production must *state* how many proxy

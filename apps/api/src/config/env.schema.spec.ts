@@ -247,6 +247,69 @@ describe('validateEnv', () => {
     });
   });
 
+  describe('JOURNEY_RUNNER_ENABLED (Phase 8C PR 8C-3)', () => {
+    const JOURNEY_URL = 'postgres://acc_journey:not-a-dev-secret@db.internal:5432/acc';
+    const problemsOf = (raw: Record<string, unknown>): string[] => {
+      try {
+        validateEnv(raw);
+        return [];
+      } catch (error) {
+        return (error as ConfigurationError).problems as string[];
+      }
+    };
+
+    it('is off by default, with the handover defaults', () => {
+      const env = validateEnv(MINIMAL_ENV);
+      expect(env.JOURNEY_RUNNER_ENABLED).toBe(false);
+      expect(env.DATABASE_JOURNEY_URL).toBeUndefined();
+      expect([
+        env.JOURNEY_RUNNER_POLL_INTERVAL_MS,
+        env.JOURNEY_RUNNER_BATCH_SIZE,
+        env.JOURNEY_RUNNER_PER_ORG_LIMIT,
+        env.JOURNEY_RUNNER_LEASE_SECONDS,
+      ]).toEqual([1000, 10, 5, 30]);
+    });
+
+    it('is permitted only in tests (NODE_ENV and APP_ENV test) with an explicit DATABASE_JOURNEY_URL', () => {
+      const env = validateEnv({
+        ...MINIMAL_ENV,
+        NODE_ENV: 'test',
+        APP_ENV: 'test',
+        JOURNEY_RUNNER_ENABLED: 'true',
+        DATABASE_JOURNEY_URL: JOURNEY_URL,
+      });
+      expect(env.JOURNEY_RUNNER_ENABLED).toBe(true);
+      const noUrl = problemsOf({
+        ...MINIMAL_ENV,
+        NODE_ENV: 'test',
+        APP_ENV: 'test',
+        JOURNEY_RUNNER_ENABLED: 'true',
+      });
+      expect(noUrl).toContain('DATABASE_JOURNEY_URL must be set when JOURNEY_RUNNER_ENABLED=true');
+    });
+
+    it.each([
+      ['development', 'development'],
+      ['test', 'development'],
+      ['development', 'test'],
+      ['production', 'test'],
+      ['production', 'staging'],
+      ['production', 'production'],
+    ])('refuses startup with NODE_ENV=%s APP_ENV=%s, even with a URL', (nodeEnv, appEnv) => {
+      const problems = problemsOf({
+        ...MINIMAL_ENV,
+        NODE_ENV: nodeEnv,
+        APP_ENV: appEnv,
+        JOURNEY_RUNNER_ENABLED: 'true',
+        DATABASE_JOURNEY_URL: JOURNEY_URL,
+        DATABASE_DISPATCH_PASSWORD: 'a-non-development-dispatch-credential',
+      });
+      expect(problems.some((p) => p.startsWith('JOURNEY_RUNNER_ENABLED=true is refused'))).toBe(
+        true,
+      );
+    });
+  });
+
   describe('BILLING_DUAL_CONTROL_THRESHOLD_PAISE (Phase 7 PR 7-6c, O-2)', () => {
     it('is unset by default, and an empty value means unset', () => {
       expect(validateEnv(MINIMAL_ENV).BILLING_DUAL_CONTROL_THRESHOLD_PAISE).toBeUndefined();

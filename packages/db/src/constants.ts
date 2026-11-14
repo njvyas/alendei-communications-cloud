@@ -10,6 +10,11 @@ export const DB_ROLES = {
   DISPATCH: 'acc_dispatch',
   /** Delivery-receipt ingestion principal (Phase 5.0, migration 0044; design spec Rev 2 §C.2a). */
   DELIVERY: 'acc_delivery',
+  /**
+   * Journey runner principal (Phase 8C PR 8C-3, migration 0064). Created NOLOGIN; every policy
+   * binds it to one claimed execution with a live lease.
+   */
+  JOURNEY: 'acc_journey',
 } as const;
 
 /**

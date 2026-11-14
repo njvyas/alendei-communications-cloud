@@ -19,6 +19,7 @@ import type { Pool } from 'pg';
 import { AppConfigService } from '../config/app-config.service';
 import {
   DELIVERY_ROLE,
+  JOURNEY_ROLE,
   DEVELOPMENT_DELIVERY_PASSWORD,
   DEVELOPMENT_DISPATCH_PASSWORD,
   DISPATCH_ROLE,
@@ -32,6 +33,8 @@ import {
   AUTH_POOL,
   DELIVERY_DB,
   DELIVERY_POOL,
+  JOURNEY_DB,
+  JOURNEY_POOL,
   DISPATCH_DB,
   DISPATCH_POOL,
 } from './database.tokens';
@@ -205,6 +208,28 @@ function resolvePrincipalUrl(
       inject: [DELIVERY_POOL],
       useFactory: (pool: Pool | null): Database | null => (pool ? createDatabase(pool) : null),
     },
+    {
+      // Phase 8C PR 8C-3: no acc_journey connection exists unless the runner is enabled, which
+      // configuration refuses outside tests (journeyRunnerProblems). No derived URL.
+      provide: JOURNEY_POOL,
+      inject: [AppConfigService],
+      useFactory: (config: AppConfigService): Pool | null =>
+        config.journeys.runnerEnabled && config.journeys.runnerUrl
+          ? createPool({
+              connectionString: config.journeys.runnerUrl,
+              max: Math.max(2, Math.floor(config.database.poolMax / 4)),
+              idleTimeoutMillis: config.database.idleTimeoutMs,
+              statementTimeoutMillis: config.database.statementTimeoutMs,
+              ssl: config.database.ssl,
+              applicationName: `${config.serviceName}-journey`,
+            })
+          : null,
+    },
+    {
+      provide: JOURNEY_DB,
+      inject: [JOURNEY_POOL],
+      useFactory: (pool: Pool | null): Database | null => (pool ? createDatabase(pool) : null),
+    },
     TenantDatabase,
   ],
   exports: [
@@ -216,6 +241,8 @@ function resolvePrincipalUrl(
     DISPATCH_DB,
     DELIVERY_POOL,
     DELIVERY_DB,
+    JOURNEY_POOL,
+    JOURNEY_DB,
     TenantDatabase,
   ],
 })
@@ -227,6 +254,7 @@ export class DatabaseModule implements OnModuleInit, OnApplicationShutdown {
     @Inject(AUTH_POOL) private readonly authPool: Pool,
     @Inject(DISPATCH_POOL) private readonly dispatchPool: Pool,
     @Optional() @Inject(DELIVERY_POOL) private readonly deliveryPool: Pool | null = null,
+    @Optional() @Inject(JOURNEY_POOL) private readonly journeyPool: Pool | null = null,
   ) {}
 
   /**
@@ -260,6 +288,20 @@ export class DatabaseModule implements OnModuleInit, OnApplicationShutdown {
       }
       verified.push(delivery.role);
     }
+    // Phase 8C PR 8C-3: with the runner enabled (tests only), acc_journey must connect and be
+    // RLS-bound, or the process refuses to start.
+    if (this.journeyPool) {
+      const journey = await assertRlsBoundPrincipal(
+        this.journeyPool,
+        'journey runner (acc_journey)',
+      );
+      if (journey.role !== JOURNEY_ROLE) {
+        throw new Error(
+          `refusing to use the journey database pool: it logs in as ${journey.role}, not ${JOURNEY_ROLE}`,
+        );
+      }
+      verified.push(journey.role);
+    }
     this.logger.log(`Database principals verified RLS-bound: ${verified.join(', ')}`);
   }
 
@@ -270,6 +312,7 @@ export class DatabaseModule implements OnModuleInit, OnApplicationShutdown {
       this.authPool.end(),
       this.dispatchPool.end(),
       ...(this.deliveryPool ? [this.deliveryPool.end()] : []),
+      ...(this.journeyPool ? [this.journeyPool.end()] : []),
     ]);
     this.logger.log('Database pools closed');
   }

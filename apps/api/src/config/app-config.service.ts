@@ -176,6 +176,18 @@ export class AppConfigService {
     } as const;
   }
 
+  /** Phase 8C PR 8C-3: the journey runner, off by default (`journeyRunnerProblems`). */
+  get journeys() {
+    return {
+      runnerEnabled: this.get('JOURNEY_RUNNER_ENABLED'),
+      runnerUrl: this.get('DATABASE_JOURNEY_URL'),
+      pollIntervalMs: this.get('JOURNEY_RUNNER_POLL_INTERVAL_MS'),
+      batchSize: this.get('JOURNEY_RUNNER_BATCH_SIZE'),
+      perOrgLimit: this.get('JOURNEY_RUNNER_PER_ORG_LIMIT'),
+      leaseSeconds: this.get('JOURNEY_RUNNER_LEASE_SECONDS'),
+    } as const;
+  }
+
   get sms() {
     return {
       templateVariableMaxLength: this.get('SMS_TEMPLATE_VARIABLE_MAX_LENGTH'),

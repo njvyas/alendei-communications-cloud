@@ -7,10 +7,13 @@ import { JourneyLifecycleService } from './journey-lifecycle.service';
 import { JourneyValidation } from './journey-validation';
 import { JourneysController } from './journeys.controller';
 import { JourneysService } from './journeys.service';
+import { JourneyRunnerService } from './runner/journey-runner.service';
+import { JourneyRunner } from './runner/journey-runner.worker';
 
 /**
  * Phase 8C: journey definitions (8C-1), lifecycle, API enrolment, execution reads, operator
- * cancel and statistics (8C-2). No runner, trigger intake, scheduler or send provider exists.
+ * cancel and statistics (8C-2), and the runner (8C-3), which is disabled by default. No trigger
+ * intake, scheduler or send provider exists.
  */
 @Module({
   controllers: [JourneysController, JourneyExecutionsController],
@@ -20,6 +23,10 @@ import { JourneysService } from './journeys.service';
     JourneysService,
     JourneyLifecycleService,
     JourneyExecutionsService,
+    // 8C-3: off unless JOURNEY_RUNNER_ENABLED (refused outside tests).
+    JourneyRunnerService,
+    JourneyRunner,
   ],
+  exports: [JourneyRunnerService, JourneyRunner],
 })
 export class JourneysModule {}
