@@ -38,6 +38,15 @@ export function JourneyDetailView({
   const [contactIdsText, setContactIdsText] = useState('');
   const [isEnrolling, setIsEnrolling] = useState(false);
   const [enrolResult, setEnrolResult] = useState<JourneyEnrolmentResult | null>(null);
+  // Stable Idempotency-Key per enrolment attempt; preserved across network retry attempts
+  const [enrolIdempotencyKey, setEnrolIdempotencyKey] = useState<string>(() => crypto.randomUUID());
+
+  const handleCloseEnrol = () => {
+    setIsEnrolOpen(false);
+    setEnrolResult(null);
+    setContactIdsText('');
+    setEnrolIdempotencyKey(crypto.randomUUID());
+  };
 
   // Poll journey state
   const { data: journeyData } = useQuery({
@@ -96,9 +105,14 @@ export function JourneyDetailView({
         );
         return;
       }
-      const res = await journeysApi.enrolContacts(journey.workspaceId, journey.id, {
-        contactIds: ids,
-      });
+      const res = await journeysApi.enrolContacts(
+        journey.workspaceId,
+        journey.id,
+        {
+          contactIds: ids,
+        },
+        enrolIdempotencyKey,
+      );
       setEnrolResult(res.data);
       toast.success(
         `Enrolled ${res.data.enrolled} contacts (${res.data.alreadyEnrolled} already enrolled, ${res.data.contactNotFound} not found).`,
@@ -396,10 +410,7 @@ export function JourneyDetailView({
       {/* Enrol Contacts Dialog (Phase 8C-2 API Trigger) */}
       <AccessibleDialog
         isOpen={isEnrolOpen}
-        onClose={() => {
-          setIsEnrolOpen(false);
-          setEnrolResult(null);
-        }}
+        onClose={handleCloseEnrol}
         titleId="enrol-contacts-title"
         descriptionId="enrol-contacts-description"
         maxWidth="max-w-md"
@@ -416,10 +427,7 @@ export function JourneyDetailView({
           </div>
           <button
             type="button"
-            onClick={() => {
-              setIsEnrolOpen(false);
-              setEnrolResult(null);
-            }}
+            onClick={handleCloseEnrol}
             className="rounded-lg p-1.5 text-acc-text-secondary hover:bg-acc-surface-raised hover:text-acc-text-primary"
             aria-label="Close enrolment dialog"
           >
@@ -487,10 +495,7 @@ export function JourneyDetailView({
         <div className="mt-6 flex items-center justify-end gap-2 border-t border-acc-border pt-4">
           <button
             type="button"
-            onClick={() => {
-              setIsEnrolOpen(false);
-              setEnrolResult(null);
-            }}
+            onClick={handleCloseEnrol}
             className="rounded-lg border border-acc-border bg-acc-surface-raised px-3.5 py-1.5 text-xs font-semibold text-acc-text-secondary hover:text-acc-text-primary"
           >
             {enrolResult ? 'Close' : 'Cancel'}

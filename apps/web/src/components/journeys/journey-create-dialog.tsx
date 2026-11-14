@@ -28,6 +28,8 @@ export function JourneyCreateDialog({
   const [workspaceId, setWorkspaceId] = useState(defaultWorkspaceId || workspaces[0]?.id || '');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Stable Idempotency-Key per dialog session, preserved across network/validation retries
+  const [idempotencyKey, setIdempotencyKey] = useState<string>(() => crypto.randomUUID());
 
   const effectiveWorkspaceId = workspaceId || workspaces[0]?.id || '';
 
@@ -35,6 +37,7 @@ export function JourneyCreateDialog({
     setName('');
     setDescription('');
     setErrorMessage(null);
+    setIdempotencyKey(crypto.randomUUID());
     onOpenChange(false);
   };
 
@@ -55,10 +58,14 @@ export function JourneyCreateDialog({
 
     setIsSubmitting(true);
     try {
-      const response = await journeysApi.create(effectiveWorkspaceId, {
-        name: trimmedName,
-        description: description.trim() || undefined,
-      });
+      const response = await journeysApi.create(
+        effectiveWorkspaceId,
+        {
+          name: trimmedName,
+          description: description.trim() || undefined,
+        },
+        idempotencyKey,
+      );
 
       toast.success(`Journey "${response.data.name}" created successfully.`);
       handleClose();

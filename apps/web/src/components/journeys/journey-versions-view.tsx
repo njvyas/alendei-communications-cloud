@@ -26,6 +26,10 @@ export function JourneyVersionsView({
   const queryClient = useQueryClient();
   const [isCreatingDraft, setIsCreatingDraft] = useState(false);
   const [inspectingVersion, setInspectingVersion] = useState<JourneyVersionRecord | null>(null);
+  // Stable Idempotency-Key per draft creation attempt; preserved across retry attempts
+  const [createDraftIdempotencyKey, setCreateDraftIdempotencyKey] = useState<string>(() =>
+    crypto.randomUUID(),
+  );
 
   const { data: versionsData, isLoading } = useQuery({
     queryKey: ['journeys', workspaceId, journeyId, 'versions'],
@@ -48,8 +52,13 @@ export function JourneyVersionsView({
     if (!canManage || isCreatingDraft) return;
     setIsCreatingDraft(true);
     try {
-      const res = await journeysApi.createVersion(workspaceId, journeyId);
+      const res = await journeysApi.createVersion(
+        workspaceId,
+        journeyId,
+        createDraftIdempotencyKey,
+      );
       toast.success(`Draft version v${res.data.versionNumber} initialized.`);
+      setCreateDraftIdempotencyKey(crypto.randomUUID());
       await queryClient.invalidateQueries({ queryKey: ['journeys', workspaceId, journeyId] });
       if (onSelectVersion) {
         onSelectVersion(res.data);

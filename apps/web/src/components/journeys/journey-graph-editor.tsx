@@ -62,6 +62,15 @@ export function JourneyGraphEditor({
   const [serverReport, setServerReport] = useState<JourneyGraphValidationReport | null>(null);
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
+  // Stable Idempotency-Key per publish attempt; preserved across network retry attempts
+  const [publishIdempotencyKey, setPublishIdempotencyKey] = useState<string>(() =>
+    crypto.randomUUID(),
+  );
+
+  const handleClosePublishModal = () => {
+    setShowPublishModal(false);
+    setPublishIdempotencyKey(crypto.randomUUID());
+  };
 
   // Compute canonical diff to determine dirtiness
   const isDirty = useMemo(() => {
@@ -303,11 +312,17 @@ export function JourneyGraphEditor({
         setSavedCanonical(canonicalJourneyJson(graph));
       }
 
-      const res = await journeysApi.publish(workspaceId, journeyId, versionId, {
-        expectedGraphSha256: latestSha,
-      });
+      const res = await journeysApi.publish(
+        workspaceId,
+        journeyId,
+        versionId,
+        {
+          expectedGraphSha256: latestSha,
+        },
+        publishIdempotencyKey,
+      );
       toast.success(`Published as Version ${res.data.versionNumber}.`);
-      setShowPublishModal(false);
+      handleClosePublishModal();
       onPublished?.(res.data);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to publish journey version.';
@@ -624,7 +639,7 @@ export function JourneyGraphEditor({
       {/* Publish Confirmation Modal */}
       <AccessibleDialog
         isOpen={showPublishModal}
-        onClose={() => setShowPublishModal(false)}
+        onClose={handleClosePublishModal}
         titleId="publish-version-title"
         maxWidth="max-w-md"
         dismissible={!isPublishing}
@@ -642,7 +657,7 @@ export function JourneyGraphEditor({
             <div className="flex items-center justify-end gap-3 pt-2">
               <button
                 type="button"
-                onClick={() => setShowPublishModal(false)}
+                onClick={handleClosePublishModal}
                 disabled={isPublishing}
                 className="rounded-lg border border-acc-border px-3 py-1.5 text-xs font-medium text-acc-text-secondary hover:bg-acc-surface-raised"
               >

@@ -478,14 +478,28 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
       assert.strictEqual(interceptedBody?.expectedGraphSha256, 'a'.repeat(64));
     });
 
-    it('journeysApi.publish dispatches POST with expectedGraphSha256 concurrency guard', async () => {
-      await journeysApi.publish('ws_test', 'j_test', 'ver_1', {
-        expectedGraphSha256: 'b'.repeat(64),
-      });
+    it('journeysApi.createVersion dispatches POST with Idempotency-Key', async () => {
+      await journeysApi.createVersion('ws_test', 'j_test', 'idemp-ver-1');
+      assert.ok(interceptedUrl.includes('/workspaces/ws_test/journeys/j_test/versions'));
+      assert.strictEqual(interceptedMethod, 'POST');
+      assert.strictEqual(interceptedHeaders['Idempotency-Key'], 'idemp-ver-1');
+    });
+
+    it('journeysApi.publish dispatches POST with expectedGraphSha256 and Idempotency-Key', async () => {
+      await journeysApi.publish(
+        'ws_test',
+        'j_test',
+        'ver_1',
+        {
+          expectedGraphSha256: 'b'.repeat(64),
+        },
+        'idemp-publish-1',
+      );
       assert.ok(
         interceptedUrl.includes('/workspaces/ws_test/journeys/j_test/versions/ver_1/publish'),
       );
       assert.strictEqual(interceptedMethod, 'POST');
+      assert.strictEqual(interceptedHeaders['Idempotency-Key'], 'idemp-publish-1');
       assert.strictEqual(interceptedBody?.expectedGraphSha256, 'b'.repeat(64));
     });
 
@@ -540,6 +554,118 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
       assert.strictEqual(interceptedMethod, 'POST');
       assert.strictEqual(interceptedHeaders['Idempotency-Key'], 'idemp-enrol-1');
       assert.deepStrictEqual(interceptedBody?.contactIds, ['c_1', 'c_2']);
+    });
+
+    describe('Idempotency-Key Preservation Across Retries (PR #106 Integration Guard)', () => {
+      it('journeysApi.create preserves the same Idempotency-Key across retry attempts', async () => {
+        const stableKey = 'idemp-journey-create-' + crypto.randomUUID();
+        const capturedKeys: (string | undefined)[] = [];
+
+        // Attempt 1
+        await journeysApi.create('ws_test', { name: 'Retry Journey' }, stableKey);
+        capturedKeys.push(interceptedHeaders['Idempotency-Key']);
+
+        // Attempt 2 (retry following transient network failure)
+        await journeysApi.create('ws_test', { name: 'Retry Journey' }, stableKey);
+        capturedKeys.push(interceptedHeaders['Idempotency-Key']);
+
+        assert.strictEqual(capturedKeys.length, 2);
+        assert.strictEqual(capturedKeys[0], stableKey);
+        assert.strictEqual(capturedKeys[1], stableKey);
+        assert.strictEqual(capturedKeys[0], capturedKeys[1]);
+      });
+
+      it('journeysApi.publish preserves the same Idempotency-Key across retry attempts', async () => {
+        const stablePublishKey = 'idemp-publish-' + crypto.randomUUID();
+        const capturedKeys: (string | undefined)[] = [];
+
+        // Attempt 1
+        await journeysApi.publish(
+          'ws_test',
+          'j_test',
+          'ver_1',
+          { expectedGraphSha256: 'c'.repeat(64) },
+          stablePublishKey,
+        );
+        capturedKeys.push(interceptedHeaders['Idempotency-Key']);
+
+        // Attempt 2 (retry)
+        await journeysApi.publish(
+          'ws_test',
+          'j_test',
+          'ver_1',
+          { expectedGraphSha256: 'c'.repeat(64) },
+          stablePublishKey,
+        );
+        capturedKeys.push(interceptedHeaders['Idempotency-Key']);
+
+        assert.strictEqual(capturedKeys.length, 2);
+        assert.strictEqual(capturedKeys[0], stablePublishKey);
+        assert.strictEqual(capturedKeys[1], stablePublishKey);
+        assert.strictEqual(capturedKeys[0], capturedKeys[1]);
+      });
+
+      it('journeysApi.enrolContacts preserves the same Idempotency-Key across retry attempts', async () => {
+        const stableEnrolKey = 'idemp-enrol-' + crypto.randomUUID();
+        const capturedKeys: (string | undefined)[] = [];
+
+        // Attempt 1
+        await journeysApi.enrolContacts(
+          'ws_test',
+          'j_test',
+          { contactIds: ['contact-1'] },
+          stableEnrolKey,
+        );
+        capturedKeys.push(interceptedHeaders['Idempotency-Key']);
+
+        // Attempt 2 (retry)
+        await journeysApi.enrolContacts(
+          'ws_test',
+          'j_test',
+          { contactIds: ['contact-1'] },
+          stableEnrolKey,
+        );
+        capturedKeys.push(interceptedHeaders['Idempotency-Key']);
+
+        assert.strictEqual(capturedKeys.length, 2);
+        assert.strictEqual(capturedKeys[0], stableEnrolKey);
+        assert.strictEqual(capturedKeys[1], stableEnrolKey);
+        assert.strictEqual(capturedKeys[0], capturedKeys[1]);
+      });
+
+      it('journeysApi.createVersion preserves the same Idempotency-Key across retry attempts', async () => {
+        const stableVersionKey = 'idemp-version-' + crypto.randomUUID();
+        const capturedKeys: (string | undefined)[] = [];
+
+        // Attempt 1
+        await journeysApi.createVersion('ws_test', 'j_test', stableVersionKey);
+        capturedKeys.push(interceptedHeaders['Idempotency-Key']);
+
+        // Attempt 2 (retry)
+        await journeysApi.createVersion('ws_test', 'j_test', stableVersionKey);
+        capturedKeys.push(interceptedHeaders['Idempotency-Key']);
+
+        assert.strictEqual(capturedKeys.length, 2);
+        assert.strictEqual(capturedKeys[0], stableVersionKey);
+        assert.strictEqual(capturedKeys[1], stableVersionKey);
+        assert.strictEqual(capturedKeys[0], capturedKeys[1]);
+      });
+
+      it('distinct operations generate distinct unique Idempotency-Keys', async () => {
+        const key1 = crypto.randomUUID();
+        const key2 = crypto.randomUUID();
+        assert.notStrictEqual(key1, key2);
+
+        await journeysApi.create('ws_test', { name: 'Journey A' }, key1);
+        const recordedKey1 = interceptedHeaders['Idempotency-Key'];
+
+        await journeysApi.create('ws_test', { name: 'Journey B' }, key2);
+        const recordedKey2 = interceptedHeaders['Idempotency-Key'];
+
+        assert.notStrictEqual(recordedKey1, recordedKey2);
+        assert.strictEqual(recordedKey1, key1);
+        assert.strictEqual(recordedKey2, key2);
+      });
     });
   });
 });

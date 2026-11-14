@@ -3816,11 +3816,12 @@ export const journeysApi = {
   async create(
     workspaceId: string,
     params: CreateJourneyParams,
-    idempotencyKey?: string,
+    idempotencyKey: string,
     signal?: AbortSignal,
   ): Promise<ApiDataResponse<JourneyRecord>> {
-    const headers: Record<string, string> = {};
-    if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+    const headers: Record<string, string> = {
+      'Idempotency-Key': idempotencyKey,
+    };
     return apiFetch<ApiDataResponse<JourneyRecord>>(
       `/workspaces/${encodeURIComponent(workspaceId)}/journeys`,
       {
@@ -3880,11 +3881,12 @@ export const journeysApi = {
   async createVersion(
     workspaceId: string,
     journeyId: string,
-    idempotencyKey?: string,
+    idempotencyKey: string,
     signal?: AbortSignal,
   ): Promise<ApiDataResponse<JourneyVersionRecord>> {
-    const headers: Record<string, string> = {};
-    if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+    const headers: Record<string, string> = {
+      'Idempotency-Key': idempotencyKey,
+    };
     return apiFetch<ApiDataResponse<JourneyVersionRecord>>(
       `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/versions`,
       {
@@ -3944,11 +3946,12 @@ export const journeysApi = {
     journeyId: string,
     versionId: string,
     params: PublishJourneyVersionParams,
-    idempotencyKey?: string,
+    idempotencyKey: string,
     signal?: AbortSignal,
   ): Promise<ApiDataResponse<JourneyVersionRecord>> {
-    const headers: Record<string, string> = {};
-    if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+    const headers: Record<string, string> = {
+      'Idempotency-Key': idempotencyKey,
+    };
     return apiFetch<ApiDataResponse<JourneyVersionRecord>>(
       `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/versions/${encodeURIComponent(versionId)}/publish`,
       {
@@ -4060,11 +4063,12 @@ export const journeysApi = {
     workspaceId: string,
     journeyId: string,
     params: { contactIds: string[] },
-    idempotencyKey?: string,
+    idempotencyKey: string,
     signal?: AbortSignal,
   ): Promise<ApiDataResponse<JourneyEnrolmentResult>> {
-    const headers: Record<string, string> = {};
-    if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+    const headers: Record<string, string> = {
+      'Idempotency-Key': idempotencyKey,
+    };
     return apiFetch<ApiDataResponse<JourneyEnrolmentResult>>(
       `/workspaces/${encodeURIComponent(workspaceId)}/journeys/${encodeURIComponent(journeyId)}/enrollments`,
       {
