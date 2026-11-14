@@ -842,6 +842,11 @@ export const JOURNEY_END_REASONS = Object.freeze({
   NODE_FAILED: 'node_failed',
   RETRY_EXHAUSTED: 'runner_retry_exhausted',
   POISONED: 'runner_poisoned',
+  // 8C-5b (send node): the node's `onSuppressed` / `onRefused` edge was `exit`.
+  /** Suppressed, consent revoked, or no active identity for the channel (status `exited`). */
+  SEND_SUPPRESSED: 'send_suppressed',
+  /** Refused by billing or provider assignment (status `exited`). */
+  SEND_REFUSED: 'send_refused',
 });
 
 /**
@@ -849,8 +854,12 @@ export const JOURNEY_END_REASONS = Object.freeze({
  * (`last_error_code`). Database errors are recorded by SQLSTATE (e.g. `55P03`).
  */
 export const JOURNEY_RUNNER_ERROR_CODES = Object.freeze({
-  /** A send-related node (send_message, wait_for_outcome, send_outcome condition): sends are disabled. */
+  /** 8C-3/8C-4: send-related nodes were refused. Since 8C-5b the runner no longer writes it (the activation-time API error is unchanged). */
   SEND_DISABLED: 'JOURNEY_SEND_DISABLED',
+  /** 8C-5b: the send port is unavailable (the production binding until 8C-6); the execution fails. */
+  SEND_UNAVAILABLE: 'SEND_UNAVAILABLE',
+  /** 8C-5b: the contact has no active identity for the node's channel; the `onSuppressed` edge is taken. */
+  NO_IDENTITY: 'NO_IDENTITY',
   NODE_MISSING: 'GRAPH_NODE_MISSING',
   TRANSITION_LIMIT: 'TRANSITION_LIMIT',
   CONTACT_FIELD_RESERVED: 'CONTACT_FIELD_RESERVED',
@@ -860,6 +869,15 @@ export const JOURNEY_RUNNER_ERROR_CODES = Object.freeze({
   POISONED: 'RUNNER_POISONED',
   UNEXPECTED: 'RUNNER_UNEXPECTED_ERROR',
 });
+
+/**
+ * 8C-5b: the step `error_code` of a send refused by the submission core, `SEND_REFUSED_<code>`
+ * (e.g. `SEND_REFUSED_RECIPIENT_SUPPRESSED`), bounded to the column's 100 characters.
+ */
+export const JOURNEY_SEND_REFUSED_PREFIX = 'SEND_REFUSED_';
+export function journeySendRefusedCode(code: string): string {
+  return `${JOURNEY_SEND_REFUSED_PREFIX}${code}`.slice(0, 100);
+}
 
 /** 8C-4: event intake and scheduled-trigger bounds (handover §§5, 8.1; proposed defaults). */
 export const JOURNEY_TRIGGER_PROCESSING_LIMITS = Object.freeze({
@@ -897,6 +915,14 @@ export const JOURNEY_RUNNER_LIMITS = Object.freeze({
   backoffMaxMs: 60_000,
   /** Transitions per execution (defence in depth; the DAG already bounds it). */
   maxTransitions: 1_000,
+  /**
+   * 8C-5b `wait_for_outcome` re-check schedule (handover Rev 2 §6): every 5 minutes during the
+   * first hour after arming, then hourly, never past the deadline. A re-check that finds no
+   * outcome re-arms silently (no history row, no transition).
+   */
+  outcomeRecheckEarlySeconds: 300,
+  outcomeRecheckEarlyWindowSeconds: 3_600,
+  outcomeRecheckLateSeconds: 3_600,
 });
 
 /**

@@ -220,7 +220,7 @@ afterAll(async () => {
 
 describe('Phase 5.0 M2 — one db:migrate from 0043; the indexes, the guard and 0046', () => {
   it('0044 is the barrier prefix, 0045 the guard; 0046 and the forward fix 0047 follow', () => {
-    expect([AT44, AT45, expected.length]).toEqual([44, 45, 67]); // Phase 7: 0050, 0051; Phase 8B.1: 0052; Phase 7 PRs 7-4 to 7-6c: 0053–0057; Phase 8A.1: 0058; Phase 7 PRs 7-6d-1, 7-6d-2: 0059, 0060; Phase 8A.2: 0061; Phase 8C PRs 8C-1 to 8C-4: 0062–0065; Phase 8C PR 8C-5a: 0066
+    expect([AT44, AT45, expected.length]).toEqual([44, 45, 68]); // Phase 7: 0050, 0051; Phase 8B.1: 0052; Phase 7 PRs 7-4 to 7-6c: 0053–0057; Phase 8A.1: 0058; Phase 7 PRs 7-6d-1, 7-6d-2: 0059, 0060; Phase 8A.2: 0061; Phase 8C PRs 8C-1 to 8C-4: 0062–0065; Phase 8C PR 8C-5a: 0066; Phase 8C PR 8C-5b: 0067
   });
 
   it('from 0043: applies 0044, builds both indexes, records 0045 and 0046; a rerun verifies and changes nothing', async () => {

@@ -168,9 +168,10 @@ describe('Phase 8C PR 8C-5a: journey send attribution (migration 0066)', () => {
     expect(publicGrant).toEqual({ public_execute: false });
   });
 
-  it('grants nothing new: no role holds a privilege on the new columns beyond its table grant', async () => {
-    // acc_journey's column UPDATE grant on journey_executions is pinned unchanged in
-    // phase8c3-runner-principal.int-spec.ts (wait_deadline_at is 8C-5b's, §3.1D).
+  it('column grants on the new columns: only the two 8C-5b grants to acc_journey (0067, §3.1D)', async () => {
+    // 0066 granted nothing. 0067 (8C-5b) grants acc_journey SELECT of journey_execution_id (its
+    // claim-bound read of attributed messages) and UPDATE of wait_deadline_at (the deadline
+    // lifecycle); both are also pinned in phase8c3-runner-principal.int-spec.ts.
     expect(
       await q(
         `SELECT grantee, table_name, column_name, privilege_type FROM information_schema.column_privileges
@@ -185,6 +186,19 @@ describe('Phase 8C PR 8C-5a: journey send attribution (migration 0066)', () => {
                                AND g.privilege_type = column_privileges.privilege_type)
           ORDER BY 1, 2, 3, 4`,
       ),
-    ).toEqual([]);
+    ).toEqual([
+      {
+        grantee: 'acc_journey',
+        table_name: 'journey_executions',
+        column_name: 'wait_deadline_at',
+        privilege_type: 'UPDATE',
+      },
+      {
+        grantee: 'acc_journey',
+        table_name: 'messages',
+        column_name: 'journey_execution_id',
+        privilege_type: 'SELECT',
+      },
+    ]);
   });
 });

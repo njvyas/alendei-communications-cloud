@@ -538,7 +538,7 @@ describe('Phase 8C PR 8C-3: journey runner', () => {
       expect((await execution(id!)).status).toBe('completed');
     });
 
-    it('fails closed on send-related nodes (JOURNEY_SEND_DISABLED) and on a reserved contact field; no partial write, no message', async () => {
+    it('fails closed on a send node (8C-5b: the production port is unavailable, SEND_UNAVAILABLE) and on a reserved contact field; no partial write, no message', async () => {
       // A send version cannot be activated (8C-2); planted by the owner to prove the runner's own refusal.
       const created = await as(http().post(url(base())))
         .set('idempotency-key', key())
@@ -585,6 +585,16 @@ describe('Phase 8C PR 8C-3: journey runner', () => {
         sql`UPDATE journeys SET status = 'active', active_version_id = ${v.id}, activated_at = now() WHERE id = ${jId}`,
       );
       const c = await contact(A, 's');
+      // An active identity, so the node reaches the (unavailable) production send port.
+      await h.admin.insert(schema.contactIdentities).values({
+        orgId: A.orgId,
+        workspaceId: A.workspaceId,
+        contactId: c,
+        channelId: waChannel,
+        rawAddress: '+12025550177',
+        normalizedAddress: '+12025550177',
+        isPrimary: true,
+      });
       const [exec] = (
         await h.admin.execute<{ id: string }>(
           sql`INSERT INTO journey_executions (org_id, workspace_id, journey_id, journey_version_id, contact_id, current_node_key, state_version, transitions, entry_kind, entry_ref)
@@ -605,7 +615,7 @@ describe('Phase 8C PR 8C-3: journey runner', () => {
           seq: 2,
           node_key: 'send',
           outcome: 'failed',
-          error_code: JOURNEY_RUNNER_ERROR_CODES.SEND_DISABLED,
+          error_code: JOURNEY_RUNNER_ERROR_CODES.SEND_UNAVAILABLE,
         },
       ]);
       expect(await messageCount()).toBe(0);
@@ -1017,9 +1027,11 @@ describe('Phase 8C PR 8C-3: journey runner', () => {
       expect(await counts({ ...ctx, claimToken: uuidv7() })).toEqual(nothing);
       expect(await counts({ ...ctx, executionId: other! })).toEqual(nothing);
       expect(await counts({ ...ctx, orgId: B.orgId })).toEqual({ ...nothing, queue: 0 });
-      // Privileges the runner principal must never have.
+      // Privileges the runner principal must never have. (8C-5b, 0067: it may read the outcome
+      // columns of its claimed execution's attributed messages — never their content.)
       for (const q of [
-        'SELECT 1 FROM messages LIMIT 1',
+        'SELECT recipient_address, payload FROM messages LIMIT 1',
+        'INSERT INTO messages (org_id) VALUES (gen_random_uuid())',
         'INSERT INTO message_dispatch_queue (message_id, org_id) VALUES (gen_random_uuid(), gen_random_uuid())',
         "UPDATE journey_execution_steps SET outcome = 'failed'",
         'DELETE FROM journey_executions',

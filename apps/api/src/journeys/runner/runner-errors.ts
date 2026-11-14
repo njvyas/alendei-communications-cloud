@@ -23,6 +23,7 @@ const TRANSIENT_CODES = new Set([
   '08000',
   '08003',
   '08006', // connection exceptions
+  'BILLING_BUSY', // 8C-5b: the send port's reservation was busy (handover Rev 2 §7.3)
   'ECONNRESET',
   'ECONNREFUSED',
   'ETIMEDOUT',
@@ -36,6 +37,18 @@ export class JourneyNodeFailure extends Error {
   ) {
     super(message);
     this.name = 'JourneyNodeFailure';
+  }
+}
+
+/**
+ * 8C-5b: a send refusal that records nothing and is retried — transient (`BILLING_BUSY`, a
+ * transient SQLSTATE) or, for an unmapped code, bounded by the poison limit. `code` is what
+ * `errorCode` reports and the queue row records.
+ */
+export class JourneySendRetry extends Error {
+  constructor(readonly code: string) {
+    super(`journey send refused (${code}); retried`);
+    this.name = 'JourneySendRetry';
   }
 }
 

@@ -865,6 +865,16 @@ const CATEGORIES: Category[] = [
       // Phase 7 PR 7-5 (DECISIONS.md §1zi.8, owner-authorised 09-Nov-2026): dispatcher
       // settlement through the three acc_dispatch settlement functions, gated on the
       // message's billing_enforced; the pre-submit top-up refusal codes.
+      // Phase 8C PR 8C-5b (handover Rev 2 §7.3): the send node's refusal mapping names the
+      // core's billing refusal codes to route them (refused / transient); it computes nothing.
+      'apps/api/src/journeys/runner/journey-send.port.ts': [
+        'BILLING_ACCOUNT_FROZEN',
+        'BILLING_ACCOUNT_NOT_CONFIGURED',
+        'BILLING_BUSY',
+        'BILLING_INSUFFICIENT_FUNDS',
+        'BILLING_PRICE_NOT_CONFIGURED',
+      ],
+      'apps/api/src/journeys/runner/runner-errors.ts': ['BILLING_BUSY'],
       'apps/api/src/messages/dispatch/dispatcher.service.ts': [
         'ATTEMPT_BILLING_REFUSALS',
         'BILLING_ACCOUNT_FROZEN',
@@ -1664,7 +1674,14 @@ const CATEGORIES: Category[] = [
         'WEBHOOK_UNSUPPORTED_MEDIA_TYPE',
       ],
       // 8C-3: the runner records the webhook placeholder as stubbed; nothing is called.
-      'apps/api/src/journeys/runner/journey-node-evaluator.ts': ['webhook'],
+      // 8C-5b (handover Rev 2 §7.4): wait_for_outcome / send_outcome read the claimed
+      // execution's message delivery outcome (read only, 0067); nothing is written.
+      'apps/api/src/journeys/runner/journey-node-evaluator.ts': ['deliveryStatus', 'webhook'],
+      'apps/api/src/journeys/runner/journey-send.port.ts': [
+        'delivered',
+        'deliveryStatus',
+        'undelivered',
+      ],
       'packages/contracts/src/journeys.ts': ['delivered', 'webhook'],
       'packages/db/src/maintenance/billing-reconcile.ts': [
         'delivered',

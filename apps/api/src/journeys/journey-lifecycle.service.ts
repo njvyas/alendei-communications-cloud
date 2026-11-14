@@ -402,7 +402,7 @@ export class JourneyLifecycleService {
       WITH ended AS (
         UPDATE journey_executions e
            SET status = 'cancelled', ended_at = now(), end_reason = ${JOURNEY_END_REASONS.JOURNEY_ARCHIVED},
-               wake_at = NULL, state_version = e.state_version + 1, updated_at = now()
+               wake_at = NULL, wait_deadline_at = NULL, state_version = e.state_version + 1, updated_at = now()
          WHERE e.journey_id = ${journey.id} AND e.org_id = ${journey.orgId}
            AND e.status IN ('running', 'waiting')
         RETURNING e.id, e.org_id, e.workspace_id, e.journey_version_id, e.state_version, e.current_node_key

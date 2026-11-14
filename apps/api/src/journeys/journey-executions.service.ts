@@ -439,6 +439,8 @@ export class JourneyExecutionsService {
           endedAt: sql`now()`,
           endReason: JOURNEY_END_REASONS.OPERATOR_CANCELLED,
           wakeAt: null,
+          // 8C-5b: an ended execution has no wait_for_outcome deadline (0066 CHECK).
+          waitDeadlineAt: null,
           stateVersion: seq,
           updatedAt: sql`now()`,
         })

@@ -104,7 +104,7 @@ These are Phase 0 procedural placeholders describing the *shape* of each runbook
 - **A stuck execution:** inspect `journey_execution_queue` (`attempts`, `last_error_code`, `claimed_until`) and the execution's `journey_execution_steps`.
   - A transient error (SQLSTATE `40001`, `40P01`, `55P03`, `57014` or `08xxx`) is retried with backoff (1 s doubling, capped at 60 s). After 3 attempts the execution ends `failed`, with `runner_retry_exhausted`.
   - Any execution claimed more than 5 times without a committed transition ends `failed`, with `runner_poisoned`. This includes executions whose worker crashed.
-  - A node that cannot run (a send-related node, a reserved contact field, a missing segment or channel) ends `failed`, with `node_failed` and the step's `error_code`, without retry.
+  - A node that cannot run (a reserved contact field, a missing segment or channel, an unavailable send) ends `failed`, with `node_failed` and the step's `error_code`, without retry.
 - **A crashed worker:** its lease (30 s) lapses and the next claim takes over with a new token and `epoch + 1`. The old worker can neither read nor write anything once its lease has expired.
 - **Pause a journey** (`POST …/pause`) to stop claiming its executions without losing state. **Cancel** an execution (`POST …/executions/:id/cancel`) to end it; the runner never touches an ended execution.
 
@@ -119,6 +119,30 @@ These are Phase 0 procedural placeholders describing the *shape* of each runbook
   - `last_error_code` and `not_before` show a backed-off retry.
   - A firing abandoned for a missing segment, a missing channel, invalid criteria or poison (more than 5 claims) skips that fire, schedules the next one, and is audited as `journey.schedule_fired` with outcome `failure`.
   - Missed fires (runner down) are **not** replayed: one fire runs, then the next fire is computed from now.
+
+### 5.z Journey send node and outcome waits (Phase 8C PR 8C-5b)
+- **No journey sends.** The send port's only production binding is `UnavailableJourneySendPort`: a `send_message` step fails with `SEND_UNAVAILABLE` (`node_failed`), and activation still refuses send-node versions (`JOURNEY_SEND_DISABLED`). Real sending is 8C-6, behind the 8B-3 automation identity, and needs a separate authorisation.
+- **Step codes** (`journey_execution_steps.error_code`):
+  - `NO_IDENTITY`: the contact has no active identity for the channel. The step is `skipped`, and the node's `onSuppressed` edge is taken.
+  - `SEND_REFUSED_<code>`: the core refused the send.
+    - Suppression or consent: `skipped`, then `onSuppressed`.
+    - Billing or provider assignment: `refused`, then `onRefused`.
+    - Template, validation or SMS problems: `failed`.
+
+    An `exit` edge ends the execution `exited` (`send_suppressed` / `send_refused`). `BILLING_BUSY` and transient SQLSTATEs are retried; an unmapped code is retried up to the poison bound.
+- **`wait_for_outcome` deadlines.**
+  - `journey_executions.wait_deadline_at` is set only while an execution waits at that node; the database refuses it on any other status.
+  - Re-checks run every 5 minutes in the first hour, then hourly. A re-check without an outcome moves `wake_at` only, writing no history row.
+  - Pausing keeps the deadline; one that passes during a pause times out at the next wake after resume.
+  - Every end (outcome, timeout, cancel, archive, failure) clears it.
+- **Orphan check — must return 0.** Every journey-attributed message is named by a step of its own execution, which is the same transaction in 8C-6:
+  ```sql
+  SELECT count(*) FROM messages m
+   WHERE m.journey_execution_id IS NOT NULL
+     AND NOT EXISTS (SELECT 1 FROM journey_execution_steps s
+                      WHERE s.message_id = m.id AND s.execution_id = m.journey_execution_id);
+  ```
+  Run it as the owner, in a read-only session. A non-zero count is an incident: send attribution and history have diverged.
 
 ## 6. Disaster recovery runbooks (see `DR.md` for objectives/backup detail)
 

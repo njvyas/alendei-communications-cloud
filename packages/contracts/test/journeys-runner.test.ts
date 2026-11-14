@@ -1,6 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { JOURNEY_RUNNER_LIMITS, nextJourneyWindowStart } from '../src/journeys';
+import {
+  JOURNEY_END_REASONS,
+  JOURNEY_RUNNER_ERROR_CODES,
+  JOURNEY_RUNNER_LIMITS,
+  journeySendRefusedCode,
+  nextJourneyWindowStart,
+} from '../src/journeys';
 
 /** Phase 8C PR 8C-3 — wait_window computation and the runner bounds. */
 
@@ -71,8 +77,24 @@ describe('runner bounds (handover §§8.2, 9)', () => {
         backoffBaseMs: 1000,
         backoffMaxMs: 60000,
         maxTransitions: 1000,
+        // 8C-5b (handover Rev 2 §6): the wait_for_outcome re-check schedule.
+        outcomeRecheckEarlySeconds: 300,
+        outcomeRecheckEarlyWindowSeconds: 3600,
+        outcomeRecheckLateSeconds: 3600,
       },
     );
+  });
+});
+
+describe('send refusal codes (8C-5b, handover Rev 2 §§3.2, 7.3)', () => {
+  it('are stable and additive', () => {
+    assert.equal(JOURNEY_RUNNER_ERROR_CODES.SEND_UNAVAILABLE, 'SEND_UNAVAILABLE');
+    assert.equal(JOURNEY_RUNNER_ERROR_CODES.NO_IDENTITY, 'NO_IDENTITY');
+    assert.equal(JOURNEY_RUNNER_ERROR_CODES.SEND_DISABLED, 'JOURNEY_SEND_DISABLED');
+    assert.equal(journeySendRefusedCode('CONSENT_REVOKED'), 'SEND_REFUSED_CONSENT_REVOKED');
+    assert.equal(journeySendRefusedCode('X'.repeat(200)).length, 100);
+    assert.equal(JOURNEY_END_REASONS.SEND_SUPPRESSED, 'send_suppressed');
+    assert.equal(JOURNEY_END_REASONS.SEND_REFUSED, 'send_refused');
   });
 });
 

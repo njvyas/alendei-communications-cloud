@@ -508,6 +508,24 @@ describe('Phase 8C PR 8C-5a: journey send attribution (0066)', () => {
         });
       });
 
+      it('fails closed (N1, 0067): a message the guard cannot read is refused, whichever execution it names', async () => {
+        // The guard's owner is made unable to read messages (acc_app without a tenant context
+        // sees none), while the foreign key — which checks without row security — still finds
+        // the row. Before 0067 the guard let both steps through; now each is refused.
+        for (const [execution, message] of [
+          [E1, m1],
+          [E3, m1],
+        ])
+          expect(
+            await rolledBack(async (c) => {
+              await c.query('ALTER FUNCTION app_journey_step_message_guard() OWNER TO acc_app');
+              return refusal(insertStep(c, execution!, 900, message!));
+            }),
+          ).toEqual({ code: '23503', constraint: 'journey_execution_steps_message_fk' });
+        // Control: with its owner restored (the rollback), the step's own message is accepted.
+        expect(await rolledBack((c) => refusal(insertStep(c, E1, 900, m1)))).toBeNull();
+      });
+
       it('refuses a second step naming the same message', async () => {
         expect(
           await rolledBack(async (c) => {
