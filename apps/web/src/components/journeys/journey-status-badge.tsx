@@ -5,9 +5,11 @@ import {
   getJourneyStatusLabel,
   getJourneyVersionStatusLabel,
   getTriggerKindLabel,
+  getTriggerStatusLabel,
   type JourneyExecutionStatus,
   type JourneyStatus,
   type JourneyTriggerRecord,
+  type JourneyTriggerStatus,
   type JourneyVersionStatus,
 } from '@/lib/journeys';
 
@@ -165,5 +167,32 @@ export function JourneyTriggerBadge({ trigger, className }: JourneyTriggerBadgeP
       />
       {kindLabel}
     </span>
+  );
+}
+
+export interface JourneyTriggerStatusBadgeProps {
+  readonly status: JourneyTriggerStatus;
+  readonly className?: string;
+}
+
+export function getJourneyTriggerStatusTone(status: JourneyTriggerStatus): BadgeVariant {
+  switch (status) {
+    case 'active':
+      return 'success';
+    case 'paused':
+      return 'warning';
+    case 'retired':
+      return 'neutral';
+    default:
+      return 'neutral';
+  }
+}
+
+export function JourneyTriggerStatusBadge({ status, className }: JourneyTriggerStatusBadgeProps) {
+  const tone = getJourneyTriggerStatusTone(status);
+  const label = getTriggerStatusLabel(status);
+
+  return (
+    <StatusBadge variant={tone} label={label} srPrefix="Trigger Status" className={className} />
   );
 }

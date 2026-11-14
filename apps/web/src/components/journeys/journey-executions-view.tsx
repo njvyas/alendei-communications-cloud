@@ -5,8 +5,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { journeysApi } from '@/lib/api-client';
 import {
   ALL_JOURNEY_EXECUTION_STATUSES,
+  formatStepDetails,
   getNodeTypeLabel,
   getStepOutcomeLabel,
+  getTriggerKindLabel,
   type JourneyExecutionRecord,
   type JourneyExecutionStepRecord,
   type JourneyNodeType,
@@ -209,7 +211,8 @@ export function JourneyExecutionsView({ workspaceId, journeyId }: JourneyExecuti
                   <td className="px-4 py-3 font-medium text-acc-text-primary">
                     <p className="font-mono text-xs">{exec.contactId}</p>
                     <p className="font-mono text-[10px] text-acc-text-secondary">
-                      Trigger: {exec.entryKind}
+                      Trigger: {getTriggerKindLabel(exec.entryKind)}
+                      {exec.enrolledBy ? ` (${exec.enrolledBy})` : ''}
                     </p>
                   </td>
                   <td className="px-4 py-3">
@@ -321,6 +324,15 @@ export function JourneyExecutionsView({ workspaceId, journeyId }: JourneyExecuti
                       : 'Still In Flight'}
                   </p>
                 </div>
+                <div className="col-span-2">
+                  <span className="text-acc-text-secondary">Trigger:</span>
+                  <p className="mt-1 text-[11px] font-mono text-acc-text-primary">
+                    {getTriggerKindLabel(selectedExecution.entryKind)}
+                    {selectedExecution.enrolledBy
+                      ? ` (Enrolled by: ${selectedExecution.enrolledBy})`
+                      : ''}
+                  </p>
+                </div>
               </div>
 
               {selectedExecution.endReason && (
@@ -397,6 +409,11 @@ export function JourneyExecutionsView({ workspaceId, journeyId }: JourneyExecuti
                         {st.errorCode && (
                           <p className="font-mono text-[10px] text-red-400">
                             Error: {st.errorCode}
+                          </p>
+                        )}
+                        {formatStepDetails(st.details) && (
+                          <p className="font-medium text-[11px] text-acc-accent">
+                            {formatStepDetails(st.details)}
                           </p>
                         )}
                         {st.details && Object.keys(st.details).length > 0 && (

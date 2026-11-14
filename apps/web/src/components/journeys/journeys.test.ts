@@ -17,19 +17,28 @@ import {
   getNodeEdgeTargets,
   updateNodeEdgeTarget,
   formatTriggerSummary,
+  formatTriggerNextFire,
+  formatStepDetails,
+  isJourneyUuid,
+  JOURNEY_UUID_PATTERN,
+  isJourneyTimeZone,
+  nextJourneyScheduleFire,
   journeyLifecycleTarget,
   type JourneyRecord,
   type JourneyGraph,
   type JourneyNode,
+  type JourneySchedule,
 } from '@/lib/journeys';
 import {
   JourneyStatusBadge,
   JourneyVersionStatusBadge,
   JourneyExecutionStatusBadge,
   JourneyTriggerBadge,
+  JourneyTriggerStatusBadge,
   getJourneyStatusTone,
   getJourneyVersionStatusTone,
   getJourneyExecutionStatusTone,
+  getJourneyTriggerStatusTone,
 } from './journey-status-badge';
 import { JourneyNodeIcon } from './journey-node-icon';
 import { JourneyNodeInspector } from './journey-node-inspector';
@@ -718,6 +727,520 @@ describe('Phase 8C Journeys Frontend Module — Unit & Component Tests', () => {
         assert.notStrictEqual(recordedKey1, recordedKey2);
         assert.strictEqual(recordedKey1, key1);
         assert.strictEqual(recordedKey2, key2);
+      });
+    });
+  });
+
+  describe('8. Phase 8C-4 Event Intake & Scheduled Trigger Processing', () => {
+    describe('8.1 Timezone & Schedule Calculation Invariants', () => {
+      it('isJourneyTimeZone accepts valid IANA identifiers and rejects invalid strings', () => {
+        assert.strictEqual(isJourneyTimeZone('UTC'), true);
+        assert.strictEqual(isJourneyTimeZone('America/New_York'), true);
+        assert.strictEqual(isJourneyTimeZone('Asia/Kolkata'), true);
+        assert.strictEqual(isJourneyTimeZone('Europe/London'), true);
+        assert.strictEqual(isJourneyTimeZone('Australia/Sydney'), true);
+
+        // Invalid time zones
+        assert.strictEqual(isJourneyTimeZone(''), false);
+        assert.strictEqual(isJourneyTimeZone('GMT+5'), false);
+        assert.strictEqual(isJourneyTimeZone('Mars/Olympus'), false);
+        assert.strictEqual(isJourneyTimeZone('Invalid/Timezone'), false);
+        assert.strictEqual(isJourneyTimeZone(null), false);
+        assert.strictEqual(isJourneyTimeZone(123), false);
+      });
+
+      it('nextJourneyScheduleFire accurately calculates upcoming fire instant for once schedule', () => {
+        const pastSchedule: JourneySchedule = {
+          type: 'once',
+          at: new Date(Date.now() - 3600000).toISOString(),
+        };
+        assert.strictEqual(nextJourneyScheduleFire(pastSchedule, new Date()), null);
+
+        const futureInstant = new Date(Date.now() + 86400000);
+        const futureSchedule: JourneySchedule = {
+          type: 'once',
+          at: futureInstant.toISOString(),
+        };
+        const next = nextJourneyScheduleFire(futureSchedule, new Date());
+        assert.ok(next instanceof Date);
+        assert.strictEqual(next.getTime(), futureInstant.getTime());
+      });
+
+      it('nextJourneyScheduleFire calculates recurring daily and weekly fires', () => {
+        const dailySchedule: JourneySchedule = {
+          type: 'recurring',
+          frequency: 'daily',
+          time: '14:30',
+          timeZone: 'UTC',
+          daysOfWeek: undefined,
+        };
+        const nextDaily = nextJourneyScheduleFire(dailySchedule, new Date('2026-11-14T10:00:00Z'));
+        assert.ok(nextDaily instanceof Date);
+        assert.strictEqual(nextDaily.toISOString(), '2026-11-14T14:30:00.000Z');
+
+        // Weekly schedule: only fires on Monday (1)
+        const weeklyMondaySchedule: JourneySchedule = {
+          type: 'recurring',
+          frequency: 'weekly',
+          time: '09:00',
+          timeZone: 'UTC',
+          daysOfWeek: [1],
+        };
+        // 2026-11-14 is a Saturday (6), so next Monday is 2026-11-16
+        const nextWeekly = nextJourneyScheduleFire(
+          weeklyMondaySchedule,
+          new Date('2026-11-14T10:00:00Z'),
+        );
+        assert.ok(nextWeekly instanceof Date);
+        assert.strictEqual(nextWeekly.toISOString(), '2026-11-16T09:00:00.000Z');
+      });
+
+      it('enforces daily schedules take no daysOfWeek and weekly requires days 1..7', () => {
+        const validDailyGraph: JourneyGraph = {
+          schemaVersion: 1,
+          entry: 'start',
+          nodes: {
+            start: {
+              type: 'entry',
+              trigger: {
+                kind: 'schedule',
+                segmentId: '00000000-0000-0000-0000-000000000001',
+                schedule: {
+                  type: 'recurring',
+                  frequency: 'daily',
+                  time: '09:00',
+                  timeZone: 'UTC',
+                },
+              },
+              next: 'finish',
+            },
+            finish: { type: 'exit' },
+          },
+        };
+        assert.strictEqual(validateJourneyGraph(validDailyGraph).valid, true);
+
+        // Daily schedule with daysOfWeek must be rejected by authoritative contract validator
+        const invalidDailyGraph = {
+          schemaVersion: 1,
+          entry: 'start',
+          nodes: {
+            start: {
+              type: 'entry',
+              trigger: {
+                kind: 'schedule',
+                segmentId: '00000000-0000-0000-0000-000000000001',
+                schedule: {
+                  type: 'recurring',
+                  frequency: 'daily',
+                  time: '09:00',
+                  timeZone: 'UTC',
+                  daysOfWeek: [1, 2],
+                },
+              },
+              next: 'finish',
+            },
+            finish: { type: 'exit' },
+          },
+        };
+        const dailyReport = validateJourneyGraph(invalidDailyGraph as unknown as JourneyGraph);
+        assert.strictEqual(dailyReport.valid, false);
+        assert.ok(
+          dailyReport.errors.some((e) => e.message.includes('daily schedules take no days')),
+        );
+      });
+    });
+
+    describe('8.2 Traceability & Formatting Helpers', () => {
+      it('isJourneyUuid accepts UUIDv4, UUIDv7, and authoritative contract UUID shapes, rejecting malformed strings', () => {
+        // UUIDv4
+        assert.strictEqual(isJourneyUuid('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'), true);
+        // UUIDv7 (version 7 nibble)
+        assert.strictEqual(isJourneyUuid('019326d8-1c4b-7000-8000-000000000000'), true);
+        // Nil UUID
+        assert.strictEqual(isJourneyUuid('00000000-0000-0000-0000-000000000000'), true);
+        // Pattern test
+        assert.ok(JOURNEY_UUID_PATTERN.test('019326d8-1c4b-7000-8000-000000000000'));
+        // Invalid shapes
+        assert.strictEqual(isJourneyUuid('not-a-uuid'), false);
+        assert.strictEqual(isJourneyUuid(''), false);
+        assert.strictEqual(isJourneyUuid('019326d8-1c4b-7000-8000'), false);
+        assert.strictEqual(isJourneyUuid('019326d8-1c4b-7000-8000-0000000000001'), false);
+      });
+
+      it('formatTriggerNextFire formats ISO instant with timezone indicator and explicit Browser local time label or returns null', () => {
+        assert.strictEqual(formatTriggerNextFire(null), null);
+        assert.strictEqual(formatTriggerNextFire(undefined), null);
+        assert.strictEqual(formatTriggerNextFire('invalid-date'), null);
+        const formatted = formatTriggerNextFire('2026-11-15T09:00:00Z');
+        assert.ok(formatted !== null);
+        assert.ok(typeof formatted === 'string' && formatted.includes('Browser local time'));
+      });
+
+      it('formatStepDetails parses initial entry step metadata', () => {
+        assert.strictEqual(formatStepDetails(null), null);
+        assert.strictEqual(
+          formatStepDetails({
+            entryKind: 'event',
+            eventKind: 'contact.tag_added',
+            eventTag: 'VIP',
+          }),
+          'Triggered by platform event: contact.tag_added (Tag: VIP)',
+        );
+        assert.strictEqual(
+          formatStepDetails({ entryKind: 'event', eventKind: 'contact.created' }),
+          'Triggered by platform event: contact.created',
+        );
+        assert.ok(
+          formatStepDetails({
+            entryKind: 'schedule',
+            firedAt: '2026-11-14T10:00:00Z',
+          })?.includes('Triggered by schedule fired at'),
+        );
+        assert.strictEqual(
+          formatStepDetails({ entryKind: 'api', enrolledBy: 'operator-alice' }),
+          'Enrolled via Inbound API (by operator-alice)',
+        );
+      });
+
+      it('formatTriggerSummary renders detailed metadata for event and schedule triggers with timezone indicator', () => {
+        assert.strictEqual(
+          formatTriggerSummary({
+            id: 't-evt',
+            journeyVersionId: 'v1',
+            kind: 'event',
+            eventKind: 'contact.tag_added',
+            eventTag: 'VIP_CUSTOMER',
+            segmentId: null,
+            nextFireAt: null,
+            status: 'active',
+          }),
+          'Event: contact.tag_added ("VIP_CUSTOMER")',
+        );
+
+        const scheduleSummary = formatTriggerSummary({
+          id: 't-sch',
+          journeyVersionId: 'v1',
+          kind: 'schedule',
+          eventKind: null,
+          eventTag: null,
+          segmentId: '00000000-0000-0000-0000-000000000042',
+          nextFireAt: '2026-11-15T09:00:00Z',
+          status: 'active',
+        });
+        assert.ok(scheduleSummary.includes('Schedule'));
+        assert.ok(scheduleSummary.includes('Segment 00000000…'));
+        assert.ok(scheduleSummary.includes('Next:'));
+        assert.ok(scheduleSummary.includes('Browser local time'));
+
+        const pausedSummary = formatTriggerSummary({
+          id: 't-paused',
+          journeyVersionId: 'v1',
+          kind: 'schedule',
+          eventKind: null,
+          eventTag: null,
+          segmentId: '00000000-0000-0000-0000-000000000042',
+          nextFireAt: null,
+          status: 'paused',
+        });
+        assert.ok(pausedSummary.includes('(Paused)'));
+      });
+    });
+
+    describe('8.3 Trigger Status Badges & Component Static Markup', () => {
+      it('JourneyTriggerStatusBadge maps statuses to tones and labels', () => {
+        assert.strictEqual(getJourneyTriggerStatusTone('active'), 'success');
+        assert.strictEqual(getJourneyTriggerStatusTone('paused'), 'warning');
+        assert.strictEqual(getJourneyTriggerStatusTone('retired'), 'neutral');
+
+        const activeMarkup = renderToStaticMarkup(
+          React.createElement(JourneyTriggerStatusBadge, { status: 'active' }),
+        );
+        assert.ok(activeMarkup.includes('Armed'));
+
+        const pausedMarkup = renderToStaticMarkup(
+          React.createElement(JourneyTriggerStatusBadge, { status: 'paused' }),
+        );
+        assert.ok(pausedMarkup.includes('Paused'));
+
+        const retiredMarkup = renderToStaticMarkup(
+          React.createElement(JourneyTriggerStatusBadge, { status: 'retired' }),
+        );
+        assert.ok(retiredMarkup.includes('Retired'));
+      });
+
+      it('JourneyNodeInspector renders schedule recurrence, time, timezone and preview controls', () => {
+        const scheduleGraph: JourneyGraph = {
+          schemaVersion: 1,
+          entry: 'start',
+          nodes: {
+            start: {
+              type: 'entry',
+              trigger: {
+                kind: 'schedule',
+                segmentId: '00000000-0000-0000-0000-000000000001',
+                schedule: {
+                  type: 'recurring',
+                  frequency: 'weekly',
+                  time: '10:30',
+                  timeZone: 'UTC',
+                  daysOfWeek: [1, 3, 5],
+                },
+              },
+              next: 'finish',
+            },
+            finish: { type: 'exit' },
+          },
+        };
+
+        const markup = renderToStaticMarkup(
+          React.createElement(JourneyNodeInspector, {
+            nodeKey: 'start',
+            node: scheduleGraph.nodes.start!,
+            graph: scheduleGraph,
+            onChange: () => {},
+            onClose: () => {},
+          }),
+        );
+
+        assert.ok(markup.includes('Trigger Configuration'));
+        assert.ok(markup.includes('Audience Segment'));
+        assert.ok(markup.includes('Recurrence Frequency'));
+        assert.ok(markup.includes('Dispatch Time (24-Hour HH:MM)'));
+        assert.ok(markup.includes('Time Zone (IANA)'));
+        assert.ok(markup.includes('Next Firing Preview:'));
+        assert.ok(markup.includes('aria-pressed="true"'), 'Selected days must expose aria-pressed');
+      });
+
+      it('JourneyNodeInspector validates segment UUID, accepting UUIDv7 and rejecting malformed IDs', () => {
+        const v7SegmentGraph: JourneyGraph = {
+          schemaVersion: 1,
+          entry: 'start',
+          nodes: {
+            start: {
+              type: 'entry',
+              trigger: {
+                kind: 'schedule',
+                segmentId: '019326d8-1c4b-7000-8000-000000000000', // UUIDv7
+                schedule: {
+                  type: 'recurring',
+                  frequency: 'daily',
+                  time: '09:00',
+                  timeZone: 'UTC',
+                },
+              },
+              next: 'finish',
+            },
+            finish: { type: 'exit' },
+          },
+        };
+
+        const v7Markup = renderToStaticMarkup(
+          React.createElement(JourneyNodeInspector, {
+            nodeKey: 'start',
+            node: v7SegmentGraph.nodes.start!,
+            graph: v7SegmentGraph,
+            onChange: () => {},
+            onClose: () => {},
+          }),
+        );
+        assert.ok(!v7Markup.includes('Segment ID must be a valid UUID'));
+        assert.ok(!v7Markup.includes('Audience segment selection or UUID is required'));
+
+        const invalidSegmentGraph: JourneyGraph = {
+          schemaVersion: 1,
+          entry: 'start',
+          nodes: {
+            start: {
+              type: 'entry',
+              trigger: {
+                kind: 'schedule',
+                segmentId: 'not-a-valid-uuid',
+                schedule: {
+                  type: 'recurring',
+                  frequency: 'daily',
+                  time: '09:00',
+                  timeZone: 'UTC',
+                },
+              },
+              next: 'finish',
+            },
+            finish: { type: 'exit' },
+          },
+        };
+
+        const invalidMarkup = renderToStaticMarkup(
+          React.createElement(JourneyNodeInspector, {
+            nodeKey: 'start',
+            node: invalidSegmentGraph.nodes.start!,
+            graph: invalidSegmentGraph,
+            onChange: () => {},
+            onClose: () => {},
+          }),
+        );
+        assert.ok(invalidMarkup.includes('Segment ID must be a valid UUID'));
+      });
+
+      it('JourneyNodeInspector enforces RBAC fallback with unsupressed validation and empty segment requirements', () => {
+        // Without contacts.read permission (default cleared session), RBAC note is shown
+        // AND missing segment validation error is ALSO shown
+        const emptySegmentGraph: JourneyGraph = {
+          schemaVersion: 1,
+          entry: 'start',
+          nodes: {
+            start: {
+              type: 'entry',
+              trigger: {
+                kind: 'schedule',
+                segmentId: '',
+                schedule: {
+                  type: 'recurring',
+                  frequency: 'daily',
+                  time: '09:00',
+                  timeZone: 'UTC',
+                },
+              },
+              next: 'finish',
+            },
+            finish: { type: 'exit' },
+          },
+        };
+
+        const emptyMarkup = renderToStaticMarkup(
+          React.createElement(JourneyNodeInspector, {
+            nodeKey: 'start',
+            node: emptySegmentGraph.nodes.start!,
+            graph: emptySegmentGraph,
+            onChange: () => {},
+            onClose: () => {},
+          }),
+        );
+
+        // RBAC informational note must be present
+        assert.ok(emptyMarkup.includes('contacts.read'));
+        // Validation error must NOT be suppressed by the RBAC note
+        assert.ok(
+          emptyMarkup.includes('Audience segment selection or UUID is required'),
+          'Missing segment ID error must display even when operator lacks contacts.read',
+        );
+
+        // Authoritative graph validation must reject empty segmentId, blocking publish
+        const graphReport = validateJourneyGraph(emptySegmentGraph);
+        assert.strictEqual(graphReport.valid, false);
+        assert.ok(
+          graphReport.errors.some(
+            (e) => e.path === 'trigger.segmentId' && e.message.includes('UUID'),
+          ),
+        );
+      });
+
+      it('JourneyNodeInspector correctly formats timezone previews and explicit browser local time interpretation', () => {
+        // 1. One-time schedule
+        const futureDate = new Date(Date.now() + 86400000).toISOString();
+        const onceGraph: JourneyGraph = {
+          schemaVersion: 1,
+          entry: 'start',
+          nodes: {
+            start: {
+              type: 'entry',
+              trigger: {
+                kind: 'schedule',
+                segmentId: '019326d8-1c4b-7000-8000-000000000000',
+                schedule: {
+                  type: 'once',
+                  at: futureDate,
+                },
+              },
+              next: 'finish',
+            },
+            finish: { type: 'exit' },
+          },
+        };
+
+        const onceMarkup = renderToStaticMarkup(
+          React.createElement(JourneyNodeInspector, {
+            nodeKey: 'start',
+            node: onceGraph.nodes.start!,
+            graph: onceGraph,
+            onChange: () => {},
+            onClose: () => {},
+          }),
+        );
+
+        assert.ok(
+          onceMarkup.includes('Execution Date') && onceMarkup.includes('Browser Local Time'),
+        );
+        assert.ok(onceMarkup.includes('Interpreted in your') && onceMarkup.includes('local time'));
+        assert.ok(onceMarkup.includes('UTC:'));
+
+        // 2. Recurring schedule with specific IANA timezone (America/New_York)
+        const recurringGraph: JourneyGraph = {
+          schemaVersion: 1,
+          entry: 'start',
+          nodes: {
+            start: {
+              type: 'entry',
+              trigger: {
+                kind: 'schedule',
+                segmentId: '019326d8-1c4b-7000-8000-000000000000',
+                schedule: {
+                  type: 'recurring',
+                  frequency: 'daily',
+                  time: '14:30',
+                  timeZone: 'America/New_York',
+                },
+              },
+              next: 'finish',
+            },
+            finish: { type: 'exit' },
+          },
+        };
+
+        const recurringMarkup = renderToStaticMarkup(
+          React.createElement(JourneyNodeInspector, {
+            nodeKey: 'start',
+            node: recurringGraph.nodes.start!,
+            graph: recurringGraph,
+            onChange: () => {},
+            onClose: () => {},
+          }),
+        );
+
+        assert.ok(recurringMarkup.includes('America/New_York'));
+        assert.ok(recurringMarkup.includes('Next Firing Preview:'));
+      });
+
+      it('JourneyNodeInspector renders event trigger controls with tag input for contact.tag_added', () => {
+        const eventGraph: JourneyGraph = {
+          schemaVersion: 1,
+          entry: 'start',
+          nodes: {
+            start: {
+              type: 'entry',
+              trigger: {
+                kind: 'event',
+                event: 'contact.tag_added',
+                tag: 'VIP_TIER_1',
+              },
+              next: 'finish',
+            },
+            finish: { type: 'exit' },
+          },
+        };
+
+        const markup = renderToStaticMarkup(
+          React.createElement(JourneyNodeInspector, {
+            nodeKey: 'start',
+            node: eventGraph.nodes.start!,
+            graph: eventGraph,
+            onChange: () => {},
+            onClose: () => {},
+          }),
+        );
+
+        assert.ok(markup.includes('Platform Event Type'));
+        assert.ok(markup.includes('Tag Name'));
+        assert.ok(markup.includes('VIP_TIER_1'));
+        assert.ok(markup.includes('/64'), 'Exposes 64-char cap indicator');
       });
     });
   });

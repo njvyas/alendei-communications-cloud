@@ -628,6 +628,7 @@ export function JourneyGraphEditor({
             nodeKey={selectedNodeKey}
             node={selectedNode}
             graph={graph}
+            workspaceId={workspaceId}
             readOnly={isEffectiveReadOnly}
             onChange={handleNodeChange}
             onDelete={handleDeleteNode}

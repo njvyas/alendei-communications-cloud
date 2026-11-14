@@ -12,7 +12,11 @@ import {
 } from '@/lib/journeys';
 import { useCanManageJourneys } from '@/lib/session-store';
 import { toast } from '@/lib/toast';
-import { JourneyStatusBadge, JourneyTriggerBadge } from './journey-status-badge';
+import {
+  JourneyStatusBadge,
+  JourneyTriggerBadge,
+  JourneyTriggerStatusBadge,
+} from './journey-status-badge';
 import { JourneyGraphEditor } from './journey-graph-editor';
 import { JourneyExecutionsView } from './journey-executions-view';
 import { JourneyNodeStatisticsView } from './journey-node-statistics-view';
@@ -276,6 +280,7 @@ export function JourneyDetailView({
               Trigger:
             </span>
             <JourneyTriggerBadge trigger={journey.trigger} />
+            {journey.trigger && <JourneyTriggerStatusBadge status={journey.trigger.status} />}
             <span className="font-mono text-[11px] text-acc-text-secondary">
               {formatTriggerSummary(journey.trigger)}
             </span>

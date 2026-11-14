@@ -31,6 +31,9 @@ import {
   validateJourneyGraph,
   canonicalJourneyJson,
   isJourneyTimeZone,
+  nextJourneyScheduleFire,
+  JOURNEY_TRIGGER_PROCESSING_LIMITS,
+  JOURNEY_SCHEDULE_ERROR_CODES,
   type JourneyStatus,
   type JourneyVersionStatus,
   type JourneyChannel,
@@ -99,6 +102,9 @@ export {
   validateJourneyGraph,
   canonicalJourneyJson,
   isJourneyTimeZone,
+  nextJourneyScheduleFire,
+  JOURNEY_TRIGGER_PROCESSING_LIMITS,
+  JOURNEY_SCHEDULE_ERROR_CODES,
   JOURNEY_AUDIT_ACTIONS,
   JOURNEY_LIFECYCLE_ACTIONS,
   JOURNEY_LIFECYCLE_TRANSITIONS,
@@ -149,6 +155,15 @@ export {
 
 export const ALL_JOURNEY_EXECUTION_STATUSES: readonly JourneyExecutionStatus[] =
   JOURNEY_EXECUTION_STATUSES;
+
+export const JOURNEY_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isJourneyUuid(val: string): boolean {
+  return JOURNEY_UUID_PATTERN.test(val);
+}
+
+export type JourneySchedule = Extract<JourneyTrigger, { kind: 'schedule' }>['schedule'];
 
 export type JourneyNodeStatistics = JourneyNodeStats;
 
@@ -260,22 +275,68 @@ export function getStepOutcomeLabel(outcome: JourneyStepOutcome): string {
   }
 }
 
+export function formatTriggerNextFire(nextFireAt: string | null | undefined): string | null {
+  if (!nextFireAt) return null;
+  try {
+    const d = new Date(nextFireAt);
+    if (Number.isNaN(d.getTime())) return null;
+    return `${d.toLocaleString(undefined, { timeZoneName: 'short' })} (Browser local time)`;
+  } catch {
+    return null;
+  }
+}
+
 export function formatTriggerSummary(trigger: JourneyTriggerRecord | null): string {
   if (!trigger) return 'No active trigger';
   if (trigger.kind === 'api') {
     return 'API Enrolment (POST /enrollments)';
   }
   if (trigger.kind === 'event') {
+    if (trigger.eventKind === 'contact.tag_added' && trigger.eventTag) {
+      return `Event: contact.tag_added ("${trigger.eventTag}")`;
+    }
     const detail = trigger.eventKind ?? trigger.eventTag ?? 'domain event';
     return `Event: ${detail}`;
   }
   if (trigger.kind === 'schedule') {
-    const nextText = trigger.nextFireAt
-      ? ` (Next: ${new Date(trigger.nextFireAt).toLocaleString()})`
-      : '';
-    return `Schedule${nextText}`;
+    const segmentText = trigger.segmentId ? ` · Segment ${trigger.segmentId.slice(0, 8)}…` : '';
+    const formattedNext = formatTriggerNextFire(trigger.nextFireAt);
+    const nextText = formattedNext
+      ? ` (Next: ${formattedNext})`
+      : trigger.status === 'paused'
+        ? ' (Paused)'
+        : '';
+    return `Schedule${segmentText}${nextText}`;
   }
   return trigger.kind;
+}
+
+export function formatStepDetails(
+  details: Record<string, unknown> | null | undefined,
+): string | null {
+  if (!details || typeof details !== 'object') return null;
+  if (details.entryKind === 'event') {
+    const kind = typeof details.eventKind === 'string' ? details.eventKind : 'Platform Event';
+    const tag = typeof details.eventTag === 'string' ? ` (Tag: ${details.eventTag})` : '';
+    return `Triggered by platform event: ${kind}${tag}`;
+  }
+  if (details.entryKind === 'schedule') {
+    const firedAt =
+      typeof details.firedAt === 'string'
+        ? (() => {
+            const d = new Date(details.firedAt);
+            return Number.isNaN(d.getTime())
+              ? 'Scheduled firing'
+              : d.toLocaleString(undefined, { timeZoneName: 'short' });
+          })()
+        : 'Scheduled firing';
+    return `Triggered by schedule fired at ${firedAt}`;
+  }
+  if (details.entryKind === 'api') {
+    const enrolledBy = typeof details.enrolledBy === 'string' ? ` (by ${details.enrolledBy})` : '';
+    return `Enrolled via Inbound API${enrolledBy}`;
+  }
+  return null;
 }
 
 const NODE_TYPE_LABELS: Record<JourneyNodeType, string> = {
