@@ -145,7 +145,7 @@ These are Phase 0 procedural placeholders describing the *shape* of each runbook
   Run it as the owner, in a read-only session. A non-zero count is an incident: send attribution and history have diverged.
 
 ### 5.w Automation sending controls and the campaign identity (Phase 8B PR 8B-3a)
-- **No campaign sends.** Campaign dispatch stays `CAMPAIGN_DISPATCH_DISABLED`. The executor is 8B-3b, and `CAMPAIGN_DISPATCH_ENABLED` defaults to off and is refused outside tests. Any enablement needs billing enforcement, recorded Gate 7-A acceptance, a provisioned `acc_campaign` credential (the role is NOLOGIN today) and a separate owner authorisation.
+- **No campaign sends.** Campaign dispatch stays `CAMPAIGN_DISPATCH_DISABLED`. The executor exists since 8B-3b (§5.v), but `CAMPAIGN_DISPATCH_ENABLED` defaults to off and is refused outside tests. Any enablement needs billing enforcement, recorded Gate 7-A acceptance, a provisioned `acc_campaign` credential (the role is NOLOGIN today) and a separate owner authorisation.
 - **Pause all automated sending for an organisation:**
   - **API:** `POST /api/v1/automation-controls/pause` (then `resume`).
   - **Who may call it:** a user session holding `campaigns.manage` at **organisation** scope. A workspace-scoped grant is refused with `403 AUTHZ_SCOPE_DENIED`, and API keys are refused.
@@ -166,6 +166,34 @@ These are Phase 0 procedural placeholders describing the *shape* of each runbook
   SELECT campaign_recipient_id FROM messages WHERE campaign_recipient_id IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
   -- a sent recipient whose message is not attributed back to it
   SELECT r.id FROM campaign_recipients r JOIN messages m ON m.id = r.message_id WHERE m.campaign_recipient_id IS DISTINCT FROM r.id;
+  ```
+
+### 5.v Campaign executor and scheduler (Phase 8B PR 8B-3b)
+- **Off, and refused outside tests.**
+  - `CAMPAIGN_DISPATCH_ENABLED` defaults to `false`. Startup refuses `true` unless `NODE_ENV=test` and `APP_ENV=test`, and in every environment it also requires `BILLING_ENFORCEMENT_ENABLED=true` and an explicit `DATABASE_CAMPAIGN_URL`.
+  - While off, no `acc_campaign` connection is opened, the worker logs that it is disabled, and `POST …/campaigns/:id/dispatch` answers `400 CAMPAIGN_DISPATCH_DISABLED` exactly as before.
+  - Enabling it outside tests needs recorded Gate 7-A acceptance, billing enforcement, a provisioned `acc_campaign` credential (the role is NOLOGIN) and a separate owner authorisation. None of these exists today.
+- **What it would do when enabled:**
+  - **Dispatch:** `POST …/dispatch` needs `campaigns.manage` and `messages.send`. It starts a draft or scheduled campaign under the caller and creates its claim row; nothing is sent by the request.
+  - **Scheduler:** `app_campaign_start_due` starts due scheduled campaigns under the user or API key that scheduled them. It skips organisations whose automation is paused, and campaigns scheduled before 8B-3b (no recorded scheduler; schedule them again).
+  - **Executor:** claims a running campaign and sends up to `ceil(rateLimitPerSecond × 5)` recipients per claim. Each send is one transaction under an automation capability (§5.w), through the shared core, with funds reserved. Providers are reached only by the existing dispatcher.
+- **Automatic pauses (`pauseReason`):** `insufficient_funds`, `billing_account`, `no_provider_assignment`, `template_not_approved`, `channel_not_supported` and `automation_paused`.
+  - The campaign stops, its recipients stay pending, and `campaign.auto_paused` is audited with the error code.
+  - Fix the cause (fund the wallet, configure billing or pricing, assign a provider, approve the template, or resume organisation automation), then `POST …/resume`. Resuming needs `messages.send`.
+  - An operator pause shows `pauseReason: operator`.
+- **Cancel:** every still-pending recipient becomes `skipped` (`campaign_cancelled`). Messages already created are not recalled.
+- **Recipient outcomes:**
+  - `skipped`: `recipient_suppressed`, `consent_revoked` or `no_active_identity`;
+  - `failed`: a validation or identity mismatch, or `CAMPAIGN_SEND_UNEXPECTED` after 3 unexpected failures;
+  - transient database or billing contention retries with backoff and records nothing.
+- **Integrity queries (each must return 0):**
+  ```sql
+  -- a running campaign with no claim row (it would never be sent)
+  SELECT c.id FROM campaigns c LEFT JOIN campaign_dispatch d ON d.campaign_id = c.id WHERE c.status = 'running' AND d.campaign_id IS NULL;
+  -- a claim row for a campaign that is not running
+  SELECT d.campaign_id FROM campaign_dispatch d JOIN campaigns c ON c.id = d.campaign_id WHERE c.status <> 'running';
+  -- a sent recipient without its message
+  SELECT id FROM campaign_recipients WHERE status = 'sent' AND message_id IS NULL;
   ```
 
 ## 6. Disaster recovery runbooks (see `DR.md` for objectives/backup detail)
