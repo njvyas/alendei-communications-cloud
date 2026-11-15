@@ -5,7 +5,13 @@ import type { ClientBase, Pool } from 'pg';
 import { migrationsWithFollowing } from '../test/following-migration-fixture';
 import { MigrationHistoryError, loadExpectedMigrations } from './migration-history';
 import { MigrationLockError, acquireMigrationLock, lockWaitFromEnv } from './migration-lock';
-import { migrateSchema, type Barrier, type Checkpoint } from './schema-migrate';
+import {
+  BARRIERS,
+  MESSAGES_CAMPAIGN_RECIPIENT_INDEX_BARRIER,
+  migrateSchema,
+  type Barrier,
+  type Checkpoint,
+} from './schema-migrate';
 
 const REPO_MIGRATIONS = resolve(__dirname, '../../migrations');
 const expected = loadExpectedMigrations(REPO_MIGRATIONS);
@@ -332,7 +338,7 @@ describe('three barriers (U14.1a 0042, U14.1b 0043, Phase 5.0 0045) — journal 
   // the third barrier), the 0045 guard, 0046, the forward fix 0047, 0048 (resolver facts), 0049
   // (support delivery filter), 0050 (ledger foundation), 0051 (pricing and rating), 0052 (campaign foundation), 0053 (funds reservation), 0054 (settlement), 0055 (tenant billing reads), 0056 (unknown-outcome register), 0057 (operator resolution), 0058 (Phase 8A.1 segments), 0059 (account provisioning), 0060 (wallet recharge), 0061 (contact import/export), 0062 (journey foundation), 0063 (journey lifecycle and executions), 0064 (journey runner) and 0065 (journey events and schedules) as the newest.
   // Update when a later migration is added.
-  it('0043 follows 0042; the 0045 guard follows 0044; 0046 to 0067 are the newest', () => {
+  it('0043 follows 0042; the 0045 guard follows 0044; 0046 to 0069 are the newest', () => {
     expect(at43).toBe(guardAt + 1);
     expect(at45).toBe(at43 + 2);
     expect(expected[at45 - 1]?.tag).toBe('0044_phase5_0_delivery_foundation');
@@ -358,29 +364,45 @@ describe('three barriers (U14.1a 0042, U14.1b 0043, Phase 5.0 0045) — journal 
     expect(expected[at45 + 20]?.tag).toBe('0065_phase8c4_journey_events_schedules');
     expect(expected[at45 + 21]?.tag).toBe('0066_phase8c5_journey_send_attribution');
     expect(expected[at45 + 22]?.tag).toBe('0067_phase8c5b_journey_send_node');
-    expect(expected).toHaveLength(at45 + 23);
+    expect(expected[at45 + 23]?.tag).toBe('0068_phase8b3_automation_identity_campaign_attribution');
+    expect(expected[at45 + 24]?.tag).toBe('0069_phase8b3_campaign_recipient_unique_guard');
+    expect(expected).toHaveLength(at45 + 25);
+  });
+
+  it('Phase 8B-3a: the fourth barrier (K1) runs after 0068 adds the column and right before guard 0069', () => {
+    const at69 = expected.findIndex(
+      (m) => m.tag === '0069_phase8b3_campaign_recipient_unique_guard',
+    );
+    expect(expected[at69 - 1]?.tag).toBe('0068_phase8b3_automation_identity_campaign_attribution');
+    expect(BARRIERS.map((b) => b.beforeTag)).toEqual([
+      '0042_messages_org_id_id_desc_guard',
+      '0043_messages_org_id_created_at_guard',
+      '0045_message_attempts_delivery_indexes_guard',
+      '0069_phase8b3_campaign_recipient_unique_guard',
+    ]);
+    expect(MESSAGES_CAMPAIGN_RECIPIENT_INDEX_BARRIER.label).toBe('uq_messages_campaign_recipient');
   });
 
   it.each<[string, Row[] | null, string[]]>([
     [
       'fresh database',
       null,
-      [`apply:${guardAt}`, 'barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:23'],
+      [`apply:${guardAt}`, 'barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:25'],
     ],
     [
       'database at 0041',
       rowsFor(guardAt),
-      ['barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:23'],
+      ['barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:25'],
     ],
     [
       'database at 0042 (U14.1a applied)',
       rowsFor(guardAt + 1),
-      ['verify:a', 'barrier:b', 'apply:2', 'barrier:c', 'apply:23'],
+      ['verify:a', 'barrier:b', 'apply:2', 'barrier:c', 'apply:25'],
     ],
     [
       'database at 0044 (Phase 5.0 M1 applied)',
       rowsFor(at45),
-      ['verify:a', 'verify:b', 'barrier:c', 'apply:23'],
+      ['verify:a', 'verify:b', 'barrier:c', 'apply:25'],
     ],
     ['up to date', rowsFor(expected.length), ['verify:a', 'verify:b', 'verify:c']],
   ])(

@@ -107,6 +107,9 @@ describe('table classes — tenancy records, tenant content, exemptions', () => 
         'templates',
       ]);
       expect([...ORG_ID_EXEMPT_TABLES].sort()).toEqual([
+        // Phase 8B PR 8B-3a (0068): the definer-only automation identity.
+        'automation_capabilities',
+        'automation_controls',
         // Phase 8C PR 8C-4 (0065): the definer-only journey event inbox.
         'automation_events',
         // Phase 7 PR 7-6d-1 (0059): the definer-only billing-account operations.

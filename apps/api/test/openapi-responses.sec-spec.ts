@@ -1764,7 +1764,10 @@ describe('Phase 1C.3 — every operation validated against the OpenAPI document'
       template.includes('/support') ||
       template.includes('/audience') ||
       template.includes('/campaigns') ||
-      template.includes('/segments');
+      template.includes('/segments') ||
+      // Phase 8B PR 8B-3a: organisation automation controls need campaigns.manage at ORGANIZATION
+      // scope; their 200/403 responses are exercised in automation-identity.int-spec.ts.
+      template.includes('/automation-controls');
 
     it('every operation succeeded with every credential its document declares', () => {
       const document = validator.document as { paths: Record<string, Record<string, Json>> };

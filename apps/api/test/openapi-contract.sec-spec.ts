@@ -205,8 +205,9 @@ describe('Phase 1C.3 — OpenAPI contract reconciliation', () => {
      * Phase 8C PR 8C-1: 11 journey-definition operations: 209 → 220.
      * Phase 8C PR 8C-2: 9 journey lifecycle, enrolment, execution and statistics operations: 220 → 229.
      * Phase 8B.2, 10-Nov-2026: 7 campaign lifecycle, audience & preview operations: 202 → 209.
+     * Phase 8B PR 8B-3a: 4 organisation automation-control operations (`/automation-controls`): 229 → 233.
      */
-    const APPLICATION_OPERATIONS = 229;
+    const APPLICATION_OPERATIONS = 233;
     const DOCUMENT_OPERATION = `GET /${PREFIX}/openapi.json`;
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 

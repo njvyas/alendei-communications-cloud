@@ -51,6 +51,7 @@ const AT42 = expected.findIndex((m) => m.tag === '0042_messages_org_id_id_desc_g
 const AT44 = expected.findIndex((m) => m.tag === '0044_phase5_0_delivery_foundation');
 const AT45 = expected.findIndex((m) => m.tag === '0045_message_attempts_delivery_indexes_guard');
 const G45 = '0045_message_attempts_delivery_indexes_guard';
+const G69 = '0069_phase8b3_campaign_recipient_unique_guard';
 const RUN = randomBytes(4).toString('hex');
 const PREFIX = `acc_tmp_p50ix_${RUN}_`;
 const NAME = /^acc_tmp_p50ix_[0-9a-f]{8}_[a-z0-9]+$/;
@@ -220,13 +221,16 @@ afterAll(async () => {
 
 describe('Phase 5.0 M2 — one db:migrate from 0043; the indexes, the guard and 0046', () => {
   it('0044 is the barrier prefix, 0045 the guard; 0046 and the forward fix 0047 follow', () => {
-    expect([AT44, AT45, expected.length]).toEqual([44, 45, 68]); // Phase 7: 0050, 0051; Phase 8B.1: 0052; Phase 7 PRs 7-4 to 7-6c: 0053–0057; Phase 8A.1: 0058; Phase 7 PRs 7-6d-1, 7-6d-2: 0059, 0060; Phase 8A.2: 0061; Phase 8C PRs 8C-1 to 8C-4: 0062–0065; Phase 8C PR 8C-5a: 0066; Phase 8C PR 8C-5b: 0067
+    expect([AT44, AT45, expected.length]).toEqual([44, 45, 70]); // Phase 8B PR 8B-3a: 0068, 0069. Phase 7: 0050, 0051; Phase 8B.1: 0052; Phase 7 PRs 7-4 to 7-6c: 0053–0057; Phase 8A.1: 0058; Phase 7 PRs 7-6d-1, 7-6d-2: 0059, 0060; Phase 8A.2: 0061; Phase 8C PRs 8C-1 to 8C-4: 0062–0065; Phase 8C PR 8C-5a: 0066; Phase 8C PR 8C-5b: 0067
   });
 
   it('from 0043: applies 0044, builds both indexes, records 0045 and 0046; a rerun verifies and changes nothing', async () => {
     const db = await createDb(base43);
     const r1 = await migrateSchema(poolFor(db), FOLDER);
-    expect(r1.barriers).toEqual([{ tag: G45, result: 'created' }]);
+    expect(r1.barriers).toEqual([
+      { tag: G45, result: 'created' },
+      { tag: G69, result: 'created' }, // Phase 8B-3a (K1)
+    ]);
     expect(await history(db)).toBe(expected.length);
     const a = await stateOf(db, MESSAGE_ATTEMPTS_PROVIDER_MESSAGE_UQ);
     const b = await stateOf(db, MESSAGE_ATTEMPTS_ID_MESSAGE_ID_UQ);
@@ -254,7 +258,10 @@ describe('Phase 5.0 M2 — one db:migrate from 0043; the indexes, the guard and 
       await stateOf(db, MESSAGE_ATTEMPTS_ID_MESSAGE_ID_UQ),
     ];
     const r = await migrateSchema(poolFor(db), FOLDER);
-    expect(r.barriers).toEqual([{ tag: G45, result: 'present' }]);
+    expect(r.barriers).toEqual([
+      { tag: G45, result: 'present' },
+      { tag: G69, result: 'created' }, // Phase 8B-3a (K1)
+    ]);
     expect([
       await stateOf(db, MESSAGE_ATTEMPTS_PROVIDER_MESSAGE_UQ),
       await stateOf(db, MESSAGE_ATTEMPTS_ID_MESSAGE_ID_UQ),
@@ -307,7 +314,10 @@ describe('Phase 5.0 M2 — interruption and recovery', () => {
       /message_attempts_provider_message_uq: recovered, exact and valid/,
     );
     const r = await migrateSchema(poolFor(db), FOLDER);
-    expect(r.barriers).toEqual([{ tag: G45, result: 'present' }]);
+    expect(r.barriers).toEqual([
+      { tag: G45, result: 'present' },
+      { tag: G69, result: 'created' }, // Phase 8B-3a (K1)
+    ]);
     expect(await history(db)).toBe(expected.length);
   });
 

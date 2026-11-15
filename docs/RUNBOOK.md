@@ -144,6 +144,30 @@ These are Phase 0 procedural placeholders describing the *shape* of each runbook
   ```
   Run it as the owner, in a read-only session. A non-zero count is an incident: send attribution and history have diverged.
 
+### 5.w Automation sending controls and the campaign identity (Phase 8B PR 8B-3a)
+- **No campaign sends.** Campaign dispatch stays `CAMPAIGN_DISPATCH_DISABLED`. The executor is 8B-3b, and `CAMPAIGN_DISPATCH_ENABLED` defaults to off and is refused outside tests. Any enablement needs billing enforcement, recorded Gate 7-A acceptance, a provisioned `acc_campaign` credential (the role is NOLOGIN today) and a separate owner authorisation.
+- **Pause all automated sending for an organisation:**
+  - **API:** `POST /api/v1/automation-controls/pause` (then `resume`).
+  - **Who may call it:** a user session holding `campaigns.manage` at **organisation** scope. A workspace-scoped grant is refused with `403 AUTHZ_SCOPE_DENIED`, and API keys are refused.
+  - **Owner-run CLI** (staging, test and development only; production is refused):
+    ```
+    printf '%s\n' "$OPERATOR_PASSWORD" | npm run --silent automation:control --workspace @acc/api -- pause --org <org id> --operator <super-admin email> --password-stdin --confirm-environment <APP_ENV> [--reason <text>]
+    ```
+  - **Effect:** once the pause commits, no further automated send is authorised. A send already in progress either completes first (the pause waits for it) or is refused.
+- **Revoke outstanding capabilities:** `POST /api/v1/automation-controls/revoke`, or the CLI's `revoke`. Every capability issued before that instant is void, so new sends need a new capability. `GET /api/v1/automation-controls` shows the state, and every control is audited (`automation.paused`, `automation.resumed`, `automation.revoked`).
+- **The one-message-per-recipient index (K1):**
+  - `uq_messages_campaign_recipient` is built `CONCURRENTLY` by `db:migrate` between `0068` and `0069`.
+  - If the build was interrupted, `db:migrate` refuses with "not usable … --recover-invalid".
+  - Recover with `npm run db:index:messages-campaign-recipient --workspace @acc/db -- --recover-invalid`, which drops and rebuilds only that verified target, then rerun `db:migrate`.
+  - A wrongly defined index under that name, or an equivalent index under another name, is refused and never dropped. Resolve it deliberately.
+- **Integrity queries (each must return 0):**
+  ```sql
+  -- two messages for one campaign recipient (K1 makes this impossible)
+  SELECT campaign_recipient_id FROM messages WHERE campaign_recipient_id IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
+  -- a sent recipient whose message is not attributed back to it
+  SELECT r.id FROM campaign_recipients r JOIN messages m ON m.id = r.message_id WHERE m.campaign_recipient_id IS DISTINCT FROM r.id;
+  ```
+
 ## 6. Disaster recovery runbooks (see `DR.md` for objectives/backup detail)
 
 **Database restore (point-in-time):**

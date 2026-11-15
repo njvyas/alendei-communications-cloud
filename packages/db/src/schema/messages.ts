@@ -20,7 +20,7 @@ import { pricingUnit } from './pricing';
 import { channels, providers } from './providers';
 import { contacts } from './contacts';
 import { templates } from './templates';
-import { campaigns } from './campaigns';
+import { campaignRecipients, campaigns } from './campaigns';
 import { organizationProviderAssignments } from './assignments';
 import { journeyExecutions } from './journeys';
 
@@ -108,6 +108,11 @@ export const messages = pgTable(
     // origin; both or neither (messages_journey_shape), write-once (trg_messages_tenant_key_immutable).
     journeyId: uuid('journey_id'),
     journeyExecutionId: uuid('journey_execution_id'),
+    // Phase 8B-3a (0068): campaign attribution with campaign_id, set only by the submission
+    // core for a campaign origin; both or neither (messages_campaign_shape), never with a
+    // journey origin (messages_single_origin), write-once (trg_messages_tenant_key_immutable).
+    // K1 uq_messages_campaign_recipient is built CONCURRENTLY by db:migrate (barrier before 0069).
+    campaignRecipientId: uuid('campaign_recipient_id'),
     ...timestamps(),
   },
   (table) => [
@@ -144,6 +149,37 @@ export const messages = pgTable(
       'messages_journey_shape',
       sql`(${table.journeyId} IS NULL) = (${table.journeyExecutionId} IS NULL)`,
     ),
+    // Phase 8B-3a (0068): campaign attribution, bound to the recipient's campaign, contact,
+    // workspace and organisation; one origin per message.
+    foreignKey({
+      name: 'messages_campaign_recipient_fk',
+      columns: [
+        table.campaignRecipientId,
+        table.campaignId,
+        table.contactId,
+        table.workspaceId,
+        table.orgId,
+      ],
+      foreignColumns: [
+        campaignRecipients.id,
+        campaignRecipients.campaignId,
+        campaignRecipients.contactId,
+        campaignRecipients.workspaceId,
+        campaignRecipients.orgId,
+      ],
+    }).onDelete('restrict'),
+    check(
+      'messages_campaign_shape',
+      sql`(${table.campaignId} IS NULL) = (${table.campaignRecipientId} IS NULL)`,
+    ),
+    check(
+      'messages_single_origin',
+      sql`${table.journeyExecutionId} IS NULL OR ${table.campaignRecipientId} IS NULL`,
+    ),
+    // K1 (8B-3a): built CONCURRENTLY by db:migrate (barrier before 0069); 0069 only verifies it.
+    uniqueIndex('uq_messages_campaign_recipient')
+      .on(table.orgId, table.campaignId, table.campaignRecipientId)
+      .where(sql`${table.campaignRecipientId} IS NOT NULL`),
     unique('uq_messages_id_org_id').on(table.id, table.orgId),
     index('messages_org_id_idx').on(table.orgId),
     // U14.1a: built CONCURRENTLY by db:migrate (barrier before migration 0042); 0042 only verifies it.

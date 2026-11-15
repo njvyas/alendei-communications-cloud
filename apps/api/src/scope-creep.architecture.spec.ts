@@ -311,7 +311,11 @@ const CATEGORIES: Category[] = [
         'schedule_mode',
         'scheduled',
         'scheduledAt',
+        // Phase 8B-3a (0068): the scheduling user, the initiator attributed when a scheduled
+        // campaign starts (OD-8C-1 initiator attribution). No scheduler runs.
+        'scheduledBy',
         'scheduled_at',
+        'scheduled_by',
       ],
       // 8C-2 (0063): the journey execution claim queue (unclaimed until 8C-3) and the
       // schedule trigger column.
@@ -984,6 +988,9 @@ const CATEGORIES: Category[] = [
       ],
       // Phase 7 PR 7-6a (DECISIONS.md §1zi.9, owner-authorised 09-Nov-2026): tenant billing reads
       // (read-only; billing.read; RLS SELECT policies, migration 0055).
+      // Phase 8B-3a (0068): a campaign pause reason (a billing-account refusal pauses the
+      // campaign, OD-8B3-3); a CHECK value only, no billing code.
+      'packages/db/src/schema/campaigns.ts': ['billing_account'],
       'packages/db/src/schema/billing.ts': [
         'billingAccountStatus',
         'billing_account_status',
@@ -2027,6 +2034,9 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       'audit',
       'audit-read',
       'auth',
+      // Phase 8B PR 8B-3a: the organisation-wide automation sending controls (pause, resume,
+      // revoke) of the shared automation identity (OD-8C-1, OD-8B3-5). No worker or send.
+      'automation',
       // Phase 7 PR 7-1 (DECISIONS.md §1zi): the ledger partition startup check; no routes.
       'billing',
       // Phase 8B.1 PR 8B-1: Campaigns foundation & CRUD APIs
@@ -2090,6 +2100,10 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
     expect([...created].sort()).toEqual([
       'api_keys',
       'audit_logs',
+      // Phase 8B PR 8B-3a (0068): the shared automation identity — definer-only capabilities
+      // (one per authorised send, hash only) and the organisation controls (pause, revoke).
+      'automation_capabilities',
+      'automation_controls',
       // Phase 8C PR 8C-4 (0065): the journey event inbox (definer-only; written by capture
       // triggers, read only by the disabled runner's intake).
       'automation_events',
@@ -2097,6 +2111,9 @@ describe('Gate D — Phase 2 introduces no out-of-scope capability (no scope cre
       'billing_account_operations',
       // Phase 7 PR 7-6c (0057): operator resolutions of unknown outcomes (definer-only).
       'billing_unknown_resolutions',
+      // Phase 8B PR 8B-3a (0068): the content-free claim row of a running campaign. No executor
+      // runs (8B-3b, disabled by default).
+      'campaign_dispatch',
       'campaign_recipients',
       'campaigns',
       'channels',

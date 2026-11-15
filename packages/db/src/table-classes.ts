@@ -45,6 +45,8 @@ export const TENANCY_RECORD_TABLES = [
   // Phase 8C PR 8C-2 (0063): content-free claim rows, as message_dispatch_queue; acc_app deletes a
   // row when its execution ends (operator cancel, archive), which the content class forbids.
   'journey_execution_queue',
+  // Phase 8B PR 8B-3a (0068): the content-free claim row of a running campaign.
+  'campaign_dispatch',
 ] as const;
 
 /**
@@ -88,6 +90,10 @@ export const CONTENT_TABLES = [
  * partition carries the parent's protections (`app_ledger_partition_report`).
  */
 export const ORG_ID_EXEMPT_TABLES: readonly string[] = [
+  // Phase 8B PR 8B-3a (migration 0068): the shared automation identity. No application role holds
+  // any privilege on either table; only the app_automation_* definers read and write them.
+  'automation_capabilities',
+  'automation_controls',
   // Phase 8C PR 8C-4 (migration 0065): the journey event inbox. No application role holds any
   // privilege on it: the SECURITY DEFINER capture triggers write it in the producer's
   // transaction, and only the definer intake (`app_journey_process_events`, executable by

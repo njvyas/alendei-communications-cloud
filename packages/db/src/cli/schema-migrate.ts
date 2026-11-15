@@ -44,6 +44,10 @@ import {
   verifyMessageAttemptsDeliveryIndexes,
 } from '../maintenance/message-attempts-delivery';
 import {
+  ensureMessagesCampaignRecipientIndex,
+  verifyMessagesCampaignRecipientIndex,
+} from '../maintenance/messages-campaign-recipient';
+import {
   acquireMigrationLock,
   assertMigrationLockHeld,
   releaseMigrationLock,
@@ -106,10 +110,26 @@ export const MESSAGE_ATTEMPTS_DELIVERY_INDEXES_BARRIER: Barrier = {
     ),
 };
 
+/**
+ * Phase 8B PR 8B-3a: K1, the one-message-per-campaign-recipient UNIQUE index on `messages`,
+ * before guard migration 0069. Migration 0068 (the prefix) adds `messages.campaign_recipient_id`.
+ */
+export const MESSAGES_CAMPAIGN_RECIPIENT_INDEX_BARRIER: Barrier = {
+  beforeTag: '0069_phase8b3_campaign_recipient_unique_guard',
+  label: 'uq_messages_campaign_recipient',
+  prepare: (client, log) => ensureMessagesCampaignRecipientIndex(client, { log }),
+  verifyApplied: (client) =>
+    verifyMessagesCampaignRecipientIndex(
+      client,
+      'Refusing: migration 0069_phase8b3_campaign_recipient_unique_guard is recorded, but the index is not as required',
+    ),
+};
+
 export const BARRIERS: readonly Barrier[] = [
   MESSAGES_INDEX_BARRIER,
   MESSAGES_CREATED_AT_INDEX_BARRIER,
   MESSAGE_ATTEMPTS_DELIVERY_INDEXES_BARRIER,
+  MESSAGES_CAMPAIGN_RECIPIENT_INDEX_BARRIER,
 ];
 
 /** Applies the given migrations (drizzle semantics) on the pinned connection. */
