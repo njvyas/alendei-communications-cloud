@@ -4057,7 +4057,13 @@ Source: `PHASE-8B-3-HANDOVER-Rev2.md` (owner decisions OD-8B3-1..6 and clarifica
 | M15 Journey mint allowed | API 1 |
 | M16 The `0069` guard accepts a non-unique index | DB 1 |
 
-**Verification:** ‹FILL›
+**Verification (disposable clone of `acc_r015_base`, code tree `79b1d50`, head `774ac48`):**
+- DB integration 584/584, API integration 771/771, security 1,860/1,860;
+- API unit 1,213, DB unit 276, contracts 62;
+- lint, typecheck and prettier are clean;
+- `db:migrate` run twice (`Schema up to date (70 migrations verified).`); the barrier built K1 between `0068` and `0069`;
+- history proof `70|d5fcd4d0b2b239bcb63562543d44731d`; the first 68 entries are unchanged (`68|881b228373c0727abf31fee5e8bc18cd`, the 8C-5b proof); first 69 `a498353101ac790bfe4aabd8a24066cf`;
+- K1 valid and ready; `acc_campaign` and `acc_journey` NOLOGIN, not superuser, no BYPASSRLS; journey event capture off; no NOT VALID constraint.
 
 **Not in 8B-3a:** the executor, scheduler and API integration (8B-3b); 8C-6; any enablement, flag, credential, provider call, QA or production change.
 
