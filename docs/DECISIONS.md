@@ -4136,7 +4136,13 @@ Source: `PHASE-8B-3-HANDOVER-Rev2.md` (owner decisions OD-8B3-1..6 and clarifica
 | B15 Inactive identity sent | API 1 |
 | B16 Scheduled start creates no claim row | API 1 |
 
-**Verification:** ‹FILL›
+**Verification (disposable clone of `acc_r015_base`, code tree `be9d512`, head `3605ff7`):**
+- DB integration 584/584, API integration 805/805 (771 + 34), security 1,860/1,860;
+- API unit 1,256, DB unit 276, contracts 62;
+- lint, typecheck, prettier and `openapi:check` are clean;
+- `db:migrate` run twice (`Schema up to date (71 migrations verified).`);
+- history proof `71|9d80e465280d1c0a4a625397287066b7`; the first 70 entries are unchanged (`70|d5fcd4d0b2b239bcb63562543d44731d`, the 8B-3a proof);
+- `app_campaign_start_due` is a definer executable only by `acc_campaign`; `acc_campaign` and `acc_journey` are NOLOGIN, not superuser, no BYPASSRLS; no NOT VALID constraint.
 
 **Not in 8B-3b:** enablement of any kind, a provisioned `acc_campaign` credential, Gate 7-A acceptance, 8C-6, provider adapters, QA or production changes.
 
