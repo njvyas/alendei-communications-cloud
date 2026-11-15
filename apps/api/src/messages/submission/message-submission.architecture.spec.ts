@@ -27,6 +27,8 @@ import { authorizeSubmission, type SubmissionAuthorization } from './submission-
 const ROOT = join(__dirname, '..', '..', '..', '..', '..');
 const SRC = join(ROOT, 'apps/api/src');
 const CORE = 'apps/api/src/messages/submission/message-submission.core.ts';
+/** Phase 8B-3b: the one admitted second consumer of the core (PHASE-8B-3-HANDOVER-Rev2 §5.6). */
+const CAMPAIGN_EXECUTOR = 'apps/api/src/campaigns/dispatch/campaign-dispatch.service.ts';
 
 /** Source without comments, so prose cannot satisfy or defeat a check. */
 const code = (path: string): string =>
@@ -175,21 +177,47 @@ describe('Phase 7-3: the shared message submission core', () => {
       ]);
     });
 
-    it('is not exported from MessagesModule (no second consumer in 7-3)', () => {
+    // Phase 8B-3a (PHASE-8B-3-HANDOVER-Rev2 §§5.6, 11): exactly one second consumer is admitted —
+    // the campaign executor (8B-3b), which reaches the core only with an automation-capability
+    // proof. 8B-3b may export the core from MessagesModule for it; nothing else may use it.
+    it('outside the messages module, only the campaign executor reaches the core or the automation proof', () => {
       const module = code(join(SRC, 'messages/messages.module.ts'));
       expect(module).toMatch(/providers:[^\]]*MessageSubmissionCore/);
-      expect(module).not.toMatch(/exports:[^\]]*MessageSubmissionCore/);
+      const outside = filesMatching(/MessageSubmissionCore|authorizeAutomationSubmission/).filter(
+        (f) => !f.startsWith('apps/api/src/messages/'),
+      );
+      expect(outside.filter((f) => f !== CAMPAIGN_EXECUTOR)).toEqual([]);
+      if (!outside.includes(CAMPAIGN_EXECUTOR)) {
+        expect(module).not.toMatch(/exports:[^\]]*MessageSubmissionCore/);
+      }
     });
   });
 
   describe('2b. origin attribution (Phase 8C-5a)', () => {
     const core = code(join(ROOT, CORE));
 
-    it('only the shared contract and the core name SubmissionOrigin (no constructor in 8C-5a)', () => {
-      expect(filesMatching(/\bSubmissionOrigin\b/)).toEqual([
-        CORE,
-        'apps/api/src/messages/submission/submission.types.ts',
-      ]);
+    it('only the shared contract, the core and (8B-3b) the campaign executor name SubmissionOrigin', () => {
+      const files = filesMatching(/\bSubmissionOrigin\b/);
+      expect(files).toEqual(
+        expect.arrayContaining([CORE, 'apps/api/src/messages/submission/submission.types.ts']),
+      );
+      expect(
+        files.filter(
+          (f) =>
+            ![
+              CORE,
+              'apps/api/src/messages/submission/submission.types.ts',
+              CAMPAIGN_EXECUTOR,
+            ].includes(f),
+        ),
+      ).toEqual([]);
+    });
+
+    it('origins are constructed only by the campaign executor: never from request input, never by journeys (8C-6)', () => {
+      const constructors = filesMatching(/kind:\s*'(campaign|journey)'\s*,/).filter(
+        (f) => f !== CORE,
+      );
+      expect(constructors.filter((f) => f !== CAMPAIGN_EXECUTOR)).toEqual([]);
     });
 
     it('the direct send path passes no origin, and no request field can produce one', () => {

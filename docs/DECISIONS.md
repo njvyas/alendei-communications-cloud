@@ -3984,6 +3984,83 @@ Nothing is enabled: no flag, credential, provider, grant, policy or operational 
 - 8C-6 (the real port, `JOURNEY_SENDS_ENABLED`, lifting the activation refusal, J-C2, J-S1/J-S2, J-P1/J-P2, reconcile);
 - any enablement, flag, credential, provider call, QA or production change.
 
+## 1zk. Phase 8B-3 campaign execution: owner-approved design, 15-Nov-2026
+Source: `PHASE-8B-3-HANDOVER-Rev2.md` (owner decisions OD-8B3-1..6 and clarifications 1–8, approved 15-Nov-2026; evidence folder `2026-11-15-phase-8b-3-handover`). Implementation of 8B-3a and 8B-3b was authorised by the owner on 15-Nov-2026 as two draft PRs, 8B-3a first. Merge, deployment and enablement are not authorised.
+
+### 1zk.1 PR 8B-3a as built: shared automation sending identity and campaign attribution (migrations `0068`, `0069`)
+**Baseline.** Built on `develop` `b19262f` (8C-5b). The journal ended at `0067`. Claude is the send-core owner (OD-8C5-5); this PR is the only open PR that modifies the shared send-core files, and 8B-3b does not modify them.
+
+**Migration `0068`.**
+- **Identity.** `automation_capabilities` stores only a token hash, the subject (`campaign_recipient`; `journey_execution` is refused), the organisation and the initiator. Issue and expiry come from one `clock_timestamp()` value, and the lifetime is at most 30 s (CHECK). Rows are immutable except for purge (trigger).
+- **Controls.** `automation_controls` holds `sending_paused` and `revoked_before` per organisation.
+  - `app_automation_control` (acc_app) checks `app_automation_org_authority()`: only an organisation-scoped `campaigns.manage` grant, or a platform operator, qualifies; a workspace grant does not.
+  - `app_automation_apply_control` (no grant to anyone) takes the controls row `FOR UPDATE`.
+- **Mint and validity.**
+  - The mint (definer) locks the controls row and then the `campaigns` row `FOR SHARE`, and refuses (`42501`, DETAIL `AUTOMATION_PAUSED`, `AUTOMATION_REVOKED`, `CAMPAIGN_NOT_RUNNING` or `CLAIM_LOST`) unless the claim is live and every control allows sending.
+  - Validity is VOLATILE and uses `clock_timestamp()`. It re-checks expiry, `revoked_before`, the organisation pause, the campaign status and the claim, so a token minted before a pause or revocation is void as soon as that operation commits.
+- **Attribution.**
+  - `messages.campaign_recipient_id`, composite FK `messages_campaign_recipient_fk`, CHECKs `messages_campaign_shape` and `messages_single_origin`; `trg_messages_tenant_key_immutable` now also covers the campaign columns.
+  - K3 `uq_campaign_recipients_message` and K4 `uq_campaign_recipients_attribution`.
+  - The recipient guard (definer) fails closed (`23503`) when it cannot find the message.
+- **Campaign lifecycle.** `started_by`, `scheduled_by`, `pause_reason` (CHECK on the value and on its shape with the status), the lifecycle guard trigger, `campaign_recipients.attempts` (bounded) and `campaign_recipients_sent_shape`.
+- **Executor principal `acc_campaign` (NOLOGIN).**
+  - It is bound to a claim (`campaign_dispatch`, `app_campaign_claim`). Its `campaign_dispatch` SELECT policy is `campaign_id = app_campaign_id()` only.
+  - Capability-gated SELECT policies cover exactly the core's footprint. INSERT is allowed on `messages`, `message_dispatch_queue` and `message_events`, for the subject's own message only.
+- **Reservation.** `app_message_reserve` admits a valid capability function-locally, only for the subject's own message. Every Phase 7 reservation rule is otherwise unchanged.
+
+**K1 and migration `0069`.**
+- `uq_messages_campaign_recipient (org_id, campaign_id, campaign_recipient_id) WHERE campaign_recipient_id IS NOT NULL` is built `CONCURRENTLY` by the `db:migrate` barrier `MESSAGES_CAMPAIGN_RECIPIENT_INDEX_BARRIER`, after `0068` and before `0069`.
+- `0069` is a guard only. It raises unless the index exists and matches the specification (keys, opclasses, collations, uniqueness, predicate, definition, valid, ready and live, and no equivalent index under another name). The migration transaction rolls back and no history row is written.
+- Interrupted-build recovery: `npm run db:index:messages-campaign-recipient --workspace @acc/db -- --recover-invalid`. It drops that verified invalid target `CONCURRENTLY`, rebuilds it and verifies it.
+
+**Shared core.**
+- `SubmissionOrigin` has journey and campaign variants. `originColumns` uses `switch (origin.kind)` with a `never` check.
+- `authorizeAutomationSubmission(tx, orgId)` requires a valid capability for an automation origin.
+- The structural spec admits exactly one future consumer and constructor of the campaign variant, `apps/api/src/campaigns/dispatch/campaign-dispatch.service.ts`, so 8B-3b does not edit the spec.
+
+**API and CLI.**
+- `GET /automation-controls` and `POST /automation-controls/{pause,resume,revoke}` accept user sessions only. They assert `campaigns.manage` at the organisation target; a workspace grant returns `AUTHZ_SCOPE_DENIED`. Every change is audited.
+- `automation:control` is an owner-run CLI with a super-administrator operator, an environment confirmation and an audit row.
+
+**Journey isolation (C-5), all five guarantees preserved and tested.** The journey subject is refused by mint and validity. `acc_journey` gains no EXECUTE, policy or grant. `UnavailableJourneySendPort` remains the only binding. Activation still refuses send nodes. No journeys code constructs a `SubmissionOrigin`.
+
+**Deviations (for review).**
+1. `0069` is guard-only, as planned; the index is built by the barrier, not by the migration.
+2. The executor's `campaign_dispatch` SELECT policy is bound to `app_campaign_id()` only (content-free; mirrors the journey queue).
+3. The `/automation-controls` routes are excluded from the OpenAPI success-envelope sweep, which needs a seeded organisation authority; route coverage and authorisation tests cover them.
+4. The CLI is a new `automation:control` command rather than an extension of `platform:support`.
+
+**Tests:**
+- **API integration** `automation-identity.int-spec.ts` (27): the send transaction under a capability (test-only caller; column parity with a direct `POST /messages`); database rules (K1, K3, composite FK, CHECKs, write-once, guards, N1-style fail-closed recipient guard); capability enforcement at the database boundary (mint refusals, wall-clock 30 s expiry, revocation, campaign and organisation pause, claim); owner condition 2 (pause, campaign pause and revoke serialise against an in-flight send, and every later send is refused); C-1 (organisation-scope authority, workspace grant refused, user sessions only, database/application parity); C-5; the `automation:control` CLI path.
+- **DB integration:** `phase8b3-automation-identity.int-spec.ts` (10: catalogue, policies, grants, definers, reservation branch) and `phase8b3-index.int-spec.ts` (8: barrier build, absent/invalid/wrongly defined/duplicated index refused by `0069`, interrupted build recovered).
+- **Unit:** `automation-controls.spec.ts` (3, structural), `cli/automation-control.spec.ts` (2), the shared-core structural spec (39, including the single admitted campaign constructor).
+- **Pins:** migration count 70 and barrier count; principals, table classes, backstop, tenant-context trigger list, 8C-5 attribution trigger definition; scope-creep and credential-absence; route coverage 220 (deferred 195), OpenAPI contract 233; regenerated `openapi.v1.json` and `metadata.ts`.
+
+**Mutation checks, each on a fresh clone of `acc_r015_base`, all caught:**
+
+| Mutation | Caught by |
+|---|---|
+| M01 Drop K1 | API 1 |
+| M02 Drop K3 | DB 1, API 1 |
+| M03 Drop the composite FK | DB 1, API 1 |
+| M04 Recipient guard passes when the message is not found | DB 1, API 1 |
+| M05 Validity uses transaction time | API 1 (31 s wall-clock expiry) |
+| M06 Validity ignores `revoked_before` | API 1 |
+| M07 Validity ignores the campaign status | API 1 |
+| M08 Validity ignores the organisation pause | API 1 |
+| M09 Mint skips its `FOR SHARE` locks | API 3 (owner condition 2) |
+| M10 Organisation authority accepts workspace grants | API 1 (parity) |
+| M11 The control API asserts at the workspace | API 5 |
+| M12 `messages` INSERT without the capability gate | DB 1, API 1 |
+| M13 Reservation admission without the subject check | DB 1, API 1 |
+| M14 `POST /messages` passes an origin | API 7 |
+| M15 Journey mint allowed | API 1 |
+| M16 The `0069` guard accepts a non-unique index | DB 1 |
+
+**Verification:** ‹FILL›
+
+**Not in 8B-3a:** the executor, scheduler and API integration (8B-3b); 8C-6; any enablement, flag, credential, provider call, QA or production change.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

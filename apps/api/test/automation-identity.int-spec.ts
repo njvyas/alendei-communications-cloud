@@ -850,6 +850,22 @@ describe('Phase 8B PR 8B-3a: shared automation identity and campaign attribution
       expect(await orgMessages(A.orgId)).toBe(before);
     });
 
+    it('the 30-second capability lifetime is wall-clock and independent of the claim: expired while the lease is live', async () => {
+      const f = await runningCampaign(A, 1); // lease 5 minutes: only the capability can expire
+      const before = await orgMessages(A.orgId);
+      const refused = await sendRefusal(f, 0, {
+        hold: async () => {
+          await new Promise((res) => setTimeout(res, 31_000));
+        },
+      });
+      expect(refused).not.toBeNull();
+      expect(await orgMessages(A.orgId)).toBe(before);
+      const claim = await h.admin.execute(
+        sql`SELECT claimed_until > now() AS live FROM campaign_dispatch WHERE campaign_id = ${f.campaignId}`,
+      );
+      expect(claim.rows).toEqual([{ live: true }]);
+    }, 60_000);
+
     it('a capability issued before an organisation-wide revocation, or revoked itself, is void in a later transaction', async () => {
       const f = await runningCampaign(A, 2);
       const r = f.recipients[0]!;
@@ -954,6 +970,22 @@ describe('Phase 8B PR 8B-3a: shared automation identity and campaign attribution
       await revoke;
       expect(await sendRefusal(f, 1, { token: outstanding })).not.toBeNull();
       await send(f, 2); // a capability minted after the revocation is valid
+    });
+
+    it('a capability minted before a campaign pause committed is void after it', async () => {
+      const f = await runningCampaign(A, 1);
+      const r = f.recipients[0]!;
+      const token = await campaignDb.transaction(async (tx) => {
+        await session(tx, f, r.id);
+        return mint(tx, r.id);
+      });
+      const paused = await http()
+        .post(url(`/workspaces/${A.workspaceId}/campaigns/${f.campaignId}/pause`))
+        .set('authorization', `Bearer ${tokens.get('org')}`);
+      expect(paused.status).toBe(200);
+      const before = await orgMessages(A.orgId);
+      expect(await sendRefusal(f, 0, { token })).not.toBeNull();
+      expect(await orgMessages(A.orgId)).toBe(before);
     });
 
     it('campaign pause (workspace route) waits for an in-flight send; later sends of that campaign are refused', async () => {

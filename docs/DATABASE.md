@@ -414,6 +414,26 @@ Mitigations, in order of preference:
 
 ## 8. Domain: Templates & Campaigns
 
+> **Phase 8B PR 8B-3a (migrations `0068`, `0069`, as built; `DECISIONS.md` §1zk.1).**
+> - **Shared automation identity:**
+>   - `automation_capabilities` holds organisation-owned, execution-scoped send capabilities: subject, claim epoch, initiator, `token_hash` only, an expiry of at most 30 seconds, and revocation. It is append-only except a single revocation, and kept 90 days.
+>   - `automation_controls` holds the organisation pause and `revoked_before`.
+>   - Both are definer-only. Mint and validity are enforced by `app_automation_capability_mint` and `app_automation_capability_valid()`. Journey subjects are refused until 8C-6.
+> - **`acc_campaign`** (NOLOGIN) has executor policies bound to one claimed campaign, plus capability-gated policies covering exactly the shared core's footprint. It has no UPDATE or DELETE on `messages`, the dispatch queue or message events.
+> - **`campaign_dispatch`** is the content-free claim row of a running campaign, claimed by `app_campaign_claim`.
+> - **`campaigns`** gains `started_by`, `scheduled_by` and `pause_reason`, plus a lifecycle guard trigger: `completed` and `cancelled` are terminal, and the start attribution is write-once.
+> - **`campaign_recipients`** gains `attempts` and the following rules:
+>   - CHECK: `sent` ⇔ `message_id`;
+>   - K3: unique `message_id`;
+>   - K4: unique `(id, campaign_id, contact_id, workspace_id, org_id)`;
+>   - a guard trigger: `pending → sent | skipped | failed`, terminal rows immutable, and `message_id` write-once and attributed back. The guard fails closed when it cannot read the message.
+> - **`messages.campaign_recipient_id`** has:
+>   - the composite FK `messages_campaign_recipient_fk → campaign_recipients (id, campaign_id, contact_id, workspace_id, org_id)` (DEP-4);
+>   - CHECKs `messages_campaign_shape` and `messages_single_origin`;
+>   - write-once through `trg_messages_tenant_key_immutable`;
+>   - **K1** `uq_messages_campaign_recipient (org_id, campaign_id, campaign_recipient_id) WHERE campaign_recipient_id IS NOT NULL` (DEP-5), built `CONCURRENTLY` by the `db:migrate` barrier and verified by `0069`.
+> - **`app_message_reserve`** admits a valid capability, function-locally, for the capability subject's own message only. It remains the single per-message reservation path.
+
 **`templates`** — `id, org_id FK, name, channel_id FK, body, variables JSONB, provider_template_map JSONB (per-provider template id mapping), approval_status ENUM(draft,pending,approved,rejected), deleted_at NULL`. *Phase 3 (ADR-014 D21): `approval_status` is a simulated, internal state, never Meta or provider approval; `provider_template_map` is not used in Phase 3.*
 
 **`campaigns`** — `id, org_id FK, workspace_id FK, name, template_id FK, routing_policy_id FK NULL, schedule JSONB, throttle_config JSONB, status ENUM(draft,scheduled,running,paused,completed,cancelled), created_by FK users`.
