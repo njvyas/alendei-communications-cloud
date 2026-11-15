@@ -164,6 +164,8 @@ const CATEGORIES: Category[] = [
         'Schedule',
         'ScheduleCampaignDto',
         'schedule',
+        // 8B-3b: the dispatch route's OpenAPI description (a draft or scheduled campaign).
+        'scheduled',
       ],
       'apps/api/src/campaigns/campaigns.dto.ts': [
         'ALL_CAMPAIGN_SCHEDULE_MODES',
