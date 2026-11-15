@@ -31,22 +31,32 @@ export interface SubmissionContext {
 }
 
 /**
- * Message attribution (Phase 8C-5a, handover Rev 2 §4). A discriminated union with one
- * owner, the backend send-core owner; the core maps each variant to its columns through an
- * exhaustive switch, so a variant added without handling is a compile error.
+ * Message attribution (Phase 8C-5a, extended by Phase 8B-3a; PHASE-8B-3-HANDOVER-Rev2 §5.4). A
+ * discriminated union with one owner, the backend send-core owner; the core maps each variant
+ * to its columns through an exhaustive switch, so a variant added without handling is a
+ * compile error.
  *
  * - `journey`: sets `messages.journey_id` and `journey_execution_id`; the composite foreign
  *   key `messages_journey_execution_fk` (0066) proves the execution is the message's own
- *   journey, workspace, contact and organization.
+ *   journey, workspace, contact and organization. No production code constructs one until 8C-6.
+ * - `campaign`: sets `messages.campaign_id` and `campaign_recipient_id`; the composite foreign
+ *   key `messages_campaign_recipient_fk` (0068) proves the recipient is the message's own
+ *   campaign, contact, workspace and organization, and K1 (`uq_messages_campaign_recipient`)
+ *   allows one message per recipient. Constructed only by the campaign executor (8B-3b).
  *
- * Reserved, not implemented: the campaign variant belongs to 8B-3, added in its own PR.
  * Built only from server-side execution state, never from request input.
  */
-export type SubmissionOrigin = {
-  readonly kind: 'journey';
-  readonly journeyId: string;
-  readonly executionId: string;
-};
+export type SubmissionOrigin =
+  | {
+      readonly kind: 'journey';
+      readonly journeyId: string;
+      readonly executionId: string;
+    }
+  | {
+      readonly kind: 'campaign';
+      readonly campaignId: string;
+      readonly campaignRecipientId: string;
+    };
 
 /** The message the core created, in plain values; the caller shapes any response. */
 export interface SubmissionResult {

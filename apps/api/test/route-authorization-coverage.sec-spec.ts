@@ -315,7 +315,9 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 8B.2 added 7 scoped campaign routes (preview, materialize, schedule, cancel, pause, resume, recipients): 189 → 196 scoped.
     // Phase 8C PR 8C-1 added 11 journey-definition routes (workspace-scoped; target deferred): 196 → 207 scoped.
     // Phase 8C PR 8C-2 added 9 journey lifecycle, enrolment, execution and statistics routes: 207 → 216.
-    expect(scoped.length).toBe(216);
+    // Phase 8B PR 8B-3a added 4 organisation automation-control routes (campaigns.manage at the
+    // ORGANIZATION target, user sessions only; target deferred): 216 → 220.
+    expect(scoped.length).toBe(220);
     expect(exempt.length).toBe(7);
     expect(open.length).toBe(9);
     expect(scoped.length + exempt.length + open.length).toBe(routes.length);
@@ -355,7 +357,8 @@ describe('§6n case 30 — route authorization coverage', () => {
     // Phase 8B.2 added 7 campaign routes, each targeting deferred workspace context: 164 → 171.
     // Phase 8C PR 8C-1 added 11 journey-definition routes, targeting the deferred workspace: 171 → 182.
     // Phase 8C PR 8C-2 added 9 more, also targeting the deferred workspace: 182 → 191.
-    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(191);
+    // Phase 8B PR 8B-3a added 4 automation-control routes, targeting the deferred ORGANIZATION: 191 → 195.
+    expect(scoped.filter((r) => r.required!.target === 'deferred').length).toBe(195);
   });
 });
 

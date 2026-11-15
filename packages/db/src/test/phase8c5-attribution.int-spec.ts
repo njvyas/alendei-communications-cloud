@@ -123,13 +123,13 @@ describe('Phase 8C PR 8C-5a: journey send attribution (migration 0066)', () => {
     ).toEqual([]);
   });
 
-  it('write-once: the tenant-key trigger now covers both attribution columns', async () => {
+  it('write-once: the tenant-key trigger covers both journey attribution columns (and, since 8B-3a 0068, the campaign ones)', async () => {
     const [row] = await q(
       `SELECT pg_get_triggerdef(t.oid) AS def FROM pg_trigger t
         WHERE t.tgrelid = 'public.messages'::regclass AND t.tgname = 'trg_messages_tenant_key_immutable'`,
     );
     expect(row.def).toBe(
-      "CREATE TRIGGER trg_messages_tenant_key_immutable AFTER UPDATE OF org_id, workspace_id, contact_id, channel_id, journey_id, journey_execution_id ON public.messages FOR EACH ROW WHEN (((old.org_id IS DISTINCT FROM new.org_id) OR (old.workspace_id IS DISTINCT FROM new.workspace_id) OR (old.contact_id IS DISTINCT FROM new.contact_id) OR (old.channel_id IS DISTINCT FROM new.channel_id) OR (old.journey_id IS DISTINCT FROM new.journey_id) OR (old.journey_execution_id IS DISTINCT FROM new.journey_execution_id))) EXECUTE FUNCTION fn_tenant_key_immutable('org_id', 'workspace_id', 'contact_id', 'channel_id', 'journey_id', 'journey_execution_id')",
+      "CREATE TRIGGER trg_messages_tenant_key_immutable AFTER UPDATE OF org_id, workspace_id, contact_id, channel_id, journey_id, journey_execution_id, campaign_id, campaign_recipient_id ON public.messages FOR EACH ROW WHEN (((old.org_id IS DISTINCT FROM new.org_id) OR (old.workspace_id IS DISTINCT FROM new.workspace_id) OR (old.contact_id IS DISTINCT FROM new.contact_id) OR (old.channel_id IS DISTINCT FROM new.channel_id) OR (old.journey_id IS DISTINCT FROM new.journey_id) OR (old.journey_execution_id IS DISTINCT FROM new.journey_execution_id) OR (old.campaign_id IS DISTINCT FROM new.campaign_id) OR (old.campaign_recipient_id IS DISTINCT FROM new.campaign_recipient_id))) EXECUTE FUNCTION fn_tenant_key_immutable('org_id', 'workspace_id', 'contact_id', 'channel_id', 'journey_id', 'journey_execution_id', 'campaign_id', 'campaign_recipient_id')",
     );
   });
 

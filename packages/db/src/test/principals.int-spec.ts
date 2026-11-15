@@ -38,12 +38,18 @@ import {
 const TABLES = [
   'api_keys',
   'audit_logs',
+  // Phase 8B PR 8B-3a (migration 0068): the shared automation identity — capabilities and the
+  // organisation controls; definer-only, no grant, RLS on.
+  'automation_capabilities',
+  'automation_controls',
   // Phase 8C PR 8C-4 (migration 0065): the journey event inbox; definer-only, no grant, RLS on.
   'automation_events',
   // Phase 7 PR 7-6d-1 (migration 0059): definer-only billing-account operations; no grant, RLS on.
   'billing_account_operations',
   // Phase 7 PR 7-6c (migration 0057): definer-only operator resolutions; no grant, RLS on.
   'billing_unknown_resolutions',
+  // Phase 8B PR 8B-3a (migration 0068): the content-free claim row of a running campaign.
+  'campaign_dispatch',
   // Phase 8B.1 (migration 0052): campaigns and campaign recipients
   'campaign_recipients',
   'campaigns',
@@ -131,6 +137,8 @@ const EXPECTED_GRANTS: Record<string, Record<string, string>> = {
   acc_app: {
     api_keys: 'INSERT,SELECT',
     audit_logs: 'INSERT,SELECT',
+    // Phase 8B-3a (0068): acc_app creates and removes a running campaign's claim row.
+    campaign_dispatch: 'DELETE,INSERT,SELECT',
     campaign_recipients: 'INSERT,SELECT,UPDATE',
     campaigns: 'INSERT,SELECT,UPDATE',
     // Phase 2.1: the channel catalogue is read-only (seeded by migration); a

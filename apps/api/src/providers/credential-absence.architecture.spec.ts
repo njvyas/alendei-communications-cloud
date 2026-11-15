@@ -275,6 +275,25 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
     ]);
     const phase8c4Triggers = migrations.find((m) => m.n.startsWith('0065_'));
     expect(phase8c4Triggers).toBeDefined();
+    // Phase 8B PR 8B-3a (migration 0068): the automation capability is an opaque, short-lived,
+    // execution-scoped send authorisation stored ONLY as its sha256 (token_hash), generated in the
+    // mint function (v_token); the campaign claim's fencing column, session setting and accessor;
+    // and the organisation-authority check that REFUSES API-key sessions (current_api_key_id).
+    // No credential: acc_campaign is created NOLOGIN.
+    const CAMPAIGN_AUTOMATION_0068 = new Set([
+      'token_hash',
+      'uq_automation_capabilities_token_hash',
+      'automation_capabilities_token_hash_length',
+      'v_token',
+      'claim_token',
+      'campaign_claim_token',
+      'app_campaign_claim_token',
+      'current_api_key_id',
+      // the executor's audit policy requires its rows to name no API key (as 0064).
+      'actor_api_key_id',
+    ]);
+    const phase8b3Automation = migrations.find((m) => m.n.startsWith('0068_'));
+    expect(phase8b3Automation).toBeDefined();
     expect(
       phase2.flatMap((m) =>
         [...m.sql.matchAll(/\w*(?:credential|secret|passw|api_?key|token)\w*/gi)]
@@ -292,6 +311,7 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
           .filter((x) => !(m === phase8c2Executions && JOURNEY_QUEUE_FENCING_0063.has(x[0])))
           .filter((x) => !(m === phase8c3Runner && JOURNEY_RUNNER_FENCING_0064.has(x[0])))
           .filter((x) => !(m === phase8c4Triggers && JOURNEY_SCHEDULE_FENCING_0065.has(x[0])))
+          .filter((x) => !(m === phase8b3Automation && CAMPAIGN_AUTOMATION_0068.has(x[0])))
           .map((x) => `${m.n}: ${x[0]}`),
       ),
     ).toEqual([]);

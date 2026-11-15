@@ -600,6 +600,8 @@ export class MessageSubmissionCore {
         billingPolicySnapshot: billing?.policy ?? null,
         journeyId: attribution.journeyId,
         journeyExecutionId: attribution.journeyExecutionId,
+        campaignId: attribution.campaignId,
+        campaignRecipientId: attribution.campaignRecipientId,
       })
       .returning();
 
@@ -639,20 +641,34 @@ export class MessageSubmissionCore {
 }
 
 /**
- * The attribution columns of an origin (Phase 8C-5a). No origin (a direct submission) sets
- * none of them. Exhaustive: an unhandled variant fails to compile at the `never` assignment.
+ * The attribution columns of an origin (Phase 8C-5a; campaign variant Phase 8B-3a). No origin
+ * (a direct submission) sets none of them. Exhaustive: an unhandled variant fails to compile at
+ * the `never` assignment.
  */
 function originColumns(origin: SubmissionOrigin | undefined): {
   journeyId: string | null;
   journeyExecutionId: string | null;
+  campaignId: string | null;
+  campaignRecipientId: string | null;
 } {
-  if (origin === undefined) return { journeyId: null, journeyExecutionId: null };
-  const kind = origin.kind;
-  switch (kind) {
+  const none = {
+    journeyId: null,
+    journeyExecutionId: null,
+    campaignId: null,
+    campaignRecipientId: null,
+  };
+  if (origin === undefined) return none;
+  switch (origin.kind) {
     case 'journey':
-      return { journeyId: origin.journeyId, journeyExecutionId: origin.executionId };
+      return { ...none, journeyId: origin.journeyId, journeyExecutionId: origin.executionId };
+    case 'campaign':
+      return {
+        ...none,
+        campaignId: origin.campaignId,
+        campaignRecipientId: origin.campaignRecipientId,
+      };
     default: {
-      const unhandled: never = kind;
+      const unhandled: never = origin;
       throw new Error(`message submission: unhandled origin '${JSON.stringify(unhandled)}'`);
     }
   }

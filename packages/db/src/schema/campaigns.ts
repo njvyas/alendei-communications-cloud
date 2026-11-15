@@ -1,7 +1,10 @@
 import { sql } from 'drizzle-orm';
 import {
+  check,
   foreignKey,
+  type AnyPgColumn,
   index,
+  integer,
   jsonb,
   pgEnum,
   pgTable,
@@ -90,9 +93,22 @@ export const campaigns = pgTable(
     startedAt: tstz('started_at'),
     completedAt: tstz('completed_at'),
     deletedAt: tstz('deleted_at'),
+    // Phase 8B-3a (0068): the initiator (write-once with started_at, trg_campaigns_lifecycle_guard),
+    // the scheduling user, and why a campaign was paused.
+    startedBy: uuid('started_by').references(() => users.id, { onDelete: 'restrict' }),
+    scheduledBy: uuid('scheduled_by').references(() => users.id, { onDelete: 'restrict' }),
+    pauseReason: text('pause_reason'),
     ...timestamps(),
   },
   (table) => [
+    check(
+      'campaigns_pause_reason',
+      sql`${table.pauseReason} IS NULL OR ${table.pauseReason} IN ('operator', 'insufficient_funds', 'billing_account', 'no_provider_assignment', 'template_not_approved', 'channel_not_supported', 'automation_paused')`,
+    ),
+    check(
+      'campaigns_pause_reason_shape',
+      sql`${table.pauseReason} IS NULL OR ${table.status} = 'paused'`,
+    ),
     foreignKey({
       name: 'campaigns_workspace_org_fk',
       columns: [table.workspaceId, table.orgId],
@@ -131,9 +147,13 @@ export const campaignRecipients = pgTable(
       onDelete: 'set null',
     }),
     status: campaignRecipientStatus('status').notNull().default('pending'),
-    messageId: uuid('message_id').references(() => messages.id, { onDelete: 'restrict' }),
+    messageId: uuid('message_id').references((): AnyPgColumn => messages.id, {
+      onDelete: 'restrict',
+    }),
     skipReason: text('skip_reason'),
     errorCode: text('error_code'),
+    /** Phase 8B-3a (0068): unexpected send failures; the executor fails the recipient at 3. */
+    attempts: integer('attempts').notNull().default(0),
     ...timestamps(),
   },
   (table) => [
@@ -149,9 +169,23 @@ export const campaignRecipients = pgTable(
     }).onDelete('restrict'),
     uniqueIndex('uq_campaign_recipients_campaign_contact').on(table.campaignId, table.contactId),
     index('campaign_recipients_campaign_status_idx').on(table.campaignId, table.status),
-    index('campaign_recipients_message_id_idx')
+    // Phase 8B-3a (0068): K3 — a message names at most one recipient (replaces the 0052 index);
+    // K4 — the target of messages_campaign_recipient_fk.
+    uniqueIndex('uq_campaign_recipients_message')
       .on(table.messageId)
       .where(sql`${table.messageId} IS NOT NULL`),
+    unique('uq_campaign_recipients_attribution').on(
+      table.id,
+      table.campaignId,
+      table.contactId,
+      table.workspaceId,
+      table.orgId,
+    ),
+    check('campaign_recipients_attempts_bounded', sql`${table.attempts} BETWEEN 0 AND 100`),
+    check(
+      'campaign_recipients_sent_shape',
+      sql`(${table.status} = 'sent') = (${table.messageId} IS NOT NULL)`,
+    ),
   ],
 );
 
@@ -159,3 +193,36 @@ export type Campaign = typeof campaigns.$inferSelect;
 export type NewCampaign = typeof campaigns.$inferInsert;
 export type CampaignRecipient = typeof campaignRecipients.$inferSelect;
 export type NewCampaignRecipient = typeof campaignRecipients.$inferInsert;
+
+/**
+ * Phase 8B-3a (0068): the content-free claim row of a running campaign (one per campaign).
+ * `app_campaign_claim` claims it (SKIP LOCKED, token, lease, epoch + 1); the executor's send
+ * transaction locks it through the claim. `next_slot_at` is the throttle.
+ */
+export const campaignDispatch = pgTable(
+  'campaign_dispatch',
+  {
+    campaignId: uuid('campaign_id').primaryKey(),
+    orgId: uuid('org_id').notNull(),
+    availableAt: tstz('available_at')
+      .notNull()
+      .default(sql`now()`),
+    nextSlotAt: tstz('next_slot_at')
+      .notNull()
+      .default(sql`now()`),
+    epoch: integer('epoch').notNull().default(0),
+    claimToken: uuid('claim_token'),
+    claimedUntil: tstz('claimed_until'),
+    claimedBy: text('claimed_by'),
+    attempts: integer('attempts').notNull().default(0),
+    lastErrorCode: text('last_error_code'),
+  },
+  (table) => [
+    foreignKey({
+      name: 'campaign_dispatch_campaign_org_fk',
+      columns: [table.campaignId, table.orgId],
+      foreignColumns: [campaigns.id, campaigns.orgId],
+    }).onDelete('restrict'),
+    index('campaign_dispatch_due_idx').on(table.availableAt, table.nextSlotAt),
+  ],
+);

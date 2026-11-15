@@ -135,9 +135,19 @@ describe('Phase 7-3: the shared message submission core', () => {
       /app_rate_message|app_price_lookup|app_ledger_post|app_ledger_|app_message_reserve/,
       /usage_ledger|usageLedger|wallets|credit_accounts|creditAccounts|pricing/i,
       /customer_charge|reservation_release|provider_cost|settle/i,
-      /provider-adapters|ProviderAdapter|dispatch\/|DispatcherService|campaign/i,
+      /provider-adapters|ProviderAdapter|dispatch\/|DispatcherService/i,
     ])('references nothing matching %s', (pattern) => {
       expect(core).not.toMatch(pattern);
+    });
+
+    // Phase 8B-3a (PHASE-8B-3-HANDOVER-Rev2 §5.6): the core now names the campaign ORIGIN
+    // variant (attribution columns), but it still imports and reaches no campaign module code.
+    it('imports nothing from the campaigns module, and names campaigns only as an origin', () => {
+      expect([...core.matchAll(/from '([^']+)'/g)].map((m) => m[1])).not.toContainEqual(
+        expect.stringMatching(/campaign/i),
+      );
+      const mentions = [...core.matchAll(/\w*campaign\w*/gi)].map((m) => m[0]);
+      expect(new Set(mentions)).toEqual(new Set(['campaign', 'campaignId', 'campaignRecipientId']));
     });
 
     it('its only billing dependency is MessageReservationService, called once, last (7-4)', () => {
@@ -197,20 +207,27 @@ describe('Phase 7-3: the shared message submission core', () => {
 
     it('only the core writes the attribution columns', () => {
       expect(filesMatching(/journeyExecutionId\s*:|journey_execution_id\s*=/)).toEqual([CORE]);
+      // Phase 8B-3a: the campaign attribution columns likewise.
+      expect(
+        filesMatching(/campaignRecipientId\s*:\s*attribution|campaign_recipient_id\s*=/),
+      ).toEqual([CORE]);
     });
 
     it('maps the origin through an exhaustive switch on its kind', () => {
-      expect(core).toMatch(/switch \(kind\) \{\s*case 'journey':/);
-      expect(core).toMatch(/const unhandled: never = kind;/);
+      expect(core).toMatch(/switch \(origin\.kind\) \{\s*case 'journey':/);
+      expect(core).toMatch(/case 'campaign':/);
+      expect(core).toMatch(/const unhandled: never = origin;/);
       expect(core).toMatch(/const attribution = originColumns\(ctx\.origin\);/);
       expect(core).toMatch(
-        /journeyId: attribution\.journeyId,\s*journeyExecutionId: attribution\.journeyExecutionId,/,
+        /journeyId: attribution\.journeyId,\s*journeyExecutionId: attribution\.journeyExecutionId,\s*campaignId: attribution\.campaignId,\s*campaignRecipientId: attribution\.campaignRecipientId,/,
       );
     });
 
-    it('no journeys code reaches the submission core in 8C-5a (the send port is 8C-5b)', () => {
+    it('no journeys code reaches the submission core or the automation proof (journey sending is 8C-6)', () => {
       const journeys = sources(join(SRC, 'journeys')).filter((path) =>
-        /MessageSubmissionCore|messages\/submission|authorizeSubmission/.test(code(path)),
+        /MessageSubmissionCore|messages\/submission|authorizeSubmission|authorizeAutomationSubmission|SubmissionOrigin|app_automation_capability/.test(
+          code(path),
+        ),
       );
       expect(journeys).toEqual([]);
     });

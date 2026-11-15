@@ -1597,3 +1597,19 @@ export class JourneyStatsSchema {
   @ApiProperty(uuid) journeyId!: string;
   @ApiProperty({ type: [JourneyVersionStatsSchema] }) versions!: JourneyVersionStatsSchema[];
 }
+
+/** Phase 8B PR 8B-3a: the organisation's automation sending controls. */
+@ApiSchema({ name: 'AutomationControl' })
+export class AutomationControlSchema {
+  @ApiProperty(uuid) orgId!: string;
+  @ApiProperty({ type: 'boolean' }) sendingPaused!: boolean;
+  @ApiProperty({ type: 'string', format: 'date-time', nullable: true }) pausedAt!: string | null;
+  @ApiProperty(nullableString) pauseReason!: string | null;
+  @ApiProperty({
+    type: 'string',
+    format: 'date-time',
+    nullable: true,
+    description: 'Capabilities issued before this instant are void.',
+  })
+  revokedBefore!: string | null;
+}

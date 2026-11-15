@@ -669,6 +669,9 @@ describe('Phase 2.2 provider adapter test-send', () => {
       );
       expect(rows.map((r) => r.policyname)).toEqual([
         'audit_logs_auth_insert',
+        // Phase 8B PR 8B-3a (migration 0068): the campaign executor's audit (acc_campaign only,
+        // system actor `campaign_executor`, the claimed campaign), pinned in phase8b3 specs.
+        'audit_logs_campaign_executor_insert',
         'audit_logs_insert',
         // Phase 8C PR 8C-3 (migration 0064): the journey runner's contact.updated audit (acc_journey
         // only, system actor `journey_runner`, the claimed contact), pinned in phase8c3-runner-principal.

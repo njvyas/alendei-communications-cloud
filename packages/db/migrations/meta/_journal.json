@@ -477,6 +477,20 @@
       "when": 1795305600000,
       "tag": "0067_phase8c5b_journey_send_node",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1795392000000,
+      "tag": "0068_phase8b3_automation_identity_campaign_attribution",
+      "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1795478400000,
+      "tag": "0069_phase8b3_campaign_recipient_unique_guard",
+      "breakpoints": true
     }
   ]
 }
