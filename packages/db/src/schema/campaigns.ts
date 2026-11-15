@@ -19,7 +19,7 @@ import { organizations, workspaces } from './tenancy';
 import { channels } from './providers';
 import { templates } from './templates';
 import { contacts, contactIdentities } from './contacts';
-import { users } from './iam';
+import { apiKeys, users } from './iam';
 import { messages } from './messages';
 
 /** Campaign lifecycle status machine (Phase 8B.1, DATABASE.md §8). */
@@ -98,12 +98,23 @@ export const campaigns = pgTable(
     startedBy: uuid('started_by').references(() => users.id, { onDelete: 'restrict' }),
     scheduledBy: uuid('scheduled_by').references(() => users.id, { onDelete: 'restrict' }),
     pauseReason: text('pause_reason'),
+    // Phase 8B-3b (0070): the API-key initiator, when a key scheduled or dispatched the campaign.
+    scheduledByApiKeyId: uuid('scheduled_by_api_key_id').references(() => apiKeys.id, {
+      onDelete: 'restrict',
+    }),
+    startedByApiKeyId: uuid('started_by_api_key_id').references(() => apiKeys.id, {
+      onDelete: 'restrict',
+    }),
     ...timestamps(),
   },
   (table) => [
     check(
       'campaigns_pause_reason',
       sql`${table.pauseReason} IS NULL OR ${table.pauseReason} IN ('operator', 'insufficient_funds', 'billing_account', 'no_provider_assignment', 'template_not_approved', 'channel_not_supported', 'automation_paused')`,
+    ),
+    check(
+      'campaigns_single_initiator',
+      sql`${table.startedBy} IS NULL OR ${table.startedByApiKeyId} IS NULL`,
     ),
     check(
       'campaigns_pause_reason_shape',

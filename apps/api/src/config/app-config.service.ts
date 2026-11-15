@@ -190,6 +190,18 @@ export class AppConfigService {
     } as const;
   }
 
+  /** Phase 8B PR 8B-3b: the campaign executor, off by default (`campaignDispatchProblems`). */
+  get campaigns() {
+    return {
+      dispatchEnabled: this.get('CAMPAIGN_DISPATCH_ENABLED'),
+      executorUrl: this.get('DATABASE_CAMPAIGN_URL'),
+      pollIntervalMs: this.get('CAMPAIGN_DISPATCH_POLL_INTERVAL_MS'),
+      batchSize: this.get('CAMPAIGN_DISPATCH_BATCH_SIZE'),
+      perOrgLimit: this.get('CAMPAIGN_DISPATCH_PER_ORG_LIMIT'),
+      leaseSeconds: this.get('CAMPAIGN_DISPATCH_LEASE_SECONDS'),
+    } as const;
+  }
+
   get sms() {
     return {
       templateVariableMaxLength: this.get('SMS_TEMPLATE_VARIABLE_MAX_LENGTH'),

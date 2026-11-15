@@ -46,6 +46,45 @@ export const ALL_CAMPAIGN_RECIPIENT_STATUSES = [
 
 export type CampaignRecipientStatus = (typeof ALL_CAMPAIGN_RECIPIENT_STATUSES)[number];
 
+/**
+ * Phase 8B PR 8B-3b: why a campaign is paused (`campaigns.pause_reason`, CHECKed by migration 0068).
+ * `operator` is a user pause; every other value is an automatic pause by the executor on a
+ * refusal that concerns the whole campaign (owner decision OD-8B3-3), or the organisation's
+ * automation pause.
+ */
+export const CAMPAIGN_PAUSE_REASONS = [
+  'operator',
+  'insufficient_funds',
+  'billing_account',
+  'no_provider_assignment',
+  'template_not_approved',
+  'channel_not_supported',
+  'automation_paused',
+] as const;
+export type CampaignPauseReason = (typeof CAMPAIGN_PAUSE_REASONS)[number];
+
+/** Phase 8B PR 8B-3b: the executor's recipient error and skip codes beyond the core's own. */
+export const CAMPAIGN_EXECUTOR_CODES = Object.freeze({
+  /** The materialised identity is no longer an active identity of the recipient's contact. */
+  NO_ACTIVE_IDENTITY: 'no_active_identity',
+  /** Left pending when the campaign was cancelled. */
+  CAMPAIGN_CANCELLED: 'campaign_cancelled',
+  /** An unmapped failure, after `CAMPAIGN_EXECUTOR_LIMITS.unexpectedAttempts` attempts. */
+  SEND_UNEXPECTED: 'CAMPAIGN_SEND_UNEXPECTED',
+});
+
+/** Phase 8B PR 8B-3b: executor bounds (PHASE-8B-3-HANDOVER-Rev2 §§4.4, 6.3; [P] defaults). */
+export const CAMPAIGN_EXECUTOR_LIMITS = Object.freeze({
+  /** The throttle slot: a claim sends at most ceil(rateLimitPerSecond × slotSeconds) messages. */
+  slotSeconds: 5,
+  /** Unexpected failures of one recipient before it is failed. */
+  unexpectedAttempts: 3,
+  /** Capabilities purged per executor cycle (retention, OD-8B3-6). */
+  capabilityPurgeBatch: 1_000,
+  /** Due scheduled campaigns started per cycle. */
+  scheduledStartsPerCycle: 10,
+});
+
 export const ALL_CAMPAIGN_CHANNELS = ['whatsapp', 'sms', 'email', 'rcs'] as const;
 
 export type CampaignChannel = (typeof ALL_CAMPAIGN_CHANNELS)[number];
@@ -94,6 +133,8 @@ export interface CampaignRecordResponse {
   readonly createdBy?: string | null;
   readonly startedAt?: string | null;
   readonly completedAt?: string | null;
+  /** Phase 8B-3b: why the campaign is paused (`null` unless `status` is `paused`). */
+  readonly pauseReason?: CampaignPauseReason | null;
   readonly createdAt: string;
   readonly updatedAt: string;
   /** Flags local preview fixtures when mock client is active */

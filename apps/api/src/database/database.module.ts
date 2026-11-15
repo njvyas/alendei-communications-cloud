@@ -18,6 +18,7 @@ import type { Pool } from 'pg';
 
 import { AppConfigService } from '../config/app-config.service';
 import {
+  CAMPAIGN_ROLE,
   DELIVERY_ROLE,
   JOURNEY_ROLE,
   DEVELOPMENT_DELIVERY_PASSWORD,
@@ -30,6 +31,8 @@ import {
   APP_DB,
   APP_POOL,
   AUTH_DB,
+  CAMPAIGN_DB,
+  CAMPAIGN_POOL,
   AUTH_POOL,
   DELIVERY_DB,
   DELIVERY_POOL,
@@ -230,6 +233,28 @@ function resolvePrincipalUrl(
       inject: [JOURNEY_POOL],
       useFactory: (pool: Pool | null): Database | null => (pool ? createDatabase(pool) : null),
     },
+    {
+      // Phase 8B PR 8B-3b: no acc_campaign connection exists unless campaign dispatch is enabled,
+      // which configuration refuses outside tests (campaignDispatchProblems). No derived URL.
+      provide: CAMPAIGN_POOL,
+      inject: [AppConfigService],
+      useFactory: (config: AppConfigService): Pool | null =>
+        config.campaigns.dispatchEnabled && config.campaigns.executorUrl
+          ? createPool({
+              connectionString: config.campaigns.executorUrl,
+              max: Math.max(2, Math.floor(config.database.poolMax / 4)),
+              idleTimeoutMillis: config.database.idleTimeoutMs,
+              statementTimeoutMillis: config.database.statementTimeoutMs,
+              ssl: config.database.ssl,
+              applicationName: `${config.serviceName}-campaign`,
+            })
+          : null,
+    },
+    {
+      provide: CAMPAIGN_DB,
+      inject: [CAMPAIGN_POOL],
+      useFactory: (pool: Pool | null): Database | null => (pool ? createDatabase(pool) : null),
+    },
     TenantDatabase,
   ],
   exports: [
@@ -243,6 +268,8 @@ function resolvePrincipalUrl(
     DELIVERY_DB,
     JOURNEY_POOL,
     JOURNEY_DB,
+    CAMPAIGN_POOL,
+    CAMPAIGN_DB,
     TenantDatabase,
   ],
 })
@@ -255,6 +282,7 @@ export class DatabaseModule implements OnModuleInit, OnApplicationShutdown {
     @Inject(DISPATCH_POOL) private readonly dispatchPool: Pool,
     @Optional() @Inject(DELIVERY_POOL) private readonly deliveryPool: Pool | null = null,
     @Optional() @Inject(JOURNEY_POOL) private readonly journeyPool: Pool | null = null,
+    @Optional() @Inject(CAMPAIGN_POOL) private readonly campaignPool: Pool | null = null,
   ) {}
 
   /**
@@ -302,6 +330,20 @@ export class DatabaseModule implements OnModuleInit, OnApplicationShutdown {
       }
       verified.push(journey.role);
     }
+    // Phase 8B PR 8B-3b: with dispatch enabled (tests only), acc_campaign must connect and be
+    // RLS-bound, or the process refuses to start.
+    if (this.campaignPool) {
+      const campaign = await assertRlsBoundPrincipal(
+        this.campaignPool,
+        'campaign executor (acc_campaign)',
+      );
+      if (campaign.role !== CAMPAIGN_ROLE) {
+        throw new Error(
+          `refusing to use the campaign database pool: it logs in as ${campaign.role}, not ${CAMPAIGN_ROLE}`,
+        );
+      }
+      verified.push(campaign.role);
+    }
     this.logger.log(`Database principals verified RLS-bound: ${verified.join(', ')}`);
   }
 
@@ -313,6 +355,7 @@ export class DatabaseModule implements OnModuleInit, OnApplicationShutdown {
       this.dispatchPool.end(),
       ...(this.deliveryPool ? [this.deliveryPool.end()] : []),
       ...(this.journeyPool ? [this.journeyPool.end()] : []),
+      ...(this.campaignPool ? [this.campaignPool.end()] : []),
     ]);
     this.logger.log('Database pools closed');
   }

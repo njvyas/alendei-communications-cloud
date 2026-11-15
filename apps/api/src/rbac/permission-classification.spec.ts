@@ -479,7 +479,13 @@ describe('the message keys in Phase 3.3 are referenced only by the messages modu
     // journey never grants send rights its author lacks. A check only; no new key, and
     // nothing in the journeys module sends.
     // The journeys controller names the rule in its OpenAPI descriptions only.
+    // Phase 8B PR 8B-3b (PHASE-8B-3-HANDOVER-Rev2 §6.1, owner-authorised 15-Nov-2026): dispatching,
+    // scheduling or resuming a campaign asserts the caller's messages.send at the campaign's
+    // workspace (the journey activation precedent), so a campaign never sends under an initiator
+    // who lacks it. A check only; no new key. The campaign executor sends through the shared
+    // core with an automation capability, never with a messages.send grant.
     expect(hits.sort()).toEqual([
+      'apps/api/src/campaigns/campaigns.service.ts',
       'apps/api/src/journeys/journey-lifecycle.service.ts',
       'apps/api/src/journeys/journeys.controller.ts',
       'apps/api/src/messages/messages.controller.ts',

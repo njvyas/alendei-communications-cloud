@@ -491,6 +491,13 @@
       "when": 1795478400000,
       "tag": "0069_phase8b3_campaign_recipient_unique_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1795564800000,
+      "tag": "0070_phase8b3b_campaign_scheduled_start",
+      "breakpoints": true
     }
   ]
 }

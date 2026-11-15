@@ -310,6 +310,77 @@ describe('validateEnv', () => {
     });
   });
 
+  describe('CAMPAIGN_DISPATCH_ENABLED (Phase 8B PR 8B-3b, OD-8B3-4)', () => {
+    const CAMPAIGN_URL = 'postgres://acc_campaign:not-a-dev-secret@db.internal:5432/acc';
+    const problemsOf = (raw: Record<string, unknown>): string[] => {
+      try {
+        validateEnv(raw);
+        return [];
+      } catch (error) {
+        return (error as ConfigurationError).problems as string[];
+      }
+    };
+    const enabledInTests = {
+      ...MINIMAL_ENV,
+      NODE_ENV: 'test',
+      APP_ENV: 'test',
+      CAMPAIGN_DISPATCH_ENABLED: 'true',
+      BILLING_ENFORCEMENT_ENABLED: 'true',
+      DATABASE_CAMPAIGN_URL: CAMPAIGN_URL,
+    };
+
+    it('is off by default, with no executor URL and the [P] defaults', () => {
+      const env = validateEnv(MINIMAL_ENV);
+      expect(env.CAMPAIGN_DISPATCH_ENABLED).toBe(false);
+      expect(env.DATABASE_CAMPAIGN_URL).toBeUndefined();
+      expect([
+        env.CAMPAIGN_DISPATCH_POLL_INTERVAL_MS,
+        env.CAMPAIGN_DISPATCH_BATCH_SIZE,
+        env.CAMPAIGN_DISPATCH_PER_ORG_LIMIT,
+        env.CAMPAIGN_DISPATCH_LEASE_SECONDS,
+      ]).toEqual([1000, 5, 2, 30]);
+    });
+
+    it('is permitted only in tests, with billing enforcement and an explicit DATABASE_CAMPAIGN_URL', () => {
+      expect(validateEnv(enabledInTests).CAMPAIGN_DISPATCH_ENABLED).toBe(true);
+      const { DATABASE_CAMPAIGN_URL: _url, ...noUrl } = enabledInTests;
+      expect(problemsOf(noUrl)).toContain(
+        'DATABASE_CAMPAIGN_URL must be set when CAMPAIGN_DISPATCH_ENABLED=true',
+      );
+    });
+
+    it('requires billing enforcement in every environment, tests included', () => {
+      const problems = problemsOf({ ...enabledInTests, BILLING_ENFORCEMENT_ENABLED: 'false' });
+      expect(
+        problems.some((p) =>
+          p.startsWith('CAMPAIGN_DISPATCH_ENABLED=true requires BILLING_ENFORCEMENT_ENABLED=true'),
+        ),
+      ).toBe(true);
+    });
+
+    it.each([
+      ['development', 'development'],
+      ['test', 'development'],
+      ['development', 'test'],
+      ['production', 'test'],
+      ['production', 'staging'],
+      ['production', 'production'],
+    ])(
+      'refuses startup with NODE_ENV=%s APP_ENV=%s, even with enforcement and a URL',
+      (nodeEnv, appEnv) => {
+        const problems = problemsOf({
+          ...enabledInTests,
+          NODE_ENV: nodeEnv,
+          APP_ENV: appEnv,
+          DATABASE_DISPATCH_PASSWORD: 'a-non-development-dispatch-credential',
+        });
+        expect(
+          problems.some((p) => p.startsWith('CAMPAIGN_DISPATCH_ENABLED=true is refused')),
+        ).toBe(true);
+      },
+    );
+  });
+
   describe('JOURNEY_EVENT_INTAKE_ENABLED / JOURNEY_SCHEDULER_ENABLED (Phase 8C PR 8C-4)', () => {
     const problemsOf = (raw: Record<string, unknown>): string[] => {
       try {

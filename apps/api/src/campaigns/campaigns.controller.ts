@@ -124,13 +124,17 @@ export class CampaignsController {
   @RequiresPermission(PERMISSIONS.CAMPAIGNS_MANAGE, { target: 'deferred', because: AT_WORKSPACE })
   @HttpCode(HttpStatus.OK)
   @AcceptedCredentials('userSession', 'apiKey')
-  @ApiOperation({ summary: 'Dispatch a campaign' })
-  @ApiErrors(400, 401, 403, 404, 409, 429)
+  @ApiOperation({
+    summary: 'Dispatch a campaign',
+    description:
+      'Disabled by default: answers 400 CAMPAIGN_DISPATCH_DISABLED unless campaign dispatch is enabled (it is refused outside tests). When enabled, the caller also needs messages.send at the workspace; a draft or scheduled campaign with an approved template and materialised pending recipients starts running under the caller, and the campaign executor sends it. Nothing is sent by this request.',
+  })
+  @ApiErrors(400, 401, 403, 404, 409, 422, 429)
   async dispatch(
     @Param('workspaceId', new ParseUUIDPipe()) workspaceId: string,
     @Param('campaignId', new ParseUUIDPipe()) campaignId: string,
   ) {
-    return this.campaigns.dispatch(requestPrincipal(), workspaceId, campaignId);
+    return { data: await this.campaigns.dispatch(requestPrincipal(), workspaceId, campaignId) };
   }
 
   @Post(':campaignId/audience-preview')

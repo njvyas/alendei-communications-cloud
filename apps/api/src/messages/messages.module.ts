@@ -20,6 +20,9 @@ import { MessageUsageService } from './usage/message-usage.service';
     DispatcherService,
     DispatchWorker,
   ],
-  exports: [MessagesService, DispatcherService],
+  // Phase 8B PR 8B-3b: the shared core is exported for its one admitted second consumer, the
+  // campaign executor, which reaches it only with an automation-capability proof
+  // (message-submission.architecture.spec.ts pins that no other module uses it).
+  exports: [MessagesService, DispatcherService, MessageSubmissionCore],
 })
 export class MessagesModule {}
