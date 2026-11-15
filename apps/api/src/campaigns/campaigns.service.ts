@@ -14,6 +14,8 @@ import {
   type CampaignThrottling,
   type MaterializeAudienceResponse,
   type PageInfo,
+  CAMPAIGN_EXECUTOR_CODES,
+  type CampaignPauseReason,
 } from '@acc/contracts';
 import { schema, type Transaction } from '@acc/db';
 import { and, eq, ilike, inArray, isNull, sql, type SQL } from 'drizzle-orm';
@@ -22,8 +24,10 @@ import { uuidv7 } from 'uuidv7';
 import { actorFromPrincipal } from '../audit/audit-actor';
 import { AuditWriter } from '../audit/audit-writer.service';
 import { AuthorizationService } from '../auth/authorization.service';
+import { PrincipalRevalidator } from '../auth/principal-revalidation.service';
 import { AppException } from '../common/errors/app.exception';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
+import { AppConfigService } from '../config/app-config.service';
 import { ContactsService } from '../contacts/contacts.service';
 import { TenantDatabase } from '../database/tenant-database.service';
 import { IdempotencyService, type IdempotentOutcome } from '../idempotency/idempotency.service';
@@ -111,6 +115,7 @@ function campaignView(row: CampaignJoinedRow): CampaignRecordResponse {
     createdBy: row.createdBy,
     startedAt: row.startedAt ? row.startedAt.toISOString() : null,
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
+    pauseReason: (row.pauseReason as CampaignPauseReason | null) ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     isSimulatedPreview: false,
@@ -126,6 +131,8 @@ export class CampaignsService {
     private readonly lists: ListQuery,
     private readonly idempotency: IdempotencyService,
     private readonly contactsService: ContactsService,
+    private readonly config: AppConfigService,
+    private readonly revalidator: PrincipalRevalidator,
   ) {}
 
   private readonly listSpec: ListQuerySpec = {
@@ -184,6 +191,27 @@ export class CampaignsService {
       target: { scopeType: 'workspace', scopeId: workspaceId },
       resourceType: 'Workspace',
     });
+  }
+
+  /**
+   * Phase 8B-3b: asserts `permission` at the workspace against the caller's CURRENT grants, re-read
+   * now (`PrincipalRevalidator`), not the snapshot taken when the request began. Used in the
+   * transaction that commits a scheduled state: a scheduled campaign is later started under its
+   * scheduler, so the scheduler must hold messages.send when the schedule commits, even if it was
+   * revoked after the request's preflight.
+   */
+  private async assertCurrentWorkspacePermission(
+    tx: Transaction,
+    principal: AuthPrincipal,
+    workspaceId: string,
+    permission: string,
+  ): Promise<void> {
+    await this.assertWorkspaceAccess(
+      tx,
+      await this.revalidator.refreshed(principal),
+      workspaceId,
+      permission,
+    );
   }
 
   async list(
@@ -298,6 +326,7 @@ export class CampaignsService {
           metrics: schema.campaigns.metrics,
           startedAt: schema.campaigns.startedAt,
           completedAt: schema.campaigns.completedAt,
+          pauseReason: schema.campaigns.pauseReason,
           deletedAt: schema.campaigns.deletedAt,
           createdAt: schema.campaigns.createdAt,
           updatedAt: schema.campaigns.updatedAt,
@@ -319,8 +348,41 @@ export class CampaignsService {
 
       if (!row) throw campaignNotFound(campaignId);
 
-      return campaignView(row as unknown as CampaignJoinedRow);
+      const view = campaignView(row as unknown as CampaignJoinedRow);
+      if (row.status === 'draft' || row.status === 'scheduled') return view;
+      return { ...view, metrics: await this.liveMetrics(tx, orgId, campaignId) };
     });
+  }
+
+  /**
+   * Phase 8B-3b (PHASE-8B-3-HANDOVER-Rev2 §6.4): progress derived on read — recipients by status,
+   * and the campaign's messages by delivery outcome — rather than counters on a hot row.
+   */
+  private async liveMetrics(tx: Transaction, orgId: string, campaignId: string) {
+    const recipients = await tx.execute<{ status: string; n: number }>(
+      sql`SELECT status::text AS status, count(*)::int AS n FROM campaign_recipients
+           WHERE campaign_id = ${campaignId} AND org_id = ${orgId} GROUP BY 1`,
+    );
+    const by = Object.fromEntries(recipients.rows.map((r) => [r.status, Number(r.n)]));
+    const [outcomes] = (
+      await tx.execute<{ delivered: number; read: number; failed: number }>(
+        sql`SELECT count(*) FILTER (WHERE delivery_status = 'delivered')::int AS delivered,
+                   count(*) FILTER (WHERE read_at IS NOT NULL)::int AS read,
+                   count(*) FILTER (WHERE status = 'failed' OR delivery_status = 'undelivered')::int AS failed
+              FROM messages WHERE org_id = ${orgId} AND campaign_id = ${campaignId}`,
+      )
+    ).rows;
+    const total = recipients.rows.reduce((a, r) => a + Number(r.n), 0);
+    const sent = by.sent ?? 0;
+    const delivered = Number(outcomes?.delivered ?? 0);
+    return {
+      totalRecipients: total,
+      sent,
+      delivered,
+      read: Number(outcomes?.read ?? 0),
+      failed: (by.failed ?? 0) + Number(outcomes?.failed ?? 0),
+      deliveryRate: sent > 0 ? Math.round((delivered / sent) * 1000) / 10 : 0,
+    } satisfies CampaignMetrics;
   }
 
   async create(
@@ -602,6 +664,20 @@ export class CampaignsService {
         }
       }
 
+      // Phase 8B-3b: an update that leaves the campaign `scheduled` (a draft moved to scheduled, or
+      // a scheduled campaign re-timed) is a schedule: the scheduler starts it later under the
+      // caller, so the caller needs messages.send — asserted against current grants, in this
+      // transaction, below — and is recorded as its scheduler. Moving back to draft clears the
+      // recorded scheduler. Metadata-only updates are unchanged.
+      const schedules = updates.status === 'scheduled';
+      if (schedules) {
+        updates.scheduledBy = principal.apiKeyId ? null : principal.userId;
+        updates.scheduledByApiKeyId = principal.apiKeyId ?? null;
+      } else if (updates.status === 'draft') {
+        updates.scheduledBy = null;
+        updates.scheduledByApiKeyId = null;
+      }
+
       if (dto.throttling !== undefined) {
         const currentThrottling = campaign.throttling as CampaignThrottling;
         updates.throttling = {
@@ -655,6 +731,15 @@ export class CampaignsService {
         },
         tx,
       );
+      if (schedules) {
+        // Last, immediately before commit: a refusal rolls the update and its audit back.
+        await this.assertCurrentWorkspacePermission(
+          tx,
+          principal,
+          workspaceId,
+          PERMISSIONS.MESSAGES_SEND,
+        );
+      }
 
       const joinedRow: CampaignJoinedRow = {
         ...updatedRow!,
@@ -746,18 +831,26 @@ export class CampaignsService {
     });
   }
 
+  /**
+   * `POST …/dispatch`. **Disabled by default** (`CAMPAIGN_DISPATCH_ENABLED`, refused outside tests
+   * and without billing enforcement): it then answers `CAMPAIGN_DISPATCH_DISABLED`, exactly as
+   * before 8B-3b. Enabled (Phase 8B-3b, PHASE-8B-3-HANDOVER-Rev2 §6.1): the caller needs
+   * `campaigns.manage` AND `messages.send` at the workspace; a `draft` or `scheduled` campaign
+   * with an approved template and pending recipients starts `running` under the caller as its
+   * initiator, and its claim row is created for the executor. Nothing is sent here.
+   */
   async dispatch(
     principal: AuthPrincipal,
     workspaceId: string,
     campaignId: string,
-  ): Promise<never> {
+  ): Promise<CampaignRecordResponse> {
     const orgId = requireOrganization(principal);
 
-    await this.db.withRequestTenant(async (tx) => {
+    return this.db.withRequestTenant(async (tx) => {
       await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.CAMPAIGNS_MANAGE);
 
       const [campaign] = await tx
-        .select({ id: schema.campaigns.id })
+        .select()
         .from(schema.campaigns)
         .where(
           and(
@@ -767,20 +860,116 @@ export class CampaignsService {
             isNull(schema.campaigns.deletedAt),
           ),
         )
+        .for('no key update')
         .limit(1);
 
       if (!campaign) throw campaignNotFound(campaignId);
 
-      throw new AppException({
-        status: HttpStatus.BAD_REQUEST,
-        code: ERROR_CODES.CAMPAIGN_DISPATCH_DISABLED,
-        message:
-          'Campaign dispatch remains disabled pending Phase 8B.2 and Phase 7 billing acceptance.',
-        logContext: { campaignId, workspaceId },
+      if (!this.config.campaigns.dispatchEnabled) {
+        throw new AppException({
+          status: HttpStatus.BAD_REQUEST,
+          code: ERROR_CODES.CAMPAIGN_DISPATCH_DISABLED,
+          message:
+            'Campaign dispatch remains disabled pending Phase 8B.2 and Phase 7 billing acceptance.',
+          logContext: { campaignId, workspaceId },
+        });
+      }
+
+      await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.MESSAGES_SEND);
+      if (campaign.status !== 'draft' && campaign.status !== 'scheduled') {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message: `Cannot dispatch a campaign in '${campaign.status}' state`,
+          details: { currentStatus: campaign.status },
+        });
+      }
+      const [template] = await tx
+        .select({
+          name: schema.templates.name,
+          body: schema.templates.body,
+          approvalStatus: schema.templates.approvalStatus,
+        })
+        .from(schema.templates)
+        .where(eq(schema.templates.id, campaign.templateId))
+        .limit(1);
+      if (!template || template.approvalStatus !== 'approved') {
+        throw new AppException({
+          status: HttpStatus.UNPROCESSABLE_ENTITY,
+          code: ERROR_CODES.TEMPLATE_NOT_APPROVED,
+          message: 'The campaign template must be approved before dispatch',
+          details: { templateId: campaign.templateId },
+        });
+      }
+      const [pending] = await tx
+        .select({ n: sql<number>`count(*)::int` })
+        .from(schema.campaignRecipients)
+        .where(
+          and(
+            eq(schema.campaignRecipients.campaignId, campaignId),
+            eq(schema.campaignRecipients.status, 'pending'),
+          ),
+        );
+      if (!pending || Number(pending.n) === 0) {
+        throw new AppException({
+          status: HttpStatus.UNPROCESSABLE_ENTITY,
+          code: ERROR_CODES.CAMPAIGN_AUDIENCE_EMPTY,
+          message: 'The campaign has no materialised pending recipients to send to',
+          details: { campaignId },
+        });
+      }
+
+      const [updatedRow] = await tx
+        .update(schema.campaigns)
+        .set({
+          status: 'running',
+          startedBy: principal.apiKeyId ? null : principal.userId,
+          startedByApiKeyId: principal.apiKeyId ?? null,
+          startedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(schema.campaigns.id, campaignId),
+            eq(schema.campaigns.orgId, orgId),
+            inArray(schema.campaigns.status, ['draft', 'scheduled']),
+          ),
+        )
+        .returning();
+      if (!updatedRow) {
+        throw new AppException({
+          status: HttpStatus.CONFLICT,
+          code: ERROR_CODES.CAMPAIGN_LIFECYCLE_CONFLICT,
+          message: 'Cannot dispatch campaign: it was modified concurrently',
+          details: { campaignId },
+        });
+      }
+      await tx.insert(schema.campaignDispatch).values({ campaignId, orgId });
+      await this.audit.record(
+        {
+          scopeType: 'workspace',
+          scopeId: workspaceId,
+          ...actorFromPrincipal(principal),
+          action: 'campaign.dispatched',
+          resourceType: 'Campaign',
+          resourceId: campaignId,
+          outcome: 'success',
+          before: null,
+          after: null,
+          metadata: { previousStatus: campaign.status, pendingRecipients: Number(pending.n) },
+        },
+        tx,
+      );
+      const channelResult = await tx.execute<{ code: string }>(
+        sql`SELECT app_channel_code(${updatedRow.channelId}) AS code`,
+      );
+      return campaignView({
+        ...updatedRow,
+        channelCode: channelResult.rows[0]?.code ?? 'unknown',
+        templateName: template.name,
+        templateBody: template.body,
       });
     });
-
-    throw new Error('Unreachable');
   }
 
   async previewAudience(
@@ -1194,6 +1383,9 @@ export class CampaignsService {
 
     const existing = await this.db.withRequestTenant(async (tx) => {
       await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.CAMPAIGNS_MANAGE);
+      // Phase 8B-3b: a scheduled campaign is started automatically, so scheduling needs the
+      // caller's messages.send (the journey activation precedent).
+      await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.MESSAGES_SEND);
 
       const [row] = await tx
         .select({
@@ -1381,6 +1573,9 @@ export class CampaignsService {
           status: 'scheduled',
           scheduleMode: 'scheduled',
           scheduledAt: scheduledAtDate,
+          // Phase 8B-3b: the initiator the scheduler starts it under (OD-8C-1).
+          scheduledBy: principal.apiKeyId ? null : principal.userId,
+          scheduledByApiKeyId: principal.apiKeyId ?? null,
           metrics: updatedMetrics,
           updatedAt: new Date(),
         })
@@ -1414,6 +1609,15 @@ export class CampaignsService {
           },
         },
         tx,
+      );
+      // Phase 8B-3b: re-asserted against the caller's CURRENT grants, last in the transaction that
+      // commits the scheduled state — not the preflight snapshot, which audience materialisation
+      // separates from this commit. A refusal rolls back the schedule and its audit row.
+      await this.assertCurrentWorkspacePermission(
+        tx,
+        principal,
+        workspaceId,
+        PERMISSIONS.MESSAGES_SEND,
       );
 
       const joinedRow: CampaignJoinedRow = {
@@ -1467,6 +1671,7 @@ export class CampaignsService {
         .update(schema.campaigns)
         .set({
           status: 'cancelled',
+          pauseReason: null,
           completedAt: new Date(),
           updatedAt: new Date(),
         })
@@ -1507,6 +1712,25 @@ export class CampaignsService {
         },
         tx,
       );
+      // Phase 8B-3b: nothing more is sent — the claim row goes, and every recipient still
+      // pending is skipped. Messages already created proceed (no recall).
+      await tx
+        .delete(schema.campaignDispatch)
+        .where(eq(schema.campaignDispatch.campaignId, campaignId));
+      await tx
+        .update(schema.campaignRecipients)
+        .set({
+          status: 'skipped',
+          skipReason: CAMPAIGN_EXECUTOR_CODES.CAMPAIGN_CANCELLED,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(schema.campaignRecipients.campaignId, campaignId),
+            eq(schema.campaignRecipients.orgId, orgId),
+            eq(schema.campaignRecipients.status, 'pending'),
+          ),
+        );
 
       const [template] = await tx
         .select({
@@ -1577,6 +1801,8 @@ export class CampaignsService {
         .update(schema.campaigns)
         .set({
           status: 'paused',
+          // Phase 8B-3b: an operator pause; the executor's claim row goes with it.
+          pauseReason: 'operator',
           updatedAt: new Date(),
         })
         .where(
@@ -1614,6 +1840,9 @@ export class CampaignsService {
         },
         tx,
       );
+      await tx
+        .delete(schema.campaignDispatch)
+        .where(eq(schema.campaignDispatch.campaignId, campaignId));
 
       const joinedRow: CampaignJoinedRow = {
         ...updatedRow!,
@@ -1635,6 +1864,9 @@ export class CampaignsService {
 
     return this.db.withRequestTenant(async (tx) => {
       await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.CAMPAIGNS_MANAGE);
+      // Phase 8B-3b: resuming sends again, so the resuming caller must hold messages.send
+      // (the journey activation precedent); the original initiator stays attributed.
+      await this.assertWorkspaceAccess(tx, principal, workspaceId, PERMISSIONS.MESSAGES_SEND);
 
       const [existing] = await tx
         .select({
@@ -1671,6 +1903,7 @@ export class CampaignsService {
         .update(schema.campaigns)
         .set({
           status: 'running',
+          pauseReason: null,
           updatedAt: new Date(),
         })
         .where(
@@ -1704,10 +1937,14 @@ export class CampaignsService {
           outcome: 'success',
           before: null,
           after: null,
-          metadata: {},
+          metadata: { previousPauseReason: campaign.pauseReason ?? null },
         },
         tx,
       );
+      await tx
+        .insert(schema.campaignDispatch)
+        .values({ campaignId, orgId })
+        .onConflictDoNothing({ target: schema.campaignDispatch.campaignId });
 
       const joinedRow: CampaignJoinedRow = {
         ...updatedRow!,

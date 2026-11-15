@@ -226,8 +226,8 @@ afterAll(async () => {
 });
 
 describe('8B-3a K1 — one db:migrate from 0067', () => {
-  it('0068 is the barrier prefix and 0069 the guard, the newest migrations', () => {
-    expect([AT68, AT69, expected.length]).toEqual([68, 69, 70]);
+  it('0068 is the barrier prefix and 0069 the guard; 8B-3b adds 0070 after them', () => {
+    expect([AT68, AT69, expected.length]).toEqual([68, 69, 71]);
   });
 
   it('from 0067: applies 0068, builds K1, records 0069; a rerun verifies and changes nothing', async () => {

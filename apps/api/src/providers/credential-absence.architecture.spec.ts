@@ -294,6 +294,22 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
     ]);
     const phase8b3Automation = migrations.find((m) => m.n.startsWith('0068_'));
     expect(phase8b3Automation).toBeDefined();
+    // Phase 8B PR 8B-3b (migration 0070): the API-key INITIATOR attribution of a campaign
+    // scheduled or dispatched with an API key (OD-8C-1) — two FK columns to api_keys, their
+    // constraints, and the write-once guard. It names the key; it stores no key material.
+    const CAMPAIGN_INITIATOR_0070 = new Set([
+      'scheduled_by_api_key_id',
+      'started_by_api_key_id',
+      'campaigns_scheduled_by_api_key_id_api_keys_id_fk',
+      'campaigns_started_by_api_key_id_api_keys_id_fk',
+      'api_keys',
+      'app_campaigns_api_key_initiator_guard',
+      'trg_campaigns_api_key_initiator_guard',
+      // the scheduler's audit metadata names the initiating key id.
+      'initiatorApiKeyId',
+    ]);
+    const phase8b3bScheduler = migrations.find((m) => m.n.startsWith('0070_'));
+    expect(phase8b3bScheduler).toBeDefined();
     expect(
       phase2.flatMap((m) =>
         [...m.sql.matchAll(/\w*(?:credential|secret|passw|api_?key|token)\w*/gi)]
@@ -312,6 +328,7 @@ describe('Phase 2 has no provider credential storage or runtime credential imple
           .filter((x) => !(m === phase8c3Runner && JOURNEY_RUNNER_FENCING_0064.has(x[0])))
           .filter((x) => !(m === phase8c4Triggers && JOURNEY_SCHEDULE_FENCING_0065.has(x[0])))
           .filter((x) => !(m === phase8b3Automation && CAMPAIGN_AUTOMATION_0068.has(x[0])))
+          .filter((x) => !(m === phase8b3bScheduler && CAMPAIGN_INITIATOR_0070.has(x[0])))
           .map((x) => `${m.n}: ${x[0]}`),
       ),
     ).toEqual([]);

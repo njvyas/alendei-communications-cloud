@@ -1006,10 +1006,20 @@ describe('Phase 8B PR 8B-3a: shared automation identity and campaign attribution
       });
       await pause;
       expect(paused).toBe(200);
-      expect(await sendRefusal(f, 1)).toMatchObject({
-        code: '42501',
-        detail: 'CAMPAIGN_NOT_RUNNING',
-      });
+      // Phase 8B-3b: the operator pause also removes the claim row, so a later send is refused
+      // at the claim fence already; the database mint refuses it independently.
+      expect(
+        (
+          await h.admin.execute(
+            sql`SELECT 1 FROM campaign_dispatch WHERE campaign_id = ${f.campaignId}`,
+          )
+        ).rows,
+      ).toHaveLength(0);
+      await expect(send(f, 1)).rejects.toThrow('fenced');
+      expect(
+        await asExecutor(f, f.recipients[1]!.id, (c) => mintRefusal(c, f.recipients[1]!.id)),
+      ).toMatchObject({ code: '42501', detail: 'CAMPAIGN_NOT_RUNNING' });
+      expect(await orgMessages(A.orgId)).toBeGreaterThan(0);
     });
   });
 

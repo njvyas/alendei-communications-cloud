@@ -96,6 +96,8 @@ describe('Phase 8B.1: Campaigns Foundation Integration Suite', () => {
         PERMISSIONS.CAMPAIGNS_MANAGE,
         PERMISSIONS.CONTACTS_READ,
         PERMISSIONS.CONTACTS_MANAGE,
+        // Phase 8B-3b: scheduling and resuming assert the caller's messages.send.
+        PERMISSIONS.MESSAGES_SEND,
       ],
     );
     await createRole(
@@ -114,6 +116,8 @@ describe('Phase 8B.1: Campaigns Foundation Integration Suite', () => {
         PERMISSIONS.CAMPAIGNS_MANAGE,
         PERMISSIONS.CONTACTS_READ,
         PERMISSIONS.CONTACTS_MANAGE,
+        // Phase 8B-3b: scheduling and resuming assert the caller's messages.send.
+        PERMISSIONS.MESSAGES_SEND,
       ],
     );
     await createRole(

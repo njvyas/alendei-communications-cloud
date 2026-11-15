@@ -180,6 +180,25 @@ export const envSchema = z.object({
    * outside tests**, and only meaningful with JOURNEY_RUNNER_ENABLED.
    */
   JOURNEY_SCHEDULER_ENABLED: booleanFromEnv.default(false),
+  // --- Campaign executor (Phase 8B PR 8B-3b) ---------------------------------
+  /**
+   * The campaign executor and scheduler (`CampaignDispatchWorker`). **Off by default, and refused
+   * at startup outside tests** (`campaignDispatchProblems`). It also requires billing enforcement
+   * (owner decision OD-8B3-4), and any enablement outside tests additionally needs recorded
+   * Gate 7-A acceptance, a provisioned `acc_campaign` credential and a separate authorisation.
+   * Off, no `acc_campaign` connection is opened and `POST …/dispatch` answers
+   * `CAMPAIGN_DISPATCH_DISABLED`.
+   */
+  CAMPAIGN_DISPATCH_ENABLED: booleanFromEnv.default(false),
+  /** The executor principal (`acc_campaign`, migration 0068). No derived or development fallback. */
+  DATABASE_CAMPAIGN_URL: postgresUrl.optional(),
+  CAMPAIGN_DISPATCH_POLL_INTERVAL_MS: positiveInt.min(50).max(60_000).default(1_000),
+  /** Campaign claims per cycle. */
+  CAMPAIGN_DISPATCH_BATCH_SIZE: positiveInt.max(10).default(5),
+  /** Campaign claims per organisation per cycle (fairness). */
+  CAMPAIGN_DISPATCH_PER_ORG_LIMIT: positiveInt.max(10).default(2),
+  /** Lease of one campaign claim, seconds. */
+  CAMPAIGN_DISPATCH_LEASE_SECONDS: positiveInt.min(5).max(600).default(30),
   /**
    * Phase 7 PR 7-6c (`DECISIONS.md` §1zi.9 D-76-3, §1zi.12 O-2): the dual-control
    * threshold for operator resolution of unknown outcomes, in integer paise. Phase 7 PR
@@ -300,6 +319,8 @@ export function allowsDevelopmentDispatchPassword(appEnv: AppEnvironment): boole
 export const DELIVERY_ROLE = 'acc_delivery';
 /** Phase 8C PR 8C-3: the journey runner principal (migration 0064). */
 export const JOURNEY_ROLE = 'acc_journey';
+/** Phase 8B PR 8B-3b: the campaign executor principal (migration 0068). */
+export const CAMPAIGN_ROLE = 'acc_campaign';
 
 /** The well-known local password of `acc_delivery`; development and test only. */
 export const DEVELOPMENT_DELIVERY_PASSWORD = 'acc_delivery_dev_password';
@@ -421,6 +442,32 @@ function journeyRunnerProblems(env: Env): string[] {
 }
 
 /**
+ * Phase 8B PR 8B-3b: campaign dispatch must not run until its enablement is separately authorised
+ * (OD-8B3-4, PHASE-8B-3-HANDOVER-Rev2 §7). Refused outside tests (NODE_ENV=test and APP_ENV=test);
+ * in EVERY environment it requires billing enforcement and an explicit `DATABASE_CAMPAIGN_URL`.
+ */
+export function campaignDispatchProblems(env: Env): string[] {
+  if (!env.CAMPAIGN_DISPATCH_ENABLED) return [];
+  const problems: string[] = [];
+  if (!(env.NODE_ENV === 'test' && env.APP_ENV === 'test')) {
+    problems.push(
+      `CAMPAIGN_DISPATCH_ENABLED=true is refused (NODE_ENV=${env.NODE_ENV}, APP_ENV=${env.APP_ENV}): ` +
+        'campaign sending is not authorised. Enabling it requires recorded Gate 7-A acceptance, ' +
+        'billing enforcement, a provisioned acc_campaign credential and a separate owner authorisation.',
+    );
+  }
+  if (!env.BILLING_ENFORCEMENT_ENABLED) {
+    problems.push(
+      'CAMPAIGN_DISPATCH_ENABLED=true requires BILLING_ENFORCEMENT_ENABLED=true (OD-8B3-4): campaign messages are always reserved',
+    );
+  }
+  if (!env.DATABASE_CAMPAIGN_URL) {
+    problems.push('DATABASE_CAMPAIGN_URL must be set when CAMPAIGN_DISPATCH_ENABLED=true');
+  }
+  return problems;
+}
+
+/**
  * Phase 8C PR 8C-4: event intake and scheduled-trigger firing run inside the runner loop. Each
  * is refused outside tests, and each requires the runner to be enabled (which is itself refused
  * outside tests).
@@ -495,6 +542,7 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     ...billingEnforcementProblems(parsed.data),
     ...journeyRunnerProblems(parsed.data),
     ...journeyTriggerProcessingProblems(parsed.data),
+    ...campaignDispatchProblems(parsed.data),
   ];
   // Checked against the raw input, because after parsing a default is
   // indistinguishable from a choice: production must *state* how many proxy

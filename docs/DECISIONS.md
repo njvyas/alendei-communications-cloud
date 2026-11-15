@@ -4067,6 +4067,101 @@ Source: `PHASE-8B-3-HANDOVER-Rev2.md` (owner decisions OD-8B3-1..6 and clarifica
 
 **Not in 8B-3a:** the executor, scheduler and API integration (8B-3b); 8C-6; any enablement, flag, credential, provider call, QA or production change.
 
+### 1zk.2 PR 8B-3b as built: campaign executor, scheduler and API integration (migration `0070`), disabled by default
+**Baseline.** Built on 8B-3a as reviewed (`ae61202`). After #112 was squash-merged to `develop` as `8269bad` (its tree is identical to `ae61202`), the branch was reconciled by a normal merge, `f7836e1` (no force-push; the merged tree `f7e5305` equals the pre-merge tree), so the PR diff is 8B-3b only. It modifies none of the shared send-core files, `0068` or `0069` (handover §11.2 rule 3). The executor is the single `SubmissionOrigin` constructor that the 8B-3a structural spec already admits.
+
+**Enablement (OD-8B3-4).** `CAMPAIGN_DISPATCH_ENABLED` is off by default and refused at startup unless `NODE_ENV=test` and `APP_ENV=test`. In every environment it also requires `BILLING_ENFORCEMENT_ENABLED=true` and `DATABASE_CAMPAIGN_URL`. While it is off, no `acc_campaign` pool exists, the worker does nothing, and `POST …/dispatch` answers `CAMPAIGN_DISPATCH_DISABLED` unchanged. When it is on, the pool must log in as `acc_campaign`, RLS-bound (checked at startup).
+
+**Executor (`CampaignDispatchService`, Rev 2 §6.2–6.3).**
+- **T-send, one transaction per recipient on `acc_campaign`:**
+  - the claim fence (`FOR UPDATE`, token and epoch);
+  - the next pending recipient (`SKIP LOCKED`);
+  - the capability mint, which holds the control and campaign rows `FOR SHARE` until commit;
+  - a re-check that the materialised identity is still active and belongs to the contact;
+  - `authorizeAutomationSubmission`, then the shared core with the campaign origin, in a savepoint;
+  - the recipient update, then commit.
+- **Refusals (OD-8B3-3):**
+  - suppression or consent: `skipped`;
+  - validation, resource, `SMS_*`, `23503` or `42501`: `failed`;
+  - billing, provider assignment, template or channel: **automatic campaign pause** with its `pause_reason`. Recipients stay pending, the claim row is removed, and `campaign.auto_paused` is audited;
+  - `BILLING_BUSY` or a transient SQLSTATE: the whole T-send rolls back and the claim is released with backoff;
+  - anything else: counted, and the recipient fails after 3 (`CAMPAIGN_SEND_UNEXPECTED`).
+  - A mint refusal `AUTOMATION_PAUSED` auto-pauses the campaign (`automation_paused`). `CAMPAIGN_NOT_RUNNING` stops quietly, and `CLAIM_LOST` is fenced.
+- **Throttle:** a claim sends at most `ceil(rateLimitPerSecond × 5 s)`, then releases to the next slot.
+- **Completion:** with no pending recipient, `completed` plus a metrics snapshot, `campaign.completed` audited, and the claim row removed.
+- **Retention:** capabilities older than 90 days are purged in bounded batches (OD-8B3-6).
+
+**Migration `0070`.**
+- `app_campaign_start_due` (definer, `acc_campaign` only) moves due `scheduled` campaigns to `running` under the scheduling user or API key, creates the claim row and audits `campaign.started` (`via: schedule`). It uses `SKIP LOCKED` and never starts a campaign of a paused organisation, one without pending recipients, or one with no recorded scheduler.
+- `EXECUTE` on `app_channel_code` for `acc_campaign`.
+- The API-key initiator columns `scheduled_by_api_key_id` and `started_by_api_key_id`, with `campaigns_single_initiator` and a write-once guard.
+
+**API.**
+- **Dispatch (enabled):** `campaigns.manage` plus `messages.send`. A draft or scheduled campaign with an approved template and pending recipients starts under the caller. It returns 200 with `{data}`, and 422 for an unapproved template or an empty audience.
+- **Schedule and resume** assert `messages.send`. Schedule records `scheduled_by`.
+- **Scheduling authority on both paths (owner review of #113):**
+  - **`PATCH …/campaigns/:id`:** an update that leaves the campaign `scheduled` (a draft moved to scheduled by `scheduleMode`/`scheduledAt`, or a scheduled campaign re-timed) now requires `messages.send`, records the caller as the scheduler (`scheduled_by` or `scheduled_by_api_key_id`), and is otherwise unchanged. Moving back to draft clears the recorded scheduler. Metadata-only updates need `campaigns.manage` only, as before.
+  - **Final transaction, current grants:** `schedule()` and the scheduling `update()` re-assert `messages.send` as the last step of the transaction that commits the scheduled state, against the caller's grants re-read at that moment (`PrincipalRevalidator`, `auth/principal-revalidation.service.ts`), not the request's preflight snapshot. A user session must still be presentable and the user able to sign in; an API key must still be unrevoked, unexpired, in an active organisation, with its scopes intersected with its creator's current authority (the `AuthGuard` rules; parity tested). A refusal rolls back the schedule and its audit row.
+- **Operator pause** sets `pause_reason = 'operator'` and removes the claim row. **Resume** clears the reason and restores the claim row.
+- **Cancel** clears the reason, removes the claim row and skips pending recipients (`campaign_cancelled`).
+- **`GET`** derives live metrics for started campaigns. **`pauseReason`** is on the campaign view.
+
+**Deviations and [P] choices (for review).**
+1. **`0070` is needed in 8B-3b** (the handover anticipated no 8B-3b migration). The scheduler runs without a tenant session, so it needs a definer; the executor needs the channel code; API-key initiators need columns. As a consequence, 8B-3b appends one entry to `_journal.json`, a file §11.1 lists under 8B-3a; the change is additive.
+2. **Dispatch returns 200 with the campaign view**, the convention of the other campaign lifecycle routes.
+3. **An existing test changed for an intended behaviour change:** the 8B.1/8B.2 `campaigns.int-spec.ts` role now holds `messages.send`, because schedule and resume require it.
+4. **Test-only enablement technique:** the dispatch suite boots the application with dispatch enabled. The executor URL is the disposable clone's owner URL with the session role set to `acc_campaign` at connection start (`options=-c role=acc_campaign`), so the real startup principal check runs against `acc_campaign`. The worker is stopped before its first cycle.
+5. **An 8B-3a test adapted to the operator pause removing the claim row:** in `automation-identity.int-spec.ts`, a send after a campaign pause is now refused at the claim fence. The test asserts that, and still asserts the database mint's own `CAMPAIGN_NOT_RUNNING` refusal.
+6. **Shared pins updated, with citations:** migration count 71 (including the count pin in the 8B-3a test file `phase8b3-index.int-spec.ts`), scope-creep, credential-absence and permission-classification; the OpenAPI document was regenerated.
+
+**Tests:**
+- **API integration** `campaigns-dispatch.int-spec.ts` (42): enablement and the RLS-bound `acc_campaign` pool; no access without a claim; the 0070 grants; the dispatch enabled path (messages.send, 422 refusals, start, audit, conflict); T-send with attribution, queue, event, reservation and one capability per send; throttle; two concurrent executors sending each recipient exactly once; fencing of a superseded claim; inactive identity; a real suppression; insufficient funds auto-pause then resume; a real `billing_account` auto-pause; the refusal matrix (9 mappings, transient, unexpected); operator pause, resume, cancel, organisation pause; scheduled start (permission, once under concurrency, paused organisation, legacy campaign); `campaigns_single_initiator` and write-once; capability retention; scheduling authority (8): `campaigns.manage` without `messages.send` refused on `PATCH` (both forms) and `POST …/schedule` with metadata updates unaffected, `messages.send` revoked after the preflight refused by the final transaction on both paths, an intact sender as control, API keys with and without `messages.send` (and a key revoked after the preflight), and revalidation parity with `AuthGuard` for a session and an API key.
+- **Unit:** refusal mapping (`campaign-refusals.spec.ts`), worker off by default (`campaign-dispatch.worker.spec.ts`), configuration rules including the six refused environment pairs and the enforcement requirement (`env.schema.spec.ts`), structural guarantees (`campaigns-boundary.spec.ts`).
+
+**Mutation checks, each on a fresh clone of `acc_r015_base`, all caught by their intended tests:**
+
+| Mutation | Caught by |
+|---|---|
+| B01 `BILLING_INSUFFICIENT_FUNDS` is not a pause | unit 2, API 2 |
+| B02 Release ignores the throttle slot | API 1 |
+| B03 Cancel leaves recipients pending | API 1 |
+| B04 Operator pause keeps the claim row | unit 1, API 1 |
+| B05 Dispatch ignores the flag | unit 1, API 1 (the default-off dispatch test) |
+| B06 Dispatch without `messages.send` | unit 1, API 1 |
+| B07 Scheduled start ignores the organisation pause | API 1 |
+| B08 Scheduled start without a recorded scheduler | API 1 |
+| B09 Quota ignores the rate | API 3 |
+| B10 Unexpected failures never fail the recipient | API 1 |
+| B11 Dispatch enabled without billing enforcement | unit 1 |
+| B12 Organisation pause is not auto-paused | API 1 |
+| B13 Resume without the claim row | unit 1, API 3 |
+| B14 Schedule records no initiator | API 3 |
+| B15 Inactive identity sent | API 1 |
+| B16 Scheduled start creates no claim row | API 1 |
+| B17 `PATCH` schedules without the `messages.send` check | API 4 |
+| B18 `schedule()` final-transaction check removed | API 2 |
+| B19 The final check uses the request snapshot | API 3 |
+| B20 `PATCH` keeps a stale recorded scheduler | API 1 |
+
+**Verification, authorisation fix (disposable clone of `acc_r015_base`, code tree `c93d3bc`, commit `649f6cd`; the final head adds only this record):**
+- DB integration 584/584, API integration 813/813 (771 + 42), security 1,860/1,860;
+- API unit 1,256, DB unit 276, contracts 62;
+- lint, typecheck, prettier and `openapi:check` are clean;
+- `db:migrate` run twice (`Schema up to date (71 migrations verified).`); history proof `71|9d80e465280d1c0a4a625397287066b7`, the first 70 equal to the merged 8B-3a (`d5fcd4d0b2b239bcb63562543d44731d`);
+- mutations B01–B20: 20/20 caught by their intended tests.
+
+**Verification, reconciled head `f7836e1` (tree `f7e5305`, identical to the pre-reconciliation tree):** CI run `43685397473`, all five checks; the regression and the 16 mutations (B01–B16) re-run with the same results as below.
+
+**Verification, pre-reconciliation (disposable clone of `acc_r015_base`, code tree `be9d512`, head `3605ff7`, before the authorisation fix):**
+- DB integration 584/584, API integration 805/805 (771 + 34), security 1,860/1,860;
+- API unit 1,256, DB unit 276, contracts 62;
+- lint, typecheck, prettier and `openapi:check` are clean;
+- `db:migrate` run twice (`Schema up to date (71 migrations verified).`);
+- history proof `71|9d80e465280d1c0a4a625397287066b7`; the first 70 entries are unchanged (`70|d5fcd4d0b2b239bcb63562543d44731d`, the 8B-3a proof);
+- `app_campaign_start_due` is a definer executable only by `acc_campaign`; `acc_campaign` and `acc_journey` are NOLOGIN, not superuser, no BYPASSRLS; no NOT VALID constraint.
+
+**Not in 8B-3b:** enablement of any kind, a provisioned `acc_campaign` credential, Gate 7-A acceptance, 8C-6, provider adapters, QA or production changes.
+
 ## 3. Risks explicitly accepted by design (not oversights)
 
 **Rate limits are deployment-wide, with no per-tenant override (Phase 1B.6.4, ADR-010 D-4).** Every tenant on a deployment shares one ceiling. A noisy tenant is bounded — it cannot exhaust another tenant's bucket, since organization is part of the key — but it cannot be throttled or exempted individually either, and a customer cannot be sold a larger allowance without raising it for everyone on that deployment. Accepted because per-tenant limits need a plan or entitlement model that belongs with billing, and because the isolation property that actually protects tenants from each other is already in place. Revisit when plan storage exists.

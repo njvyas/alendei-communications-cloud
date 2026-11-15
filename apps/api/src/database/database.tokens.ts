@@ -11,3 +11,7 @@ export const DELIVERY_DB = Symbol('DELIVERY_DB');
 /** Phase 8C PR 8C-3: the journey runner principal; `null` unless JOURNEY_RUNNER_ENABLED. */
 export const JOURNEY_POOL = Symbol('JOURNEY_POOL');
 export const JOURNEY_DB = Symbol('JOURNEY_DB');
+
+/** Phase 8B PR 8B-3b: the campaign executor principal; `null` unless CAMPAIGN_DISPATCH_ENABLED. */
+export const CAMPAIGN_POOL = Symbol('CAMPAIGN_POOL');
+export const CAMPAIGN_DB = Symbol('CAMPAIGN_DB');

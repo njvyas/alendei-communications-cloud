@@ -336,9 +336,9 @@ describe('three barriers (U14.1a 0042, U14.1b 0043, Phase 5.0 0045) — journal 
 
   // Pins the journal shape at the time of Phase 8B.1: 0042, 0043, then 0044 (the prefix of
   // the third barrier), the 0045 guard, 0046, the forward fix 0047, 0048 (resolver facts), 0049
-  // (support delivery filter), 0050 (ledger foundation), 0051 (pricing and rating), 0052 (campaign foundation), 0053 (funds reservation), 0054 (settlement), 0055 (tenant billing reads), 0056 (unknown-outcome register), 0057 (operator resolution), 0058 (Phase 8A.1 segments), 0059 (account provisioning), 0060 (wallet recharge), 0061 (contact import/export), 0062 (journey foundation), 0063 (journey lifecycle and executions), 0064 (journey runner) and 0065 (journey events and schedules) as the newest.
+  // (support delivery filter), 0050 (ledger foundation), 0051 (pricing and rating), 0052 (campaign foundation), 0053 (funds reservation), 0054 (settlement), 0055 (tenant billing reads), 0056 (unknown-outcome register), 0057 (operator resolution), 0058 (Phase 8A.1 segments), 0059 (account provisioning), 0060 (wallet recharge), 0061 (contact import/export), 0062 (journey foundation), 0063 (journey lifecycle and executions), 0064 (journey runner), 0065 (journey events and schedules), 0066–0067 (8C-5), 0068–0069 (8B-3a) and 0070 (8B-3b scheduled start) as the newest.
   // Update when a later migration is added.
-  it('0043 follows 0042; the 0045 guard follows 0044; 0046 to 0069 are the newest', () => {
+  it('0043 follows 0042; the 0045 guard follows 0044; 0046 to 0070 are the newest', () => {
     expect(at43).toBe(guardAt + 1);
     expect(at45).toBe(at43 + 2);
     expect(expected[at45 - 1]?.tag).toBe('0044_phase5_0_delivery_foundation');
@@ -366,7 +366,9 @@ describe('three barriers (U14.1a 0042, U14.1b 0043, Phase 5.0 0045) — journal 
     expect(expected[at45 + 22]?.tag).toBe('0067_phase8c5b_journey_send_node');
     expect(expected[at45 + 23]?.tag).toBe('0068_phase8b3_automation_identity_campaign_attribution');
     expect(expected[at45 + 24]?.tag).toBe('0069_phase8b3_campaign_recipient_unique_guard');
-    expect(expected).toHaveLength(at45 + 25);
+    // Phase 8B-3b: the executor's scheduled start, channel-code grant and API-key initiator.
+    expect(expected[at45 + 25]?.tag).toBe('0070_phase8b3b_campaign_scheduled_start');
+    expect(expected).toHaveLength(at45 + 26);
   });
 
   it('Phase 8B-3a: the fourth barrier (K1) runs after 0068 adds the column and right before guard 0069', () => {
@@ -387,22 +389,22 @@ describe('three barriers (U14.1a 0042, U14.1b 0043, Phase 5.0 0045) — journal 
     [
       'fresh database',
       null,
-      [`apply:${guardAt}`, 'barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:25'],
+      [`apply:${guardAt}`, 'barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:26'],
     ],
     [
       'database at 0041',
       rowsFor(guardAt),
-      ['barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:25'],
+      ['barrier:a', 'apply:1', 'barrier:b', 'apply:2', 'barrier:c', 'apply:26'],
     ],
     [
       'database at 0042 (U14.1a applied)',
       rowsFor(guardAt + 1),
-      ['verify:a', 'barrier:b', 'apply:2', 'barrier:c', 'apply:25'],
+      ['verify:a', 'barrier:b', 'apply:2', 'barrier:c', 'apply:26'],
     ],
     [
       'database at 0044 (Phase 5.0 M1 applied)',
       rowsFor(at45),
-      ['verify:a', 'verify:b', 'barrier:c', 'apply:25'],
+      ['verify:a', 'verify:b', 'barrier:c', 'apply:26'],
     ],
     ['up to date', rowsFor(expected.length), ['verify:a', 'verify:b', 'verify:c']],
   ])(
