@@ -4135,15 +4135,20 @@ Source: `PHASE-8B-3-HANDOVER-Rev2.md` (owner decisions OD-8B3-1..6 and clarifica
 | B11 Dispatch enabled without billing enforcement | unit 1 |
 | B12 Organisation pause is not auto-paused | API 1 |
 | B13 Resume without the claim row | unit 1, API 3 |
-| B14 Schedule records no initiator | API 2 |
+| B14 Schedule records no initiator | API 3 |
 | B15 Inactive identity sent | API 1 |
 | B16 Scheduled start creates no claim row | API 1 |
-| B17 `PATCH` schedules without the `messages.send` check | ‹B17› |
-| B18 `schedule()` final-transaction check removed | ‹B18› |
-| B19 The final check uses the request snapshot | ‹B19› |
-| B20 `PATCH` keeps a stale recorded scheduler | ‹B20› |
+| B17 `PATCH` schedules without the `messages.send` check | API 4 |
+| B18 `schedule()` final-transaction check removed | API 2 |
+| B19 The final check uses the request snapshot | API 3 |
+| B20 `PATCH` keeps a stale recorded scheduler | API 1 |
 
-**Verification, final head (authorisation fix):** ‹FILL›
+**Verification, authorisation fix (disposable clone of `acc_r015_base`, code tree `c93d3bc`, commit `649f6cd`; the final head adds only this record):**
+- DB integration 584/584, API integration 813/813 (771 + 42), security 1,860/1,860;
+- API unit 1,256, DB unit 276, contracts 62;
+- lint, typecheck, prettier and `openapi:check` are clean;
+- `db:migrate` run twice (`Schema up to date (71 migrations verified).`); history proof `71|9d80e465280d1c0a4a625397287066b7`, the first 70 equal to the merged 8B-3a (`d5fcd4d0b2b239bcb63562543d44731d`);
+- mutations B01–B20: 20/20 caught by their intended tests.
 
 **Verification, reconciled head `f7836e1` (tree `f7e5305`, identical to the pre-reconciliation tree):** CI run `43685397473`, all five checks; the regression and the 16 mutations (B01–B16) re-run with the same results as below.
 
