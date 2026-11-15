@@ -186,6 +186,7 @@ const CATEGORIES: Category[] = [
         // 8B-3b: the scheduling initiator recorded at schedule time (OD-8C-1).
         'scheduledBy',
         'scheduledByApiKeyId',
+        'schedules',
         'scheduling',
       ],
       // 8B-3b: the campaign executor and scheduler (disabled by default; refused outside tests).

@@ -4068,7 +4068,7 @@ Source: `PHASE-8B-3-HANDOVER-Rev2.md` (owner decisions OD-8B3-1..6 and clarifica
 **Not in 8B-3a:** the executor, scheduler and API integration (8B-3b); 8C-6; any enablement, flag, credential, provider call, QA or production change.
 
 ### 1zk.2 PR 8B-3b as built: campaign executor, scheduler and API integration (migration `0070`), disabled by default
-**Baseline.** Stacked on 8B-3a (`ae61202`). It modifies none of the shared send-core files, `0068` or `0069` (handover §11.2 rule 3). The executor is the single `SubmissionOrigin` constructor that the 8B-3a structural spec already admits.
+**Baseline.** Built on 8B-3a as reviewed (`ae61202`). After #112 was squash-merged to `develop` as `8269bad` (its tree is identical to `ae61202`), the branch was reconciled by a normal merge, `f7836e1` (no force-push; the merged tree `f7e5305` equals the pre-merge tree), so the PR diff is 8B-3b only. It modifies none of the shared send-core files, `0068` or `0069` (handover §11.2 rule 3). The executor is the single `SubmissionOrigin` constructor that the 8B-3a structural spec already admits.
 
 **Enablement (OD-8B3-4).** `CAMPAIGN_DISPATCH_ENABLED` is off by default and refused at startup unless `NODE_ENV=test` and `APP_ENV=test`. In every environment it also requires `BILLING_ENFORCEMENT_ENABLED=true` and `DATABASE_CAMPAIGN_URL`. While it is off, no `acc_campaign` pool exists, the worker does nothing, and `POST …/dispatch` answers `CAMPAIGN_DISPATCH_DISABLED` unchanged. When it is on, the pool must log in as `acc_campaign`, RLS-bound (checked at startup).
 
@@ -4099,6 +4099,9 @@ Source: `PHASE-8B-3-HANDOVER-Rev2.md` (owner decisions OD-8B3-1..6 and clarifica
 **API.**
 - **Dispatch (enabled):** `campaigns.manage` plus `messages.send`. A draft or scheduled campaign with an approved template and pending recipients starts under the caller. It returns 200 with `{data}`, and 422 for an unapproved template or an empty audience.
 - **Schedule and resume** assert `messages.send`. Schedule records `scheduled_by`.
+- **Scheduling authority on both paths (owner review of #113):**
+  - **`PATCH …/campaigns/:id`:** an update that leaves the campaign `scheduled` (a draft moved to scheduled by `scheduleMode`/`scheduledAt`, or a scheduled campaign re-timed) now requires `messages.send`, records the caller as the scheduler (`scheduled_by` or `scheduled_by_api_key_id`), and is otherwise unchanged. Moving back to draft clears the recorded scheduler. Metadata-only updates need `campaigns.manage` only, as before.
+  - **Final transaction, current grants:** `schedule()` and the scheduling `update()` re-assert `messages.send` as the last step of the transaction that commits the scheduled state, against the caller's grants re-read at that moment (`PrincipalRevalidator`, `auth/principal-revalidation.service.ts`), not the request's preflight snapshot. A user session must still be presentable and the user able to sign in; an API key must still be unrevoked, unexpired, in an active organisation, with its scopes intersected with its creator's current authority (the `AuthGuard` rules; parity tested). A refusal rolls back the schedule and its audit row.
 - **Operator pause** sets `pause_reason = 'operator'` and removes the claim row. **Resume** clears the reason and restores the claim row.
 - **Cancel** clears the reason, removes the claim row and skips pending recipients (`campaign_cancelled`).
 - **`GET`** derives live metrics for started campaigns. **`pauseReason`** is on the campaign view.
@@ -4112,7 +4115,7 @@ Source: `PHASE-8B-3-HANDOVER-Rev2.md` (owner decisions OD-8B3-1..6 and clarifica
 6. **Shared pins updated, with citations:** migration count 71 (including the count pin in the 8B-3a test file `phase8b3-index.int-spec.ts`), scope-creep, credential-absence and permission-classification; the OpenAPI document was regenerated.
 
 **Tests:**
-- **API integration** `campaigns-dispatch.int-spec.ts` (34): enablement and the RLS-bound `acc_campaign` pool; no access without a claim; the 0070 grants; the dispatch enabled path (messages.send, 422 refusals, start, audit, conflict); T-send with attribution, queue, event, reservation and one capability per send; throttle; two concurrent executors sending each recipient exactly once; fencing of a superseded claim; inactive identity; a real suppression; insufficient funds auto-pause then resume; a real `billing_account` auto-pause; the refusal matrix (9 mappings, transient, unexpected); operator pause, resume, cancel, organisation pause; scheduled start (permission, once under concurrency, paused organisation, legacy campaign); `campaigns_single_initiator` and write-once; capability retention.
+- **API integration** `campaigns-dispatch.int-spec.ts` (42): enablement and the RLS-bound `acc_campaign` pool; no access without a claim; the 0070 grants; the dispatch enabled path (messages.send, 422 refusals, start, audit, conflict); T-send with attribution, queue, event, reservation and one capability per send; throttle; two concurrent executors sending each recipient exactly once; fencing of a superseded claim; inactive identity; a real suppression; insufficient funds auto-pause then resume; a real `billing_account` auto-pause; the refusal matrix (9 mappings, transient, unexpected); operator pause, resume, cancel, organisation pause; scheduled start (permission, once under concurrency, paused organisation, legacy campaign); `campaigns_single_initiator` and write-once; capability retention; scheduling authority (8): `campaigns.manage` without `messages.send` refused on `PATCH` (both forms) and `POST …/schedule` with metadata updates unaffected, `messages.send` revoked after the preflight refused by the final transaction on both paths, an intact sender as control, API keys with and without `messages.send` (and a key revoked after the preflight), and revalidation parity with `AuthGuard` for a session and an API key.
 - **Unit:** refusal mapping (`campaign-refusals.spec.ts`), worker off by default (`campaign-dispatch.worker.spec.ts`), configuration rules including the six refused environment pairs and the enforcement requirement (`env.schema.spec.ts`), structural guarantees (`campaigns-boundary.spec.ts`).
 
 **Mutation checks, each on a fresh clone of `acc_r015_base`, all caught by their intended tests:**
@@ -4135,8 +4138,16 @@ Source: `PHASE-8B-3-HANDOVER-Rev2.md` (owner decisions OD-8B3-1..6 and clarifica
 | B14 Schedule records no initiator | API 2 |
 | B15 Inactive identity sent | API 1 |
 | B16 Scheduled start creates no claim row | API 1 |
+| B17 `PATCH` schedules without the `messages.send` check | ‹B17› |
+| B18 `schedule()` final-transaction check removed | ‹B18› |
+| B19 The final check uses the request snapshot | ‹B19› |
+| B20 `PATCH` keeps a stale recorded scheduler | ‹B20› |
 
-**Verification (disposable clone of `acc_r015_base`, code tree `be9d512`, head `3605ff7`):**
+**Verification, final head (authorisation fix):** ‹FILL›
+
+**Verification, reconciled head `f7836e1` (tree `f7e5305`, identical to the pre-reconciliation tree):** CI run `43685397473`, all five checks; the regression and the 16 mutations (B01–B16) re-run with the same results as below.
+
+**Verification, pre-reconciliation (disposable clone of `acc_r015_base`, code tree `be9d512`, head `3605ff7`, before the authorisation fix):**
 - DB integration 584/584, API integration 805/805 (771 + 34), security 1,860/1,860;
 - API unit 1,256, DB unit 276, contracts 62;
 - lint, typecheck, prettier and `openapi:check` are clean;

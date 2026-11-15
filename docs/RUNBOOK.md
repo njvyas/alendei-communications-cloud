@@ -175,6 +175,7 @@ These are Phase 0 procedural placeholders describing the *shape* of each runbook
   - Enabling it outside tests needs recorded Gate 7-A acceptance, billing enforcement, a provisioned `acc_campaign` credential (the role is NOLOGIN) and a separate owner authorisation. None of these exists today.
 - **What it would do when enabled:**
   - **Dispatch:** `POST …/dispatch` needs `campaigns.manage` and `messages.send`. It starts a draft or scheduled campaign under the caller and creates its claim row; nothing is sent by the request.
+  - **Scheduling:** `POST …/schedule`, or a `PATCH` that leaves the campaign scheduled, needs `messages.send`, re-checked against the caller's current grants in the transaction that commits it; the caller is recorded as the scheduler.
   - **Scheduler:** `app_campaign_start_due` starts due scheduled campaigns under the user or API key that scheduled them. It skips organisations whose automation is paused, and campaigns scheduled before 8B-3b (no recorded scheduler; schedule them again).
   - **Executor:** claims a running campaign and sends up to `ceil(rateLimitPerSecond × 5)` recipients per claim. Each send is one transaction under an automation capability (§5.w), through the shared core, with funds reserved. Providers are reached only by the existing dispatcher.
 - **Automatic pauses (`pauseReason`):** `insufficient_funds`, `billing_account`, `no_provider_assignment`, `template_not_approved`, `channel_not_supported` and `automation_paused`.

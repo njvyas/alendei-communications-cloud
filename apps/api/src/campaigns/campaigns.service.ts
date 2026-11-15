@@ -24,6 +24,7 @@ import { uuidv7 } from 'uuidv7';
 import { actorFromPrincipal } from '../audit/audit-actor';
 import { AuditWriter } from '../audit/audit-writer.service';
 import { AuthorizationService } from '../auth/authorization.service';
+import { PrincipalRevalidator } from '../auth/principal-revalidation.service';
 import { AppException } from '../common/errors/app.exception';
 import { ListQuery, type ListQueryInput, type ListQuerySpec } from '../common/http/list-query';
 import { AppConfigService } from '../config/app-config.service';
@@ -131,6 +132,7 @@ export class CampaignsService {
     private readonly idempotency: IdempotencyService,
     private readonly contactsService: ContactsService,
     private readonly config: AppConfigService,
+    private readonly revalidator: PrincipalRevalidator,
   ) {}
 
   private readonly listSpec: ListQuerySpec = {
@@ -189,6 +191,27 @@ export class CampaignsService {
       target: { scopeType: 'workspace', scopeId: workspaceId },
       resourceType: 'Workspace',
     });
+  }
+
+  /**
+   * Phase 8B-3b: asserts `permission` at the workspace against the caller's CURRENT grants, re-read
+   * now (`PrincipalRevalidator`), not the snapshot taken when the request began. Used in the
+   * transaction that commits a scheduled state: a scheduled campaign is later started under its
+   * scheduler, so the scheduler must hold messages.send when the schedule commits, even if it was
+   * revoked after the request's preflight.
+   */
+  private async assertCurrentWorkspacePermission(
+    tx: Transaction,
+    principal: AuthPrincipal,
+    workspaceId: string,
+    permission: string,
+  ): Promise<void> {
+    await this.assertWorkspaceAccess(
+      tx,
+      await this.revalidator.refreshed(principal),
+      workspaceId,
+      permission,
+    );
   }
 
   async list(
@@ -641,6 +664,20 @@ export class CampaignsService {
         }
       }
 
+      // Phase 8B-3b: an update that leaves the campaign `scheduled` (a draft moved to scheduled, or
+      // a scheduled campaign re-timed) is a schedule: the scheduler starts it later under the
+      // caller, so the caller needs messages.send — asserted against current grants, in this
+      // transaction, below — and is recorded as its scheduler. Moving back to draft clears the
+      // recorded scheduler. Metadata-only updates are unchanged.
+      const schedules = updates.status === 'scheduled';
+      if (schedules) {
+        updates.scheduledBy = principal.apiKeyId ? null : principal.userId;
+        updates.scheduledByApiKeyId = principal.apiKeyId ?? null;
+      } else if (updates.status === 'draft') {
+        updates.scheduledBy = null;
+        updates.scheduledByApiKeyId = null;
+      }
+
       if (dto.throttling !== undefined) {
         const currentThrottling = campaign.throttling as CampaignThrottling;
         updates.throttling = {
@@ -694,6 +731,15 @@ export class CampaignsService {
         },
         tx,
       );
+      if (schedules) {
+        // Last, immediately before commit: a refusal rolls the update and its audit back.
+        await this.assertCurrentWorkspacePermission(
+          tx,
+          principal,
+          workspaceId,
+          PERMISSIONS.MESSAGES_SEND,
+        );
+      }
 
       const joinedRow: CampaignJoinedRow = {
         ...updatedRow!,
@@ -1563,6 +1609,15 @@ export class CampaignsService {
           },
         },
         tx,
+      );
+      // Phase 8B-3b: re-asserted against the caller's CURRENT grants, last in the transaction that
+      // commits the scheduled state — not the preflight snapshot, which audience materialisation
+      // separates from this commit. A refusal rolls back the schedule and its audit row.
+      await this.assertCurrentWorkspacePermission(
+        tx,
+        principal,
+        workspaceId,
+        PERMISSIONS.MESSAGES_SEND,
       );
 
       const joinedRow: CampaignJoinedRow = {

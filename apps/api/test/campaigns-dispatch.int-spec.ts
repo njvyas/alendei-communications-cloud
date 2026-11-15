@@ -43,6 +43,7 @@ import {
   type CampaignSubmissionCore,
 } from '../src/campaigns/dispatch/campaign-dispatch.service';
 import { CampaignDispatchWorker } from '../src/campaigns/dispatch/campaign-dispatch.worker';
+import { PrincipalRevalidator } from '../src/auth/principal-revalidation.service';
 import { CAMPAIGN_POOL } from '../src/database/database.tokens';
 import { CredentialService } from '../src/iam/credential.service';
 import { MessageSubmissionCore } from '../src/messages/submission/message-submission.core';
@@ -91,6 +92,8 @@ describe('Phase 8B PR 8B-3b: campaign executor, scheduler and API integration', 
   const tokens = new Map<string, string>();
   let seq = 0;
   let workerWasRunning = false;
+  let senderRole: string;
+  const apiKeys: string[] = [];
 
   const http = () => request(h.app.getHttpServer());
   const login = async (email: string) =>
@@ -427,11 +430,11 @@ describe('Phase 8B PR 8B-3b: campaign executor, scheduler and API integration', 
       sql`INSERT INTO wallets (org_id, balance_paise) VALUES (${A.orgId}, 1000000), (${L.orgId}, ${2 * WA_PAISE})`,
     );
 
-    const sender = await roleWith(A, 'sender', [
+    const sender = (senderRole = await roleWith(A, 'sender', [
       PERMISSIONS.CAMPAIGNS_READ,
       PERMISSIONS.CAMPAIGNS_MANAGE,
       PERMISSIONS.MESSAGES_SEND,
-    ]);
+    ]));
     const manager = await roleWith(A, 'manager', [
       PERMISSIONS.CAMPAIGNS_READ,
       PERMISSIONS.CAMPAIGNS_MANAGE,
@@ -478,6 +481,7 @@ describe('Phase 8B PR 8B-3b: campaign executor, scheduler and API integration', 
       if (orgIds.length > 0) {
         const orgs = sql`ANY(${`{${orgIds.join(',')}}`}::uuid[])`;
         await purgeMessageEvents(h.admin, sql`org_id = ${orgs}`);
+        for (const id of apiKeys) await purgeAudit(h.admin, sql`actor_api_key_id = ${id}`);
         await purgeAudit(
           h.admin,
           sql`resource_type = 'Campaign' AND scope_id IN (SELECT id FROM workspaces WHERE org_id = ${orgs})`,
@@ -497,6 +501,7 @@ describe('Phase 8B PR 8B-3b: campaign executor, scheduler and API integration', 
             'messages',
             'campaign_recipients',
             'campaigns',
+            'api_keys',
             'templates',
             'suppressions',
             'contact_identities',
@@ -1105,6 +1110,235 @@ describe('Phase 8B PR 8B-3b: campaign executor, scheduler and API integration', 
       await h.admin.execute(
         sql`UPDATE campaigns SET status = 'cancelled' WHERE id IN (${f.campaignId}, ${legacy.campaignId})`,
       );
+    });
+  });
+
+  // ===============================================================================================
+
+  describe('scheduling authority: messages.send on current grants (both API paths)', () => {
+    const draft = () => plant(A, 1, { status: 'draft' });
+    const future = () => new Date(Date.now() + 3_600_000).toISOString();
+    const patch = (f: Planted, who: string, body: Record<string, unknown>) =>
+      as(
+        http()
+          .patch(url(base(A, f.campaignId)))
+          .send(body),
+        who,
+      );
+    const scheduleVia = (f: Planted, who: string) =>
+      as(
+        http()
+          .post(url(`${base(A, f.campaignId)}/schedule`))
+          .send({ scheduledAt: future() }),
+        who,
+      );
+    const scheduledAudits = async (id: string) => (await audits(id, 'campaign.scheduled')).length;
+
+    /** A fresh user holding the sender role (campaigns.manage + messages.send) at the workspace. */
+    async function revocableSender(label: string) {
+      const userId = await userWith(A, label, senderRole, 'workspace');
+      return {
+        userId,
+        revoke: () =>
+          h.admin.execute(
+            sql`DELETE FROM user_roles WHERE user_id = ${userId} AND role_id = ${senderRole}`,
+          ),
+      };
+    }
+    /** Revokes `revoke()` the first time the final transaction re-reads the caller's grants. */
+    function revokeAtFinalCheck(revoke: () => Promise<unknown>) {
+      const revalidator = h.app.get(PrincipalRevalidator);
+      const original = revalidator.currentGrants.bind(revalidator);
+      return jest.spyOn(revalidator, 'currentGrants').mockImplementationOnce(async (principal) => {
+        await revoke();
+        return original(principal);
+      });
+    }
+    async function apiKey(scopes: string[]) {
+      const prefix = `ak_test_${hex(8)}`;
+      const secret = `s${hex(16)}`;
+      const [key] = await h.admin
+        .insert(schema.apiKeys)
+        .values({
+          orgId: A.orgId,
+          workspaceId: A.workspaceId,
+          name: `p8b3b-${hex(3)}`,
+          keyPrefix: prefix,
+          keyHash: await credentials.hash(secret),
+          scopes,
+          createdBy: tokens.get('sender:id')!,
+        })
+        .returning({ id: schema.apiKeys.id });
+      apiKeys.push(key!.id);
+      tokens.set(`key:${key!.id}`, `${prefix}.${secret}`);
+      return key!.id;
+    }
+
+    afterEach(() => jest.restoreAllMocks());
+
+    it('PATCH: campaigns.manage without messages.send cannot move a draft to scheduled (either form); metadata updates still work', async () => {
+      const f = await draft();
+      const both = await patch(f, 'manager', { scheduleMode: 'scheduled', scheduledAt: future() });
+      expect(both.status).toBe(403);
+      await h.admin.execute(
+        sql`UPDATE campaigns SET scheduled_at = now() + interval '2 hours' WHERE id = ${f.campaignId}`,
+      );
+      const modeOnly = await patch(f, 'manager', { scheduleMode: 'scheduled' });
+      expect(modeOnly.status).toBe(403);
+      expect(await campaign(f.campaignId)).toMatchObject({ status: 'draft', scheduledBy: null });
+      const renamed = await patch(f, 'manager', { name: `renamed-${hex(3)}` });
+      expect(renamed.status).toBe(200);
+      expect(renamed.body.data.status).toBe('draft');
+    });
+
+    it('PATCH: a sender schedules (recorded as scheduler); a manager cannot re-time it; moving back to draft clears the scheduler', async () => {
+      const f = await draft();
+      const ok = await patch(f, 'sender', { scheduleMode: 'scheduled', scheduledAt: future() });
+      expect(ok.status).toBe(200);
+      expect(await campaign(f.campaignId)).toMatchObject({
+        status: 'scheduled',
+        scheduledBy: tokens.get('sender:id'),
+        scheduledByApiKeyId: null,
+      });
+      expect((await patch(f, 'manager', { scheduledAt: future() })).status).toBe(403);
+      expect((await patch(f, 'manager', { name: `renamed-${hex(3)}` })).status).toBe(200);
+      expect((await campaign(f.campaignId)).scheduledBy).toBe(tokens.get('sender:id'));
+      const back = await patch(f, 'sender', { scheduleMode: 'immediate' });
+      expect(back.status).toBe(200);
+      expect(await campaign(f.campaignId)).toMatchObject({ status: 'draft', scheduledBy: null });
+    });
+
+    it('POST …/schedule: campaigns.manage without messages.send is refused; nothing commits', async () => {
+      const f = await draft();
+      expect((await scheduleVia(f, 'manager')).status).toBe(403);
+      expect(await campaign(f.campaignId)).toMatchObject({ status: 'draft', scheduledBy: null });
+      expect(await scheduledAudits(f.campaignId)).toBe(0);
+    });
+
+    it('POST …/schedule: messages.send revoked after the preflight — the final transaction refuses and nothing commits', async () => {
+      const f = await draft();
+      const s = await revocableSender('revoke-schedule');
+      const spy = revokeAtFinalCheck(s.revoke);
+      const res = await scheduleVia(f, 'revoke-schedule');
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(res.status).toBe(403);
+      expect(await campaign(f.campaignId)).toMatchObject({ status: 'draft', scheduledBy: null });
+      expect(await scheduledAudits(f.campaignId)).toBe(0);
+    });
+
+    it('PATCH: messages.send revoked before the final check — the transition to scheduled does not commit', async () => {
+      const f = await draft();
+      const s = await revocableSender('revoke-patch');
+      const spy = revokeAtFinalCheck(s.revoke);
+      const res = await patch(f, 'revoke-patch', {
+        scheduleMode: 'scheduled',
+        scheduledAt: future(),
+      });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(res.status).toBe(403);
+      expect(await campaign(f.campaignId)).toMatchObject({ status: 'draft', scheduledBy: null });
+      expect(await audits(f.campaignId, 'campaign.updated')).toHaveLength(0);
+    });
+
+    it('a sender with intact grants schedules through the final check (control for the revocation cases)', async () => {
+      const f = await draft();
+      await revocableSender('intact-sender');
+      const res = await scheduleVia(f, 'intact-sender');
+      expect(res.status).toBe(200);
+      expect(await campaign(f.campaignId)).toMatchObject({
+        status: 'scheduled',
+        scheduledBy: tokens.get('intact-sender:id'),
+      });
+    });
+
+    it('API keys: a key with messages.send schedules (recorded as the key); a key without it is refused on both paths', async () => {
+      const sending = await apiKey([
+        PERMISSIONS.CAMPAIGNS_READ,
+        PERMISSIONS.CAMPAIGNS_MANAGE,
+        PERMISSIONS.MESSAGES_SEND,
+      ]);
+      const managing = await apiKey([PERMISSIONS.CAMPAIGNS_READ, PERMISSIONS.CAMPAIGNS_MANAGE]);
+      const f1 = await draft();
+      const ok = await as(
+        http()
+          .post(url(`${base(A, f1.campaignId)}/schedule`))
+          .send({ scheduledAt: future() }),
+        `key:${sending}`,
+      );
+      expect(ok.status).toBe(200);
+      expect(await campaign(f1.campaignId)).toMatchObject({
+        status: 'scheduled',
+        scheduledBy: null,
+        scheduledByApiKeyId: sending,
+      });
+      const f2 = await draft();
+      expect((await scheduleVia(f2, `key:${managing}`)).status).toBe(403);
+      expect(
+        (await patch(f2, `key:${managing}`, { scheduleMode: 'scheduled', scheduledAt: future() }))
+          .status,
+      ).toBe(403);
+      expect(await campaign(f2.campaignId)).toMatchObject({
+        status: 'draft',
+        scheduledByApiKeyId: null,
+      });
+      // A key revoked after the preflight is refused by the final check.
+      const f3 = await draft();
+      const spy = revokeAtFinalCheck(() =>
+        h.admin.execute(sql`UPDATE api_keys SET revoked_at = now() WHERE id = ${sending}`),
+      );
+      expect((await scheduleVia(f3, `key:${sending}`)).status).toBe(403);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect((await campaign(f3.campaignId)).status).toBe('draft');
+      for (const f of [f1])
+        await h.admin.execute(
+          sql`UPDATE campaigns SET status = 'cancelled' WHERE id = ${f.campaignId}`,
+        );
+    });
+
+    it('the revalidated grants equal what AuthGuard resolves (GET /auth/me/authorization), for a session and an API key', async () => {
+      const key = await apiKey([PERMISSIONS.CAMPAIGNS_READ, PERMISSIONS.MESSAGES_SEND]);
+      const revalidator = h.app.get(PrincipalRevalidator);
+      const shape = (
+        grants: readonly {
+          scopeType: string;
+          scopeId: string | null;
+          permissions: readonly string[];
+        }[],
+      ) =>
+        grants
+          .map((g) => ({
+            scopeType: g.scopeType,
+            scopeId: g.scopeId,
+            permissions: [...g.permissions].sort(),
+          }))
+          .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+      const token = tokens.get('sender')!;
+      const sid = JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString())
+        .sid as string;
+      const me = await as(http().get(url('/auth/me/authorization')), 'sender');
+      expect(me.status).toBe(200);
+      expect(
+        shape(
+          await revalidator.currentGrants({
+            userId: tokens.get('sender:id')!,
+            apiKeyId: null,
+            sessionId: sid,
+          }),
+        ),
+      ).toEqual(shape(me.body.data.grants));
+      const meKey = await as(http().get(url('/auth/me/authorization')), `key:${key}`);
+      expect(meKey.status).toBe(200);
+      expect(
+        shape(await revalidator.currentGrants({ userId: null, apiKeyId: key, sessionId: null })),
+      ).toEqual(shape(meKey.body.data.grants));
+      // A revoked session resolves to nothing.
+      expect(
+        await revalidator.currentGrants({
+          userId: tokens.get('sender:id')!,
+          apiKeyId: null,
+          sessionId: uuidv7(),
+        }),
+      ).toEqual([]);
     });
   });
 

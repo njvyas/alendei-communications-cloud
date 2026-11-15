@@ -13,6 +13,7 @@ import { CsrfGuard } from './csrf.guard';
 import { AccessTokenService } from './jwt.service';
 import { PermissionEvaluator } from './permission-evaluator.service';
 import { ScopeChainResolver } from './scope-chain-resolver.service';
+import { PrincipalRevalidator } from './principal-revalidation.service';
 import { ScopeResolver } from './scope-resolver.service';
 
 /**
@@ -36,6 +37,7 @@ import { ScopeResolver } from './scope-resolver.service';
     ScopeChainResolver,
     PermissionEvaluator,
     AuthorizationService,
+    PrincipalRevalidator,
     AuthRateLimitService,
     AuthService,
     { provide: APP_GUARD, useClass: CsrfGuard },
@@ -48,6 +50,7 @@ import { ScopeResolver } from './scope-resolver.service';
     ScopeChainResolver,
     PermissionEvaluator,
     AuthorizationService,
+    PrincipalRevalidator,
     AuthService,
   ],
 })
