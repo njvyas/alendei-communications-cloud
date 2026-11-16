@@ -702,12 +702,18 @@ describe('Phase 7-6c: operator resolution of unknown outcomes', () => {
         await tx.execute(sql`UPDATE usage_ledger SET id = ${reversed}::uuid WHERE id = ${row.id}`);
       }
     });
-    // The previous ordering now returns the CI failure's shape; facts() does not.
+    // The previous ordering now returns the CI failure's shape exactly: the earlier
+    // transaction's reservation and release first, then the three tied facts inverted.
+    // facts() does not.
     const old = await h.admin.execute<{ label: string }>(
       sql`SELECT entry_type::text || '@' || CASE WHEN anchor_id = ${m.id} THEN 'm' WHEN anchor_id = ${m.earlier} THEN '1' ELSE 'u' END AS label
             FROM usage_ledger WHERE message_id = ${m.id} ORDER BY occurred_at, id`,
     );
-    expect(old.rows.map((x) => x.label)).not.toEqual(posting.map((x) => x.split(':')[0]));
+    expect(old.rows.map((x) => x.label)).toEqual([
+      'reservation@m',
+      'reservation_release@m',
+      ...[...tie].reverse(),
+    ]);
     expect(await facts(m)).toEqual(posting);
   });
 
