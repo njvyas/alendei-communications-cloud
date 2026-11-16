@@ -398,14 +398,29 @@ describe('Phase 7-6c: operator resolution of unknown outcomes', () => {
       .get(url(`/platform/billing/resolutions/${id}`))
       .set('Authorization', `Bearer ${token}`);
 
-  /** The message's ledger facts as `type@anchor:amount` (anchor m = message, 1/2 = attempt). */
+  /**
+   * The message's ledger facts as `type@anchor:amount` (anchor m = message, 1 = the earlier
+   * attempt, u = the unknown attempt), in posting order.
+   *
+   * Facts posted in one transaction share `occurred_at` (`now()`), and the schema's `uuidv7()`
+   * (migration 0000) has millisecond precision with random low bits, so `id` does not order
+   * facts posted within the same millisecond: `ORDER BY occurred_at, id` returned them in
+   * random order (develop CI run 43692704470). Within one `occurred_at` the facts are ordered by
+   * the posting order of the resolution (0057): reservation, release, customer charges (message,
+   * then attempts in order), provider cost.
+   */
   async function facts(m: Planted): Promise<string[]> {
     const { rows } = await h.admin.execute<{
       entry_type: string;
       anchor_id: string;
       amount_paise: string;
     }>(
-      sql`SELECT entry_type, anchor_id, amount_paise FROM usage_ledger WHERE message_id = ${m.id} ORDER BY occurred_at, id`,
+      sql`SELECT entry_type, anchor_id, amount_paise FROM usage_ledger WHERE message_id = ${m.id}
+           ORDER BY occurred_at,
+                    CASE entry_type WHEN 'reservation' THEN 0 WHEN 'reservation_release' THEN 1
+                                    WHEN 'customer_charge' THEN 2 WHEN 'provider_cost' THEN 3 ELSE 4 END,
+                    CASE WHEN anchor_id = ${m.id} THEN 0 WHEN anchor_id = ${m.earlier} THEN 1 ELSE 2 END,
+                    id`,
     );
     const anchor = (a: string) => (a === m.id ? 'm' : a === m.earlier ? '1' : 'u');
     return rows.map((r) => `${r.entry_type}@${anchor(r.anchor_id)}:${r.amount_paise}`);
@@ -655,6 +670,51 @@ describe('Phase 7-6c: operator resolution of unknown outcomes', () => {
       'reservation_release@m:60',
       'customer_charge@u:60',
     ]);
+  });
+
+  it('facts() orders facts that share occurred_at by posting order, not by id (develop CI run 43692704470)', async () => {
+    const m = await plant(P, { perAttempt: true, earlier: 'reached', evidenced: true });
+    const r = (await charge(requester, m.id).expect(201)).body.data;
+    await approve(approver, r.id, 120).expect(200);
+    const posting = [
+      'reservation@m:60',
+      'reservation_release@m:60',
+      'customer_charge@1:60',
+      'customer_charge@u:60',
+      'provider_cost@u:20',
+    ];
+    // Reproduce the CI case deterministically: give the facts posted in the resolution
+    // transaction ids that sort in REVERSE posting order, as same-millisecond uuidv7 ids may.
+    const { rows } = await h.admin.execute<{ id: string; label: string }>(
+      sql`SELECT id, entry_type::text || '@' || CASE WHEN anchor_id = ${m.id} THEN 'm' WHEN anchor_id = ${m.earlier} THEN '1' ELSE 'u' END AS label
+            FROM usage_ledger
+           WHERE message_id = ${m.id}
+             AND occurred_at = (SELECT max(occurred_at) FROM usage_ledger WHERE message_id = ${m.id})`,
+    );
+    // The resolution transaction posts the customer charges and the provider cost.
+    const tie = ['customer_charge@1', 'customer_charge@u', 'provider_cost@u'];
+    expect(rows.map((x) => x.label).sort()).toEqual([...tie].sort());
+    await h.admin.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL session_replication_role = replica`);
+      for (const row of rows) {
+        const rank = tie.indexOf(row.label);
+        const reversed = `ffffffff-ffff-7fff-bfff-${String(900000000000 - rank).padStart(12, '0')}`;
+        await tx.execute(sql`UPDATE usage_ledger SET id = ${reversed}::uuid WHERE id = ${row.id}`);
+      }
+    });
+    // The previous ordering now returns the CI failure's shape exactly: the earlier
+    // transaction's reservation and release first, then the three tied facts inverted.
+    // facts() does not.
+    const old = await h.admin.execute<{ label: string }>(
+      sql`SELECT entry_type::text || '@' || CASE WHEN anchor_id = ${m.id} THEN 'm' WHEN anchor_id = ${m.earlier} THEN '1' ELSE 'u' END AS label
+            FROM usage_ledger WHERE message_id = ${m.id} ORDER BY occurred_at, id`,
+    );
+    expect(old.rows.map((x) => x.label)).toEqual([
+      'reservation@m',
+      'reservation_release@m',
+      ...[...tie].reverse(),
+    ]);
+    expect(await facts(m)).toEqual(posting);
   });
 
   it('a zero customer price: no customer_charge is posted; with evidence the provider cost still is, as on the automatic path; without evidence nothing is posted', async () => {
