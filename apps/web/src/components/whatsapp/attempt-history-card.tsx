@@ -108,9 +108,6 @@ export function AttemptHistoryCard({ message, isPolling }: AttemptHistoryCardPro
                   Provider ID
                 </th>
                 <th scope="col" className="px-3 py-2 font-medium">
-                  Provider Msg ID
-                </th>
-                <th scope="col" className="px-3 py-2 font-medium">
                   Submission
                 </th>
                 <th scope="col" className="px-3 py-2 font-medium">
@@ -130,7 +127,7 @@ export function AttemptHistoryCard({ message, isPolling }: AttemptHistoryCardPro
             <tbody className="divide-y divide-[var(--color-border-subtle)]">
               {message.attempts.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-3 py-4 text-center text-[var(--color-ink-muted)]">
+                  <td colSpan={7} className="px-3 py-4 text-center text-[var(--color-ink-muted)]">
                     {(() => {
                       const guidance = emptyAttemptsGuidance(message.status, message.failureReason);
                       return (
@@ -158,21 +155,6 @@ export function AttemptHistoryCard({ message, isPolling }: AttemptHistoryCardPro
                     </td>
                     <td className="px-3 py-2 font-mono text-[11px] text-[var(--color-ink)]">
                       {att.providerId}
-                    </td>
-                    <td
-                      className="px-3 py-2 font-mono text-[11px] text-[var(--color-ink)]"
-                      data-testid={`attempt-provider-msg-id-${att.attemptNumber}`}
-                    >
-                      {att.providerMessageId ? (
-                        <span
-                          title={att.providerMessageId}
-                          className="truncate max-w-[130px] inline-block"
-                        >
-                          {att.providerMessageId}
-                        </span>
-                      ) : (
-                        <span className="opacity-50">—</span>
-                      )}
                     </td>
                     <td className="px-3 py-2">
                       <span

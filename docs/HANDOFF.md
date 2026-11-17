@@ -387,7 +387,7 @@ All five review items are decided (`DECISIONS.md` §1o):
 ## 7. Residual risks (documented, accepted — not closed)
 
 - **Simulator-only limitation** — WhatsApp submissions are executed strictly against the deterministic simulator; no real Meta credentials or vendor endpoints connected in Phase 3.3.
-- **Delivery and webhooks excluded** — No inbound webhooks, delivery receipts, delivery status simulation, or DLR handling exist in Phase 3.3.
+- **Delivery and webhooks excluded** — No inbound webhooks, delivery receipts, delivery status simulation, or DLR handling exist in Phase 3.3. *(Superseded on `develop` 08-Nov-2026: Phase 5.0 adds simulator-only delivery-receipt ingestion, disabled by default — see item 4 of §9 and `ROADMAP.md` §8a.)*
 - **Provider fallback delivered for same-channel WhatsApp** — Provider-to-provider fallback within the WhatsApp channel is implemented in Phase 3.4; cross-channel fallback (e.g. WhatsApp -> SMS) and delayed retry timers remain deferred to Phase 5.
 - **R-13 in-process bypass** — caught only by the static boundary test and review (`DECISIONS.md` §1o; `PROVIDER_ADAPTER.md` §6h).
 - **`app.current_user_id` / `app.current_api_key_id` forgery** — confined to one organization's content (`SECURITY.md` §4b).
@@ -430,8 +430,12 @@ All five review items are decided (`DECISIONS.md` §1o):
      - U152-L2: multi-organization switching;
      - U152-L3: development-only tests.
    - Gate F.3: PARKED — NOT ACCEPTED.
-4. Separately authorized operational tasks (`DECISIONS.md` §1w.10): G, separate schema migration from shared-role reconciliation; E, migration-history recovery; F, evidence preservation and cleanup of `acc_clone_436072f90852` and the orphaned test process. No migration `0035`+ until G and then E are resolved.
-5. Items 1 and 3 stay deferred until the user schedules them.
+4. Phase 5.0 (delivery-outcome ingestion): implemented and merged to `develop` 07–08-Nov-2026 — PR #77 `04023c0`, #78 `f61b4c8`, #79 `6f16680` (frontend), #81 `9bc1f2e`, #83 `5ecc573`, #84 `f564cc6`; close-out corrections in the PR that adds this item. Migrations 0044–0049, proof `50|36a91c1259daa5bcf6ec6847880dea98`. See `ROADMAP.md` §8a, `DECISIONS.md` §1zh and `DELIVERY_OUTCOMES.md`.
+   - **Not deployed and not accepted.** QA is deferred until owner access is restored; the remaining gates are listed in `ROADMAP.md` §8a.
+   - **Runtime state is not evidenced by this document.** Repository defaults (`DELIVERY_WEBHOOKS_ENABLED=false`) describe the code, not any host. The only runtime record is the last QA deployment record (`c92a8c4`, which predates the ingress code); it must be re-observed on the host before QA work starts.
+   - Phase 5.0 development is stopped after the close-out PR. Phase 5 failover-engine work (`ROADMAP.md` §8b) has not started and is not authorised.
+5. Separately authorized operational tasks (`DECISIONS.md` §1w.10): G, separate schema migration from shared-role reconciliation; E, migration-history recovery; F, evidence preservation and cleanup of `acc_clone_436072f90852` and the orphaned test process. No migration `0035`+ until G and then E are resolved.
+6. Items 1 and 3 stay deferred until the user schedules them.
 
 ## 10. DO NOT
 
